@@ -1,8 +1,4 @@
-use std::{
-    pin::Pin,
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use litellm_redis_store::rate_limits::{
     AcquireReply, Applied, AtomicCounter, AtomicReply, Counter, Entry, Error, Gauge,
@@ -15,7 +11,7 @@ use pyo3::{
     types::{PyDict, PyString},
 };
 
-use super::{PyNumber, call, request::NativeRequestRedis, store_error};
+use super::{NativePending, PyNumber, redis_async, request::NativeRequestRedis, store_error, ttl};
 use crate::execution::run_async_value;
 use crate::redis::client::NativeRedisClient;
 
@@ -167,116 +163,74 @@ impl<'py> IntoPyObject<'py> for PyLocal {
     }
 }
 
-enum Reply {
-    WindowCounts(Vec<WindowCount>),
-    Values(Vec<Option<String>>),
-    Atomic(AtomicReply),
-    Guarded(GuardedReply),
-    Acquire(AcquireReply),
-    Counts(Vec<i64>),
-    Totals(Vec<f64>),
+type OverLimit = Option<(usize, i64, i64)>;
+
+fn window_counts(counts: Vec<WindowCount>) -> Vec<(String, i64)> {
+    counts
+        .into_iter()
+        .map(
+            |WindowCount {
+                 window_start,
+                 count,
+             }| (window_start, count),
+        )
+        .collect()
 }
 
-impl<'py> IntoPyObject<'py> for Reply {
-    type Target = PyAny;
-    type Output = Bound<'py, PyAny>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        match self {
-            Self::WindowCounts(counts) => counts
+fn atomic(reply: AtomicReply) -> (OverLimit, Vec<(i64, i64)>) {
+    match reply {
+        AtomicReply::Applied(applied) => (
+            None,
+            applied
                 .into_iter()
                 .map(
-                    |WindowCount {
-                         window_start,
+                    |Applied {
                          count,
-                     }| (window_start, count),
+                         window_start,
+                     }| (count, window_start),
                 )
-                .collect::<Vec<_>>()
-                .into_pyobject(py),
-            Self::Values(values) => values.into_pyobject(py),
-            Self::Atomic(AtomicReply::Applied(applied)) => (
-                None::<(usize, i64, i64)>,
-                applied
-                    .into_iter()
-                    .map(
-                        |Applied {
-                             count,
-                             window_start,
-                         }| (count, window_start),
-                    )
-                    .collect::<Vec<_>>(),
-            )
-                .into_pyobject(py)
-                .map(Bound::into_any),
-            Self::Atomic(AtomicReply::OverLimit {
-                index,
-                current,
-                limit,
-            }) => (Some((index, current, limit)), Vec::<(i64, i64)>::new())
-                .into_pyobject(py)
-                .map(Bound::into_any),
-            Self::Guarded(GuardedReply { applied, count }) => {
-                (applied, count).into_pyobject(py).map(Bound::into_any)
-            }
-            Self::Acquire(AcquireReply::Acquired(counts)) => (None::<(usize, i64, i64)>, counts)
-                .into_pyobject(py)
-                .map(Bound::into_any),
-            Self::Acquire(AcquireReply::OverLimit {
-                index,
-                in_flight,
-                limit,
-            }) => (Some((index, in_flight, limit)), Vec::<i64>::new())
-                .into_pyobject(py)
-                .map(Bound::into_any),
-            Self::Counts(counts) => counts.into_pyobject(py),
-            Self::Totals(totals) => totals.into_pyobject(py),
-        }
+                .collect(),
+        ),
+        AtomicReply::OverLimit {
+            index,
+            current,
+            limit,
+        } => (Some((index, current, limit)), Vec::new()),
     }
 }
 
-type Resolve = Pin<Box<dyn Future<Output = Result<Reply, Error>> + Send>>;
+fn guarded(GuardedReply { applied, count }: GuardedReply) -> (bool, i64) {
+    (applied, count)
+}
+
+fn acquire(reply: AcquireReply) -> (OverLimit, Vec<i64>) {
+    match reply {
+        AcquireReply::Acquired(counts) => (None, counts),
+        AcquireReply::OverLimit {
+            index,
+            in_flight,
+            limit,
+        } => (Some((index, in_flight, limit)), Vec::new()),
+    }
+}
 
 /// One script call declared on a batch: the request's pre-call batch, or a batch of its own when
-/// no request was passed. `resolve` flushes that batch if it has not gone out, once.
-#[pyclass(frozen, name = "NativeRateLimitPending")]
-pub(crate) struct NativeRateLimitPending {
-    resolve: Mutex<Option<Resolve>>,
+/// no request was passed. Resolving it flushes that batch if it has not gone out.
+fn pending<T, R>(
     call_type: &'static str,
-}
-
-impl NativeRateLimitPending {
-    fn new<T: Send + 'static>(
-        pending: Result<Pending<T>, Error>,
-        reply: fn(T) -> Reply,
-        call_type: &'static str,
-    ) -> PyResult<Self> {
-        let pending = pending.map_err(rate_limit_error)?;
-        Ok(Self {
-            resolve: Mutex::new(Some(Box::pin(
-                async move { pending.resolve().await.map(reply) },
-            ))),
-            call_type,
-        })
-    }
-}
-
-#[pymethods]
-impl NativeRateLimitPending {
-    fn resolve<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let resolve = self
-            .resolve
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .ok_or_else(|| {
-                PyRuntimeError::new_err("this rate-limit script was already resolved")
-            })?;
-        let scope = call(py, self.call_type)?;
-        run_async_value(py, async move {
-            scope.scope(resolve).await.map_err(rate_limit_error)
-        })
-    }
+    pending: Result<Pending<T>, Error>,
+    reply: fn(T) -> R,
+) -> PyResult<NativePending>
+where
+    T: Send + 'static,
+    R: for<'a> IntoPyObject<'a> + Send + 'static,
+{
+    let pending = pending.map_err(rate_limit_error)?;
+    Ok(NativePending::new(
+        call_type,
+        rate_limit_error,
+        async move { pending.resolve().await.map(reply) },
+    ))
 }
 
 fn rate_limit_error(error: Error) -> PyErr {
@@ -313,7 +267,7 @@ impl NativeRateLimits {
         backfill_ttl_seconds: Option<f64>,
         redis_ttl_seconds: u64,
     ) -> Self {
-        let backfill_ttl = backfill_ttl_seconds.map(|ttl| Duration::from_secs_f64(ttl.max(0.0)));
+        let backfill_ttl = ttl(backfill_ttl_seconds);
         Self(Arc::new(RateLimits::new(
             client.map(|client| client.0.clone()),
             backfill_ttl,
@@ -344,11 +298,7 @@ impl NativeRateLimits {
     #[pyo3(signature = (entry, value, ttl_seconds))]
     fn set_local(&self, entry: PyEntry, value: PyLocal, ttl_seconds: Option<f64>) -> PyResult<()> {
         self.0
-            .set_local(
-                &entry.0,
-                value.0,
-                ttl_seconds.map(|ttl| Duration::from_secs_f64(ttl.max(0.0))),
-            )
+            .set_local(&entry.0, value.0, ttl(ttl_seconds))
             .map_err(store_error)
     }
 
@@ -360,14 +310,12 @@ impl NativeRateLimits {
         backfill_ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let backfill_ttl = backfill_ttl_seconds.map(|ttl| Duration::from_secs_f64(ttl.max(0.0)));
-        let scope = call(py, "async_get_cache")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.get(&entry.0, backfill_ttl))
+        let backfill_ttl = ttl(backfill_ttl_seconds);
+        redis_async(py, "async_get_cache", store_error, async move {
+            store
+                .get(&entry.0, backfill_ttl)
                 .await
                 .map(|local| local.map(PyLocal))
-                .map_err(store_error)
         })
     }
 
@@ -378,13 +326,13 @@ impl NativeRateLimits {
         now: i64,
         window_size: i64,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
-        NativeRateLimitPending::new(
+        pending(
+            "batch_rate_limiter_script",
             self.0
                 .sliding_window(request.as_ref(), &counters(counters_), now, window_size),
-            Reply::WindowCounts,
-            "batch_rate_limiter_script",
+            window_counts,
         )
     }
 
@@ -393,12 +341,12 @@ impl NativeRateLimits {
         &self,
         counters_: Vec<PyCounter>,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
-        NativeRateLimitPending::new(
-            self.0.read_counters(request.as_ref(), &counters(counters_)),
-            Reply::Values,
+        pending(
             "batch_counter_read_script",
+            self.0.read_counters(request.as_ref(), &counters(counters_)),
+            std::convert::identity,
         )
     }
 
@@ -407,16 +355,16 @@ impl NativeRateLimits {
         &self,
         counters_: Vec<PyAtomicCounter>,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
         let counters_ = counters_
             .into_iter()
             .map(|counter| counter.0)
             .collect::<Vec<_>>();
-        NativeRateLimitPending::new(
-            self.0.check_and_increment(request.as_ref(), &counters_),
-            Reply::Atomic,
+        pending(
             "check_and_increment_by_n_script",
+            self.0.check_and_increment(request.as_ref(), &counters_),
+            atomic,
         )
     }
 
@@ -428,7 +376,7 @@ impl NativeRateLimits {
         amount: PyNumber,
         ttl_seconds: Option<u64>,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
         let increment = GuardedIncrement {
             counter: counter.0,
@@ -436,10 +384,10 @@ impl NativeRateLimits {
             amount: amount.0,
             ttl: ttl_seconds.map(Duration::from_secs),
         };
-        NativeRateLimitPending::new(
-            self.0.guarded_increment(request.as_ref(), &increment),
-            Reply::Guarded,
+        pending(
             "window_guarded_token_increment_script",
+            self.0.guarded_increment(request.as_ref(), &increment),
+            guarded,
         )
     }
 
@@ -450,7 +398,7 @@ impl NativeRateLimits {
         slot_ttl_seconds: u64,
         slot_id: &str,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
         let gauges = gauges
             .into_iter()
@@ -459,15 +407,15 @@ impl NativeRateLimits {
                 limit,
             })
             .collect::<Vec<_>>();
-        NativeRateLimitPending::new(
+        pending(
+            "parallel_acquire_script",
             self.0.parallel_acquire(
                 request.as_ref(),
                 &gauges,
                 Duration::from_secs(slot_ttl_seconds),
                 slot_id,
             ),
-            Reply::Acquire,
-            "parallel_acquire_script",
+            acquire,
         )
     }
 
@@ -477,13 +425,13 @@ impl NativeRateLimits {
         gauges: Vec<PyScope>,
         slot_id: &str,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
-        NativeRateLimitPending::new(
+        pending(
+            "parallel_release_script",
             self.0
                 .parallel_release(request.as_ref(), &scopes(gauges), slot_id),
-            Reply::Counts,
-            "parallel_release_script",
+            std::convert::identity,
         )
     }
 
@@ -493,16 +441,16 @@ impl NativeRateLimits {
         gauges: Vec<PyScope>,
         slot_ttl_seconds: u64,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
-        NativeRateLimitPending::new(
+        pending(
+            "parallel_count_script",
             self.0.parallel_count(
                 request.as_ref(),
                 &scopes(gauges),
                 Duration::from_secs(slot_ttl_seconds),
             ),
-            Reply::Counts,
-            "parallel_count_script",
+            std::convert::identity,
         )
     }
 
@@ -511,13 +459,13 @@ impl NativeRateLimits {
         &self,
         increments_: Vec<PyIncrement>,
         request: Option<PyRef<'_, NativeRequestRedis>>,
-    ) -> PyResult<NativeRateLimitPending> {
+    ) -> PyResult<NativePending> {
         let request = request_of(request);
-        NativeRateLimitPending::new(
+        pending(
+            "token_increment_script",
             self.0
                 .token_increment(request.as_ref(), &increments(increments_)),
-            Reply::Totals,
-            "token_increment_script",
+            std::convert::identity,
         )
     }
 
@@ -560,13 +508,8 @@ impl NativeRateLimits {
         increment: PyIncrement,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let scope = call(py, "async_increment")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.increment(&increment.0))
-                .await
-                .map(PyNumber)
-                .map_err(store_error)
+        redis_async(py, "async_increment", store_error, async move {
+            store.increment(&increment.0).await.map(PyNumber)
         })
     }
 
@@ -577,12 +520,8 @@ impl NativeRateLimits {
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let increments_ = increments(increments_);
-        let scope = call(py, "async_increment_pipeline")?;
-        run_async_value(py, async move {
-            scope
-                .scope(store.increment_many(&increments_))
-                .await
-                .map_err(store_error)
+        redis_async(py, "async_increment_pipeline", store_error, async move {
+            store.increment_many(&increments_).await
         })
     }
 
