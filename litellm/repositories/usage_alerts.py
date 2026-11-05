@@ -414,11 +414,9 @@ class UsageAlertsRepository:
             ), updated AS (
                 UPDATE "LiteLLM_UsageAlertIncident" i SET
                     evaluation_day=p.day, breached=p.breached,
-                    day=CASE WHEN p.breached THEN p.day ELSE i.day END,
-                    record=(CASE WHEN p.breached THEN p.record || jsonb_build_object(
-                        'id',i.id,'first_seen',i.record->'first_seen',
-                        'activity_path',replace(p.record->>'activity_path',p.record->>'id',i.id)) ELSE i.record END)
-                        || jsonb_build_object('status',CASE WHEN i.status='open' AND NOT p.breached THEN 'resolved' ELSE i.status END),
+                    record=i.record || jsonb_build_object(
+                        'last_seen',CASE WHEN p.breached THEN p.record->'last_seen' ELSE i.record->'last_seen' END,
+                        'status',CASE WHEN i.status='open' AND NOT p.breached THEN 'resolved' ELSE i.status END),
                     status=CASE WHEN i.status='open' AND NOT p.breached THEN 'resolved' ELSE i.status END,
                     updated_at=CURRENT_TIMESTAMP
                 FROM prior p WHERE i.id=p.prior_id AND p.evaluation_day<p.day AND (NOT p.breached OR p.prior_breached)

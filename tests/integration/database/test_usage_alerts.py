@@ -153,6 +153,56 @@ async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gatew
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_ongoing_episode_preserves_its_original_evidence_and_activity_link(db: ManagementDatabase) -> None:
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    definition: Final = UsageAlertRuleInput(
+        name="Original episode", scope_type="user", scope_id="episode-example", metric="requests", direction="increase"
+    )
+    rule: Final = await repository.save_rule(definition, "qa-admin")
+    assert rule is not None
+    initial: Final = UsageAlertObservation(
+        entity_id=rule.scope_id,
+        day=date(2026, 11, 2),
+        observed=420,
+        baseline=120,
+        baseline_sample_days=7,
+        threshold=360,
+        breached=True,
+    )
+    try:
+        original: Final = (await repository.record_observations(rule, (initial,)))[0]
+        edited: Final = await repository.save_rule(
+            definition.model_copy(update={"name": "Edited rule", "multiplier": 4}), "qa-admin", rule
+        )
+        assert edited is not None
+        later: Final = initial.model_copy(
+            update={
+                "day": date(2026, 11, 3),
+                "observed": 600,
+                "baseline": 100,
+                "threshold": 400,
+                "baseline_sample_days": 4,
+            }
+        )
+        ongoing: Final = (await repository.record_observations(edited, (later,)))[0]
+        assert ongoing.last_seen >= original.last_seen
+        assert ongoing.model_copy(update={"last_seen": original.last_seen}) == original
+        stored: Final = await repository.get_alert(original.id)
+        assert stored == ongoing
+        healthy: Final = later.model_copy(update={"day": date(2026, 11, 4), "breached": False})
+        resolved: Final = (await repository.record_observations(edited, (healthy,)))[0]
+        assert resolved.model_copy(update={"status": "open", "last_seen": original.last_seen}) == original
+        repeated: Final = later.model_copy(update={"day": date(2026, 11, 5)})
+        new_episode: Final = (await repository.record_observations(edited, (repeated,)))[0]
+        assert new_episode.id != original.id
+        assert new_episode.day == repeated.day and new_episode.observed_value == 600
+        assert new_episode.threshold == 400 and new_episode.rule_name == "Edited rule"
+        assert new_episode.activity_path != original.activity_path
+    finally:
+        await repository.delete_rule(rule.id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.parametrize(
     "changed_field,new_value",
     [("metric", "latency"), ("direction", "decrease"), ("scope_type", "user"), ("scope_id", "semantic-other")],
