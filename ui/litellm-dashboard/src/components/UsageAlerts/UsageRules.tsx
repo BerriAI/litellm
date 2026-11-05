@@ -15,6 +15,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { METRIC_LABELS, RuleInput, SCOPE_LABELS, UsageRule } from "./usageAlertApi";
 import UsageRuleForm from "./UsageRuleForm";
 import IssueFamilySettings from "@/components/Issues/IssueFamilySettings";
+import { uiHref } from "@/utils/uiHref";
 
 function editorTitle(rule: UsageRule | null | undefined): string {
   if (rule === undefined) return "Monitoring";
@@ -100,6 +101,12 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
         ) : (
           <>
             <IssueFamilySettings accessToken={accessToken} />
+            <a
+              className="text-sm text-primary hover:underline"
+              href={`${uiHref("logging-and-alerts")}?tab=email-alerts`}
+            >
+              Email delivery settings
+            </a>
             <details
               open={customOpen}
               onToggle={(event) => setCustomOpen(event.currentTarget.open)}

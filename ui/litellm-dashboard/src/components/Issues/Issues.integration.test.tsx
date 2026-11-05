@@ -423,6 +423,10 @@ describe("unified issue investigations", () => {
     const user = userEvent.setup();
     renderWithProviders(<IssuesInbox />);
     await user.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("link", { name: "Email delivery settings" })).toHaveAttribute(
+      "href",
+      "/ui/logging-and-alerts?tab=email-alerts",
+    );
     await user.click(await screen.findByRole("button", { name: "Edit Unexpected spend" }));
     fireEvent.change(screen.getByLabelText("Increase factor"), { target: { value: "10" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
