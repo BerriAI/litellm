@@ -77,7 +77,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
-    bedrock_supports_native_structured_output,
+    bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
     requests_output_config_format,
@@ -1429,11 +1429,9 @@ class AmazonConverseConfig(BaseConfig):
     def uses_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> bool:
-        native_output_requested: Final = (
-            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
-        ) or requests_output_config_format(optional_params)
-        return native_output_requested and bedrock_supports_native_structured_output(
+        return bedrock_native_output_retry_requested(
             bedrock_capability_model(model, litellm_params.get("base_model")),
+            optional_params,
             self.custom_llm_provider or "bedrock_converse",
             deployment_model_info(litellm_params),
         )

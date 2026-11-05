@@ -488,8 +488,27 @@ def requests_output_config_format(optional_params: Mapping[str, object]) -> bool
 
 
 def requests_native_output(anthropic_optional_params: Mapping[str, object]) -> bool:
-    return isinstance(anthropic_optional_params.get("output_format"), Mapping) or requests_output_config_format(
-        anthropic_optional_params
+    output_config: Final = anthropic_optional_params.get("outputConfig")
+    return (
+        isinstance(anthropic_optional_params.get("output_format"), Mapping)
+        or requests_output_config_format(anthropic_optional_params)
+        or (
+            anthropic_optional_params.get("json_mode") is True
+            and isinstance(output_config, Mapping)
+            and isinstance(output_config.get("textFormat"), Mapping)
+        )
+    )
+
+
+def bedrock_native_output_retry_requested(
+    model: str,
+    optional_params: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return requests_native_output(optional_params) and (
+        bedrock_native_output_is_opt_in(model, custom_llm_provider, model_info)
+        or _bedrock_native_output_enabled(model, custom_llm_provider, model_info)
     )
 
 
