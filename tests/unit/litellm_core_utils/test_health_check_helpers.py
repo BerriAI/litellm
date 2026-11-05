@@ -33,6 +33,23 @@ from litellm.types.utils import (
 )
 
 
+async def test_responses_health_check_sends_message_list(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={"id": "resp_health", "object": "response", "created_at": 0, "model": "health", "output": []}
+    )
+
+    result: Final = await ahealth_check(
+        {"model": "openai/gpt-6.1-sol", "api_key": "sk-test"}, mode="responses", prompt="probe", input=["probe"]
+    )
+
+    assert "error" not in result, result
+    assert json.loads(upstream.calls.last.request.content)["input"] == [{"role": "user", "content": "probe"}]
+
+
 def _png_chunks(png: bytes, offset: int = 8) -> tuple[tuple[bytes, bytes], ...]:
     if offset >= len(png):
         return ()
