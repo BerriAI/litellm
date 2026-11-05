@@ -21,7 +21,10 @@ interface RankedRow extends Record<string, unknown> {
 const EMPTY_RANKED = { spend: 0, requests: 0, successful_requests: 0, failed_requests: 0, tokens: 0 } as const;
 
 /** Sums one breakdown dimension across every day, highest spend first. */
-export const rollUpBreakdown = (results: readonly DailyData[], dimension: BreakdownDimension | "api_keys"): RankedRow[] => {
+export const rollUpBreakdown = (
+  results: readonly DailyData[],
+  dimension: BreakdownDimension | "api_keys",
+): RankedRow[] => {
   const entries = results.flatMap((day) => Object.entries(day.breakdown[dimension] ?? {}));
   const totals = entries.reduce<ReadonlyMap<string, RankedRow>>((acc, [key, entry]) => {
     const row = acc.get(key) ?? { key, ...EMPTY_RANKED };
