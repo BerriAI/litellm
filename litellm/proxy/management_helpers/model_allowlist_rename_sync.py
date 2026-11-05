@@ -13,7 +13,7 @@ from typing import Final
 
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.management_helpers.access_group_model_sync import raw_executor, still_backed
+from litellm.proxy.management_helpers.access_group_model_sync import raw_executor, raw_transactions, still_backed
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -80,6 +80,23 @@ def _rewrite_sql(set_clause: str, where_clause: str) -> str:
     return f"WITH {ctes} {rows}"
 
 
+_LOCK_ORGS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_OrganizationTable" WHERE $1 = ANY("models") '
+    'ORDER BY organization_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_TEAMS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE $1 = ANY("models") ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_USERS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_UserTable" WHERE $1 = ANY("models") ORDER BY user_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_KEYS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE $1 = ANY("models") ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_PROJECTS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_ProjectTable" WHERE $1 = ANY("models") ORDER BY project_id COLLATE "C" FOR UPDATE'
+)
+
 _REPLACE_SQL: Final = _rewrite_sql('array_replace(array_remove("models", $2), $1, $2)', '$1 = ANY("models")')
 
 _APPEND_SQL: Final = _rewrite_sql('array_append("models", $2)', '$1 = ANY("models") AND NOT ($2 = ANY("models"))')
@@ -98,9 +115,15 @@ async def sync_model_allowlists_for_renamed_model(
         return
     executor: Final = raw_executor(prisma_client)
     old_name_still_backed: Final = await still_backed(executor, llm_router, old_name, model_id)
-    touched_rows: Final = await executor.query_raw(
-        _APPEND_SQL if old_name_still_backed else _REPLACE_SQL, old_name, new_name
-    )
+    async with raw_transactions(prisma_client).tx() as transaction:
+        _ = await transaction.query_raw(_LOCK_ORGS_LISTING_SQL, old_name)
+        _ = await transaction.query_raw(_LOCK_TEAMS_LISTING_SQL, old_name)
+        _ = await transaction.query_raw(_LOCK_USERS_LISTING_SQL, old_name)
+        _ = await transaction.query_raw(_LOCK_KEYS_LISTING_SQL, old_name)
+        _ = await transaction.query_raw(_LOCK_PROJECTS_LISTING_SQL, old_name)
+        touched_rows: Final = await transaction.query_raw(
+            _APPEND_SQL if old_name_still_backed else _REPLACE_SQL, old_name, new_name
+        )
     touched: Final = tuple(_TouchedRow.model_validate(row) for row in touched_rows)
     await evict_and_broadcast(
         tuple(cache_key for row in touched for cache_key in _CACHE_KEYS_BY_KIND[row.kind](row)),

@@ -63,7 +63,7 @@ _DAILY_TABLES: Final = (
 )
 
 
-@pytest.mark.parametrize("batch_size,row_count,expected,distinct_models", [(None, 251, 251, False), ("200", 251, 200, False), (None, 10001, 10000, False), (None, 3001, 3001, True)])
+@pytest.mark.parametrize("batch_size,row_count,expected,distinct_models", [(None, 251, 251, False), (None, 501, 500, False), ("200", 251, 200, False), ("10000", 10001, 10000, False), ("3001", 3001, 3001, True)])
 @pytest.mark.asyncio
 async def test_worker_applies_the_configured_backlog_in_one_transaction(
     parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, expected: int, distinct_models: bool

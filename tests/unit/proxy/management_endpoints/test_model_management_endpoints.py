@@ -8567,12 +8567,19 @@ class TestAccessGroupModelSync:
                 return [{"deployment_count": deployment_count}]
             if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
                 return [{"access_group_id": "ag-1"}]
+            if sql.startswith("SELECT 1 AS locked FROM"):
+                return []
             assert sql.startswith("WITH ")
             return TestAccessGroupModelSync._ALLOWLIST_ROWS
+
+        @contextlib.asynccontextmanager
+        async def transaction():
+            yield mock_prisma.db
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+        mock_prisma.db.tx = MagicMock(side_effect=transaction)
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=row)
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=row)

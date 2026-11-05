@@ -84,7 +84,7 @@ SET state = 'applied', applied_at = CURRENT_TIMESTAMP, last_error = NULL
 WHERE delivery_id = ANY($1::text[]) AND state = 'pending' """
 _FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET attempts = attempts + 1, last_error = $3,
-    next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)))::integer),
+    next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))),
     state = $4::"AccountingDeliveryState"
 WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
 RETURNING delivery_id, attempts"""

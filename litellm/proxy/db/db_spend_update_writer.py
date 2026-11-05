@@ -328,13 +328,13 @@ _SpendTableName = Literal[
     "agent_list_transactions",
 ]
 _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
-    "user_list_transactions",
-    "end_user_list_transactions",
-    "key_list_transactions",
-    "team_list_transactions",
-    "team_member_list_transactions",
     "org_list_transactions",
     "org_member_list_transactions",
+    "team_list_transactions",
+    "user_list_transactions",
+    "end_user_list_transactions",
+    "team_member_list_transactions",
+    "key_list_transactions",
     "project_list_transactions",
     "tag_list_transactions",
     "model_access_group_list_transactions",
@@ -561,6 +561,24 @@ ON CONFLICT (user_id, team_id) DO UPDATE
 SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
     total_spend = GREATEST("LiteLLM_TeamMembership".total_spend, "LiteLLM_TeamMembership".spend) + EXCLUDED.total_spend
 """
+
+
+def _org_members_in_key_order(spend_by_member_key: Mapping[str, float]) -> tuple[tuple[tuple[str, str], float], ...]:
+    """Sorted by the decoded (organization_id, user_id), the order every other writer locks these rows in, since
+    the percent-encoded key does not sort the same way."""
+    decoded: Final = (
+        ((unquote(key.split("::")[1]), unquote(key.split("::")[3])), cost) for key, cost in spend_by_member_key.items()
+    )
+    return tuple(sorted(decoded))
+
+
+def _charged_team_ids(updates: DBSpendUpdateTransactions) -> tuple[str, ...]:
+    members: Final = updates.get("team_member_list_transactions") or {}
+    return tuple(
+        sorted(
+            {*(updates.get("team_list_transactions") or {}), *(key.split("::")[1] for key in members)},
+        )
+    )
 
 
 async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_member_key: Mapping[str, float]) -> None:
@@ -2294,6 +2312,10 @@ class DBSpendUpdateWriter:
         transaction: _SpendTransaction,
         updates: DBSpendUpdateTransactions,
     ) -> None:
+        """Every team advisory lock is taken before the first row lock, the order the team roster writers use, so
+        applying a batch of charges cannot deadlock with a concurrent roster change."""
+        for team_id in _charged_team_ids(updates):
+            _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
         await self._commit_spend_updates_to_db(
             prisma_client, 0, proxy_logging_obj, updates, outer_transaction=transaction
         )
@@ -2312,6 +2334,104 @@ class DBSpendUpdateWriter:
 
         """
         from litellm.proxy.utils import ProxyUpdateSpend
+
+        ### UPDATE ORG TABLE ###
+        org_list_transactions: Final = db_spend_update_transactions["org_list_transactions"]
+        verbose_proxy_logger.debug("Org Spend transactions: %s", org_list_transactions)
+        if org_list_transactions is not None and len(org_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with _spend_update_tx(
+                        prisma_client, "LiteLLM_OrganizationTable", outer_transaction=outer_transaction
+                    ) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
+                            for org_id, response_cost in sorted(org_list_transactions.items()):
+                                batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"organization_id": org_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except Exception as e:
+                    if outer_transaction is not None:
+                        raise
+                    await self.handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+        if on_table_committed is not None:
+            on_table_committed("org_list_transactions")
+
+        org_member_list_transactions: Final = db_spend_update_transactions.get("org_member_list_transactions")
+        verbose_proxy_logger.debug("Org Membership Spend transactions: %s", org_member_list_transactions)
+        if org_member_list_transactions is not None and len(org_member_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with (
+                        _spend_update_tx(
+                            prisma_client, "LiteLLM_OrganizationMembership", outer_transaction=outer_transaction
+                        ) as transaction,
+                        transaction.batch_() as batcher,
+                    ):
+                        for (org_id, member_id), response_cost in _org_members_in_key_order(
+                            org_member_list_transactions
+                        ):
+                            batcher.litellm_organizationmembership.update_many(
+                                where={"organization_id": org_id, "user_id": member_id},
+                                data={"spend": {"increment": response_cost}},
+                            )
+                    break
+                except Exception as e:
+                    if outer_transaction is not None:
+                        raise
+                    await self.handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+        if on_table_committed is not None:
+            on_table_committed("org_member_list_transactions")
+
+        ### UPDATE TEAM TABLE ###
+        team_list_transactions: Final = db_spend_update_transactions["team_list_transactions"]
+        verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
+        if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
+            for i in range(n_retry_times + 1):
+                start_time = time.time()
+                try:
+                    async with _spend_update_tx(
+                        prisma_client, "LiteLLM_TeamTable", outer_transaction=outer_transaction
+                    ) as transaction:
+                        async with transaction.batch_() as batcher:
+                            # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
+                            for team_id, response_cost in sorted(team_list_transactions.items()):
+                                verbose_proxy_logger.debug(
+                                    "Updating spend for team id=%s by %s", team_id, response_cost
+                                )
+                                batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"team_id": team_id},
+                                    data={"spend": {"increment": response_cost}},
+                                )
+                    break
+                except Exception as e:
+                    if outer_transaction is not None:
+                        raise
+                    await self.handle_spend_update_failure(
+                        e=e,
+                        attempt=i,
+                        n_retry_times=n_retry_times,
+                        start_time=start_time,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+        if on_table_committed is not None:
+            on_table_committed("team_list_transactions")
 
         ### UPDATE USER TABLE ###
         user_list_transactions: Final = db_spend_update_transactions["user_list_transactions"]
@@ -2359,75 +2479,6 @@ class DBSpendUpdateWriter:
             )
         if on_table_committed is not None:
             on_table_committed("end_user_list_transactions")
-        ### UPDATE KEY TABLE ###
-        key_list_transactions: Final = db_spend_update_transactions["key_list_transactions"]
-        verbose_proxy_logger.debug("KEY Spend transactions: %s", key_list_transactions)
-        if key_list_transactions is not None and len(key_list_transactions.keys()) > 0:
-            for i in range(n_retry_times + 1):
-                start_time = time.time()
-                try:
-                    async with _spend_update_tx(
-                        prisma_client, "LiteLLM_VerificationToken", outer_transaction=outer_transaction
-                    ) as transaction:
-                        async with transaction.batch_() as batcher:
-                            # Sort by token for consistent lock ordering across pods to prevent deadlocks.
-                            for token, response_cost in sorted(key_list_transactions.items()):
-                                spend_increment: _SpendIncrement = {"increment": response_cost}
-                                batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"token": token},
-                                    data={
-                                        "spend": spend_increment,
-                                        "total_spend": spend_increment,
-                                        "last_active": datetime.now(timezone.utc),
-                                    },
-                                )
-                    break
-                except Exception as e:
-                    if outer_transaction is not None:
-                        raise
-                    await self.handle_spend_update_failure(
-                        e=e,
-                        attempt=i,
-                        n_retry_times=n_retry_times,
-                        start_time=start_time,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
-        if on_table_committed is not None:
-            on_table_committed("key_list_transactions")
-
-        ### UPDATE TEAM TABLE ###
-        team_list_transactions: Final = db_spend_update_transactions["team_list_transactions"]
-        verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
-        if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
-            for i in range(n_retry_times + 1):
-                start_time = time.time()
-                try:
-                    async with _spend_update_tx(
-                        prisma_client, "LiteLLM_TeamTable", outer_transaction=outer_transaction
-                    ) as transaction:
-                        async with transaction.batch_() as batcher:
-                            # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
-                            for team_id, response_cost in sorted(team_list_transactions.items()):
-                                verbose_proxy_logger.debug(
-                                    "Updating spend for team id=%s by %s", team_id, response_cost
-                                )
-                                batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"team_id": team_id},
-                                    data={"spend": {"increment": response_cost}},
-                                )
-                    break
-                except Exception as e:
-                    if outer_transaction is not None:
-                        raise
-                    await self.handle_spend_update_failure(
-                        e=e,
-                        attempt=i,
-                        n_retry_times=n_retry_times,
-                        start_time=start_time,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
-        if on_table_committed is not None:
-            on_table_committed("team_list_transactions")
 
         ### UPDATE TEAM Membership TABLE with spend ###
         team_member_list_transactions: Final = db_spend_update_transactions["team_member_list_transactions"]
@@ -2478,22 +2529,27 @@ class DBSpendUpdateWriter:
         elif on_table_committed is not None:
             on_table_committed("team_member_list_transactions")
 
-        ### UPDATE ORG TABLE ###
-        org_list_transactions: Final = db_spend_update_transactions["org_list_transactions"]
-        verbose_proxy_logger.debug("Org Spend transactions: %s", org_list_transactions)
-        if org_list_transactions is not None and len(org_list_transactions.keys()) > 0:
+        ### UPDATE KEY TABLE ###
+        key_list_transactions: Final = db_spend_update_transactions["key_list_transactions"]
+        verbose_proxy_logger.debug("KEY Spend transactions: %s", key_list_transactions)
+        if key_list_transactions is not None and len(key_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
                     async with _spend_update_tx(
-                        prisma_client, "LiteLLM_OrganizationTable", outer_transaction=outer_transaction
+                        prisma_client, "LiteLLM_VerificationToken", outer_transaction=outer_transaction
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
-                            for org_id, response_cost in sorted(org_list_transactions.items()):
-                                batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"organization_id": org_id},
-                                    data={"spend": {"increment": response_cost}},
+                            # Sort by token for consistent lock ordering across pods to prevent deadlocks.
+                            for token, response_cost in sorted(key_list_transactions.items()):
+                                spend_increment: _SpendIncrement = {"increment": response_cost}
+                                batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
+                                    where={"token": token},
+                                    data={
+                                        "spend": spend_increment,
+                                        "total_spend": spend_increment,
+                                        "last_active": datetime.now(timezone.utc),
+                                    },
                                 )
                     break
                 except Exception as e:
@@ -2507,39 +2563,7 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                     )
         if on_table_committed is not None:
-            on_table_committed("org_list_transactions")
-
-        org_member_list_transactions: Final = db_spend_update_transactions.get("org_member_list_transactions")
-        verbose_proxy_logger.debug("Org Membership Spend transactions: %s", org_member_list_transactions)
-        if org_member_list_transactions is not None and len(org_member_list_transactions.keys()) > 0:
-            for i in range(n_retry_times + 1):
-                start_time = time.time()
-                try:
-                    async with (
-                        _spend_update_tx(
-                            prisma_client, "LiteLLM_OrganizationMembership", outer_transaction=outer_transaction
-                        ) as transaction,
-                        transaction.batch_() as batcher,
-                    ):
-                        for key, response_cost in sorted(org_member_list_transactions.items()):
-                            _, quoted_org_id, _, quoted_user_id = key.split("::")
-                            batcher.litellm_organizationmembership.update_many(
-                                where={"organization_id": unquote(quoted_org_id), "user_id": unquote(quoted_user_id)},
-                                data={"spend": {"increment": response_cost}},
-                            )
-                    break
-                except Exception as e:
-                    if outer_transaction is not None:
-                        raise
-                    await self.handle_spend_update_failure(
-                        e=e,
-                        attempt=i,
-                        n_retry_times=n_retry_times,
-                        start_time=start_time,
-                        proxy_logging_obj=proxy_logging_obj,
-                    )
-        if on_table_committed is not None:
-            on_table_committed("org_member_list_transactions")
+            on_table_committed("key_list_transactions")
 
         ### UPDATE PROJECT TABLE ###
         project_list_transactions: Final = db_spend_update_transactions.get("project_list_transactions")

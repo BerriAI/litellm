@@ -54,7 +54,7 @@ async def flush_accounting_deliveries(
         )
         repository: Final = AccountingDeliveryRepository(database)
         started: Final = time.monotonic()
-        batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "10000"))
+        batch_size: Final = int(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "500"))
 
         async def run_batch(*, retry_only: bool) -> bool:
             result: Final = await repository.apply_pending(apply, batch_size=batch_size, retry_only=retry_only)
