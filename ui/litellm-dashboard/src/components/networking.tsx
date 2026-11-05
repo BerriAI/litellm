@@ -94,7 +94,12 @@ import { normalizeBackendPageUrlToUiOrigin } from "@/utils/returnUrlUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
-import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
+import type {
+  ListPluginsResponse,
+  SkillRegisterRequest,
+  SkillMutationResponse,
+  SkillImport,
+} from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
 import type { ObjectPermission } from "./object_permission_types";
@@ -6886,11 +6891,6 @@ export const updateUserBanner = async (accessToken: string, banner: UserBannerUp
 
 // Claude Code Marketplace Networking Functions
 
-/**
- * List all Claude Code plugins (admin only)
- * @param accessToken - Admin access token
- * @param enabledOnly - If true, only return enabled plugins (default: false)
- */
 export const getClaudeCodePluginsList = async (
   accessToken: string,
   enabledOnly: boolean = false,
@@ -6903,45 +6903,11 @@ export const getClaudeCodePluginsList = async (
   return data;
 };
 
-/**
- * Register a new Claude Code plugin (admin only). Create-only: the proxy returns
- * 409 if a plugin with the same name already exists.
- * @param accessToken - Admin access token
- * @param pluginData - Plugin registration data
- */
-export const registerClaudeCodePlugin = async (accessToken: string, pluginData: SkillRegisterRequest) => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(pluginData),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      let errorMessage: string;
-      try {
-        errorMessage = deriveErrorMessage(JSON.parse(errorBody));
-      } catch {
-        errorMessage = errorBody || `Request failed with status ${response.status}`;
-      }
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to register Claude Code plugin:", error);
-    throw error;
-  }
-};
+export const registerClaudeCodePlugin = (
+  accessToken: string,
+  pluginData: SkillRegisterRequest,
+): Promise<components["schemas"]["RegisterPluginResponse"]> =>
+  apiClient.post("/claude-code/plugins", { accessToken, body: pluginData });
 
 export const uploadClaudeCodeSkill = async (
   accessToken: string,
@@ -6953,6 +6919,64 @@ export const uploadClaudeCodeSkill = async (
   body.append("metadata", JSON.stringify(metadata));
   return apiClient.post("/claude-code/plugins/upload", { accessToken, rawBody: body });
 };
+
+export const listSkillHubSkills = (accessToken: string, query: { limit: number; offset: number }) =>
+  apiClient.get<components["schemas"]["SkillHubList"]>("/skill-hub/skills", { accessToken, query });
+
+export const getSkillHubSkill = (accessToken: string, name: string) =>
+  apiClient.get<components["schemas"]["SkillHubSkill"]>(`/skill-hub/skills/${encodeURIComponent(name)}`, {
+    accessToken,
+  });
+
+export const importSkillHubSkill = (accessToken: string, body: SkillImport) =>
+  apiClient.post<SkillMutationResponse>("/skill-hub/skills/import", { accessToken, body });
+
+export const updateSkillHubSkill = (
+  accessToken: string,
+  name: string,
+  body: components["schemas"]["SkillHubMetadata"],
+) => apiClient.put<SkillMutationResponse>(`/skill-hub/skills/${encodeURIComponent(name)}`, { accessToken, body });
+
+export const uploadSkillHubSkill = (
+  accessToken: string,
+  file: File,
+  version: string,
+  skill?: components["schemas"]["SkillHubSkill"],
+): Promise<SkillMutationResponse> => {
+  const body = new FormData();
+  body.append("file", file);
+  if (version.trim()) body.append("version", version.trim());
+  if (skill?.updated_at) body.append("expected_updated_at", skill.updated_at);
+  return skill
+    ? apiClient.put(`/skill-hub/skills/${encodeURIComponent(skill.name)}/upload`, { accessToken, rawBody: body })
+    : apiClient.post("/skill-hub/skills/upload", { accessToken, rawBody: body });
+};
+
+export const deleteSkillHubSkill = (accessToken: string, name: string) =>
+  apiClient.delete(`/skill-hub/skills/${encodeURIComponent(name)}`, { accessToken });
+
+export const listSkillSubmissions = (
+  accessToken: string,
+  query: { limit: number; offset: number },
+): Promise<components["schemas"]["SkillHubSubmissionList"]> =>
+  apiClient.get("/skill-hub/submissions", { accessToken, query });
+
+export const getSkillSubmission = (
+  accessToken: string,
+  id: string,
+): Promise<components["schemas"]["SkillHubSubmissionDetail"]> =>
+  apiClient.get(`/skill-hub/submissions/${encodeURIComponent(id)}`, { accessToken });
+
+export const reviewSkillSubmission = (
+  accessToken: string,
+  id: string,
+  action: "approve" | "reject",
+  body?: components["schemas"]["SkillHubRejection"],
+): Promise<components["schemas"]["SkillHubReviewResponse"]> =>
+  apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}/${action}`, { accessToken, body });
+
+export const downloadSkillSubmission = (accessToken: string, id: string): Promise<Blob> =>
+  apiClient.getBlob(`/skill-hub/submissions/${encodeURIComponent(id)}/archive`, { accessToken, redirect: "error" });
 
 /**
  * Enable a Claude Code plugin (admin only)

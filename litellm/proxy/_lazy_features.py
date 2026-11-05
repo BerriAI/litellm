@@ -48,6 +48,13 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
     return _register
 
 
+def _include_skill_hub(app: "FastAPI", module: object) -> None:
+    from litellm.proxy.discovery_endpoints.skill_hub_submissions import router
+
+    _include_router()(app, module)
+    app.include_router(router)
+
+
 @dataclass(frozen=True)
 class LazyFeature:
     name: str
@@ -287,6 +294,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="skill_hub",
         module_path="litellm.proxy.discovery_endpoints.skill_hub_endpoints",
         path_prefixes=("/skill-hub",),
+        register_fn=_include_skill_hub,
     ),
     LazyFeature(
         name="claude_code_marketplace",

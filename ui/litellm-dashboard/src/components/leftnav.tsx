@@ -68,6 +68,7 @@ import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  formatUserRole,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -245,7 +246,13 @@ const menuGroups: MenuGroup[] = [
         ],
       },
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
-      { key: "skills", page: "skills", label: "Skills", icon: <Blocks {...ICON} />, roles: all_admin_roles },
+      {
+        key: "skills",
+        page: "skills",
+        label: "Skills",
+        icon: <Blocks {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles, formatUserRole("org_admin")],
+      },
       { key: "guardrails", page: "guardrails", label: "Guardrails", icon: <Shield {...ICON} /> },
       {
         key: "policies",

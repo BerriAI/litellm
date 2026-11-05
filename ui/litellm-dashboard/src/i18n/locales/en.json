@@ -1599,7 +1599,7 @@
   "skills": {
     "panel": {
       "title": "Skills",
-      "intro": "Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via <endpoint/>.",
+      "intro": "Upload or import portable skills. Review proposed changes before publishing them to the Skills Hub.",
       "addButton": "+ Add Skill",
       "deleteDialog": {
         "title": "Delete Skill",
@@ -1611,7 +1611,15 @@
       "toasts": {
         "deleted": "Skill \"{{name}}\" deleted successfully",
         "deleteFailed": "Failed to delete skill"
-      }
+      },
+      "editButton": "Edit Skill",
+      "tabs": {
+        "skills": "Published skills",
+        "submissions": "Submissions",
+        "mySubmissions": "My submissions"
+      },
+      "loadFailed": "Could not refresh published skills. The last loaded list may be out of date",
+      "detailFailed": "Could not load the latest skill details. Retry before editing"
     },
     "table": {
       "empty": {
@@ -1637,7 +1645,9 @@
         "category": "Category",
         "public": "Public",
         "createdAt": "Created At",
-        "actions": "Actions"
+        "actions": "Actions",
+        "domain": "Domain",
+        "updatedAt": "Updated at"
       }
     },
     "addForm": {
@@ -1704,7 +1714,8 @@
         "sha256Invalid": "SHA-256 must be a 64-character hex digest",
         "nameRequired": "Please enter skill name",
         "nameInvalid": "Name must be kebab-case (lowercase, numbers, hyphens only)",
-        "emailInvalid": "Please enter a valid email"
+        "emailInvalid": "Please enter a valid email",
+        "descriptionTooLong": "Description must be 1024 characters or fewer"
       },
       "toasts": {
         "noToken": "No access token available",
@@ -1713,8 +1724,98 @@
         "invalidVersion": "Version must be in semantic versioning format (e.g., 1.0.0)",
         "invalidEmail": "Invalid email format",
         "registered": "Skill registered successfully",
-        "registerFailed": "Failed to register skill"
-      }
+        "registerFailed": "Failed to register skill",
+        "submitted": "Submitted for admin approval. The published skill is unchanged",
+        "updated": "Skill updated successfully"
+      },
+      "editTitle": "Edit Skill",
+      "approvalNotice": "Your changes will be submitted for admin approval. Published skills stay unchanged until approval",
+      "submitReview": "Submit for approval",
+      "save": "Save changes",
+      "versionOverride": "Version override (optional)",
+      "versionContext": "Current version {{version}}. Leave blank for the next patch version, or enter a higher version",
+      "automaticVersion": "Automatic next patch",
+      "versionOverrideHint": "Leave blank to assign the next patch version when this change is published",
+      "modes": {
+        "upload": "Upload ZIP",
+        "import": "Import URL",
+        "metadata": "Edit metadata"
+      },
+      "neutralLabels": {
+        "url": "Source URL",
+        "skill": "Skill selector (optional)",
+        "ref": "Git ref (optional)",
+        "path": "Path (optional)",
+        "domain": "Domain (optional)",
+        "namespace": "Namespace (optional)",
+        "keywords": "Keywords (optional)"
+      },
+      "uploadHint": "Choose a ZIP up to 10 MiB containing SKILL.md. Its frontmatter supplies the skill name and description.",
+      "replacementHint": "The replacement SKILL.md supplies the description. Domain, namespace, and keywords are preserved.",
+      "importHint": "Enter the original source URL. Use a skill selector or path when the repository contains several skills. Leave the ref blank to use HEAD.",
+      "saving": "Saving..."
+    },
+    "submissions": {
+      "adminIntro": "Review submitted skills and changes before publishing them",
+      "authorIntro": "Your submissions and review outcomes. Pending changes are not published",
+      "loading": "Loading submissions...",
+      "loadFailed": "Could not refresh submissions. Previously loaded details may be out of date",
+      "retry": "Retry",
+      "empty": "No submissions yet",
+      "emptyPage": "No submissions on this page",
+      "page": "Page {{page}}",
+      "previous": "Previous",
+      "next": "Next",
+      "review": "Review",
+      "details": "View details",
+      "reviewTitle": "Submission for {{name}}",
+      "field": "Field",
+      "current": "Currently published",
+      "proposed": "Proposed",
+      "notSet": "Not set",
+      "noCurrent": "No currently published skill is available for comparison",
+      "pendingNotice": "Awaiting admin approval. The published skill remains unchanged",
+      "submittedBy": "Submitted by {{name}}",
+      "reviewedBy": "Reviewed by {{name}} on {{date}}",
+      "rejectionReason": "Rejection reason: {{reason}}",
+      "reasonLabel": "Rejection reason (optional)",
+      "approve": "Approve and publish",
+      "reject": "Reject",
+      "approved": "Submission approved and published",
+      "rejected": "Submission rejected. Published skills are unchanged",
+      "actionFailed": "Could not review this submission",
+      "download": "Download submitted ZIP",
+      "downloading": "Downloading...",
+      "downloadFailed": "Could not download the submitted ZIP",
+      "status": {
+        "pending_review": "Pending review",
+        "approved": "Approved",
+        "rejected": "Rejected"
+      },
+      "operation": {
+        "create": "New skill",
+        "update": "Skill update"
+      },
+      "fields": {
+        "name": "Name",
+        "version": "Version",
+        "description": "Description",
+        "source": "Source",
+        "author": "Author",
+        "homepage": "Homepage",
+        "keywords": "Keywords",
+        "category": "Category",
+        "domain": "Domain",
+        "namespace": "Namespace",
+        "installation_preference": "Installation preference",
+        "agent_skill": "Portable skill descriptor"
+      },
+      "nextPatchVersion": "Next patch version on approval",
+      "descriptorUnavailable": "The current portable descriptor is not included in this response"
+    },
+    "detail": {
+      "subtitle": "Published skill metadata and portable archive",
+      "private": "Private"
     }
   },
   "claudeCodePlugins": {

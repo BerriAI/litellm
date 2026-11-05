@@ -449,7 +449,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
 
-    litellm_native_routes = [
+    skill_hub_routes = (
         "/skill-hub/skills",
         "/skill-hub/skills/upload",
         "/skill-hub/skills/import",
@@ -461,6 +461,15 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/skills/{name}/versions/{version_id}/archive",
         "/skill-hub/skills/{name}/publish",
         "/skill-hub/skills/{name}/unpublish",
+        "/skill-hub/skills/{name}/upload",
+        "/skill-hub/submissions",
+        "/skill-hub/submissions/{submission_id}",
+        "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/approve",
+        "/skill-hub/submissions/{submission_id}/reject",
+    )
+
+    litellm_native_routes = [
         "/rag/ingest",
         "/v1/rag/ingest",
         "/rag/query",
@@ -709,6 +718,7 @@ class LiteLLMRoutes(enum.Enum):
         + key_management_routes
         + mcp_management_routes
         + list(agent_management_routes)
+        + list(skill_hub_routes)
     )
 
     spend_tracking_routes = [
@@ -951,6 +961,7 @@ class LiteLLMRoutes(enum.Enum):
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
+        *skill_hub_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

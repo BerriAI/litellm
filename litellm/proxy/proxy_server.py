@@ -2934,7 +2934,11 @@ def configured_max_request_size_mb() -> int | float | None:
 
 
 _ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
-    {("POST", "/claude-code/plugins/upload"): 11, ("POST", "/skill-hub/skills/upload"): 11}
+    {
+        ("POST", "/claude-code/plugins/upload"): 11,
+        ("POST", "/skill-hub/skills/upload"): 11,
+        ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+    }
 )
 
 

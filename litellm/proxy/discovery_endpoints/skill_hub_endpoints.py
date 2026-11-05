@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from dataclasses import replace
 from datetime import datetime
 from typing import Annotated, Final
 from urllib.parse import quote
@@ -14,13 +15,13 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.models.plugin_upload import (
     PluginArchiveMetadata,
     PluginPublication,
-    PluginPublicationBase,
-    PluginPublicationError,
+    PluginSnapshot,
     PluginUploadStore,
     PluginVersion,
     PublishedPlugin,
     has_agent_skill_metadata,
 )
+from litellm.models.skill_submission import SkillSubmission, SkillSubmissionStore
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
     MANIFEST_FIELDS,
@@ -40,10 +41,16 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
     marketplace_key_header_present,
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
-from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.proxy.deps.repositories import PluginUploadRepositoryDep, SkillSubmissionRepositoryDep
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     SkillArchive,
     build_agent_skill_archive,
+)
+from litellm.proxy.discovery_endpoints.skill_hub_mutations import (
+    SkillMutationError,
+    archive_writer,
+    write_skill,
+    write_target,
 )
 from litellm.proxy.discovery_endpoints.skill_import import (
     MAX_IMPORT_BYTES,
@@ -52,13 +59,15 @@ from litellm.proxy.discovery_endpoints.skill_import import (
     parse_skill_source,
     select_imported_skill,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.types.proxy.claude_code_endpoints import PluginListItem
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import AgentSkillsIndexEntry
 from litellm.types.proxy.skill_hub import (
     ImportSkillRequest,
     SkillHubList,
     SkillHubMetadata,
+    SkillHubMutationResponse,
+    SkillHubPendingSkill,
+    SkillHubProposal,
     SkillHubPublication,
     SkillHubSkill,
     SkillHubVersion,
@@ -92,6 +101,9 @@ def _skill_response(request: Request, plugin: PluginListItem) -> SkillHubSkill:
         name=plugin.name,
         description=plugin.description,
         version=plugin.version,
+        domain=plugin.domain,
+        namespace=plugin.namespace,
+        keywords=None if plugin.keywords is None else tuple(plugin.keywords),
         updated_at=None if plugin.updated_at is None else datetime.fromisoformat(plugin.updated_at),
         visibility="public" if plugin.enabled else "private",
         source={"source": "archive", "url": _download_url(request, plugin.name)} if local_archive else plugin.source,
@@ -135,22 +147,28 @@ async def get_skill(
     metadata: Final = await store.get_metadata(name)
     if metadata is None or not (await resolve_skill_visibility(caller)).allows(metadata):
         raise HTTPException(404, "Skill not found")
-    return _metadata_response(request, metadata)
+    return skill_metadata_response(request, metadata)
 
 
-def _metadata_response(request: Request, metadata: PluginArchiveMetadata) -> SkillHubSkill:
+def skill_metadata_response(request: Request, metadata: PluginArchiveMetadata) -> SkillHubSkill:
+    manifest: Final = MANIFEST_FIELDS.validate_json(metadata.manifest_json or "{}")
     return _skill_response(
         request,
-        PluginListItem(
-            id=metadata.id or metadata.name,
-            name=metadata.name,
-            description=metadata.description,
-            version=metadata.version,
-            source=dict(metadata.source),
-            has_agent_skill_metadata=metadata.has_agent_skill_metadata,
-            enabled=metadata.enabled,
-            created_at=None,
-            updated_at=metadata.updated_at.isoformat() if metadata.updated_at is not None else None,
+        PluginListItem.model_validate(
+            {
+                "id": metadata.id or metadata.name,
+                "name": metadata.name,
+                "description": metadata.description,
+                "version": metadata.version,
+                "source": dict(metadata.source),
+                "has_agent_skill_metadata": metadata.has_agent_skill_metadata,
+                "enabled": metadata.enabled,
+                "created_at": None,
+                "updated_at": metadata.updated_at.isoformat() if metadata.updated_at is not None else None,
+                "domain": manifest.get("domain"),
+                "namespace": manifest.get("namespace"),
+                "keywords": manifest.get("keywords"),
+            }
         ),
     )
 
@@ -166,70 +184,33 @@ def _require_admin(caller: UserAPIKeyAuth) -> None:
         raise HTTPException(403, "Only proxy admins may publish skills")
 
 
-async def skill_publisher(
-    caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> UserAPIKeyAuth:
-    from litellm.proxy.proxy_server import proxy_logging_obj
-
-    _require_admin(caller)
-    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
-        raise HTTPException(503, "Skills Hub publishing requires the default v3 rate limiter")
-    key_identity: Final = caller.api_key or caller.token
-    identity: Final = (
-        f"user:{caller.user_id}" if caller.user_id else f"key:{key_identity}" if key_identity else "local-admin"
-    )
-    result: Final = await limiter.atomic_check_and_increment_by_n(
-        descriptors=[
-            {
-                "key": "skill_hub_publish",
-                "value": hashlib.sha256(identity.encode()).hexdigest(),
-                "rate_limit": {"requests_per_unit": 10, "window_size": 60},
-            }
-        ],
-        increments=[{"requests": 1}],
-        parent_otel_span=caller.parent_otel_span,
-    )
-    if result["overall_code"] == "OVER_LIMIT":
-        raise HTTPException(
-            429, "Skills Hub allows 10 uploads or imports per minute per user", headers={"Retry-After": "60"}
-        )
-    return caller
-
-
-@router.put("/{name}", response_model=SkillHubSkill)
+@router.put("/{name}", response_model=SkillHubMutationResponse)
 async def replace_skill_metadata(
     request: Request,
     name: str,
     body: SkillHubMetadata,
     uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
     caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> SkillHubSkill:
-    """Replace registry metadata, clearing omitted fields and preserving skill files."""
-    _require_admin(caller)
-    store: Final = _require_store(uploads)
-    metadata: Final = await store.get_metadata(name)
-    if metadata is None or metadata.id is None:
+) -> SkillHubMutationResponse:
+    """Replace registry metadata, preserving files. Members submit an immutable proposal for admin review."""
+    existing: Final = await write_target(name, True, uploads, caller, body.expected_updated_at)
+    if isinstance(existing, SkillMutationError):
+        raise HTTPException(existing.status, existing.message)
+    if existing is None:
         raise HTTPException(404, "Skill not found")
-    if body.expected_updated_at is not None and body.expected_updated_at != metadata.updated_at:
-        raise HTTPException(409, "The published skill changed. Reload it before publishing an update")
-    manifest: Final = MANIFEST_FIELDS.validate_json(metadata.manifest_json or "{}")
     publication: Final = PluginPublication(
         name=name,
         version=body.version,
         description=body.description,
         manifest={
-            **{key: value for key, value in manifest.items() if key not in _EDITABLE_METADATA},
+            **{key: value for key, value in existing.manifest.items() if key not in _EDITABLE_METADATA},
             **body.model_dump(exclude_none=True),
             "name": name,
-            "source": dict(metadata.source),
         },
         created_by=caller.user_id,
     )
-    published: Final = await store.publish(publication, PluginPublicationBase(metadata.id, metadata.updated_at))
-    if isinstance(published, PluginPublicationError):
-        raise _publication_error(published)
-    return skill_publication_response(request, publication, published)
+    return await _mutate(request, publication, existing, _require_store(uploads), submissions, caller)
 
 
 @router.post("/{name}/publish", response_model=SkillHubSkill)
@@ -268,14 +249,15 @@ async def remove_skill(name: str, caller: Annotated[UserAPIKeyAuth, Depends(user
     return Response(status_code=204)
 
 
-@router.post("/upload", response_model=SkillHubSkill)
+@router.post("/upload", response_model=SkillHubMutationResponse)
 async def upload_skill(
     request: Request,
     uploads: PluginUploadRepositoryDep,
-    caller: Annotated[UserAPIKeyAuth, Depends(skill_publisher)],
+    submissions: SkillSubmissionRepositoryDep,
+    caller: Annotated[UserAPIKeyAuth, Depends(archive_writer)],
     file: Annotated[UploadFile, File(description="Agent Skills ZIP with SKILL.md and optional supporting files")],
     version: Annotated[str | None, Form()] = None,
-) -> SkillHubSkill:
+) -> SkillHubMutationResponse:
     """Publish a portable skill while retaining Claude marketplace compatibility."""
     store: Final = _require_store(uploads)
     content: Final = await file.read(MAX_IMPORT_BYTES + 1)
@@ -284,21 +266,22 @@ async def upload_skill(
     archive: Final = await asyncio.to_thread(build_agent_skill_archive, content)
     if archive is None:
         raise HTTPException(422, "Upload a valid Agent Skill with name and description in SKILL.md")
-    return await _publish(request, store, caller, archive, version, None)
+    return await _publish(request, store, submissions, caller, archive, version, None)
 
 
 def import_http_client() -> httpx.AsyncClient:
     return get_async_httpx_client(llm_provider="skill_hub_import").client
 
 
-@router.post("/import", response_model=SkillHubSkill)
+@router.post("/import", response_model=SkillHubMutationResponse)
 async def import_skill(
     request: Request,
     body: ImportSkillRequest,
     uploads: PluginUploadRepositoryDep,
-    caller: Annotated[UserAPIKeyAuth, Depends(skill_publisher)],
+    submissions: SkillSubmissionRepositoryDep,
+    caller: Annotated[UserAPIKeyAuth, Depends(archive_writer)],
     client: Annotated[httpx.AsyncClient, Depends(import_http_client)],
-) -> SkillHubSkill:
+) -> SkillHubMutationResponse:
     """Import a public skills.sh or GitHub skill as a portable snapshot."""
     store: Final = _require_store(uploads)
     source: Final = parse_skill_source(body.url, skill=body.skill, ref=body.ref, path=body.path)
@@ -310,26 +293,89 @@ async def import_skill(
     archive: Final = await asyncio.to_thread(select_imported_skill, content, source)
     if isinstance(archive, SkillImportError):
         raise HTTPException(archive.status, archive.message)
-    return await _publish(request, store, caller, archive, body.version, body.url)
+    return await _publish(request, store, submissions, caller, archive, body.version, body.url)
 
 
 async def _publish(
     request: Request,
     store: PluginUploadStore,
+    submissions: SkillSubmissionStore | None,
     caller: UserAPIKeyAuth,
     archive: SkillArchive,
     version: str | None,
     origin: str | None,
-) -> SkillHubSkill:
+) -> SkillHubMutationResponse:
+    existing: Final = await write_target(archive.declared_name or "", False, store, caller)
+    if isinstance(existing, SkillMutationError):
+        raise HTTPException(existing.status, existing.message)
     publication: Final = await prepare_skill_publication(request, archive, version, origin, caller.user_id)
-    published: Final = await store.publish(publication)
-    if isinstance(published, PluginPublicationError):
-        raise _publication_error(published)
-    return skill_publication_response(request, publication, published)
+    return await _mutate(request, publication, existing, store, submissions, caller)
 
 
-def _publication_error(error: PluginPublicationError) -> HTTPException:
-    return HTTPException({"invalid_version": 400, "conflict": 409, "not_found": 404}[error.kind], error.message)
+async def _mutate(
+    request: Request,
+    publication: PluginPublication,
+    existing: PluginSnapshot | None,
+    store: PluginUploadStore,
+    submissions: SkillSubmissionStore | None,
+    caller: UserAPIKeyAuth,
+) -> SkillHubMutationResponse:
+    result: Final = await write_skill(publication, existing, store, submissions, caller)
+    if isinstance(result, SkillMutationError):
+        raise HTTPException(result.status, result.message)
+    if isinstance(result, SkillSubmission):
+        return SkillHubPendingSkill(submission_id=result.id, proposal=skill_proposal_response(request, result))
+    return skill_publication_response(request, publication, result)
+
+
+def skill_proposal_response(request: Request, submission: SkillSubmission) -> SkillHubProposal:
+    proposal: Final = submission.proposal
+    return SkillHubProposal.model_validate(
+        {
+            **proposal.manifest,
+            "name": proposal.name,
+            "description": proposal.description,
+            "version": proposal.version,
+            **(
+                {
+                    "source": {
+                        "source": "archive",
+                        "url": _url(request, f"skill-hub/submissions/{quote(submission.id, safe='')}/archive"),
+                    }
+                }
+                if submission.has_archive
+                else {}
+            ),
+        }
+    )
+
+
+@router.put("/{name}/upload", response_model=SkillHubMutationResponse)
+async def replace_skill_archive(
+    request: Request,
+    name: str,
+    uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
+    caller: Annotated[UserAPIKeyAuth, Depends(archive_writer)],
+    file: Annotated[UploadFile, File(description="Replacement Agent Skills ZIP with the same declared skill name")],
+    version: Annotated[str | None, Form()] = None,
+    expected_updated_at: Annotated[datetime | None, Form()] = None,
+) -> SkillHubMutationResponse:
+    """Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp."""
+    existing: Final = await write_target(name, True, uploads, caller, expected_updated_at)
+    if isinstance(existing, SkillMutationError):
+        raise HTTPException(existing.status, existing.message)
+    if existing is None:
+        raise HTTPException(404, "Skill not found")
+    content: Final = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(content) > MAX_IMPORT_BYTES:
+        raise HTTPException(413, "Skill ZIP must be 10 MiB or smaller")
+    archive: Final = await asyncio.to_thread(build_agent_skill_archive, content)
+    if archive is None or archive.declared_name != name:
+        raise HTTPException(422, "Replacement SKILL.md must declare the existing skill name and a description")
+    prepared: Final = await prepare_skill_publication(request, archive, version, None, caller.user_id)
+    publication: Final = replace(prepared, manifest={**existing.manifest, **prepared.manifest})
+    return await _mutate(request, publication, existing, _require_store(uploads), submissions, caller)
 
 
 def skill_publication_response(
@@ -348,6 +394,9 @@ def skill_publication_response(
                 "has_agent_skill_metadata": has_agent_skill_metadata(publication.manifest),
                 "created_at": None,
                 "updated_at": published.updated_at.isoformat(),
+                "domain": publication.manifest.get("domain"),
+                "namespace": publication.manifest.get("namespace"),
+                "keywords": publication.manifest.get("keywords"),
             }
         ),
     )

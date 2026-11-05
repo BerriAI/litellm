@@ -2,27 +2,27 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Plugin } from "@/components/claude_code_plugins/types";
+import { SkillHubSkill } from "@/components/claude_code_plugins/types";
 
 import PluginTable from "./PluginTable";
 
-const mockPlugins: Plugin[] = [
+const mockPlugins: SkillHubSkill[] = [
   {
     id: "plugin-id-newer",
     name: "newer-skill",
     version: "1.2.0",
     description: "A skill for testing",
     source: { source: "github", repo: "org/newer-skill" },
-    category: "development",
-    enabled: true,
-    created_at: "2025-01-15T10:30:00Z",
+    domain: "development",
+    visibility: "public",
+    updated_at: "2025-01-15T10:30:00Z",
   },
   {
     id: "plugin-id-older",
     name: "older-skill",
     source: { source: "github", repo: "org/older-skill" },
-    enabled: false,
-    created_at: "2024-01-10T09:15:00Z",
+    visibility: "private",
+    updated_at: "2024-01-10T09:15:00Z",
   },
 ];
 
@@ -44,7 +44,7 @@ describe("PluginTable", () => {
 
   it("should render every column header", () => {
     render(<PluginTable {...defaultProps} />);
-    for (const header of ["Skill Name", "Version", "Description", "Category", "Public", "Created At"]) {
+    for (const header of ["Skill Name", "Version", "Description", "Domain", "Public", "Updated at"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
   });
@@ -54,7 +54,7 @@ describe("PluginTable", () => {
     expect(screen.getByText("No skills found")).toBeInTheDocument();
   });
 
-  it("should sort by created date descending by default", () => {
+  it("should sort by name ascending by default", () => {
     render(<PluginTable {...defaultProps} />);
     const rows = screen.getAllByRole("row").slice(1);
     expect(within(rows[0]).getByText("newer-skill")).toBeInTheDocument();
@@ -75,10 +75,10 @@ describe("PluginTable", () => {
     expect(mockOnPluginClick).not.toHaveBeenCalled();
   });
 
-  it("should badge the category and fall back to Uncategorized", () => {
+  it("should display the domain and a fallback when unset", () => {
     render(<PluginTable {...defaultProps} />);
     expect(screen.getByText("development")).toBeInTheDocument();
-    expect(screen.getByText("Uncategorized")).toBeInTheDocument();
+    expect(screen.getAllByText("—")[0]).toBeInTheDocument();
   });
 
   it("should show whether the skill is public", () => {
