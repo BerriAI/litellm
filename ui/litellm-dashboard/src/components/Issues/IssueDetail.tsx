@@ -100,9 +100,7 @@ function RetirementContext({ issue }: { issue: Issue }) {
     );
   return (
     <div className="space-y-2">
-      <p className="text-sm">
-        Model retirement: {deprecation.model.deprecation_date}. Last recorded use: {deprecation.last_used_date} UTC.
-      </p>
+      <p className="text-sm">Last recorded use: {deprecation.last_used_date} UTC.</p>
       <RecommendedReplacement recommendation={deprecation.model} />
       <div className="flex flex-wrap items-center gap-3 pt-1">
         <Button variant="outline" size="sm" onClick={copy}>
@@ -130,8 +128,8 @@ function IssueBody({ issue }: { issue: Issue }) {
   const impact = issueImpactText(issue);
   return (
     <div className="min-w-0 space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 flex-1 space-y-2">
+      <header className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
+        <div className="w-full min-w-0 flex-1 space-y-2 sm:w-auto">
           <h1 className="break-words text-xl font-semibold">{issue.title}</h1>
           <p className="break-all text-sm text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
             {issueResource(issue)}
@@ -144,7 +142,7 @@ function IssueBody({ issue }: { issue: Issue }) {
         <IssueStatusActions issue={issue} />
       </header>
       <section className="space-y-3" aria-label="Issue evidence">
-        <p className="text-sm text-muted-foreground">{issue.explanation}</p>
+        {issue.kind === "performance" && <p className="text-sm text-muted-foreground">{issue.explanation}</p>}
         <IssueComparisonTable issue={issue} />
         <RetirementContext issue={issue} />
         {impact && <p className="text-xs text-muted-foreground">Recorded resources: {impact}.</p>}

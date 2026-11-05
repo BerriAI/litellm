@@ -31,6 +31,7 @@ let staleStatus = false;
 let empty = false;
 let allFailed = false;
 let deniedDetail = false;
+let families = FAMILY_SETTINGS;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -88,6 +89,7 @@ describe("unified issue investigations", () => {
     empty = false;
     allFailed = false;
     deniedDetail = false;
+    families = FAMILY_SETTINGS;
     auth.isViewOnly = false;
     auth.isAuthorized = true;
     auth.userRole = "Admin";
@@ -105,7 +107,7 @@ describe("unified issue investigations", () => {
         return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
       if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
       if (url.pathname === "/issues") return listResponse(url.searchParams);
-      if (url.pathname === "/issues/families") return json(FAMILY_SETTINGS);
+      if (url.pathname === "/issues/families") return json(families);
       if (url.pathname === "/issues/families/spend") return json(FAMILY_SETTINGS.data[0]);
       if (url.pathname.endsWith("/activity"))
         return failActivity ? json({ detail: "Unavailable" }, 503) : json(activity());
@@ -397,6 +399,24 @@ describe("unified issue investigations", () => {
     renderWithProviders(<IssueDetail id={detail.id} />);
     expect(await screen.findByRole("button", { name: "Reopen" })).toBeInTheDocument();
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it.each([
+    { total: 0, label: "No default policies yet" },
+    { total: 5, label: "Thresholds vary by scope" },
+  ])("describes incomplete or differing defaults without a fabricated multiplier: $total", async ({ total, label }) => {
+    families = {
+      data: FAMILY_SETTINGS.data.map((family) => ({
+        ...family,
+        total_rules: total,
+        enabled: null,
+        policies: family.policies.map((policy) => ({ ...policy, multiplier: null })),
+      })),
+    };
+    renderWithProviders(<IssuesInbox />);
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect((await screen.findAllByText(new RegExp(label))).length).toBeGreaterThan(0);
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("Mixed×");
   });
 
   it("uses four family controls and sends only changed policy fields atomically", async () => {

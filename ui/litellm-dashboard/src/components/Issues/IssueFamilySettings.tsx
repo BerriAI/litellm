@@ -20,6 +20,14 @@ function enabledLabel(enabled: boolean | null) {
   if (enabled === null) return "Mixed settings";
   return enabled ? "Enabled" : "Disabled";
 }
+function familySummary(family: Family) {
+  if (family.total_rules === 0) return "No default policies yet";
+  const thresholds = family.policies.map((policy) => {
+    if (policy.multiplier === null) return "Thresholds vary by scope";
+    return `${policy.multiplier}× ${policy.direction}`;
+  });
+  return [enabledLabel(family.enabled), ...new Set(thresholds)].join(" · ");
+}
 const enabledValue = (enabled: boolean | null) => (enabled === null ? "" : String(enabled));
 
 function policyUpdate(data: FormData, policy: Policy): PolicyUpdate | null {
@@ -247,12 +255,7 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
               <li key={family.family} className="flex items-center justify-between gap-3 py-3">
                 <div className="space-y-1">
                   <p className="text-sm font-medium">{FAMILY_LABELS[family.family]}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {enabledLabel(family.enabled)} ·{" "}
-                    {family.policies
-                      .map((policy) => `${policy.multiplier ?? "Mixed"}× ${policy.direction}`)
-                      .join(" · ")}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{familySummary(family)}</p>
                 </div>
                 <Button
                   variant="ghost"
