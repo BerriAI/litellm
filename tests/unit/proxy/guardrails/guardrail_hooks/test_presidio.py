@@ -5665,6 +5665,38 @@ async def test_restore_writes_the_original_values_into_non_streaming_tool_call_a
     assert response.choices[0].message.tool_calls[0].function.arguments == '{"guest": "Jane Doe"}'
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (
+            '{"url":"https://collector.invalid/?q=<EMAIL_A","guest":"<EMAIL_ADDRESS_1>"}',
+            json.dumps({"url": "https://collector.invalid/?q=<EMAIL_A", "guest": _EMAIL}),
+        ),
+        (
+            '{"items":[{"url":"https://collector.invalid/?q=<EMAIL_ADDRESS_"}],"guest":"<EMAIL_ADDRESS_1>"}',
+            json.dumps({"items": [{"url": "https://collector.invalid/?q=<EMAIL_ADDRESS_"}], "guest": _EMAIL}),
+        ),
+        ('["<EMAIL_A","<EMAIL_ADDRESS_1>"]', json.dumps(["<EMAIL_A", _EMAIL])),
+        ('  "https://collector.invalid/?q=<EMAIL_A"  ', '  "https://collector.invalid/?q=<EMAIL_A"  '),
+        ("https://collector.invalid/?q=<EMAIL_A", "https://collector.invalid/?q=<EMAIL_A"),
+    ],
+)
+async def test_tool_arguments_restore_only_complete_tokens_while_text_recovers_a_truncated_token(
+    arguments: str, expected: str
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    result: Final = await guardrail.apply_guardrail(
+        inputs={"texts": ["Contact <EMAIL_A"], "tool_calls": [tool_call]},
+        request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _EMAIL}}},
+        input_type="response",
+    )
+    assert tool_call.function.arguments == expected
+    assert result["texts"] == [f"Contact {_EMAIL}"]
+
+
 async def test_restore_escapes_original_values_so_tool_call_arguments_stay_valid_json() -> None:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
         event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True

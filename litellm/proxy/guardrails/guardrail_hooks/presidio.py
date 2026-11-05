@@ -25,7 +25,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import accumulate, chain, count, pairwise, repeat
+from itertools import accumulate, chain, count, pairwise
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
@@ -1467,7 +1467,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return response
 
     @staticmethod
-    def _unmask_pii_text(text: str, pii_tokens: dict[str, str]) -> str:
+    def _unmask_pii_text(text: str, pii_tokens: dict[str, str], *, allow_partial_tokens: bool = True) -> str:
         """
         Replace PII tokens in *text* with their original values.
 
@@ -1481,7 +1481,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for token, original_text in pii_tokens.items():
             if token in text:
                 text = text.replace(token, original_text)
-            else:
+            elif allow_partial_tokens:
                 # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
                 # Only check at the very end of the text.
                 min_overlap = min(20, len(token) // 2)
@@ -1979,8 +1979,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        async def restore(text: str, allow_masking: bool) -> str:
-            return self._unmask_pii_text(text, pii_tokens) if allow_masking else text
+        def restore_for_slot(slot: _TextSlot | _ToolCallSlot) -> Callable[[str, bool], Awaitable[str]]:
+            async def restore(text: str, allow_masking: bool) -> str:
+                if not allow_masking:
+                    return text
+                return self._unmask_pii_text(text, pii_tokens, allow_partial_tokens=isinstance(slot, _TextSlot))
+
+            return restore
 
         def mask_reserving(reserved_tokens: frozenset[str]) -> Callable[[str, bool], Awaitable[str]]:
             async def mask(text: str, allow_masking: bool) -> str:
@@ -1996,7 +2001,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return mask
 
         rewrites: Final = (
-            repeat(restore)
+            map(restore_for_slot, (slot for slot, _ in segments))
             if input_type == "response"
             and (
                 self._callback_role == "restore"
