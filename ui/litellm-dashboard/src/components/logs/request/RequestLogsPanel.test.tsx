@@ -803,4 +803,13 @@ describe("RequestLogsPanel", () => {
       expect(screen.queryByText("Refreshing every 15s")).not.toBeInTheDocument();
     });
   });
+
+  it("a failed logs request says so instead of showing an empty table", async () => {
+    vi.mocked(uiSpendLogsCall).mockRejectedValue(new Error("Request timed out after 30s"));
+    renderPanel();
+    const alert = await screen.findByRole("alert", {}, { timeout: 3000 });
+    expect(alert).toHaveTextContent("Failed to load");
+    expect(alert).toHaveTextContent("Request timed out after 30s");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+  });
 });

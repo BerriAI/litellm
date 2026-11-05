@@ -1,18 +1,17 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Final, List
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
-import litellm
 import pytest
 from pydantic import ValidationError
 
-
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
+from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -146,9 +145,7 @@ class TestAnthropicLoggingHandlerModelFallback:
             '{"type": "message_stop"}',
         ]
 
-    def _create_mock_logging_obj(
-        self, model_in_details: str = None
-    ) -> LiteLLMLoggingObj:
+    def _create_mock_logging_obj(self, model_in_details: str = None) -> LiteLLMLoggingObj:
         """Create a mock logging object with optional model in model_call_details"""
         mock_logging_obj = MagicMock()
 
@@ -167,21 +164,13 @@ class TestAnthropicLoggingHandlerModelFallback:
         mock_handler = MagicMock()
         return mock_handler
 
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
-    )
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "_create_anthropic_response_logging_payload"
-    )
-    def test_model_from_request_body_used_when_present(
-        self, mock_create_payload, mock_build_response
-    ):
+    @patch.object(AnthropicPassthroughLoggingHandler, "build_complete_streaming_response")
+    @patch.object(AnthropicPassthroughLoggingHandler, "_create_anthropic_response_logging_payload")
+    def test_model_from_request_body_used_when_present(self, mock_create_payload, mock_build_response):
         """Test that model from request_body is used when present"""
         # Arrange
         request_body = {"model": "claude-3-sonnet-20240229"}
-        logging_obj = self._create_mock_logging_obj(
-            model_in_details="claude-3-haiku-20240307"
-        )
+        logging_obj = self._create_mock_logging_obj(model_in_details="claude-3-haiku-20240307")
         passthrough_handler = self._create_mock_passthrough_handler()
 
         # Mock successful response building
@@ -205,57 +194,37 @@ class TestAnthropicLoggingHandlerModelFallback:
         # Verify that _build_complete_streaming_response was called with the request_body model
         mock_build_response.assert_called_once()
         call_args = mock_build_response.call_args
-        assert (
-            call_args[1]["model"] == "claude-3-sonnet-20240229"
-        )  # Should use request_body model
+        assert call_args[1]["model"] == "claude-3-sonnet-20240229"  # Should use request_body model
 
     def test_model_fallback_logic_isolated(self):
         """Test just the model fallback logic in isolation"""
         # Test case 1: Model from request body
         request_body = {"model": "claude-3-sonnet-20240229"}
-        logging_obj = self._create_mock_logging_obj(
-            model_in_details="claude-3-haiku-20240307"
-        )
+        logging_obj = self._create_mock_logging_obj(model_in_details="claude-3-haiku-20240307")
 
         # Extract the logic directly from the function
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
+        if not model and hasattr(logging_obj, "model_call_details") and logging_obj.model_call_details.get("model"):
             model = logging_obj.model_call_details.get("model")
 
         assert model == "claude-3-sonnet-20240229"  # Should use request_body model
 
         # Test case 2: Fallback to logging obj
         request_body = {}
-        logging_obj = self._create_mock_logging_obj(
-            model_in_details="claude-3-haiku-20240307"
-        )
+        logging_obj = self._create_mock_logging_obj(model_in_details="claude-3-haiku-20240307")
 
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
+        if not model and hasattr(logging_obj, "model_call_details") and logging_obj.model_call_details.get("model"):
             model = logging_obj.model_call_details.get("model")
 
         assert model == "claude-3-haiku-20240307"  # Should use fallback model
 
         # Test case 3: Empty string in request body, fallback to logging obj
         request_body = {"model": ""}
-        logging_obj = self._create_mock_logging_obj(
-            model_in_details="claude-3-opus-20240229"
-        )
+        logging_obj = self._create_mock_logging_obj(model_in_details="claude-3-opus-20240229")
 
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
+        if not model and hasattr(logging_obj, "model_call_details") and logging_obj.model_call_details.get("model"):
             model = logging_obj.model_call_details.get("model")
 
         assert model == "claude-3-opus-20240229"  # Should use fallback model
@@ -265,11 +234,7 @@ class TestAnthropicLoggingHandlerModelFallback:
         logging_obj = self._create_mock_logging_obj()
 
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
+        if not model and hasattr(logging_obj, "model_call_details") and logging_obj.model_call_details.get("model"):
             model = logging_obj.model_call_details.get("model")
 
         assert model == ""  # Should be empty
@@ -285,11 +250,7 @@ class TestAnthropicLoggingHandlerModelFallback:
 
         # Extract the logic directly from the function
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
+        if not model and hasattr(logging_obj, "model_call_details") and logging_obj.model_call_details.get("model"):
             model = logging_obj.model_call_details.get("model")
 
         assert model == ""  # Should remain empty since no fallback available
@@ -299,11 +260,7 @@ class TestAnthropicLoggingHandlerModelFallback:
         logging_obj = self._create_mock_logging_obj()  # Empty dict
 
         model = request_body.get("model", "")
-        if (
-            not model
-            and hasattr(logging_obj, "model_call_details")
-            and logging_obj.model_call_details.get("model")
-        ):
+        if not model and hasattr(logging_obj, "model_call_details") and logging_obj.model_call_details.get("model"):
             model = logging_obj.model_call_details.get("model")
 
         assert model == ""  # Should remain empty
@@ -312,9 +269,7 @@ class TestAnthropicLoggingHandlerModelFallback:
 class TestAzureAnthropicCostCalculation:
     """Test the custom_llm_provider cost calculation logic for Azure AI Anthropic."""
 
-    def _create_mock_logging_obj(
-        self, model: str = None, custom_llm_provider: str = None
-    ) -> LiteLLMLoggingObj:
+    def _create_mock_logging_obj(self, model: str = None, custom_llm_provider: str = None) -> LiteLLMLoggingObj:
         """Create a mock logging object with optional model and custom_llm_provider"""
         mock_logging_obj = MagicMock()
         mock_model_call_details = {}
@@ -327,12 +282,11 @@ class TestAzureAnthropicCostCalculation:
         return mock_logging_obj
 
     @patch("litellm.completion_cost")
-    def test_cost_calculation_with_azure_ai_custom_llm_provider(
-        self, mock_completion_cost
-    ):
+    def test_cost_calculation_with_azure_ai_custom_llm_provider(self, mock_completion_cost):
         """Test that custom_llm_provider is passed to completion_cost for Azure AI Anthropic"""
-        from litellm.types.utils import ModelResponse
         from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
 
         mock_completion_cost.return_value = 0.001
 
@@ -366,8 +320,9 @@ class TestAzureAnthropicCostCalculation:
     @patch("litellm.completion_cost")
     def test_cost_calculation_without_custom_llm_provider(self, mock_completion_cost):
         """Test that cost calculation works without custom_llm_provider (standard Anthropic)"""
-        from litellm.types.utils import ModelResponse
         from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
 
         mock_completion_cost.return_value = 0.001
 
@@ -398,12 +353,11 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["custom_llm_provider"] is None
 
     @patch("litellm.completion_cost")
-    def test_cost_calculation_does_not_duplicate_provider_prefix(
-        self, mock_completion_cost
-    ):
+    def test_cost_calculation_does_not_duplicate_provider_prefix(self, mock_completion_cost):
         """Test that provider prefix is not duplicated if already present in model name"""
-        from litellm.types.utils import ModelResponse
         from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
 
         mock_completion_cost.return_value = 0.001
 
@@ -437,9 +391,7 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
     @patch("litellm.completion_cost")
-    def test_cost_calculation_resolves_unknown_model_from_litellm_params(
-        self, mock_completion_cost
-    ):
+    def test_cost_calculation_resolves_unknown_model_from_litellm_params(self, mock_completion_cost):
         """When the body model is the "unknown" sentinel, the deployment model
         from litellm_params must be used for costing, not "unknown" (which makes
         completion_cost raise and the cost silently fall back to $0)."""
@@ -452,9 +404,7 @@ class TestAzureAnthropicCostCalculation:
         logging_obj = self._create_mock_logging_obj(model="unknown")
         logging_obj.model_call_details["litellm_params"] = {
             "model": "anthropic/claude-3-5-haiku-20241022",
-            "metadata": {
-                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
-            },
+            "metadata": {"model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"},
         }
         logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
 
@@ -472,17 +422,12 @@ class TestAzureAnthropicCostCalculation:
         )
 
         mock_completion_cost.assert_called_once()
-        assert (
-            mock_completion_cost.call_args[1]["model"]
-            == "anthropic/claude-3-5-haiku-20241022"
-        )
+        assert mock_completion_cost.call_args[1]["model"] == "anthropic/claude-3-5-haiku-20241022"
         assert kwargs["response_cost"] == 0.001
         assert kwargs["model"] == "anthropic/claude-3-5-haiku-20241022"
 
     @patch("litellm.completion_cost")
-    def test_cost_calculation_resolves_unknown_model_from_model_group(
-        self, mock_completion_cost
-    ):
+    def test_cost_calculation_resolves_unknown_model_from_model_group(self, mock_completion_cost):
         """With only model_group available (no deployment litellm_params.model),
         the leading passthrough/ prefix must be stripped so the cost map can
         resolve the model."""
@@ -494,9 +439,7 @@ class TestAzureAnthropicCostCalculation:
 
         logging_obj = self._create_mock_logging_obj(model="unknown")
         logging_obj.model_call_details["litellm_params"] = {
-            "metadata": {
-                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
-            }
+            "metadata": {"model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"}
         }
         logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
 
@@ -514,16 +457,11 @@ class TestAzureAnthropicCostCalculation:
         )
 
         mock_completion_cost.assert_called_once()
-        assert (
-            mock_completion_cost.call_args[1]["model"]
-            == "anthropic/claude-3-5-haiku-20241022"
-        )
+        assert mock_completion_cost.call_args[1]["model"] == "anthropic/claude-3-5-haiku-20241022"
         assert kwargs["response_cost"] == 0.002
 
     @patch("litellm.completion_cost")
-    def test_cost_calculation_skips_unknown_litellm_params_model_for_model_group(
-        self, mock_completion_cost
-    ):
+    def test_cost_calculation_skips_unknown_litellm_params_model_for_model_group(self, mock_completion_cost):
         """When litellm_params.model is itself the "unknown" sentinel, the
         deployment-model branch must not short-circuit; resolution falls through
         to model_group so costing still prices the real model instead of "unknown"."""
@@ -536,9 +474,7 @@ class TestAzureAnthropicCostCalculation:
         logging_obj = self._create_mock_logging_obj(model="unknown")
         logging_obj.model_call_details["litellm_params"] = {
             "model": "unknown",
-            "metadata": {
-                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
-            },
+            "metadata": {"model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"},
         }
         logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
 
@@ -556,17 +492,12 @@ class TestAzureAnthropicCostCalculation:
         )
 
         mock_completion_cost.assert_called_once()
-        assert (
-            mock_completion_cost.call_args[1]["model"]
-            == "anthropic/claude-3-5-haiku-20241022"
-        )
+        assert mock_completion_cost.call_args[1]["model"] == "anthropic/claude-3-5-haiku-20241022"
         assert kwargs["response_cost"] == 0.003
         assert kwargs["model"] == "anthropic/claude-3-5-haiku-20241022"
 
     @patch("litellm.completion_cost")
-    def test_streaming_cost_calculation_resolves_model_from_message_start_chunk(
-        self, mock_completion_cost
-    ):
+    def test_streaming_cost_calculation_resolves_model_from_message_start_chunk(self, mock_completion_cost):
         """On the bare /anthropic passthrough path litellm_params carries no model
         or model_group and the body model is the "unknown" sentinel; the model
         must be recovered from the message_start SSE event so completion_cost
@@ -629,9 +560,7 @@ class TestAzureAnthropicCostCalculation:
             ),
             _sse("message_stop", {"type": "message_stop"}),
         ]
-        all_chunks = list(
-            PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames)
-        )
+        all_chunks = list(PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames))
 
         logging_obj = RealLoggingObj(
             model="unknown",
@@ -675,9 +604,7 @@ class TestAzureAnthropicCostCalculation:
         ]
 
         assert (
-            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
-                chunks
-            )
+            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(chunks)
             == "claude-3-5-haiku-20241022"
         )
 
@@ -693,12 +620,9 @@ class TestAzureAnthropicCostCalculation:
         )
 
         assert (
-            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
-                [raw_event]
-            )
+            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([raw_event])
             == "claude-3-5-haiku-20241022"
         )
-
 
 
 class TestAnthropicBatchPassthroughCostTracking:
@@ -800,9 +724,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         )
 
         mock_batches_config_instance = MagicMock()
-        mock_batches_config_instance.transform_retrieve_batch_response.return_value = (
-            mock_batch_response
-        )
+        mock_batches_config_instance.transform_retrieve_batch_response.return_value = mock_batch_response
         mock_batches_config.return_value = mock_batches_config_instance
 
         # Test the handler
@@ -907,9 +829,10 @@ class TestAnthropicBatchPassthroughCostTracking:
         mock_request_body,
     ):
         """Test that model gets 'anthropic/' prefix when not found in router"""
+        import base64
+
         from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig
         from litellm.types.utils import LiteLLMBatch
-        import base64
 
         # Model not in router - returns same model name
         mock_get_model_id.return_value = "claude-sonnet-4-5-20250929"
@@ -930,9 +853,7 @@ class TestAnthropicBatchPassthroughCostTracking:
             "transform_retrieve_batch_response",
             return_value=mock_batch_response,
         ):
-            with patch.object(
-                AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"
-            ):
+            with patch.object(AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"):
                 result = AnthropicPassthroughLoggingHandler.batch_creation_handler(
                     httpx_response=mock_httpx_response,
                     logging_obj=mock_logging_obj,
@@ -947,10 +868,7 @@ class TestAnthropicBatchPassthroughCostTracking:
                 # Verify unified_object_id contains anthropic/ prefix
                 unified_object_id = result["kwargs"]["unified_object_id"]
                 decoded = base64.urlsafe_b64decode(unified_object_id + "==").decode()
-                assert (
-                    "anthropic/claude-sonnet-4-5-20250929" in decoded
-                    or "claude-sonnet-4-5-20250929" in decoded
-                )
+                assert "anthropic/claude-sonnet-4-5-20250929" in decoded or "claude-sonnet-4-5-20250929" in decoded
 
     @pytest.mark.parametrize(
         "kwargs,expected_user_id,expected_team_id",
@@ -1008,9 +926,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         mock_managed_files_hook.store_unified_object_id = AsyncMock()
         with (
             patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution.verbose_proxy_logger"
-            ),
+            patch("litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution.verbose_proxy_logger"),
         ):
             mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
             AnthropicPassthroughLoggingHandler._store_batch_managed_object(
@@ -1061,9 +977,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         is never tracked. The failure has to reach the log instead of being reported as a
         success."""
         mock_managed_files_hook = MagicMock()
-        mock_managed_files_hook.store_unified_object_id = AsyncMock(
-            side_effect=RuntimeError("db down")
-        )
+        mock_managed_files_hook.store_unified_object_id = AsyncMock(side_effect=RuntimeError("db down"))
         with (
             patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
             patch(
@@ -1105,9 +1019,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         this gate an id-scoped route reached the store with a mismatched id, where it could
         only either claim a row it did not create or fail the model_object_id unique
         constraint."""
-        with patch.object(
-            AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"
-        ) as mock_store:
+        with patch.object(AnthropicPassthroughLoggingHandler, "_store_batch_managed_object") as mock_store:
             AnthropicPassthroughLoggingHandler.batch_creation_handler(
                 httpx_response=mock_httpx_response,
                 logging_obj=mock_logging_obj,
@@ -1121,9 +1033,7 @@ class TestAnthropicBatchPassthroughCostTracking:
 
         assert mock_store.call_count == (1 if registers else 0)
 
-    def test_batch_creation_handler_failure_status_code(
-        self, mock_logging_obj, mock_request_body
-    ):
+    def test_batch_creation_handler_failure_status_code(self, mock_logging_obj, mock_request_body):
         """Test batch creation handler with non-200 status code"""
         mock_response = MagicMock()
         mock_response.status_code = 400
@@ -1146,9 +1056,7 @@ class TestAnthropicBatchPassthroughCostTracking:
         assert result["kwargs"]["response_cost"] == 0.0
 
     @patch("litellm.proxy.proxy_server.proxy_logging_obj")
-    def test_store_batch_managed_object_success(
-        self, mock_proxy_logging_obj, mock_logging_obj
-    ):
+    def test_store_batch_managed_object_success(self, mock_proxy_logging_obj, mock_logging_obj):
         """Test storing batch managed object"""
         from litellm.types.utils import LiteLLMBatch
 
@@ -1179,15 +1087,13 @@ class TestAnthropicBatchPassthroughCostTracking:
             )
 
             # Verify managed files hook was called
-            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with(
-                "managed_files"
-            )
+            mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files")
 
 
 class TestBuildCompleteStreamingResponseRobustness:
     """_build_complete_streaming_response must tolerate non-standard SSE frames."""
 
-    def _build(self, chunks: List[str]):
+    def _build(self, chunks: list[str]):
         return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=chunks,
             litellm_logging_obj=MagicMock(),
@@ -1236,6 +1142,40 @@ class TestBuildCompleteStreamingResponseRobustness:
         result = self._build(chunks)
         assert result is not None
         assert result.choices[0].message.content == "Hello"
+
+    @pytest.mark.parametrize(
+        "content_events",
+        [
+            [
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+                'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            ],
+            [
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}}',
+                'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"ls\\"}"}}',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            ],
+        ],
+        ids=["text", "tool_use"],
+    )
+    @pytest.mark.parametrize("non_object_data_line", ["data: 5", "data: []", 'data: "x"', "data: null"])
+    def test_data_line_that_is_not_a_json_object_is_skipped(
+        self, content_events: list[str], non_object_data_line: str
+    ) -> None:
+        chunks: Final = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            *content_events,
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        expected: Final = self._build(chunks)
+
+        result: Final = self._build([non_object_data_line, *chunks[:2], non_object_data_line, *chunks[2:]])
+
+        assert result is not None
+        assert result.choices[0].message == expected.choices[0].message
+        assert result.usage == expected.usage
 
     def test_done_in_text_payload_is_not_dropped(self):
         """A valid event whose text content contains '[DONE]' must NOT be skipped."""
@@ -1344,11 +1284,7 @@ class TestPureTextFastPathParity:
                         },
                     )
                 )
-            frames.append(
-                self._sse(
-                    "content_block_stop", {"type": "content_block_stop", "index": b}
-                )
-            )
+            frames.append(self._sse("content_block_stop", {"type": "content_block_stop", "index": b}))
         frames.append(
             self._sse(
                 "message_delta",
@@ -1406,9 +1342,7 @@ class TestPureTextFastPathParity:
         # And the full logged payload (sans non-deterministic response id).
         def _scrub(p):
             d = dict(p)
-            r = d.get("complete_streaming_response_in_db") or d.get(
-                "complete_streaming_response"
-            )
+            r = d.get("complete_streaming_response_in_db") or d.get("complete_streaming_response")
             return d, getattr(r, "usage", None)
 
         assert _scrub(k_fast)[1] == _scrub(k_legacy)[1]
@@ -1420,11 +1354,7 @@ class TestPureTextFastPathParity:
         self._assert_parity(self._text_stream(["Just one piece of text."]))
 
     def test_parity_cache_tokens(self):
-        self._assert_parity(
-            self._text_stream(
-                ["a", "b", "c"], input_tokens=20, cache_creation=5, cache_read=7
-            )
-        )
+        self._assert_parity(self._text_stream(["a", "b", "c"], input_tokens=20, cache_creation=5, cache_read=7))
 
     def test_parity_max_tokens_stop(self):
         self._assert_parity(self._text_stream(["tok"] * 8, stop_reason="max_tokens"))
@@ -1485,12 +1415,7 @@ class TestPureTextFastPathParity:
             self._sse("message_stop", {"type": "message_stop"}),
         ]
         all_chunks = self._to_all_chunks(frames)
-        assert (
-            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
-                list(all_chunks)
-            )
-            is None
-        )
+        assert AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(list(all_chunks)) is None
 
     def test_collapse_returns_none_for_thinking(self):
         frames = [
@@ -1527,19 +1452,12 @@ class TestPureTextFastPathParity:
             self._sse("message_stop", {"type": "message_stop"}),
         ]
         all_chunks = self._to_all_chunks(frames)
-        assert (
-            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
-                list(all_chunks)
-            )
-            is None
-        )
+        assert AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(list(all_chunks)) is None
 
     def test_collapse_actually_shrinks_chunk_count(self):
         frames = self._text_stream(["a"] * 50)
         all_chunks = list(self._to_all_chunks(frames))
-        collapsed = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(
-            all_chunks
-        )
+        collapsed = AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
         assert collapsed is not None
         # 50 text deltas + 50 event markers + 1 ping collapse to far fewer.
         assert len(collapsed) < len(all_chunks) / 2
@@ -1605,10 +1523,7 @@ class TestPureTextFastPathParity:
             self._sse("message_stop", {"type": "message_stop"}),
         ]
         all_chunks = list(self._to_all_chunks(frames))
-        assert (
-            AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks)
-            is None
-        )
+        assert AnthropicPassthroughLoggingHandler._collapse_pure_text_chunks(all_chunks) is None
 
 
 class TestInterruptedStreamOutputTokenRecovery:
@@ -1723,9 +1638,7 @@ class TestInterruptedStreamOutputTokenRecovery:
         import litellm
 
         placeholder = 2
-        result = self._run(
-            self._interrupted_chunks(placeholder_output_tokens=placeholder)
-        )
+        result = self._run(self._interrupted_chunks(placeholder_output_tokens=placeholder))
         usage = result["result"].usage
 
         expected = litellm.token_counter(
@@ -1898,9 +1811,7 @@ class TestStreamFalseDeduplication:
                     "delta": {"type": "text_delta", "text": "Hello"},
                 },
             ),
-            TestStreamFalseDeduplication._sse(
-                "content_block_stop", {"type": "content_block_stop", "index": 0}
-            ),
+            TestStreamFalseDeduplication._sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
             TestStreamFalseDeduplication._sse(
                 "message_delta",
                 {
@@ -1950,15 +1861,12 @@ class TestStreamFalseDeduplication:
 
         # The assembled response must be stored on model_call_details so callbacks
         # can identify this as a completed streaming call, not an in-progress one.
-        assert (
-            logging_obj.model_call_details.get("complete_streaming_response")
-            is not None
-        ), "complete_streaming_response must be set on model_call_details after assembly"
+        assert logging_obj.model_call_details.get("complete_streaming_response") is not None, (
+            "complete_streaming_response must be set on model_call_details after assembly"
+        )
 
         # The returned result must match what was stored
-        assert result["result"] is logging_obj.model_call_details.get(
-            "complete_streaming_response"
-        )
+        assert result["result"] is logging_obj.model_call_details.get("complete_streaming_response")
 
     def test_dedup_guard_fires_when_stream_true_on_logging_obj(self):
         """
@@ -1970,9 +1878,6 @@ class TestStreamFalseDeduplication:
         This is the _is_assembled_stream_success gate: with stream=False it
         always returned False and the guard was permanently disabled.
         """
-        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-            EndpointType,
-        )
         from litellm.types.utils import ModelResponse
 
         # Simulate what pass_through_endpoints.py now does after stream detection
@@ -1987,21 +1892,16 @@ class TestStreamFalseDeduplication:
         assert logging_obj._is_assembled_stream_success(result=mock_response) is True
 
         # First dispatch sets the flag
-        assert not logging_obj.model_call_details.get(
-            "has_dispatched_final_stream_success"
-        )
+        assert not logging_obj.model_call_details.get("has_dispatched_final_stream_success")
         logging_obj.model_call_details["has_dispatched_final_stream_success"] = True
 
         # Second dispatch would be blocked — simulate the guard check
         would_skip = bool(
             logging_obj._is_assembled_stream_success(result=mock_response)
-            and logging_obj.model_call_details.get(
-                "has_dispatched_final_stream_success"
-            )
+            and logging_obj.model_call_details.get("has_dispatched_final_stream_success")
         )
         assert would_skip is True, (
-            "Dedup guard must block a second dispatch_success_handlers call for the "
-            "same assembled streaming response"
+            "Dedup guard must block a second dispatch_success_handlers call for the same assembled streaming response"
         )
 
     def test_sse_fallback_path_sets_stream_true_for_dedup(self):
@@ -2035,9 +1935,7 @@ class TestStreamFalseDeduplication:
 
         would_skip = bool(
             logging_obj._is_assembled_stream_success(result=mock_response)
-            and logging_obj.model_call_details.get(
-                "has_dispatched_final_stream_success"
-            )
+            and logging_obj.model_call_details.get("has_dispatched_final_stream_success")
         )
         assert would_skip is True
 
@@ -2101,9 +1999,9 @@ class TestNonStreamingResponseRedaction:
             logging_obj=logging_obj,
         )
 
-        assert (
-            "complete_streaming_response" not in logging_obj.model_call_details
-        ), "non-streaming responses must not populate complete_streaming_response"
+        assert "complete_streaming_response" not in logging_obj.model_call_details, (
+            "non-streaming responses must not populate complete_streaming_response"
+        )
 
     def test_streaming_sets_complete_streaming_response(self):
         from litellm.types.utils import ModelResponse
@@ -2120,10 +2018,7 @@ class TestNonStreamingResponseRedaction:
             logging_obj=logging_obj,
         )
 
-        assert (
-            logging_obj.model_call_details.get("complete_streaming_response")
-            is response
-        )
+        assert logging_obj.model_call_details.get("complete_streaming_response") is response
 
     def test_non_streaming_response_is_redacted_when_message_logging_off(self):
         from litellm.litellm_core_utils.redact_messages import (
@@ -2197,10 +2092,8 @@ class TestAnthropicUsageOnlyFallback:
     ]
 
     def test_build_usage_only_recovers_cache_inclusive_usage(self):
-        response = (
-            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
-                all_chunks=self._CHUNKS, model="claude-3-5-haiku-20241022"
-            )
+        response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self._CHUNKS, model="claude-3-5-haiku-20241022"
         )
         assert response is not None
         usage = response.usage
@@ -2211,6 +2104,18 @@ class TestAnthropicUsageOnlyFallback:
         assert usage._cache_creation_input_tokens == 20
         assert usage.prompt_tokens_details.cached_tokens == 40
         assert usage.server_tool_use.web_search_requests == 2
+
+    @pytest.mark.parametrize("non_object_data_line", ["data: 5", 'data: "x"', "data: [1]"])
+    def test_build_usage_only_skips_a_data_line_that_is_not_a_json_object(self, non_object_data_line: str) -> None:
+        response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=[f"{non_object_data_line}\n\n", *self._CHUNKS], model="claude-3-5-haiku-20241022"
+        )
+        expected = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self._CHUNKS, model="claude-3-5-haiku-20241022"
+        )
+
+        assert response is not None and expected is not None
+        assert response.usage == expected.usage
 
     def test_build_usage_only_returns_none_without_usage_events(self):
         chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
@@ -2260,10 +2165,8 @@ class TestAnthropicUsageOnlyFallback:
                 }
             ),
         ]
-        response = (
-            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
-                all_chunks=chunks, model="unknown"
-            )
+        response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=chunks, model="unknown"
         )
         assert response is not None
         assert response.model == "claude-opus-4-6"
@@ -2286,11 +2189,13 @@ class TestAnthropicUsageOnlyFallback:
             ("data: {not-json", None),
             ("event: ping", None),
             ('data: {"a": 1}', {"a": 1}),
+            ("data: 5", None),
+            ("data: []", None),
+            ('data: "x"', None),
+            ("data: null", None),
         ],
     )
-    def test_extract_sse_data_handles_malformed_and_sentinel_lines(
-        self, event_str, expected
-    ):
+    def test_extract_sse_data_handles_malformed_and_sentinel_lines(self, event_str, expected):
         assert extract_sse_data(event_str) == expected
 
     def _real_logging_obj(self):
@@ -2310,12 +2215,8 @@ class TestAnthropicUsageOnlyFallback:
         return logging_obj
 
     @patch("litellm.completion_cost")
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
-    )
-    def test_handler_falls_back_when_assembly_returns_none(
-        self, mock_assemble, mock_cost
-    ):
+    @patch.object(AnthropicPassthroughLoggingHandler, "build_complete_streaming_response")
+    def test_handler_falls_back_when_assembly_returns_none(self, mock_assemble, mock_cost):
         mock_assemble.return_value = None
         mock_cost.return_value = 0.0021
         logging_obj = self._real_logging_obj()
@@ -2336,9 +2237,7 @@ class TestAnthropicUsageOnlyFallback:
         assert result["kwargs"]["response_cost"] == 0.0021
 
     @patch("litellm.completion_cost")
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
-    )
+    @patch.object(AnthropicPassthroughLoggingHandler, "build_complete_streaming_response")
     def test_handler_falls_back_when_assembly_raises(self, mock_assemble, mock_cost):
         import litellm
 
@@ -2368,9 +2267,7 @@ class TestAnthropicUsageOnlyFallback:
         assert result["result"].usage.completion_tokens == 55
         assert result["kwargs"]["response_cost"] == 0.0021
 
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
-    )
+    @patch.object(AnthropicPassthroughLoggingHandler, "build_complete_streaming_response")
     def test_handler_returns_none_when_no_usage_recoverable(self, mock_assemble):
         # assembly fails AND the chunks carry no usage event, so there is nothing
         # to price; the handler must return None rather than fabricate a response
@@ -2392,15 +2289,9 @@ class TestAnthropicUsageOnlyFallback:
         assert result["result"] is None
         assert result["kwargs"] == {}
 
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "build_usage_only_response_from_chunks"
-    )
-    @patch.object(
-        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
-    )
-    def test_handler_does_not_crash_when_usage_only_fallback_raises(
-        self, mock_assemble, mock_fallback
-    ):
+    @patch.object(AnthropicPassthroughLoggingHandler, "build_usage_only_response_from_chunks")
+    @patch.object(AnthropicPassthroughLoggingHandler, "build_complete_streaming_response")
+    def test_handler_does_not_crash_when_usage_only_fallback_raises(self, mock_assemble, mock_fallback):
         # if the usage-only fallback itself raises, it must be treated as None and
         # drop gracefully, not propagate out and crash the success handler
         mock_assemble.return_value = None
@@ -2428,7 +2319,6 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
     builder must record it there or streaming pass-through logs $0."""
 
 
-
 class TestAnthropicPassthroughFastMode:
     """Anthropic charges a provider-specific multiplier for ``speed=fast``, applied off
     ``usage.speed`` and covering every token type, cache included. The response usage
@@ -2437,20 +2327,20 @@ class TestAnthropicPassthroughFastMode:
 
     MODEL = "claude-opus-4-8"
     STREAM_CHUNKS = [
-        'event: message_start',
+        "event: message_start",
         'data: {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant",'
         ' "model": "claude-opus-4-8", "content": [], "stop_reason": null,'
         ' "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 0}}}',
-        'event: content_block_start',
+        "event: content_block_start",
         'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
-        'event: content_block_delta',
+        "event: content_block_delta",
         'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}',
-        'event: content_block_stop',
+        "event: content_block_stop",
         'data: {"type": "content_block_stop", "index": 0}',
-        'event: message_delta',
+        "event: message_delta",
         'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"},'
         ' "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100}}',
-        'event: message_stop',
+        "event: message_stop",
         'data: {"type": "message_stop"}',
     ]
 
@@ -2663,10 +2553,35 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
 
 
+
+def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
+    message_delta: Final = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "stop_sequence", "stop_sequence": "END\u2028OF\u2029TURN"},
+        "usage": {"output_tokens": 3},
+    }
+    all_chunks: Final = [
+        'data: {"type": "content_block_stop", "index": 0}',
+        f"data: {json.dumps(message_delta, ensure_ascii=False)}",
+    ]
+
+    assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is False
+
+
+def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separators() -> None:
+    message_start: Final = {
+        "type": "message_start",
+        "message": {
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "Prefill\u2028line\u2029two"}],
+        },
+    }
+    chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
+
+    assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 @pytest.mark.asyncio
-async def test_anthropic_passthrough_handler(
-    mock_httpx_response, mock_response, mock_logging_obj
-):
+async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
     """
     Unit test - Assert that the anthropic passthrough handler calls the litellm logging object's async_success_handler
     """
@@ -2805,8 +2720,6 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
 def test_handle_logging_anthropic_collected_chunks(all_chunks):
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
-        PassthroughStandardLoggingPayload,
-        EndpointType,
     )
     from litellm.types.utils import ModelResponse
 
@@ -3007,3 +2920,185 @@ def test_streamed_messages_end_turn_logs_no_stop_details(mock_logging_obj):
     assert logged.choices[0].finish_reason == "stop"
     provider_fields: Final = logged.choices[0].message.provider_specific_fields or {}
     assert "stop_details" not in provider_fields
+
+
+def _go_sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+_GO_MESSAGE_DELTA_USAGE: Final = {
+    "input_tokens": 1200,
+    "output_tokens": 300,
+    "cost": 0,
+    "opencode": {"billing_source": "go", "list_cost": 0.00412},
+}
+
+
+def _go_stream_chunks() -> list[str]:
+    message = {
+        "id": "msg_go",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1200, "output_tokens": 0},
+    }
+    return [
+        _go_sse("message_start", {"type": "message_start", "message": message}),
+        _go_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _go_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+        ),
+        _go_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _go_sse(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": _GO_MESSAGE_DELTA_USAGE,
+            },
+        ),
+        _go_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _go_logging_obj() -> LiteLLMLoggingObj:
+    logging_obj = LiteLLMLoggingObj(
+        model="opencode_go/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="go-stream",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "opencode_go"
+    logging_obj.model_call_details["stream"] = True
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+    return logging_obj
+
+
+def test_streamed_messages_bill_the_list_cost_reported_in_the_final_message_delta():
+    result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=_go_logging_obj(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "opencode_go/claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=_go_stream_chunks(),
+        end_time=datetime.now(),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.00412
+    assert result["result"]._hidden_params["response_cost"] == 0.00412
+
+
+def test_streamed_messages_from_other_providers_ignore_a_zero_usage_cost_field():
+    logging_obj = _go_logging_obj()
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=_go_stream_chunks(),
+        end_time=datetime.now(),
+    )
+
+    headers = result["result"]._hidden_params.get("additional_headers") or {}
+    assert "llm_provider-x-litellm-response-cost" not in headers
+    assert result["kwargs"].get("response_cost") != 0.0
+
+
+_BEDROCK_TRACE_PRICING: Final = {
+    "bedrock/guardrails": {
+        "litellm_provider": "bedrock",
+        "mode": "guardrail",
+        "guardrail_cost_per_unit": {"topicPolicyUnits": 0.00015, "contentPolicyUnits": 0.00015},
+    }
+}
+_BEDROCK_INVOKE_TRACE: Final = {
+    "guardrail": {
+        "input": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1}}}},
+        "outputs": [{"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 2, "contentPolicyUnits": 2}}}}],
+    }
+}
+
+
+def _recorded_guardrail_entries(logging_obj: LiteLLMLoggingObj) -> list:
+    return logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+
+
+def test_anthropic_passthrough_handler_bills_the_bedrock_guardrail_trace_of_a_messages_response(
+    monkeypatch, mock_httpx_response, mock_response, mock_logging_obj
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _BEDROCK_TRACE_PRICING)
+    mock_logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=mock_httpx_response,
+        response_body={**mock_response, "amazon-bedrock-trace": _BEDROCK_INVOKE_TRACE},
+        logging_obj=mock_logging_obj,
+        url_route="/v1/messages",
+        result="success",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+    )
+    (entry,) = _recorded_guardrail_entries(mock_logging_obj)
+    assert entry["guardrail_provider"] == "bedrock"
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
+    assert entry["guardrail_cost"] == pytest.approx(6 * 0.00015)
+
+
+def test_anthropic_passthrough_stream_bills_the_bedrock_guardrail_trace_of_the_message_stop_event(
+    monkeypatch, mock_logging_obj, all_chunks
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _BEDROCK_TRACE_PRICING)
+    mock_logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    stop_event: Final = json.dumps({"type": "message_stop", "amazon-bedrock-trace": _BEDROCK_INVOKE_TRACE})
+    chunks: Final = [*all_chunks, f"event: message_stop\ndata: {stop_event}\n\n"]
+    AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=mock_logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude", "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+    (entry,) = _recorded_guardrail_entries(mock_logging_obj)
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}
+    assert entry["guardrail_cost"] == pytest.approx(6 * 0.00015)
+
+
+def test_anthropic_passthrough_stream_bills_a_bedrock_guardrail_trace_whose_json_holds_unicode_line_separators(
+    monkeypatch: pytest.MonkeyPatch, mock_logging_obj: LiteLLMLoggingObj, all_chunks: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _BEDROCK_TRACE_PRICING)
+    mock_logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    trace: Final = {"guardrail": {**_BEDROCK_INVOKE_TRACE["guardrail"], "actionReason": "Blocked\u2028by\u2029policy"}}
+    stop_event: Final = json.dumps({"type": "message_stop", "amazon-bedrock-trace": trace}, ensure_ascii=False)
+    AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=mock_logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude", "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=[*all_chunks, f"event: message_stop\ndata: {stop_event}\n\n"],
+        end_time=datetime(2025, 1, 1),
+    )
+    (entry,) = _recorded_guardrail_entries(mock_logging_obj)
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 3, "contentPolicyUnits": 3}

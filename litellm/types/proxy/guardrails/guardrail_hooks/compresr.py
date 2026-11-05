@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field
 
@@ -93,7 +93,7 @@ class CompresrGuardrailOptionalParams(LiteLLMBaseModel):
             "Unset lets the server default apply (~10.0)."
         ),
     )
-    compression_params: dict[str, Any] | None = Field(
+    compression_params: dict[str, object] | None = Field(
         default=None,
         description=(
             "Passthrough of extra parameters forwarded verbatim in the Compresr "

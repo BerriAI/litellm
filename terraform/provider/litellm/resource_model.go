@@ -7,10 +7,11 @@ import (
 
 func resourceLiteLLMModel() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceLiteLLMModelCreate,
-		Read:   resourceLiteLLMModelRead,
-		Update: resourceLiteLLMModelUpdate,
-		Delete: resourceLiteLLMModelDelete,
+		Create:        resourceLiteLLMModelCreate,
+		Read:          resourceLiteLLMModelRead,
+		Update:        resourceLiteLLMModelUpdate,
+		Delete:        resourceLiteLLMModelDelete,
+		CustomizeDiff: validateAdditionalDropParams,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -237,7 +238,8 @@ func resourceLiteLLMModel() *schema.Resource {
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
-				Description: "Additional parameters to pass to litellm_params beyond the standard ones",
+				DiffSuppressFunc: suppressEquivalentDropParams,
+				Description:      "Additional parameters to pass to litellm_params beyond the standard ones",
 			},
 		},
 	}

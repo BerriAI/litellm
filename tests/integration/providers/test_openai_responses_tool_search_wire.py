@@ -51,7 +51,7 @@ from integration.providers.test_responses_bridge_tool_search_wire import (
 )
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _OPENAI_HOST: Final = "api.openai.com"
 _OPENAI_API_BASE: Final = f"https://{_OPENAI_HOST}/v1"

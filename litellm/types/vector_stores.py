@@ -31,7 +31,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
 
     vector_store_name: str | None
     vector_store_description: str | None
-    vector_store_metadata: dict[str, Any] | str | None
+    vector_store_metadata: dict[str, object] | str | None
     created_at: datetime | None
     updated_at: datetime | None
 

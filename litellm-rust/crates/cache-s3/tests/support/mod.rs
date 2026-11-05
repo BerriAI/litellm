@@ -23,8 +23,8 @@ pub fn config(endpoint: &str) -> S3CacheConfig {
             url: endpoint.to_string(),
         }),
         auth: AwsAuthConfig {
-            access_key_id: Some("key".to_string()),
-            secret_access_key: Some("secret".to_string()),
+            access_key_id: Some("key".into()),
+            secret_access_key: Some("secret".into()),
             region_name: Some("us-east-1".to_string()),
             ..Default::default()
         },
@@ -34,7 +34,7 @@ pub fn config(endpoint: &str) -> S3CacheConfig {
 pub fn cache_with(config: S3CacheConfig, runtime: Handle) -> JsonS3Cache {
     S3Cache::new(
         config,
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         JsonCodec::new(),
         runtime,
     )

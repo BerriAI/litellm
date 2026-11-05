@@ -28,6 +28,8 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _IMAGE_BACKEND: Final = "gemini-scripted-image"
 _CHAT_BACKEND: Final = "gemini-scripted-chat"
 _PROJECT: Final = "scripted-project"

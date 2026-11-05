@@ -26,7 +26,12 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     NON_INFERENCE_CALL_TYPES,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
@@ -34,6 +39,14 @@ from litellm.types.utils import (
 )
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
+
+BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
+
+ITPM_RESERVED_KEY: Final = "_litellm_itpm_reserved"
+OTPM_RESERVED_KEY: Final = "_litellm_otpm_reserved"
+ITPM_CACHE_KEY: Final = "_litellm_itpm_cache_key"
+OTPM_CACHE_KEY: Final = "_litellm_otpm_cache_key"
+IO_TOKEN_RESERVATION_KEYS: Final = frozenset({ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY})
 
 MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
 """Where auth records the model access groups that authorized the request, for the spend writer.
@@ -120,7 +133,7 @@ def is_unbilled_non_inference_call(
     origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) if metadata is not None else None
     if origin == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN:
         return False
-    if not is_background_response(response):
+    if not is_background_response(_finished_response(response)):
         return True
     return origin == BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN or _is_managed_background_call(metadata)
 
@@ -145,6 +158,26 @@ def is_unbilled_non_inference_call_from_params(
     return is_unbilled_non_inference_call(call_type, metadata, response)
 
 
+def settles_background_response(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> bool:
+    return kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES or (
+        call_type in NON_INFERENCE_CALL_TYPES
+        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+    )
+
+
+def logged_event_key(kwargs: Mapping[str, object], event_id: str) -> str:
+    call_type: Final = kwargs.get("call_type")
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    metadata: Final = (
+        as_str_mapping(litellm_params.get("litellm_metadata")) or as_str_mapping(litellm_params.get("metadata")) or {}
+    )
+    if not event_id or not settles_background_response(
+        call_type if isinstance(call_type, str) else "", metadata, kwargs
+    ):
+        return event_id
+    return f"{event_id}{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"
+
+
 def sanitize_user_api_key_auth(auth: object) -> object:
     """Copy of the auth object with its budget reservation removed; the cost callback
     falls back to reading the reservation from inside the auth object."""
@@ -157,7 +190,10 @@ def sanitize_user_api_key_auth(auth: object) -> object:
     return auth
 
 
-def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+def without_budget_reservation(
+    parent_metadata: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+    """Parent metadata minus the admission reservation, also inside ``user_api_key_auth``."""
     return {
         k: sanitize_user_api_key_auth(v) if k == _USER_API_KEY_AUTH_KEY else v
         for k, v in parent_metadata.items()
@@ -176,7 +212,7 @@ def forwarded_internal_call_metadata(
     """
     if not parent_metadata:
         return {}
-    return _sanitized(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
+    return without_budget_reservation(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
 
 
 def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
@@ -202,4 +238,4 @@ def sanitized_forwardable_call_metadata(
     must not inherit per-request state such as its routing decision or logging payload.
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
-    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
+    return without_budget_reservation(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}

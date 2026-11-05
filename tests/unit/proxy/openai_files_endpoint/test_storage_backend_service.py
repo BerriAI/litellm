@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,10 +28,7 @@ class _RecordingStorageBackend:
             raise self.delete_error
 
 
-class _FakeManagedFilesHook(BaseFileEndpoints):
-    def __init__(self):
-        self.stored = []
-
+class _ManagedFilesEndpoints(BaseFileEndpoints):
     async def acreate_file(
         self, create_file_request, llm_router, target_model_names_list, litellm_parent_otel_span, user_api_key_dict
     ):
@@ -48,8 +46,21 @@ class _FakeManagedFilesHook(BaseFileEndpoints):
     async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
         raise NotImplementedError
 
+
+class _FakeManagedFilesHook(_ManagedFilesEndpoints):
+    def __init__(self):
+        self.stored = []
+
     async def store_unified_file_id(self, **kwargs):
         self.stored.append(kwargs)
+
+
+class _ForwardingManagedFilesHook(_ManagedFilesEndpoints):
+    def __init__(self, writer: _FakeManagedFilesHook):
+        self._writer = writer
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._writer, name)
 
 
 class _FailingManagedFilesHook(_FakeManagedFilesHook):
@@ -140,6 +151,24 @@ async def test_upload_with_target_model_names_and_hook_stores_unified_id(monkeyp
         "stored_id_matches_response": True,
         "model_mappings": {"gpt-x": "https://storage.example/blob-1"},
     }
+
+
+@pytest.mark.asyncio
+async def test_upload_stores_the_unified_id_through_a_hook_that_forwards_its_writer(monkeypatch):
+    backend: Final = _RecordingStorageBackend()
+    monkeypatch.setattr(storage_backend_service, "get_storage_backend", lambda name, prisma_client=None: backend)
+    writer: Final = _FakeManagedFilesHook()
+
+    file_object: Final = await StorageBackendFileService.upload_file_to_storage_backend(
+        file_data=_file_data(),
+        target_storage="azure_storage",
+        target_model_names=["gpt-x"],
+        purpose="batch",
+        proxy_logging_obj=_FakeProxyLogging(hook=_ForwardingManagedFilesHook(writer)),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+    )
+
+    assert [stored["file_id"] for stored in writer.stored] == [file_object.id]
 
 
 @pytest.mark.asyncio

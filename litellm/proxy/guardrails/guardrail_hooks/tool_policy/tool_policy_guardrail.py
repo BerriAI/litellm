@@ -105,7 +105,7 @@ def _resolve_tool_names_from_messages(messages: list[dict]) -> dict[str, str]:
                 fn = (tc.get("function") or {}).get("name")
             else:
                 tc_id = getattr(tc, "id", None)
-                fn_obj = getattr(tc, "function", None)
+                fn_obj: object = getattr(tc, "function", None)
                 fn = getattr(fn_obj, "name", None) if fn_obj else None
             if tc_id and fn:
                 mapping[tc_id] = fn

@@ -1,8 +1,11 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
+
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import type { Team } from "@/components/key_team_helpers/key_list";
 import type { Organization } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface InheritedBudgetGate {
@@ -115,7 +118,10 @@ export const teamMemberBudgetGate = (
 
   return {
     scope: "Team member",
-    alias: `${memberLabel || userId} in ${teamInfo.team_info.team_alias || teamInfo.team_info.team_id}`,
+    alias: i18n.t("shared.inheritedBudgetHint.memberAlias", {
+      member: memberLabel || userId,
+      team: teamInfo.team_info.team_alias || teamInfo.team_info.team_id,
+    }),
     maxBudget: budgetRow.max_budget + activeIncrease(membershipBudget, now),
     budgetDuration: budgetRow.budget_duration ?? null,
     spend: membership?.spend ?? 0,
@@ -143,12 +149,13 @@ interface InheritedBudgetHintProps {
 }
 
 export function InheritedBudgetHint({ gates }: InheritedBudgetHintProps) {
+  const { t } = useTranslation();
   if (gates.length === 0) return null;
   return (
     <SimpleTooltip
       content={
         <div data-testid="inherited-budget-hint" className="flex flex-col gap-1">
-          <span>This key has no budget of its own, but its spend still counts toward:</span>
+          <span>{t("shared.inheritedBudgetHint.intro")}</span>
           {gates.map((gate) => (
             <span key={gate.scope}>{formatGate(gate)}</span>
           ))}

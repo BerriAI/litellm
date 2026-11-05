@@ -577,6 +577,154 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
 )
 
 
+CLAUDE_HAIKU_5_5_THINKING_SIGNATURE: Final = (
+    "CAQS8gcKEggSEAIYAjgBQgh0aGlua2luZxIMKxM+8GdyGfxkJrU6Ggw3AMSc5G/SaulUVJkiMJgPNRytmwmfF4bj7WugkKlRxBr+SRwcL9iQ"
+    "+S5uvmIi/D8thAXX+oVg67diUo3rxiqNB0KrfSB/DXD50OomDcy90ai3a+RMcwIy9wEMzOdOIFqQ24tUMm1YorcQLQpresEnXA9ItiMAzP+P"
+    "8NMJ1br7O3JHYLIi/12UzVr36AKPrMJQk86VBn5fVxo0xcphyl071Y30m3wO0INGtU+d37IXSrYCJzQdnUSKxekBK28fxsA4tmxx1BE/1Hfl"
+    "UTsq36+CE2MatE0ymL2pQA+povoJ1iVlB/PBZvkOvpRcQubSwm8RqJrBfmse8baU2UJot0VNNC7OprQ3wYx1j3BGmXOQCGkvCn6jd2lPLjLS"
+    "F1CjbWQs7X18gB69y2sUosm3aI+MnQNHkUqe8JtIaii42uu3Xe/JheeRTRrcsuAdMZJ76ID9wRZnf3/QCHaMyrYwHXf5SsoUjX3Ofs5MuQT0"
+    "ISf4T7q+QGf51Bxb4jdfF879h061ZSejzknCHI3fV3SwuldjIIV+FD50d63iLqM/D8GOjaGfDrYugkkdBjCNEQkTpn9NQmqalsrJWOdQQrhc"
+    "L8TDZG4HBasd/kGr7EnlEbLKrGaWbAWYo4vssoUE7Q57wPumuMrYh4OKInksQTnB0OV9OIZEiTgb9fyaxJBCUiypuQDGMlAP8nb0TQF1vxjR"
+    "vsXV/qnN0ovR6/7raePN4NM4nMEXESRQyC22Ml88z+WZhe2VG5CLH8tFNapisH+msyqtGyDa+SEie/e6xcDfI1fLAZwEHM34/YjW+C1E1PPd"
+    "RsGBE9Ms6JUaPrcITwImVKMLGH1pj+TsS+qK7JTGjH8FKwR1Eds/dJTFDEQaAYcmjXWxDR5HBknx7xv90K2uoKt4KmAgulWCQv/LaEAt27lm"
+    "aGP+4PQ9tpb/Otsub8spmcXKfNqdjWTDH3aEF5MsJ5eSddn92pFV9JAo4oFcj1fUTujfwumGCYDADjLBmyvQao9S42zpO5idmYrHWHt7h7m6"
+    "BoU5b4uKVS4w4ELEl8y+Oq1uiQLSB8e0cxLarWfCiiTL6v6aJUDEvUTQU+O3XiOxNMCkc00J7e1TnNnnoFqs0sqhV0mMT346vLHocBMVn2iE"
+    "ZSwFb9OWlHO1e9Y7ccd8XL7KjXtoZeuBTrdYlxrf3g6QHVZg3OOM3OVSOWawFU0tBZUUgH6rYH4oHh8JqwGmbTI1mtAtUX89KrHzGWgUs619"
+    "SPbFptVh8Vfb3zr0D0OzDqjzv1KCNW/tZcJnCaL9Zl6tAt2v5FiBTOjIbBgB"
+)
+
+CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "vertex_ai/claude-haiku-5-5@default"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-haiku-5-5@default:rawPredict",
+    expected_provider_headers={
+        "authorization": "Bearer scripted-token",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "x-api-key": "scripted-token",
+    },
+    expected_provider_request=VERTEX_AI_ANTHROPIC_MESSAGES_REQUEST,
+    mock_provider_response={
+        **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-haiku-5-5",
+        "id": "msg_vrtx_011Cg8AfAmbYAQCTSseeQSZJ",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "The system prompt mentions a chat_completions client for this review, but that's not actually in my "
+                    "available toolset — I only have search_files and read_file. I'll note that discrepancy and proceed by "
+                    "explaining which file I need, then calling read_file on shop/validation.py, probably starting around the "
+                    "first 60 lines to get context near line 18.\n\n"
+                ),
+                "signature": CLAUDE_HAIKU_5_5_THINKING_SIGNATURE,
+            },
+            {
+                "type": "text",
+                "text": (
+                    "I'll read `shop/validation.py` next, starting at the `validate_quantity` definition on line 18 and "
+                    "including the surrounding context. The project instructions mention a chat_completions client, but none "
+                    "is available in my tools, so I'm using the read-only file tools."
+                ),
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_017jjdVAoN8bus5ng5NkzafQ",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 876,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 348,
+            "output_tokens_details": {"thinking_tokens": 168},
+        },
+    },
+    expected_litellm_response={
+        **CHAT_COMPLETIONS_RESPONSE,
+        "model": "vertex_ai/claude-haiku-5-5@default",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": (
+                        "I'll read `shop/validation.py` next, starting at the `validate_quantity` definition on line 18 and "
+                        "including the surrounding context. The project instructions mention a chat_completions client, but "
+                        "none is available in my tools, so I'm using the read-only file tools."
+                    ),
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 2,
+                            "function": {
+                                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
+                                "name": "read_file",
+                            },
+                            "id": "toolu_vrtx_017jjdVAoN8bus5ng5NkzafQ",
+                            "type": "function",
+                        }
+                    ],
+                    "reasoning_content": (
+                        "The system prompt mentions a chat_completions client for this review, but that's not actually in my "
+                        "available toolset — I only have search_files and read_file. I'll note that discrepancy and proceed "
+                        "by explaining which file I need, then calling read_file on shop/validation.py, probably starting "
+                        "around the first 60 lines to get context near line 18.\n\n"
+                    ),
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": (
+                                "The system prompt mentions a chat_completions client for this review, but that's not actually "
+                                "in my available toolset — I only have search_files and read_file. I'll note that discrepancy "
+                                "and proceed by explaining which file I need, then calling read_file on shop/validation.py, "
+                                "probably starting around the first 60 lines to get context near line 18.\n\n"
+                            ),
+                            "signature": CLAUDE_HAIKU_5_5_THINKING_SIGNATURE,
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "citations": None,
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "The system prompt mentions a chat_completions client for this review, but that's not "
+                                    "actually in my available toolset — I only have search_files and read_file. I'll note "
+                                    "that discrepancy and proceed by explaining which file I need, then calling read_file on "
+                                    "shop/validation.py, probably starting around the first 60 lines to get context near "
+                                    "line 18.\n\n"
+                                ),
+                                "signature": CLAUDE_HAIKU_5_5_THINKING_SIGNATURE,
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 348,
+            "prompt_tokens": 880,
+            "total_tokens": 1228,
+            "completion_tokens_details": {"reasoning_tokens": 168, "text_tokens": 180},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 4,
+                "cache_write_tokens": 876,
+                "cache_creation_tokens": 876,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 876,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+
 CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",

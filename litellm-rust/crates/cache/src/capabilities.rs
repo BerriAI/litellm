@@ -48,7 +48,7 @@ pub trait BatchCache: BaseCache {
             .map(|key| match self.get_cache(key, context) {
                 Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
                 Ok(None) => Ok(BatchEntry::Miss),
-                Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+                Err(Error::InvalidEntry(_)) => Ok(BatchEntry::Invalid),
                 Err(error) => Err(error),
             })
             .collect()
@@ -65,7 +65,7 @@ pub trait BatchCache: BaseCache {
                 entries.push(match self.async_get_cache(&key, &context).await {
                     Ok(Some(value)) => BatchEntry::Hit(value),
                     Ok(None) => BatchEntry::Miss,
-                    Err(Error::InvalidEntry) => BatchEntry::Invalid,
+                    Err(Error::InvalidEntry(_)) => BatchEntry::Invalid,
                     Err(error) => return Err(error),
                 });
             }
