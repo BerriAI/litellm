@@ -50,9 +50,11 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
 
 def _include_skill_hub(app: "FastAPI", module: object) -> None:
     from litellm.proxy.discovery_endpoints.skill_hub_submissions import router
+    from litellm.proxy.discovery_endpoints.skill_scanning import router as scan_router
 
     _include_router()(app, module)
     app.include_router(router)
+    app.include_router(scan_router)
 
 
 @dataclass(frozen=True)

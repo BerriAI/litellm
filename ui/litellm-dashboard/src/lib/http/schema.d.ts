@@ -16019,6 +16019,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/submissions/{submission_id}/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill Scan
+         * @description Read the latest manual security scan. Only proxy admins may read reports.
+         */
+        get: operations["get_skill_scan_skill_hub_submissions__submission_id__scan_get"];
+        put?: never;
+        /**
+         * Start Skill Scan
+         * @description Start an optional scan of a pending submission. Scans never change approval decisions.
+         */
+        post: operations["start_skill_scan_skill_hub_submissions__submission_id__scan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/calculate": {
         parameters: {
             query?: never;
@@ -31226,6 +31250,8 @@ export interface components {
              * @description Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.
              */
             self_serve_budget_policy?: ("disabled" | "lower_only" | "ceiling") | null;
+            /** @description Opt-in external scanner for manual admin review of skill submissions */
+            skill_scanner?: components["schemas"]["SkillScannerConfig"] | null;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
@@ -47033,6 +47059,107 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
+        };
+        /** SkillScan */
+        SkillScan: {
+            /** Archive Sha256 */
+            archive_sha256?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            report?: components["schemas"]["SkillScanReport"] | null;
+            /** Requested By */
+            requested_by: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed";
+        };
+        /** SkillScanFinding */
+        SkillScanFinding: {
+            /** Explanation */
+            explanation?: string | null;
+            /** File */
+            file: string;
+            /** Message */
+            message: string;
+            /** Remediation */
+            remediation?: string | null;
+            /** Rule Id */
+            rule_id: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+            /** Start Line */
+            start_line?: number | null;
+        };
+        /** SkillScanReport */
+        SkillScanReport: {
+            /** Complete */
+            complete: boolean;
+            /** Findings */
+            findings: components["schemas"]["SkillScanFinding"][];
+            /**
+             * Limitations
+             * @default []
+             */
+            limitations: string[];
+            /** Risk Score */
+            risk_score: number;
+            /**
+             * Scan Mode
+             * @enum {string}
+             */
+            scan_mode: "static-only" | "static+llm";
+            /** Scanner Version */
+            scanner_version: string;
+        };
+        /** SkillScanRequest */
+        SkillScanRequest: Record<string, never>;
+        /** SkillScanResponse */
+        SkillScanResponse: {
+            /** Configured */
+            configured: boolean;
+            scan: components["schemas"]["SkillScan"] | null;
+        };
+        /** SkillScannerConfig */
+        SkillScannerConfig: {
+            /**
+             * Api Key Env
+             * @description Environment secret name for scanner auth
+             */
+            api_key_env: string;
+            /**
+             * Endpoint
+             * @description External scanner's authenticated POST endpoint
+             */
+            endpoint: string;
+            /**
+             * Timeout Seconds
+             * @default 180
+             */
+            timeout_seconds: number;
+            /**
+             * Use Llm
+             * @default false
+             */
+            use_llm: boolean;
         };
         /** Span */
         Span: {
@@ -74743,6 +74870,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillHubReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_scan_skill_hub_submissions__submission_id__scan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillScanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_skill_scan_skill_hub_submissions__submission_id__scan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillScanRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillScanResponse"];
                 };
             };
             /** @description Validation Error */
