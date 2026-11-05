@@ -4976,12 +4976,13 @@ class Logging(LiteLLMLoggingBaseClass):
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
         """The success-event payload with the request messages put back where `turn_off_message_logging`
         redacted them in place, for a callback that routes on the request and never logs it."""
+        request_messages: Final = cast(object, self.messages)  # cast-ok: the request messages are only put back as-is
         standard_logging_object: Final = self.model_call_details.get("standard_logging_object")
         return {
             **self.model_call_details,
-            "messages": self.messages,
+            "messages": request_messages,
             **(
-                {"standard_logging_object": {**standard_logging_object, "messages": self.messages}}
+                {"standard_logging_object": {**standard_logging_object, "messages": request_messages}}
                 if isinstance(standard_logging_object, dict)
                 else {}
             ),
