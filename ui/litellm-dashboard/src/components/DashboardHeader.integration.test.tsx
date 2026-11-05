@@ -84,7 +84,8 @@ describe("dashboard header controls", () => {
   it("offers docs, community and latest posts under the bell", async () => {
     const { user } = renderHeader();
     await user.click(screen.getByRole("button", { name: /Notifications/ }));
-    const tools = await screen.findByRole("dialog", { name: "What's new" });
+    const tools = await screen.findByRole("dialog", { name: "Notifications" });
+    await user.click(within(tools).getByRole("button", { name: /What’s new/ }));
     expect(await within(tools).findByRole("link", { name: /Gateway update/ })).toHaveAttribute(
       "href",
       "https://example.com/update",
@@ -102,7 +103,7 @@ describe("dashboard header controls", () => {
     const { user } = renderHeader();
     expect(screen.queryByRole("link", { name: "Join Slack" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Notifications/ }));
-    const tools = await screen.findByRole("dialog", { name: "What's new" });
+    const tools = await screen.findByRole("dialog", { name: "Notifications" });
     expect(within(tools).getByRole("link", { name: "Docs", exact: true })).toBeVisible();
     expect(within(tools).queryByRole("link", { name: "Blog", exact: true })).not.toBeInTheDocument();
     expect(within(tools).queryByRole("link", { name: "Discord", exact: true })).not.toBeInTheDocument();

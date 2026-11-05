@@ -46,6 +46,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
 
     const titles = screen.getAllByRole("article").map((item) => item.getAttribute("aria-label"));
     expect(titles).toEqual(["LiteLLM v1.103.0 is available", "LiteLLM Auto Router"]);
@@ -69,6 +70,7 @@ describe("NotificationsBellView", () => {
       />,
     );
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("1 new feature, 1 fix, and 1 other update");
   });
 
@@ -81,6 +83,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion={currentVersion} latestRelease={latestRelease} />);
     await user.click(bell(1));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     expect(screen.getAllByRole("article").map((item) => item.getAttribute("aria-label"))).toEqual([
       "LiteLLM Auto Router",
     ]);
@@ -90,6 +93,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
 
     expect(bell(1).querySelector("[data-slot=badge]")).not.toBeNull();
@@ -108,6 +112,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     const first = renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
     first.unmount();
 
@@ -121,6 +126,7 @@ describe("NotificationsBellView", () => {
       <NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />,
     );
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
     expect(bell(1)).toBeInTheDocument();
 
@@ -142,6 +148,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion="1.103.0" latestRelease={RELEASE} />);
     await user.click(bell(0));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     expect(announcement("LiteLLM Auto Router")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^mark as read$/i })).not.toBeInTheDocument();
   });
@@ -156,6 +163,7 @@ describe("NotificationsBellView", () => {
     );
     const [bellA] = screen.getAllByRole("button", { name: "Notifications, 2 unread" });
     await user.click(bellA);
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
 
     expect(screen.getAllByRole("button", { name: "Notifications, 1 unread" })).toHaveLength(2);
@@ -175,6 +183,7 @@ describe("NotificationsBell", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBell accessToken="token" />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("Your current version is v1.102.0");
   });
 });
@@ -184,6 +193,22 @@ const ISSUES = { data: [SPEND_ISSUE, RETIREMENT_ISSUE], total: 2, limit: 3, offs
 describe("issue notifications", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
+
+  it.each([
+    ["unavailable", undefined],
+    ["empty", { data: [], total: 0, limit: 3, offset: 0 }],
+    ["active", ISSUES],
+  ] as const)("keeps updates collapsed when alerts are %s", async (_state, issues) => {
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={issues} />);
+    await user.click(screen.getByRole("button", { name: /^Notifications/ }));
+    expect(screen.getByRole("button", { name: /What’s new/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("article", { name: "LiteLLM Auto Router" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Docs", exact: true })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /What’s new/ }));
+    const update = announcement("LiteLLM Auto Router");
+    expect(screen.getByLabelText("Notification content")).toContainElement(update);
+  });
 
   it("opens issue-owned investigations and keeps resources outside the scrolling content", async () => {
     const user = userEvent.setup();

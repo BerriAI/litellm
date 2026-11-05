@@ -115,16 +115,19 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
 function ProductUpdates({
   announcements,
   unreadCount,
-  hasAlerts,
+  showAlerts,
 }: {
   announcements: Announcement[];
   unreadCount: number;
-  hasAlerts: boolean;
+  showAlerts: boolean;
 }) {
-  const [open, setOpen] = useState<boolean | undefined>();
-  const expanded = open ?? !hasAlerts;
+  const [expanded, setExpanded] = useState(false);
   return (
-    <Collapsible open={expanded} onOpenChange={setOpen} className="shrink-0 border-t border-border px-4 py-2">
+    <Collapsible
+      open={expanded}
+      onOpenChange={setExpanded}
+      className={cn("px-4 py-2", showAlerts && "border-t border-border")}
+    >
       <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 py-1 text-sm font-medium">
         <span>What’s new{unreadCount > 0 ? ` · ${unreadCount} unread` : ""}</span>
         <ChevronDown
@@ -132,7 +135,7 @@ function ProductUpdates({
           aria-hidden
         />
       </CollapsibleTrigger>
-      <CollapsibleContent className="max-h-[min(14rem,25dvh)] overflow-y-auto overscroll-contain">
+      <CollapsibleContent>
         <div className="space-y-3 pt-3">
           {announcements.map((announcement, index) => (
             <Fragment key={announcement.readKey}>
@@ -205,44 +208,44 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
           {t("shell.notifications.bell.trigger")}
         </PopoverTitle>
         <div aria-label="Notification content" className="min-h-0 overflow-y-auto overscroll-contain">
-          <div className="space-y-3 p-4">
-            {showIssues && (
+          {showIssues && (
+            <div className="space-y-3 p-4">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-medium">Alerts</p>
                 <a className="text-xs text-primary hover:underline" href={issuesHref()}>
                   View all{count > 0 ? ` ${count}` : ""}
                 </a>
               </div>
-            )}
-            {issuesPending && (
-              <p role="status" className="text-xs text-muted-foreground">
-                Loading alerts…
-              </p>
-            )}
-            {issuesFailed && (
-              <p className="text-xs text-muted-foreground">Could not load alerts. Open Alerts to retry.</p>
-            )}
-            {issues?.data.map((issue) => (
-              <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
-                <a
-                  href={issueHref(issue.id)}
-                  className="block truncate text-sm font-medium hover:underline"
-                  title={issue.title}
-                >
-                  {issue.title}
-                </a>
-                <p className="truncate text-xs text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
-                  {issueResource(issue)}
+              {issuesPending && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Loading alerts…
                 </p>
-                <p className="text-xs text-muted-foreground">{issueComparisonText(issue)}</p>
-                <p className="text-xs text-muted-foreground">{issueDate(issue.observed_on)} UTC</p>
-                {issue.deprecation && <RecommendedReplacement recommendation={issue.deprecation.model} />}
-              </article>
-            ))}
-            {issues?.total === 0 && <p className="text-xs text-muted-foreground">No open alerts.</p>}
-          </div>
+              )}
+              {issuesFailed && (
+                <p className="text-xs text-muted-foreground">Could not load alerts. Open Alerts to retry.</p>
+              )}
+              {issues?.data.map((issue) => (
+                <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
+                  <a
+                    href={issueHref(issue.id)}
+                    className="block truncate text-sm font-medium hover:underline"
+                    title={issue.title}
+                  >
+                    {issue.title}
+                  </a>
+                  <p className="truncate text-xs text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
+                    {issueResource(issue)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{issueComparisonText(issue)}</p>
+                  <p className="text-xs text-muted-foreground">{issueDate(issue.observed_on)} UTC</p>
+                  {issue.deprecation && <RecommendedReplacement recommendation={issue.deprecation.model} />}
+                </article>
+              ))}
+              {issues?.total === 0 && <p className="text-xs text-muted-foreground">No open alerts.</p>}
+            </div>
+          )}
+          <ProductUpdates announcements={announcements} unreadCount={unreadCount} showAlerts={showIssues} />
         </div>
-        <ProductUpdates announcements={announcements} unreadCount={unreadCount} hasAlerts={needsAttention} />
         <DashboardResources>{deploymentHealthLink}</DashboardResources>
       </PopoverContent>
     </Popover>
