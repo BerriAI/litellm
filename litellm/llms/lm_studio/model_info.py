@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
-from pydantic import BeforeValidator, ConfigDict, ValidationError
+from pydantic import BeforeValidator, ConfigDict, Field, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -45,6 +45,7 @@ class _ModelV1(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     key: str
+    kind: str | None = Field(default=None, alias="type")
     loaded_instances: tuple[_Instance, ...] = ()
 
 
@@ -54,19 +55,21 @@ class _ModelsV1(LiteLLMBaseModel):
     models: tuple[_ModelV1, ...]
 
     def context_length(self, model: str) -> int | None:
-        instances: Final = tuple(chain.from_iterable(card.loaded_instances for card in self.models))
-        exact: Final = tuple(instance.config.context_length for instance in instances if instance.id == model)
-        matching: Final = next((card.loaded_instances for card in self.models if card.key == model), ())
-        contexts: Final = exact or tuple(instance.config.context_length for instance in matching)
-        if not contexts or any(context is None for context in contexts):
-            return None
-        return min(context for context in contexts if context is not None)
+        chat_cards: Final = tuple(card for card in self.models if card.kind != "embedding")
+        instances: Final = tuple(chain.from_iterable(card.loaded_instances for card in chat_cards))
+        named: Final = next((instance for instance in instances if instance.id == model), None)
+        first_loaded: Final = next(
+            (card.loaded_instances[0] for card in chat_cards if card.key == model and card.loaded_instances), None
+        )
+        serving: Final = named if named is not None else first_loaded
+        return serving.config.context_length if serving is not None else None
 
 
 class _ModelV0(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
+    kind: str | None = Field(default=None, alias="type")
     state: str
     loaded_context_length: _TokenLimit = None
 
@@ -78,7 +81,9 @@ class _ModelsV0(LiteLLMBaseModel):
 
     def context_length(self, model: str) -> int | None:
         card: Final = next((card for card in self.data if card.id == model), None)
-        return card.loaded_context_length if card is not None and card.state == "loaded" else None
+        if card is None or card.state != "loaded" or card.kind == "embeddings":
+            return None
+        return card.loaded_context_length
 
 
 class _Unavailable(LiteLLMBaseModel):

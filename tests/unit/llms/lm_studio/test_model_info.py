@@ -14,9 +14,10 @@ from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 @pytest.mark.parametrize(
     ("model", "expected"),
     (
-        ("org/model", 2048),
+        ("org/model", 8192),
         ("instance-a", 8192),
         ("instance-b", 2048),
+        ("small-first", 1024),
         ("other", 4096),
         ("model", None),
         ("missing", None),
@@ -38,13 +39,20 @@ async def test_matches_loaded_instances_without_using_theoretical_limits(model: 
                             {"id": "instance-b", "config": {"context_length": 2048}},
                         ],
                     },
+                    {
+                        "key": "small-first",
+                        "loaded_instances": [
+                            {"id": "small-a", "config": {"context_length": 1024}},
+                            {"id": "big-b", "config": {"context_length": 4096}},
+                        ],
+                    },
                     {"key": "other", "loaded_instances": [{"id": "other", "config": {"context_length": 4096}}]},
                     {"key": "unloaded", "max_context_length": 131072, "loaded_instances": []},
                     {
                         "key": "incomplete",
                         "loaded_instances": [
-                            {"id": "valid", "config": {"context_length": 4096}},
                             {"id": "invalid", "config": {}},
+                            {"id": "valid", "config": {"context_length": 4096}},
                         ],
                     },
                 ]
@@ -116,6 +124,65 @@ async def test_legacy_fallback_preserves_origin_and_proxy_prefix(
             )
             == {}
         )
+
+
+@pytest.mark.parametrize(
+    ("path", "models"),
+    (
+        (
+            "/api/v1/models",
+            {
+                "models": [
+                    {
+                        "type": "embedding",
+                        "key": "org/embedder",
+                        "loaded_instances": [
+                            {"id": "org/embedder", "config": {"context_length": 2048}},
+                            {"id": "embedder-copy", "config": {"context_length": 2048}},
+                        ],
+                    },
+                    {
+                        "type": "llm",
+                        "key": "org/chat",
+                        "loaded_instances": [{"id": "org/chat", "config": {"context_length": 4096}}],
+                    },
+                ]
+            },
+        ),
+        (
+            "/api/v0/models",
+            {
+                "data": [
+                    {"id": "org/embedder", "type": "embeddings", "state": "loaded", "loaded_context_length": 2048},
+                    {"id": "embedder-copy", "type": "embeddings", "state": "loaded", "loaded_context_length": 2048},
+                    {"id": "org/chat", "type": "llm", "state": "loaded", "loaded_context_length": 4096},
+                ]
+            },
+        ),
+    ),
+)
+async def test_embedding_models_advertise_no_limits_since_lm_studio_truncates_their_input(
+    path: str, models: Mapping[str, object]
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=models) if request.url.path == path else httpx.Response(404)
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        cache: Final = InMemoryCache()
+        limits: Final = {
+            model: await get_lm_studio_model_info(
+                model=model, api_base="https://backend.test/v1", headers={}, client=handler, cache=cache
+            )
+            for model in ("org/embedder", "embedder-copy", "org/chat")
+        }
+    assert limits == {
+        "org/embedder": {},
+        "embedder-copy": {},
+        "org/chat": {"max_tokens": 4096, "max_input_tokens": 4096, "max_output_tokens": 4096},
+    }
 
 
 @pytest.mark.parametrize("context", (True, 0, -1, "8192", 1.5, None))

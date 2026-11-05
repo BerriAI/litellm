@@ -1420,6 +1420,7 @@ def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
     loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
 ) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
@@ -1453,6 +1454,7 @@ def update_db_model(
             incoming_model_info,
             _cost_map_entry(db_model, incoming_model_info),
             _loaded_catalog_entry(incoming_model_info, loaded_catalog),
+            discovered_model_info,
         )
         stored_model_info_fields: Final[Mapping[str, object]] = without_server_derived_pricing(incoming_model_info)
         merged_model_info.update(
@@ -1800,6 +1802,11 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             write_row=write_row,
+            discovered_model_info=(
+                llm_router.registry().discovered_model_info(model_id)
+                if llm_router is not None
+                else MappingProxyType({})
+            ),
         )
 
         if updated_model is None:
@@ -2155,6 +2162,7 @@ async def _update_team_model_in_db(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     write_row: Callable[[PrismaCompatibleUpdateDBModel], Awaitable[_RowT]],
+    discovered_model_info: Mapping[str, object] = MappingProxyType({}),
 ) -> _RowT:
     """
     Handle team model updates with proper alias management.
@@ -2199,7 +2207,9 @@ async def _update_team_model_in_db(
 
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
-        return await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
+        return await write_row(
+            update_db_model(db_model=db_model, updated_patch=patch_data, discovered_model_info=discovered_model_info)
+        )
 
     # Determine public model name
     public_model_name: Final = _get_public_model_name(
@@ -2220,7 +2230,9 @@ async def _update_team_model_in_db(
             ),
         }
     )
-    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=team_patch))
+    row: Final = await write_row(
+        update_db_model(db_model=db_model, updated_patch=team_patch, discovered_model_info=discovered_model_info)
+    )
 
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(

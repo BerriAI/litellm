@@ -175,26 +175,20 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
     _invalidate_model_cost_lowercase_map()
 
 
-async def test_discovery_sends_the_secret_behind_an_oidc_api_key(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_discovery_sends_the_secret_behind_an_oidc_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token: Final = tmp_path / "token"
     token.write_text("local-secret")
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "local",
-                "litellm_params": {
-                    "model": "hosted_vllm/local-model",
-                    "api_base": "https://discovery.test/v1",
-                    "api_key": f"oidc/file/{token}",
-                },
-                "model_info": {"id": "oidc-deployment"},
-            }
-        ]
-    )
+    router: Final = Router(model_list=[{
+        "model_name": "local",
+        "litellm_params": {
+            "model": "hosted_vllm/local-model",
+            "api_base": "https://discovery.test/v1",
+            "api_key": f"oidc/file/{token}",
+        },
+        "model_info": {"id": "oidc-deployment"},
+    }])
     authorizations: Final[list[str | None]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -1117,12 +1111,8 @@ def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
     tier_rates: Final = inherit_configured and service_tier != "default"
     input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
     output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
-    effective_input: Final = (
-        0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
-    )
-    cache_rate: Final = (
-        0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
-    )
+    effective_input: Final = 0.0 if override == "input_cost_per_token_priority" and service_tier == "priority" else input_rate
+    cache_rate: Final = 0.0 if override == "cache_read_input_token_cost" else (0.001 if inherit_configured else effective_input)
     assert completion_cost(
         model=model,
         completion_response=ModelResponse(
@@ -3046,8 +3036,7 @@ def test_a_github_copilot_chat_pin_opts_a_dual_endpoint_model_out_of_the_respons
 
 @pytest.mark.parametrize("registered_mode, pinned_mode", [("chat", "responses"), ("responses", "chat")])
 @pytest.mark.parametrize(
-    "model, custom_llm_provider",
-    [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")],
+    "model, custom_llm_provider", [("github_copilot/routing-test-model", None), ("routing-test-model", "github_copilot")]
 )
 def test_a_github_copilot_responses_pin_still_opts_the_model_into_the_responses_api(
     monkeypatch: pytest.MonkeyPatch,
@@ -4229,9 +4218,7 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
 
 
-def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     catalog: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
