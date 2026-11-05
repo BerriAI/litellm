@@ -2,8 +2,9 @@ import type { Team } from "@/components/key_team_helpers/key_list";
 import i18n from "@/i18n/i18n";
 import { processActivityData } from "@/components/activity_metrics";
 import type { DailyActivityAggregatedResponse, DailyActivityMetadata, KeySpendActivityRow } from "./dailyActivityApi";
-import { toDailyData } from "./dailyActivityApi";
-import type { ModelActivityData } from "./types";
+import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData } from "./dailyActivityApi";
+import type { ModelActivityData, OtherModelData } from "./types";
+import type { components } from "@/lib/http/schema";
 
 export const reportingKeyId = (key: string): string => {
   if (!key) return "unattributed";
@@ -72,3 +73,26 @@ export const keyDetailFromResponse = (
   apiKey: string,
   teams: Team[],
 ): ModelActivityData | undefined => processActivityData({ results: toDailyData(response) }, "api_keys", teams)[apiKey];
+
+const modelTotals = (metrics: components["schemas"]["SpendMetrics"]) => ({
+  spend: metrics.spend ?? 0,
+  requests: metrics.api_requests ?? 0,
+  successful_requests: metrics.successful_requests ?? 0,
+  failed_requests: metrics.failed_requests ?? 0,
+  tokens: metrics.total_tokens ?? 0,
+});
+
+export const boundedActivityMetrics = (
+  response: DailyActivityAggregatedResponse,
+): { metrics: ModelActivityData; otherModels?: OtherModelData } => {
+  const breakdown = "model_breakdown" in response ? response.model_breakdown : undefined;
+  return {
+    metrics: {
+      ...overallUsageMetrics(toDailyData(response), response.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA),
+      top_models: breakdown?.models.map(({ model, metrics }) => ({ model, ...modelTotals(metrics) })) ?? [],
+    },
+    otherModels: breakdown?.other
+      ? { ...modelTotals(breakdown.other.metrics), model_count: breakdown.other.model_count }
+      : undefined,
+  };
+};

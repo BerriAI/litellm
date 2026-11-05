@@ -57,7 +57,8 @@ describe("entity activity", () => {
     expect(url.searchParams.get("start_date")).toBe("2026-10-01");
     expect(url.searchParams.get("end_date")).toBe("2026-10-07");
     expect(url.searchParams.get("timezone")).toBe("0");
-    expect(url.searchParams.get("api_key_limit")).toBe("1");
+    expect(url.searchParams.get("bounded")).toBe("true");
+    expect(url.searchParams.get("include_model_breakdown")).toBe(scope === "key" ? "true" : null);
     expect(url.searchParams.has("alert")).toBe(false);
   });
 
@@ -66,6 +67,17 @@ describe("entity activity", () => {
     renderWithProviders(<EntityActivity scope="key" id="key-hash" />, { searchParams: dates });
     await screen.findByText("No activity in this date range.");
     expect(urls()[0].searchParams.get("user_id")).toBe("viewer");
+  });
+
+  it("loads a member's key through the authorized team scope without filtering to the viewer", async () => {
+    auth.userRole = "Internal User";
+    renderWithProviders(<EntityActivity scope="key" id="member-key" teamId="team-1" />, { searchParams: dates });
+    await screen.findByText("No activity in this date range.");
+    expect(urls()).toHaveLength(1);
+    expect(urls()[0].pathname).toBe("/team/daily/activity/aggregated");
+    expect(urls()[0].searchParams.get("team_ids")).toBe("team-1");
+    expect(urls()[0].searchParams.get("api_key")).toBe("member-key");
+    expect(urls()[0].searchParams.has("user_id")).toBe(false);
   });
 
   it("does not query global model activity for a member", async () => {

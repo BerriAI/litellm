@@ -39,10 +39,13 @@ from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, w
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
+from litellm.repositories.analytics_budget import AnalyticsCapacityError
+from litellm.repositories.bounded_daily_activity import BoundedDailyActivityRepository
 from litellm.repositories.daily_activity_buckets import api_key_bucket
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    BoundedDailyActivityResponse,
     CacheLeakageKeysResponse,
     DailyActivityKeyPageResponse,
     DailyActivityKeySearchResponse,
@@ -272,8 +275,13 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         api_key_limit: Annotated[
             int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
         ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
-    ) -> SpendAnalyticsPaginatedResponse:
+        bounded: bool = False,
+        include_model_breakdown: bool = False,
+        model_limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> SpendAnalyticsPaginatedResponse | BoundedDailyActivityResponse:
         try:
+            if bounded and resolver.entity not in ("user", "team"):
+                raise HTTPException(status_code=422, detail="Bounded Activity is supported for user and team scopes")
             resolved: ResolvedScope = await _resolved_scope(
                 resolver,
                 entity_query,
@@ -281,6 +289,13 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 prisma_client,
                 user_aggregated=resolver.entity == "user",
             )
+            if bounded:
+                try:
+                    return await BoundedDailyActivityRepository.from_prisma(prisma_client).aggregate(
+                        resolved.scope, model_limit=model_limit if include_model_breakdown else None
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
             activity: Final = await get_daily_activity_aggregated(
                 repository,
                 resolved.scope,
@@ -294,6 +309,8 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
             return with_ptu_consumption(activity, llm_router, single_team_id(resolved.scope.entity_ids))
         except HTTPException:
             raise
+        except AnalyticsCapacityError as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"}) from exc
         except Exception as exc:
             verbose_proxy_logger.exception("Daily activity aggregation failed: %s", exc)
             raise HTTPException(status_code=500, detail={"error": f"Failed to fetch analytics: {exc}"})
@@ -305,7 +322,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         name=resolver.operation_names["aggregated"],
         tags=list(resolver.tags),
         dependencies=(Depends(user_api_key_auth),),
-        response_model=SpendAnalyticsPaginatedResponse,
+        response_model=SpendAnalyticsPaginatedResponse | BoundedDailyActivityResponse,
         include_in_schema=prefix != "/end_user",
     )
 
