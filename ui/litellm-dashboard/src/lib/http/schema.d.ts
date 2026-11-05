@@ -35054,6 +35054,11 @@ export interface components {
         IssueFamilyList: {
             /** Data */
             data: components["schemas"]["IssueFamilySetting"][];
+            /**
+             * Projection Pending
+             * @default false
+             */
+            projection_pending: boolean;
         };
         /** IssueFamilyPolicy */
         IssueFamilyPolicy: {
@@ -35107,6 +35112,7 @@ export interface components {
             enabled: boolean | null;
             /** Enabled Rules */
             enabled_rules: number;
+            evaluation_status_counts?: components["schemas"]["UsageAlertEvaluationCounts"];
             /**
              * Family
              * @enum {string}
