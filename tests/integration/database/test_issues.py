@@ -646,3 +646,99 @@ async def test_provider_recovery_pages_saved_cohorts_and_rejects_stale_observati
         assert remaining[0].id == inputs[2].id
     finally:
         await _remove_issues(db, tuple(issue.id for issue in inputs))
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_prune_removes_expired_children_in_bounded_passes(
+    db: ManagementDatabase,
+) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    expired: Final = _issue(
+        IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}")
+    )
+    open_issue: Final = _issue(expired.cohort)
+    recent: Final = _issue(expired.cohort)
+    rule: Final = await alerts.save_rule(
+        UsageAlertRuleInput(
+            name="Prune fixture",
+            scope_type="user",
+            scope_id=expired.cohort.scope_id,
+            metric="requests",
+            direction="increase",
+        ),
+        "qa-admin",
+    )
+    assert rule is not None
+    deliveries: Final = tuple(
+        IssueDeliveryInput(id=str(uuid4()), issue_id=expired.id, channel="slack")
+        for _ in range(2)
+    )
+    try:
+        await store.upsert_issues((expired, open_issue, recent))
+        source: Final = (
+            await alerts.record_observations(
+                rule,
+                (
+                    UsageAlertObservation(
+                        entity_id=rule.scope_id,
+                        day=expired.observed_on,
+                        observed=420,
+                        baseline=120,
+                        threshold=360,
+                        breached=True,
+                    ),
+                ),
+            )
+        )[0]
+        await store.add_signals(
+            expired.id,
+            (
+                IssueSignalInput(
+                    source="usage_alert", source_id=source.id, usage_alert=source
+                ),
+            ),
+        )
+        for delivery in deliveries:
+            await store.queue_delivery(
+                delivery, rule.id, rule.updated_at.isoformat(), source.id
+            )
+        assert await store.set_status(expired.id, "resolved", "open") is not None
+        assert await store.set_status(recent.id, "resolved", "open") is not None
+        await _query(
+            db,
+            "UPDATE \"LiteLLM_Issue\" SET updated_at=TIMESTAMP '2000-01-01' WHERE id=ANY($1::text[]) RETURNING id",
+            [expired.id, open_issue.id],
+        )
+        await store.prune(retention_days=90, limit=1)
+        assert await store.get_issue(expired.id) is not None
+        for _ in range(7):
+            await store.prune(retention_days=90, limit=1)
+        assert await store.get_issue(expired.id) is None
+        assert await store.get_issue(open_issue.id) is not None
+        assert await store.get_issue(recent.id) is not None
+        assert (await store.list_signals(expired.id)).total == 0
+        assert (
+            await _query(
+                db,
+                'SELECT id FROM "LiteLLM_IssueDelivery" WHERE issue_id=$1',
+                expired.id,
+            )
+            == []
+        )
+        assert (
+            await _query(
+                db,
+                'SELECT delivery_id FROM "LiteLLM_IssueDeliveryRule" WHERE delivery_id=ANY($1::text[])',
+                [delivery.id for delivery in deliveries],
+            )
+            == []
+        )
+    finally:
+        await _remove_issues(db, (expired.id, open_issue.id, recent.id))
+        await alerts.delete_rule(rule.id)
+        await _query(
+            db,
+            'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id',
+            rule.id,
+        )
