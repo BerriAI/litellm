@@ -5379,6 +5379,163 @@
       "autoApply": "Changes apply automatically when the proxy refreshes its configuration."
     }
   },
+  "aria": {
+    "page": {
+      "unavailable": "Aria is not available for this session."
+    },
+    "usageTrigger": {
+      "ask": "Ask Aria"
+    },
+    "destination": {
+      "loadingSettings": "Loading gateway settings",
+      "settingsError": "Could not load gateway settings.",
+      "retry": "Retry",
+      "consentTitle": "Connect to the configured gateway",
+      "consentBody": "This gateway uses a different address. Aria will send your existing session credential to the address shown above.",
+      "useConfigured": "Use configured gateway"
+    },
+    "inferenceTarget": {
+      "invalid": "The gateway must be a valid HTTP(S) URL without credentials, a query, or a fragment.",
+      "httpsRequired": "Inference must use HTTPS when the dashboard or management gateway uses HTTPS."
+    },
+    "chat": {
+      "startOver": "Start over"
+    },
+    "composer": {
+      "tooLong": "Keep your message within {{limit}} characters.",
+      "placeholder": "Ask Aria…"
+    },
+    "modelPicker": {
+      "loading": "Loading models",
+      "ariaLabel": "{{agent}} model",
+      "placeholder": "Choose a chat model",
+      "noMatch": "No matching models",
+      "noModels": "No available models"
+    },
+    "modelStatus": {
+      "loadError": "Could not load models.",
+      "retry": "Retry"
+    },
+    "start": {
+      "title": "What would you like to know?",
+      "descriptionAdmin": "Manage your gateway · Changes require approval",
+      "descriptionUser": "Ask about your usage",
+      "descriptionGateway": "Ask about gateway usage",
+      "suggestedQuestions": "Suggested questions",
+      "questions": {
+        "spendOverview": {
+          "label": "Spend overview",
+          "question": "How much have I spent this week?"
+        },
+        "costByModel": {
+          "label": "Cost by model",
+          "question": "Which models are costing the most?"
+        },
+        "findSavings": {
+          "label": "Find savings",
+          "question": "How can I reduce my spend?"
+        }
+      }
+    },
+    "conversation": {
+      "ariaLabel": "{{agent}} conversation",
+      "yourQuestion": "Your question",
+      "workingLabel": "{{agent}} is working",
+      "working": "Working…",
+      "jumpToLatest": "Jump to latest",
+      "status": {
+        "review": "Review change",
+        "applying": "Applying…",
+        "completed": "Completed",
+        "cancelled": "Cancelled",
+        "unknown": "Check result"
+      },
+      "details": "Details",
+      "copyGeneratedKey": "Copy generated key",
+      "keyNotice": "Copy this key now. It stays only in this chat session.",
+      "cancel": "Cancel",
+      "confirmChange": "Confirm change"
+    },
+    "actions": {
+      "keyCreate": "Create a virtual key",
+      "keyUpdate": "Update a virtual key",
+      "keyDetachFromTeam": "Remove a virtual key from its team without deleting the key",
+      "keyDelete": "Delete virtual keys",
+      "keyBlock": "Block a virtual key",
+      "keyUnblock": "Unblock a virtual key",
+      "teamCreate": "Create a team",
+      "teamUpdate": "Update a team",
+      "teamDelete": "Delete teams",
+      "teamMemberAdd": "Add a team member",
+      "teamMemberUpdate": "Update a team member",
+      "teamMemberDelete": "Remove a team member",
+      "userCreate": "Create a user without a key",
+      "userUpdate": "Update a user",
+      "userDelete": "Delete users",
+      "budgetCreate": "Create a budget",
+      "budgetUpdate": "Update a budget",
+      "budgetDelete": "Delete a budget",
+      "unverified": "The change could not be verified. Check the resource before trying again."
+    },
+    "session": {
+      "interruptedWrite": "A submitted change may have completed. Check the relevant page before trying again.",
+      "completedChangesShown": "Completed changes are shown above."
+    },
+    "agent": {
+      "stepLimit": "I reached the step limit. Any completed actions remain applied; check the relevant page before continuing.",
+      "noAnswer": "The model returned no answer. Try another request or model."
+    },
+    "answer": {
+      "ariaLabel": "{{agent}} answer",
+      "export": "Export answer",
+      "exportFailed": "Could not open the PDF print dialog. Please try again.",
+      "printPreview": "{{agent}} print preview"
+    },
+    "chart": {
+      "valuesLabel": "{{title}} values",
+      "category": "Category",
+      "valuesUnavailable": "Values unavailable for: {{labels}}.",
+      "unavailable": "Unavailable",
+      "titles": {
+        "dailySpend": "Daily spend",
+        "dailyRequests": "Daily requests",
+        "dailyTokens": "Daily tokens",
+        "spendByModel": "Spend by model",
+        "spendByProvider": "Spend by provider",
+        "tokenBreakdown": "Token breakdown"
+      },
+      "scopes": {
+        "gateway": "Gateway usage",
+        "allTeams": "All teams",
+        "allTags": "All tags",
+        "yours": "Your usage"
+      },
+      "labels": {
+        "unknown": "Unknown",
+        "other": "Other",
+        "prompt": "Prompt",
+        "completion": "Completion",
+        "cacheRead": "Cache read",
+        "cacheCreation": "Cache creation"
+      },
+      "notes": {
+        "otherRemainder": "Up to six leading entries. Other includes remaining recorded spend.",
+        "cacheSeparate": "Cache counts are reported separately. Do not add them to total tokens."
+      }
+    }
+  },
+  "betaBadge": {
+    "label": "Beta"
+  },
+  "chatComposer": {
+    "stopRequest": "Stop request",
+    "sendMessage": "Send message",
+    "codeInterpreterEnabled": "Code Interpreter enabled (click to disable)",
+    "enableCodeInterpreter": "Enable Code Interpreter"
+  },
+  "userBanner": {
+    "dismiss": "Dismiss banner"
+  },
   "caching": {
     "dashboard": {
       "tabs": {
@@ -6466,6 +6623,10 @@
     }
   },
   "metadataKeyValueFields": {
+    "errors": {
+      "duplicateKey": "Duplicate key",
+      "missingKey": "Missing key"
+    },
     "keyPlaceholder": "Key",
     "valuePlaceholder": "Value",
     "removePair": "Remove key-value pair",
@@ -12897,6 +13058,28 @@
       }
     },
     "crudPermissionPanel": {
+      "groups": {
+        "read": {
+          "label": "Read",
+          "description": "Safe operations — fetch, list, search. No side effects."
+        },
+        "create": {
+          "label": "Create",
+          "description": "Add new resources — insert, upload, register."
+        },
+        "update": {
+          "label": "Update",
+          "description": "Modify existing resources — edit, patch, rename."
+        },
+        "delete": {
+          "label": "Delete",
+          "description": "Destructive operations — remove, purge, destroy."
+        },
+        "unknown": {
+          "label": "Other",
+          "description": "Operations that could not be automatically classified."
+        }
+      },
       "risk": {
         "high": "High Risk",
         "medium": "Medium Risk",
