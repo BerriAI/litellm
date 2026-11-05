@@ -194,8 +194,16 @@ class PerformanceIssueProjector:
         self._metrics = metrics
         self._providers = providers
         self._delivery = delivery
+        self._overrides: frozenset[tuple[UsageAlertScope, UsageAlertMetric, UsageAlertDirection, str | None]] = (
+            frozenset()
+        )
 
     async def run(self, now: datetime, day: date, rules: tuple[UsageAlertRule, ...], *, ready: bool) -> None:
+        self._overrides = frozenset(
+            (rule.scope_type, rule.metric, rule.direction, rule.scope_id)
+            for rule in rules
+            if rule.enabled and not is_default_usage_rule(rule)
+        )
         observed_at: Final = now.replace(microsecond=now.microsecond // 1000 * 1000)
         version: Final = hashlib.sha256(
             ("performance-v1:" + ",".join(f"{rule.id}:{rule.updated_at.isoformat()}" for rule in rules)).encode()
@@ -213,7 +221,16 @@ class PerformanceIssueProjector:
     async def _candidates(
         self, sources: tuple[IssueProjectionSignal, ...], scope: UsageAlertScope, day: date
     ) -> tuple[_Candidate, ...]:
-        windows: Final = tuple(_window(source, day) for source in sources)
+        eligible: Final = tuple(
+            source
+            for source in sources
+            if not is_default_usage_rule(source.rule)
+            or not any(
+                (scope, source.rule.metric, source.rule.direction, entity) in self._overrides
+                for entity in (None, source.alert.scope_id)
+            )
+        )
+        windows: Final = tuple(_window(source, day) for source in eligible)
         rows: Final = await self._metrics.issue_windows(scope, windows)
         by_reference: Final = {
             reference: tuple(group)
@@ -223,7 +240,7 @@ class PerformanceIssueProjector:
         }
         return tuple(
             candidate
-            for source in sources
+            for source in eligible
             if (candidate := self._candidate(source, by_reference.get(source.alert.id, ()), day)) is not None
         )
 

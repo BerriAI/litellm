@@ -201,6 +201,42 @@ async def test_same_day_rule_revision_requires_a_fresh_observation(db: Managemen
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        await prisma.writer_db.query_raw(
+            'UPDATE "LiteLLM_DailyUserSpend" SET spend=40 WHERE date=$1 AND api_key=$2 RETURNING id',
+            _DAY.isoformat(),
+            _KEY_B,
+        )
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        # A rule can change after the daily observations, before Issue projection.
+        await UsageAlertJob(job._store, job._metrics, job._health, job._delivery)._run(_NOW)
+        issues: Final = IssuesRepository.from_prisma(prisma)
+        original: Final = await issues.active_signals(_DAY, scope_type="key", metric="spend")
+        assert len(original) == 2
+        overridden: Final = next(item for item in original if item.alert.scope_id == _KEY_A)
+        retained: Final = next(item for item in original if item.alert.scope_id == _KEY_B)
+        await UsageAlertsRepository.from_prisma(prisma).save_rule(
+            UsageAlertRuleInput(
+                name="Project A high spend threshold",
+                scope_type="key",
+                scope_id=_KEY_A,
+                metric="spend",
+                direction="increase",
+                multiplier=100,
+                min_requests=0,
+            ),
+            None,
+        )
+        await job._run(_NOW + timedelta(minutes=1))
+        attached: Final = await prisma.writer_db.query_raw('SELECT source_id FROM "LiteLLM_IssueSignal"')
+        assert overridden.alert.id not in {row["source_id"] for row in attached}
+        assert retained.alert.id in {row["source_id"] for row in attached}
+        assert await UsageAlertsRepository.from_prisma(prisma).get_alert(overridden.alert.id) is not None
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_provider_issue_keeps_an_independent_noisy_key_and_recovers_from_fresh_evidence(
     db: ManagementDatabase,
 ) -> None:
