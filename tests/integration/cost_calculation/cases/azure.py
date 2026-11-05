@@ -1588,6 +1588,7 @@ AZURE_PINNED_GPT_5_4_MINI_STREAM: Final = CostTrackingTestCase(
         content_type="text/event-stream",
         frames=(
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"$MODEL","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}\n\n',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"$MODEL","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1,"model":"$MODEL","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2252}}\n\n',
             "data: [DONE]\n\n",
         ),

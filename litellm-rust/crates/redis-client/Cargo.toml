@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-circuit-breaker.workspace = true
+litellm-secret-value.workspace = true
 futures-util.workspace = true
 redis = { workspace = true, features = ["cluster-async", "connection-manager", "tokio-rustls-comp"] }
 thiserror.workspace = true
