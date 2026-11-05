@@ -89,7 +89,9 @@ def _rewrite_sql(set_clause: str, where_clause: str) -> str:
     return f"WITH {ctes} {rows}"
 
 
-_TEAMS_LISTING_SQL: Final = 'SELECT team_id FROM "LiteLLM_TeamTable" WHERE $1 = ANY("models") ORDER BY team_id COLLATE "C"'
+_TEAMS_LISTING_SQL: Final = (
+    'SELECT team_id FROM "LiteLLM_TeamTable" WHERE $1 = ANY("models") ORDER BY team_id COLLATE "C"'
+)
 
 _LOCK_ORGS_LISTING_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_OrganizationTable" WHERE $1 = ANY("models") '
