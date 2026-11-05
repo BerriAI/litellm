@@ -284,6 +284,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone", "/v1/extraction", "/extraction"),
     ),
     LazyFeature(
+        name="skill_hub",
+        module_path="litellm.proxy.discovery_endpoints.skill_hub_endpoints",
+        path_prefixes=("/skill-hub",),
+    ),
+    LazyFeature(
         name="claude_code_marketplace",
         module_path="litellm.proxy.anthropic_endpoints.claude_code_endpoints",
         path_prefixes=("/claude-code",),

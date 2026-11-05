@@ -1,6 +1,10 @@
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Protocol
+
+
+def has_agent_skill_metadata(manifest: Mapping[str, object]) -> bool:
+    return isinstance(manifest.get("agent_skill"), dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +23,10 @@ class PluginArchiveMetadata:
     enabled: bool
     source: Mapping[str, str]
     manifest_json: str | None
+    id: str | None = None
+    version: str | None = None
+    description: str | None = None
+    has_agent_skill_metadata: bool = False
 
 
 class PluginUploadStore(Protocol):
@@ -27,3 +35,5 @@ class PluginUploadStore(Protocol):
     async def get_metadata(self, name: str) -> PluginArchiveMetadata | None: ...
 
     async def get_content(self, metadata: PluginArchiveMetadata) -> bytes | None: ...
+
+    def public_metadata(self) -> AsyncIterator[PluginArchiveMetadata]: ...

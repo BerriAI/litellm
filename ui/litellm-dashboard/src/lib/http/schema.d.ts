@@ -30,7 +30,7 @@ export interface paths {
         };
         /**
          * Agent Skills Index
-         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         * @description Discover public Hub skills and the separately enabled hosted skill store.
          */
         get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
         put?: never;
@@ -339,7 +339,7 @@ export interface paths {
         };
         /**
          * Agent Skills Index
-         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         * @description Discover public Hub skills and the separately enabled hosted skill store.
          */
         get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
@@ -15670,6 +15670,174 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skills
+         * @description Browse the caller's public and granted private skills.
+         */
+        get: operations["list_skills_skill_hub_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Skill
+         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         */
+        post: operations["import_skill_skill_hub_skills_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Skill
+         * @description Publish a portable skill while retaining Claude marketplace compatibility.
+         */
+        post: operations["upload_skill_skill_hub_skills_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill
+         * @description Read one visible skill and its portable download URL.
+         */
+        get: operations["get_skill_skill_hub_skills__name__get"];
+        /**
+         * Replace Skill Metadata
+         * @description Replace registry metadata, clearing omitted fields and preserving skill files.
+         */
+        put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
+        post?: never;
+        /**
+         * Remove Skill
+         * @description Delete a skill and its managed archive.
+         */
+        delete: operations["remove_skill_skill_hub_skills__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Skill
+         * @description Download the complete portable skill, with SKILL.md at the ZIP root.
+         */
+        get: operations["download_skill_skill_hub_skills__name__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Skill Content
+         * @description Read the original SKILL.md without downloading supporting files.
+         */
+        get: operations["skill_content_skill_hub_skills__name__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Skill
+         * @description Make a skill public using the existing Hub publication policy.
+         */
+        post: operations["publish_skill_skill_hub_skills__name__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/unpublish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unpublish Skill
+         * @description Remove a skill from public discovery while retaining explicit grants.
+         */
+        post: operations["unpublish_skill_skill_hub_skills__name__unpublish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/calculate": {
         parameters: {
             query?: never;
@@ -28173,6 +28341,16 @@ export interface components {
              */
             metadata: string;
         };
+        /** Body_upload_skill_skill_hub_skills_upload_post */
+        Body_upload_skill_skill_hub_skills_upload_post: {
+            /**
+             * File
+             * @description Agent Skills ZIP with SKILL.md and optional supporting files
+             */
+            file: string;
+            /** Version */
+            version?: string | null;
+        };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
@@ -34196,6 +34374,35 @@ export interface components {
             url: string;
         } & {
             [key: string]: unknown;
+        };
+        /** ImportSkillRequest */
+        ImportSkillRequest: {
+            /**
+             * Path
+             * @description Repository-relative skill directory
+             */
+            path?: string | null;
+            /**
+             * Ref
+             * @description Git commit, tag or branch to import
+             * @default HEAD
+             */
+            ref: string;
+            /**
+             * Skill
+             * @description Skill name to select when a repository contains several skills
+             */
+            skill?: string | null;
+            /**
+             * Url
+             * @description Public skills.sh skill URL or GitHub repository URL
+             */
+            url: string;
+            /**
+             * Version
+             * @description Version label for the imported snapshot
+             */
+            version?: string | null;
         };
         /**
          * IncompleteDetails
@@ -46391,6 +46598,54 @@ export interface components {
             type: string;
             /** Updated At */
             updated_at: string;
+        };
+        /** SkillHubList */
+        SkillHubList: {
+            /** Count */
+            count: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Skills */
+            skills: components["schemas"]["SkillHubSkill"][];
+        };
+        /** SkillHubMetadata */
+        SkillHubMetadata: {
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Namespace */
+            namespace?: string | null;
+            /** Version */
+            version?: string | null;
+        };
+        /** SkillHubPublication */
+        SkillHubPublication: Record<string, never>;
+        /** SkillHubSkill */
+        SkillHubSkill: {
+            /** Content Url */
+            content_url?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Download Url */
+            download_url?: string | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Source */
+            source: {
+                [key: string]: string;
+            };
+            /** Version */
+            version?: string | null;
+            /**
+             * Visibility
+             * @enum {string}
+             */
+            visibility: "public" | "private";
         };
         /** SkillReference */
         SkillReference: {
@@ -73509,6 +73764,334 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_skills_skill_hub_skills_get: {
+        parameters: {
+            query?: {
+                query?: string;
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_skill_skill_hub_skills_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportSkillRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_skill_skill_hub_skills_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_skill_skill_hub_skills_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_skill_hub_skills__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_skill_metadata_skill_hub_skills__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubMetadata"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_skill_skill_hub_skills__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_skill_skill_hub_skills__name__archive_get: {
+        parameters: {
+            query?: {
+                digest?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skill_content_skill_hub_skills__name__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/markdown": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_skill_skill_hub_skills__name__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubPublication"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpublish_skill_skill_hub_skills__name__unpublish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubPublication"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
