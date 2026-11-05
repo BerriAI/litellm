@@ -90,11 +90,20 @@ def _window_rows(scope: Scope) -> str:
 
 def _key_attribution_query(scope: Scope, metric: Literal["spend", "requests"]) -> str:
     measure: Final = "spend" if metric == "spend" else "api_requests"
+    # Shared keys must stop at the first different owner, rather than recounting
+    # every owner for every source. Compare team totals only for an exclusive key.
     same_identity: Final = {
         "deployment": "true",
-        "user": "k.users=1 AND k.user_id=p.entity_id",
-        "model": "k.models=1 AND k.model=p.entity_id",
-        "team": "k.team_days IS NOT DISTINCT FROM k.user_days",
+        "user": """NOT EXISTS (SELECT 1 FROM "LiteLLM_DailyUserSpend"
+            WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day
+                AND COALESCE(user_id,'')<>w.entity_id)""",
+        "model": """NOT EXISTS (SELECT 1 FROM "LiteLLM_DailyUserSpend"
+            WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day
+                AND COALESCE(NULLIF(model,''),'unknown-model')<>w.entity_id)""",
+        "team": """CASE WHEN EXISTS (SELECT 1 FROM "LiteLLM_DailyTeamSpend"
+            WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day
+                AND COALESCE(team_id,'')<>w.entity_id AND api_requests>0)
+            THEN false ELSE team_days IS NOT DISTINCT FROM user_days END""",
         "key": "true",
     }[scope]
     team_days: Final = (
@@ -140,14 +149,6 @@ def _key_attribution_query(scope: Scope, metric: Literal["spend", "requests"]) -
         SELECT DISTINCT api_key,entity_id,start_day,target_day FROM candidate WHERE api_key<>''
     ), key_population AS (
         SELECT w.*,
-            (SELECT count(DISTINCT COALESCE(user_id,'')) FROM "LiteLLM_DailyUserSpend"
-                WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day) AS users,
-            (SELECT MIN(user_id) FROM "LiteLLM_DailyUserSpend"
-                WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day) AS user_id,
-            (SELECT count(DISTINCT COALESCE(NULLIF(model,''),'unknown-model')) FROM "LiteLLM_DailyUserSpend"
-                WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day) AS models,
-            (SELECT MIN(COALESCE(NULLIF(model,''),'unknown-model')) FROM "LiteLLM_DailyUserSpend"
-                WHERE api_key=w.api_key AND date>=w.start_day AND date<=w.target_day) AS model,
             {team_days} AS team_days,
             (SELECT jsonb_agg(to_jsonb(d) ORDER BY d.day) FROM (
                 SELECT date AS day,SUM(spend) AS spend,SUM(api_requests)::bigint AS requests,
@@ -157,10 +158,13 @@ def _key_attribution_query(scope: Scope, metric: Literal["spend", "requests"]) -
                     AND date>=w.start_day AND date<=w.target_day GROUP BY date
             ) d) AS user_days
         FROM windows w
+    ), equivalent_keys AS (
+        SELECT w.api_key,w.entity_id,w.start_day,w.target_day,({same_identity}) AS equivalent
+        FROM key_population w
     ) SELECT p.reference_id,p.api_key AS key_id,
-        p.key_count=1 AND ({same_identity}) AS equivalent,p.positive_change_share,
+        p.key_count=1 AND k.equivalent AS equivalent,p.positive_change_share,
         COALESCE(p.baseline_value,0) AS baseline_value,p.observed_value
-    FROM candidate p JOIN key_population k ON k.api_key=p.api_key AND k.entity_id=p.entity_id
+    FROM candidate p JOIN equivalent_keys k ON k.api_key=p.api_key AND k.entity_id=p.entity_id
         AND k.start_day=p.start_day AND k.target_day=p.target_day"""
 
 

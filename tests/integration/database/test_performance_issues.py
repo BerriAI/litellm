@@ -14,8 +14,9 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy.spend_tracking.usage_alert_job import UsageAlertJob
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.issues import IssuesRepository
+from litellm.repositories.usage_alert_metrics import IssueMetricWindow
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRuleInput, UsageAlertScope
 
 _DAY: Final = date(2026, 11, 4)
 _NOW: Final = datetime(2026, 11, 5, 3, microsecond=987654, tzinfo=timezone.utc)
@@ -234,6 +235,49 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
         assert overridden.alert.id not in {row["source_id"] for row in attached}
         assert retained.alert.id in {row["source_id"] for row in attached}
         assert await UsageAlertsRepository.from_prisma(prisma).get_alert(overridden.alert.id) is not None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_shared_key_does_not_make_distinct_resource_populations_equivalent(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma, reliability=True)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        scopes: Final[tuple[tuple[UsageAlertScope, str], ...]] = (
+            ("user", "owner-1"),
+            ("team", "team"),
+            ("model", "example-model"),
+        )
+        for scope, entity in scopes:
+            assert (
+                await job._metrics.issue_key_attributions(
+                    scope,
+                    (
+                        IssueMetricWindow(
+                            reference_id=entity, entity_id=entity, start=_DAY - timedelta(days=7), day=_DAY
+                        ),
+                    ),
+                )
+            )[0].equivalent
+        for table, entity in (("LiteLLM_DailyUserSpend", "user_id"), ("LiteLLM_DailyTeamSpend", "team_id")):
+            await prisma.writer_db.query_raw(
+                f"""INSERT INTO "{table}"
+                    (id,{entity},date,api_key,model,custom_llm_provider,spend,api_requests,successful_requests,
+                     failed_requests,total_response_time_ms,timed_requests,updated_at)
+                SELECT id||'-shared','other-owner',date,api_key,'other-model',custom_llm_provider,spend,
+                    api_requests,successful_requests,failed_requests,total_response_time_ms,timed_requests,updated_at
+                FROM "{table}" RETURNING id"""
+            )
+        for scope, entity in scopes:
+            assert not (
+                await job._metrics.issue_key_attributions(
+                    scope,
+                    (
+                        IssueMetricWindow(
+                            reference_id=entity, entity_id=entity, start=_DAY - timedelta(days=7), day=_DAY
+                        ),
+                    ),
+                )
+            )[0].equivalent
 
 
 @pytest.mark.asyncio(loop_scope="session")

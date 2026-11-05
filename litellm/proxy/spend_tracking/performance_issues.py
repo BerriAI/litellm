@@ -288,7 +288,9 @@ class PerformanceIssueProjector:
     ) -> None:
         candidates: Final = await self._candidates(sources, scope, day)
         provider_targets: Final = await self._provider_targets(candidates, providers, now)
-        resource_targets: Final = await self._resource_targets(candidates, now)
+        resource_targets: Final = await self._resource_targets(
+            tuple(item for item in candidates if item.source.alert.id not in provider_targets), now
+        )
         targets: Final = {
             item.source.alert.id: provider_targets.get(item.source.alert.id)
             or resource_targets.get(item.source.alert.id)
