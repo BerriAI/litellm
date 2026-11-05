@@ -150,6 +150,70 @@
       "noMatchingOptions": "No matching options"
     },
     "formConfig": {
+      "fields": {
+        "name": {
+          "label": "Display Name",
+          "placeholder": "e.g., Customer Support Agent"
+        },
+        "description": {
+          "label": "Description",
+          "placeholder": "Describe what this agent does..."
+        },
+        "url": {
+          "label": "URL",
+          "tooltip": "Base URL where the agent is hosted (optional)"
+        },
+        "version": {
+          "label": "Version"
+        },
+        "protocolVersion": {
+          "label": "Protocol Version",
+          "tooltip": "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version."
+        },
+        "skills": {
+          "label": "Skills"
+        },
+        "streaming": {
+          "label": "Streaming"
+        },
+        "pushNotifications": {
+          "label": "Push Notifications"
+        },
+        "stateTransitionHistory": {
+          "label": "State Transition History"
+        },
+        "iconUrl": {
+          "label": "Icon URL"
+        },
+        "documentationUrl": {
+          "label": "Documentation URL"
+        },
+        "supportsAuthenticatedExtendedCard": {
+          "label": "Supports Authenticated Extended Card"
+        },
+        "model": {
+          "label": "Model (Optional)"
+        },
+        "makePublic": {
+          "label": "Make Public"
+        },
+        "costPerQuery": {
+          "label": "Cost Per Query ($)",
+          "tooltip": "Fixed cost per query"
+        },
+        "inputCostPerToken": {
+          "label": "Input Cost Per Token ($)",
+          "tooltip": "Cost per input token"
+        },
+        "outputCostPerToken": {
+          "label": "Output Cost Per Token ($)",
+          "tooltip": "Cost per output token"
+        },
+        "enableTracing": {
+          "label": "Enable Tracing",
+          "tooltip": "Enable request tracing for this agent"
+        }
+      },
       "basic": {
         "title": "Basic Information",
         "protocolVersionHelp": "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version."
@@ -651,6 +715,12 @@
       }
     },
     "documents": {
+      "statuses": {
+        "uploading": "Uploading",
+        "ready": "Ready",
+        "error": "Error",
+        "removed": "Removed"
+      },
       "empty": {
         "title": "No documents uploaded yet",
         "description": "Upload documents above to get started."
@@ -956,6 +1026,9 @@
       }
     },
     "providerFields": {
+      "placeholders": {
+        "sidecarApiKey": "Enter sidecar API key"
+      },
       "labels": {
         "apiBase": "API Base",
         "apiKey": "API Key",
@@ -2253,6 +2326,8 @@
       }
     },
     "estimatedOutputTokens": {
+      "invalidPerModel": "Enter a JSON object of positive integers, e.g. {\"gpt-4\": 4096}",
+      "invalidPositive": "Enter a positive integer",
       "adminOnlyTooltip": "Only a proxy admin can change this. It sets how many output tokens the rate limiter reserves for a request that omits max_tokens, which is charged against the team and organization TPM windows.",
       "estimateTooltip": "Expected output tokens reserved for TPM limiting when a request omits max_tokens. Overrides the built-in estimate for this {{entity}}.",
       "perModelTooltip": "Per-model expected output tokens reserved for TPM limiting when a request omits max_tokens. Takes precedence over the {{entity}}-wide estimate."
@@ -2274,6 +2349,10 @@
   },
   "apiKeys": {
     "keyTableColumns": {
+      "sortFields": {
+        "spend": "Spend",
+        "budget": "Budget"
+      },
       "status": {
         "deleted": "Deleted",
         "deletedTooltip": "Deleted {{date}}{{deletedBy}}. Kept for audit and spend history; requests using this key are rejected.",
@@ -2315,6 +2394,20 @@
       }
     },
     "virtualKeysTable": {
+      "filterLabels": {
+        "team": "Team",
+        "organization": "Organization",
+        "userId": "User ID",
+        "keyId": "Key ID",
+        "status": "Status"
+      },
+      "statuses": {
+        "all": "All statuses",
+        "active": "Active",
+        "expired": "Expired",
+        "revoked": "Revoked (blocked)",
+        "deleted": "Deleted"
+      },
       "loadingKey": "Loading key...",
       "title": "Virtual Keys",
       "description": "Every key that authenticates requests to the gateway.",
@@ -2652,6 +2745,15 @@
       "allProviderModels": "All {{provider}} models"
     },
     "modelMaxBudgetEditor": {
+      "periods": {
+        "hourly": "Hourly",
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "calendarMonth": "Calendar month"
+      },
+      "modelPattern": "Model pattern",
+      "premiumHint": "Premium feature - Upgrade to set per-model budgets",
       "blurb": "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Pick an access group, or type a pattern like claude-opus*, to share one budget across every model it covers.",
       "addModelBudget": "Add Model Budget",
       "removeModelBudget": "Remove model budget",
@@ -2676,6 +2778,24 @@
       "triedInOrder": "Tried in order; first model still within its own budget is used"
     },
     "budgetWindowsEditor": {
+      "options": {
+        "hourly": {
+          "label": "Hourly",
+          "resetHint": "Resets every hour"
+        },
+        "daily": {
+          "label": "Daily",
+          "resetHint": "Resets daily at midnight UTC"
+        },
+        "weekly": {
+          "label": "Weekly",
+          "resetHint": "Resets every Sunday at midnight UTC"
+        },
+        "monthly": {
+          "label": "Monthly",
+          "resetHint": "Resets on the 1st of every month at midnight UTC"
+        }
+      },
       "maxSpend": "Max spend ($)",
       "addWindow": "+ Add Budget Window"
     },
@@ -2752,6 +2872,10 @@
     "copy": "Copy"
   },
   "routerSettingsForm": {
+    "configOwned": {
+      "hint": "Set in config.yaml. Edit the file to change it.",
+      "sourceUnknown": "Could not load which settings config.yaml owns. Reload the page to make changes."
+    },
     "page": {
       "updated": "router settings updated successfully",
       "updateFailed": "Failed to update router settings: ",
@@ -2917,6 +3041,27 @@
     "placeholder": "Select pass through routes",
     "empty": "No pass through routes found"
   },
+  "callbackInfo": {
+    "descriptions": {
+      "arize": "Arize Logging Integration",
+      "braintrust": "Braintrust Logging Integration",
+      "customCallbackApi": "Custom Callback API Logging Integration",
+      "galileo": "Galileo AI Observability Integration",
+      "datadog": "Datadog Logging Integration",
+      "newrelic": "New Relic Logging Integration",
+      "lago": "Lago Billing Logging Integration",
+      "langfuse": "Langfuse v2 Logging Integration",
+      "langfuseOtel": "Langfuse v3 OTEL Logging Integration",
+      "langsmith": "Langsmith Logging Integration",
+      "openmeter": "OpenMeter Logging Integration",
+      "otel": "OpenTelemetry Logging Integration",
+      "pointfive": "PointFive Logging Integration",
+      "zerobus": "Databricks Zerobus Ingest Logging Integration",
+      "s3": "S3 Bucket (AWS) Logging Integration",
+      "signoz": "SigNoz Logging Integration. Setup: https://signoz.io/docs/litellm-observability/",
+      "sqs": "SQS Queue (AWS) Logging Integration"
+    }
+  },
   "projects": {
     "page": {
       "title": "Projects",
@@ -3068,6 +3213,13 @@
     }
   },
   "budgets": {
+    "durationFilterOptions": {
+      "hourly": "hourly",
+      "daily": "daily",
+      "weekly": "weekly",
+      "monthly": "monthly",
+      "notSet": "Not set"
+    },
     "panel": {
       "title": "Budgets",
       "description": "Spend, TPM and RPM limits you can assign to customers.",
@@ -3100,6 +3252,11 @@
       }
     },
     "table": {
+      "filterLabels": {
+        "reset": "Reset",
+        "maxBudget": "Max Budget",
+        "created": "Created"
+      },
       "loading": "Loading budgets…",
       "searchPlaceholder": "Search by budget ID…",
       "emptyState": {
@@ -3155,6 +3312,12 @@
       }
     },
     "form": {
+      "resetOptions": {
+        "inTotal": "in total",
+        "perDay": "per day",
+        "perWeek": "per week",
+        "perMonth": "per month"
+      },
       "noLimit": "No limit",
       "optional": "Optional",
       "spendLimit": "Spend limit",
@@ -3190,6 +3353,10 @@
   },
   "costTracking": {
     "settings": {
+      "docsLinks": {
+        "customPricing": "Custom pricing for models",
+        "spendTracking": "Spend tracking"
+      },
       "removal": {
         "discount": {
           "title": "Remove Provider Discount",
@@ -3296,6 +3463,7 @@
     },
     "addMarginForm": {
       "provider": {
+        "global": "Global (All Providers)",
         "label": "Provider",
         "hint": "Select 'Global' to apply margin to all providers, or select a specific provider",
         "placeholder": "Select provider or 'Global'",
@@ -3854,6 +4022,12 @@
       "loadFailed": "Existing evaluations could not be loaded. Refresh the page to retry.",
       "loading": "Loading evaluations...",
       "start": {
+        "directionOptions": {
+          "forward": "Adoption check: key's traffic vs the router",
+          "reverse": "Regression check: router's picks vs a baseline"
+        },
+        "durationDays_one": "{{count}} day",
+        "durationDays_other": "{{count}} days",
         "description": {
           "forward": "Duplicates a sampled slice of the selected targets' traffic (keys, teams, or users) through the auto-router and has an LLM judge compare both answers blind. Each target gets its own spend budget. The router's answers are never served to users; judge calls bill to the sampled traffic's own identity.",
           "reverse": "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each target gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the sampled traffic's own identity."
@@ -14894,6 +15068,14 @@
   },
   "teams": {
     "teamInfo": {
+      "tabs": {
+        "overview": "Overview",
+        "myUser": "My User",
+        "virtualKeys": "Virtual Keys",
+        "members": "Members",
+        "memberPermissions": "Member Permissions",
+        "settings": "Settings"
+      },
       "toasts": {
         "mcpUnresolvable": "Cannot save MCP tool permissions because {{reason}}. Retry once the page has finished loading",
         "loadFailed": "Failed to load team information",
@@ -14919,6 +15101,8 @@
         "tpmOrRpmRequired": "Set at least one of TPM or RPM"
       },
       "mcpLookup": {
+        "teamGroupsReloadFailed": "the team's access groups could not be reloaded",
+        "teamGroupsLoadFailed": "the team's access groups could not be loaded",
         "serversFailed": "the MCP server list could not be loaded",
         "toolsetsFailed": "the MCP toolset list could not be loaded",
         "accessGroupsFailed": "the access group list could not be loaded",
@@ -15239,6 +15423,23 @@
       }
     },
     "memberPermissions": {
+      "descriptions": {
+        "autoRouterManage": "Member can create auto routers for this team and edit their own router configurations",
+        "keyGenerate": "Member can generate a virtual key for this team",
+        "keyServiceAccountGenerate": "Member can generate a service account key (not belonging to any user) for this team",
+        "keyUpdate": "Member can update a virtual key belonging to this team",
+        "keyDelete": "Member can delete a virtual key belonging to this team",
+        "keyInfo": "Member can get info about a virtual key belonging to this team",
+        "keyRegenerate": "Member can regenerate a virtual key belonging to this team",
+        "keyIdRegenerate": "Member can regenerate a virtual key belonging to this team",
+        "keyList": "Member can list virtual keys belonging to this team",
+        "keyBlock": "Member can block a virtual key belonging to this team",
+        "keyUnblock": "Member can unblock a virtual key belonging to this team",
+        "keyAccessGroupAssignment": "Member can assign access groups to virtual keys for this team",
+        "teamDailyActivity": "Member can view all team usage data (not just their own)",
+        "spendLogs": "Member can view spend logs for the entire team (not just their own)",
+        "fallback": "Access {{permission}}"
+      },
       "toasts": {
         "loadFailed": "Failed to load permissions",
         "updated": "Permissions updated successfully",
