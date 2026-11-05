@@ -2405,7 +2405,7 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
     }
 
 
-def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_model_cost_map):
+def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_model_cost_map: None) -> None:
     litellm_params: Final = {
         "model_info": {
             "id": "deployment-1",
