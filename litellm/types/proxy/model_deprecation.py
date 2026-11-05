@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import Enum
 from typing import Final, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -63,3 +64,38 @@ class ModelDeprecationResponse(LiteLLMBaseModel):
     )
     warn_within_days: int = Field(description="The window (in days) used to bucket 'imminent' models.")
     checked_at: datetime = Field(description="UTC timestamp when the deprecation snapshot was generated.")
+
+
+class DeprecationAlertStatus(str, Enum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+    DISMISSED = "dismissed"
+
+
+class DeprecationAlertUpdate(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str = Field(min_length=1, max_length=1024)
+    deprecation_date: date
+    status: DeprecationAlertStatus
+    last_seen_date: date
+    last_seen_requests: int = Field(ge=0)
+
+
+class DeprecationAlertState(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    deprecation_date: date
+    status: DeprecationAlertStatus = DeprecationAlertStatus.OPEN
+    last_seen_date: date | None = None
+    last_seen_requests: int = 0
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class DeprecationTagUsage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    api_key: str
+    tag: str

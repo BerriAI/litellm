@@ -29,9 +29,6 @@ vi.mock("./detailNavigation", () => ({
 vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
   default: () => <section aria-label="Decision models" />,
 }));
-vi.mock("./components/ModelDeprecationBanner", () => ({
-  default: () => <section aria-label="Model deprecations" />,
-}));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -110,12 +107,6 @@ describe("ModelsAndEndpointsPage", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
     renderPage();
     expect(screen.queryByRole("region", { name: "Decision models" })).not.toBeInTheDocument();
-  });
-
-  it("renders the model deprecation banner", () => {
-    renderPage();
-
-    expect(screen.getByRole("region", { name: "Model deprecations" })).toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {

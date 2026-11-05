@@ -22,8 +22,6 @@ import { useCallback, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
-import { modelDeprecationKeys } from "../../hooks/models/useModelDeprecations";
-import { invalidateModelQueries } from "../../hooks/models/invalidateModelQueries";
 import { ROUTING_STATUS_FILTER_ID, routingStatusToBlocked } from "../utils/routingStatus";
 import { transformModelData } from "../utils/modelDataTransformer";
 import {
@@ -268,8 +266,8 @@ const AllModelsTab = ({
     try {
       setDeleteLoading(true);
       await modelDeleteCall(accessToken, deleteModalModelId);
-      void invalidateModelQueries(queryClient);
       toast.success(t("modelsAndEndpoints.allModelsTab.toasts.deleted"));
+      queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       refetchModels();
     } catch (error) {
       console.error("Error deleting model:", error);
@@ -293,7 +291,7 @@ const AllModelsTab = ({
         );
         // invalidateQueries already schedules a refetch for active observers
         // on this key — no need to also call refetchModels() (would double-fetch).
-        void invalidateModelQueries(queryClient);
+        queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       } catch (error) {
         console.error("Error toggling model pause state:", error);
         toast.fromError(error);
@@ -305,9 +303,8 @@ const AllModelsTab = ({
   );
 
   const handleRefresh = useCallback(() => {
-    refetchModels();
-    void queryClient.invalidateQueries({ queryKey: modelDeprecationKeys.all });
-  }, [queryClient, refetchModels]);
+    void refetchModels();
+  }, [refetchModels]);
 
   const handleDeleteClick = useCallback((modelId: string) => {
     setDeleteModalModelId(modelId);

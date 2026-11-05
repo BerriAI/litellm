@@ -300,6 +300,13 @@ const menuGroups: MenuGroup[] = [
         label: "Usage",
       },
       {
+        key: "alerts",
+        page: "alerts",
+        label: "Alerts",
+        icon: <Bell {...ICON} />,
+        roles: rolesWithCapability("viewGlobalSpend"),
+      },
+      {
         key: "model-insights",
         page: "model-insights",
         icon: <Trophy {...ICON} />,

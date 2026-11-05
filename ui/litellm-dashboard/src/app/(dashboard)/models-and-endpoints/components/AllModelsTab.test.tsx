@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
 
-import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import AllModelsTab from "./AllModelsTab";
 import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
 
@@ -21,6 +21,12 @@ vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", ()
     return isVisible ? <div data-testid="model-settings-modal" /> : null;
   },
 }));
+
+const mockInvalidateQueries = vi.fn();
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return { ...actual, useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }) };
+});
 
 interface ModelsInfoArgs {
   page?: number;
@@ -151,7 +157,6 @@ const defaultProps = {
 describe("AllModelsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    testQueryClient.clear();
     modelsInfoCalls.length = 0;
     setModelsInfo([makeRow()]);
     vi.spyOn(useAuthorizedModule, "default").mockReturnValue(MOCK_AUTHORIZED);

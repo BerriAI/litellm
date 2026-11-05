@@ -7,7 +7,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { invalidateModelQueries } from "@/app/(dashboard)/hooks/models/invalidateModelQueries";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUrlTab } from "@/hooks/useUrlTab";
@@ -31,7 +30,6 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import ModelDeprecationBanner from "./components/ModelDeprecationBanner";
 
 const MODEL_TAB_SLUGS = [
   "add",
@@ -168,10 +166,10 @@ export default function ModelsAndEndpointsPage() {
 
   const handleRefreshClick = () => {
     setLastRefreshed(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
-    void invalidateModelQueries(queryClient);
+    queryClient.invalidateQueries({ queryKey: ["models", "list"] });
   };
 
-  const invalidateModels = () => invalidateModelQueries(queryClient);
+  const invalidateModels = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
 
   if (teamId) {
     return (
@@ -206,7 +204,6 @@ export default function ModelsAndEndpointsPage() {
         </div>
 
         {!isViewOnly && <DecisionModelsBanner />}
-        <ModelDeprecationBanner />
 
         {modelId ? (
           <ModelInfoView
