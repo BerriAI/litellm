@@ -16,7 +16,7 @@ Daily Performance defaults cover spend, latency, reliability, and traffic across
 | Latency | At least 3× average latency and a 500 ms increase | Three recorded reference days and at least 100 timed requests in both periods |
 | Reliability | At least 3× error rate and a two percentage-point increase | Three recorded reference days and at least 500 daily requests in both periods |
 | Traffic increase | At least 10× requests and an increase of 1,000 requests | Three recorded reference days with a positive request baseline |
-| Traffic decrease | At most one fifth of baseline requests | Seven recorded reference days and a baseline of at least 500 daily requests |
+| Traffic decrease | At most one fifth of baseline requests | Seven recorded reference days, each with at least 500 requests |
 
 New resources need history before they can produce a default spike. A zero spend, request, or latency baseline does not establish a spike. A zero error-rate baseline is usable only after sufficient historical traffic has been observed; the percentage-point floor still applies.
 
@@ -27,6 +27,14 @@ The scheduler wakes hourly and evaluates the latest completed UTC day after a on
 Decrease rules need a successful background aggregate-flush sample for every hour of the target day and another sample after the grace period. Until that coverage exists, their status is `insufficient_coverage`. A key with no requests can then produce a request or spend drop; missing latency samples never become zero latency. Coverage shows that an aggregate writer was healthy each hour, not that every replica delivered every request.
 
 The baseline averages recorded reference days; it does not turn missing reference days into zero. Average latency is weighted by timed request count, using the same successful-request duration totals as Activity. `baseline_sample_days` records how many reference days contributed. Cost, traffic, and latency comparisons require a positive baseline. Reliability can compare against a recorded 0% error rate when historical and current request volume meet the rule's minimum. Missing history and low-volume comparisons remain `insufficient_history`.
+
+## How related signals form one issue
+
+A key with unusually high spend gets a spend issue, including when it makes only a few expensive requests. Its comparison includes request volume so you can distinguish more traffic from more expensive traffic. A traffic-increase signal joins that spend issue when both increases use the same reference window and their ratios are within 20% of each other.
+
+Default user, team, model, and gateway signals can join a key issue when they describe the same key traffic. For spend and request increases, they can also join when that key accounts for at least 80% of the source's positive growth. Each supporting signal retains its own comparison. A reliability or latency change remains a separate issue from increased spend.
+
+Provider latency grouping requires measured deterioration within established key/model traffic: at least two keys per model, two models, and 80% coverage of current timed requests. A change in the mix of fast and slow models alone is insufficient. A source joins only when at least 80% of its timed traffic independently meets the shared pattern; a source with more than twice the provider cohort's latency ratio stays separate. The issue keeps its original provider/model cohort until recovery. These relationships are evidence for a shared investigation, not proof of a provider outage or root cause. Custom rules retain their configured resource scope.
 
 ## Read and investigate issues
 

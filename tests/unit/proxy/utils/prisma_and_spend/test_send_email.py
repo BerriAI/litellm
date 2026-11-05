@@ -7,7 +7,7 @@ Symbols pinned here:
 from __future__ import annotations
 
 import threading
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock
 
 import pytest
@@ -185,6 +185,7 @@ async def test_should_send_plain_text_and_html_as_multipart_alternative(monkeypa
 async def test_durable_alert_delivery_can_observe_smtp_failure(in_memory_smtp: InMemorySMTP) -> None:
     in_memory_smtp.raise_on_send = RuntimeError("smtp unavailable")
     with pytest.raises(RuntimeError, match="smtp unavailable"):
-        await send_email(receiver_email="alerts@example.com", subject="Daily usage", html="<p>Alert</p>",
-                         raise_on_error=True)
+        await send_email(
+            receiver_email="alerts@example.com", subject="Daily usage", html="<p>Alert</p>", raise_on_error=True
+        )
     assert in_memory_smtp.sent == []

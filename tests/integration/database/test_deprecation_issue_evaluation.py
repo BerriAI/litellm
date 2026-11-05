@@ -73,7 +73,7 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
 ) -> None:
     prefix = f"retirement-lifecycle-{uuid4()}"
     name = f"example/{prefix}"
-    now = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 5, 10, microsecond=123456, tzinfo=timezone.utc)
     retirement = now.date() + timedelta(days=15)
     config = ConfigRepository(db.prisma, use_writer=True)
     previous_checkpoint = await config.get_param("issues:deprecation_projection")
