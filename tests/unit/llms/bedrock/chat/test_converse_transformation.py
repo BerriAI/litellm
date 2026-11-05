@@ -11813,6 +11813,33 @@ def test_a_default_native_schema_rejection_retries_with_the_json_tool(
     assert "toolConfig" in retry_request and "outputConfig" not in retry_request
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_an_unforceable_tool_native_schema_rejection_retries_with_the_json_tool(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model="bedrock/converse/anthropic.claude-fable-5-1",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 2
+    first_request: Final = json.loads(route.calls[0].request.content)
+    retry_request: Final = json.loads(route.calls[1].request.content)
+    assert "outputConfig" in first_request and "toolConfig" not in first_request
+    assert "toolConfig" in retry_request and "outputConfig" not in retry_request
+
+
 CONTROL_PLANE_ENDPOINT: Final = "https://bedrock-fips.us-east-1.amazonaws.com"
 
 
