@@ -6,6 +6,7 @@ and version parameter injection.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -549,6 +550,30 @@ async def test_watsonx_route_falls_back_to_env_when_no_deployment_is_flagged(mon
             "WATSONX_API_KEY": "watsonx-env-key",
             "WATSONX_API_BASE": "https://us-south.ml.cloud.ibm.com",
         },
+    )
+
+    assert target == "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation"
+    assert authorization == "Bearer iam-token-1"
+    assert iam_apikey == "wx-env-key"
+
+
+@pytest.mark.asyncio
+async def test_watsonx_route_falls_back_to_env_when_the_only_flagged_deployment_belongs_to_a_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                **_watsonx_deployment("wx-team-a-key", "https://team-a.ml.cloud.ibm.com", use_in_pass_through=True),
+                "model_info": {"team_id": "team-a"},
+            }
+        ]
+    )
+
+    target, authorization, iam_apikey = await _route_target_and_iam_apikey(
+        monkeypatch,
+        llm_router,
+        env={"WX_API_KEY": "wx-env-key", "WATSONX_API_BASE": "https://us-south.ml.cloud.ibm.com"},
     )
 
     assert target == "https://us-south.ml.cloud.ibm.com/ml/v1/text/generation"

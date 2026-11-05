@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -11,6 +11,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     LiteLLM_ManagedVectorStore,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
@@ -24,6 +25,11 @@ def _get_proxy_llm_router() -> "Router | None":
     from litellm.proxy.proxy_server import llm_router
 
     return llm_router
+
+
+def _is_team_deployment(deployment: Mapping[str, object]) -> bool:
+    model_info: Final = deployment.get("model_info")
+    return is_str_keyed_mapping(model_info) and bool(model_info.get("team_id"))
 
 
 def _get_str_value(values: dict[str, object] | None, key: str) -> str | None:
@@ -101,6 +107,8 @@ class PassthroughEndpointRouter:
         if llm_router is None:
             return None
         for deployment in llm_router.get_model_list() or ():
+            if _is_team_deployment(deployment):
+                continue
             litellm_params: LiteLLMParamsTypedDict = deployment["litellm_params"]
             api_key: str | None = self._resolve_matching_deployment_api_key(
                 litellm_params=litellm_params,
