@@ -93,7 +93,7 @@ export default function MigrationDetail({
     queryKey: ["deprecationUsageTags", scope, model, range, keys],
     enabled: keys.length > 0,
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/model/deprecations/alerts/tags", {
+      const { data } = await backgroundFetchClient.GET("/alerting/model-deprecations/tags", {
         params: { query: { ...range, model, api_keys: keys } },
         signal,
       });
@@ -134,7 +134,7 @@ export default function MigrationDetail({
         last_seen_date: selected.lastUsedDate,
         last_seen_requests: selected.lastDayRequests,
       };
-      const { data } = await backgroundFetchClient.PUT("/model/deprecations/alerts/state", { body });
+      const { data } = await backgroundFetchClient.PUT("/alerting/model-deprecations/state", { body });
       if (!data) throw new Error("Could not save alert status");
       return data;
     },
