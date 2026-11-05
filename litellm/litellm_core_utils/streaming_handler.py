@@ -321,10 +321,6 @@ class CustomStreamWrapper:
         self.complete_response = ""
         self.response_uptil_now = ""
         self._emitted_disqualifying_content = False
-        # Whether the client received a delta it can use (visible answer text).
-        # Reasoning deltas disqualify a continuation but must not disqualify a
-        # restart via fallback, so is_pre_first_chunk keys off this rather than
-        # the coarser sent_first_chunk, which flips on any delta (#49795).
         self.sent_visible_chunk = False
         _model_info: Final[dict] = litellm_params.model_info or {}
 
@@ -2461,6 +2457,11 @@ class CustomStreamWrapper:
         "images",
         "annotations",
     )
+    _RESTART_DISQUALIFYING_DELTA_FIELDS: Final = tuple(
+        field
+        for field in _CONTINUATION_DISQUALIFYING_DELTA_FIELDS
+        if field not in ("reasoning_content", "thinking_blocks", "reasoning_items")
+    )
 
     @classmethod
     def _delta_disqualifies_continuation(cls, delta: object) -> bool:
@@ -2490,7 +2491,9 @@ class CustomStreamWrapper:
         # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
-        if isinstance(content, str) and content:
+        if (isinstance(content, str) and content) or (
+            callable(get) and any(get(field) for field in self._RESTART_DISQUALIFYING_DELTA_FIELDS)
+        ):
             self.sent_visible_chunk = True
         self.response_uptil_now += content if isinstance(content, str) else ""
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
