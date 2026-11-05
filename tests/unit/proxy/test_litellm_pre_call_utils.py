@@ -9153,7 +9153,9 @@ class TestResolveUserProviderCredentials:
             llm_router=self._router(),
         )
 
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
@@ -9610,7 +9612,9 @@ class TestResolveUserProviderCredentials:
             team_id=None,
             llm_router=router,
         )
-        assert data["secret_fields"]["user_provider_credentials"] == {"copilot-cred": "gho_secret"}
+        assert data["secret_fields"]["user_provider_credentials"] == {
+            "copilot-cred": {"access_token": "gho_secret", "github_host": "github.com"}
+        }
         call_where: Final = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
 
@@ -10096,7 +10100,8 @@ async def test_secret_fields_user_provider_credentials_repr_hides_tokens(monkeyp
     assert isinstance(credentials, RedactedDict)
     assert "gho_secret" not in str(data)
     assert "gho_secret" not in repr(credentials)
-    assert credentials["copilot-cred"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_secret", "provider reads still get the token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
 
 
 @pytest.mark.asyncio
@@ -10110,8 +10115,10 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10150,7 +10157,8 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"], f"header-mapped user-b must never reach the token loader: {called_user_ids}"
     credentials = updated["secret_fields"]["user_provider_credentials"]
-    assert credentials["copilot-cred"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert credentials["copilot-cred"]["github_host"] == "github.com"
     assert updated["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
 
@@ -10163,8 +10171,10 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(return_value={"copilot-cred": "gho_user_a_token"})
-    monkeypatch.setattr(upc, "aget_user_provider_tokens", load)
+    load = AsyncMock(
+        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
+    )
+    monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
             {
@@ -10200,4 +10210,5 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
 
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
-    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["access_token"] == "gho_user_a_token"
+    assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"]["github_host"] == "github.com"

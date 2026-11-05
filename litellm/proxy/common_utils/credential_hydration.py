@@ -68,7 +68,7 @@ def decrypted_or_stored(key: str, value: str) -> str:
     return value if decrypted is None else decrypted
 
 
-def _decrypted(db_credential: CredentialItem) -> CredentialItem:
+def decrypted_credential(db_credential: CredentialItem) -> CredentialItem:
     """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     decrypted_values: Final = MappingProxyType(
         {
@@ -99,7 +99,7 @@ async def hydrate_named_credential_authoritative(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return await hydrate_named_credential(credential_name, prisma_client)
-    return _decrypted(db_credential)
+    return decrypted_credential(db_credential)
 
 
 async def hydrate_named_credential(
@@ -114,7 +114,7 @@ async def hydrate_named_credential(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return None
-    return _decrypted(db_credential)
+    return decrypted_credential(db_credential)
 
 
 async def named_credential_wif_fields(

@@ -4168,7 +4168,7 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
-github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type", "github_copilot_host")
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params
