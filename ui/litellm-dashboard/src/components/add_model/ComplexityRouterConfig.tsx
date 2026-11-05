@@ -195,7 +195,9 @@ const rowOrigin = (row: TierRow, editing: boolean, t: TFunction = i18n.t.bind(i1
     : t("addModel.complexityRouterConfig.rowOrigin.custom");
 };
 
-const builtInTierInfo = (rowId: string): { label: string; description: ParseKeys; examples: ParseKeys } | undefined => {
+const builtInTierInfo = (
+  rowId: string,
+): { labelKey: ParseKeys; description: ParseKeys; examples: ParseKeys } | undefined => {
   const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === rowId);
   return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
 };
@@ -799,10 +801,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                               handleTierLabelChange(row.id as keyof ComplexityTiers, event.target.value)
                             }
                             placeholder={t("addModel.complexityRouterConfig.displayName.placeholder", {
-                              label: tierInfo.label,
+                              label: t(tierInfo.labelKey),
                             })}
                             aria-label={t("addModel.complexityRouterConfig.displayName.aria", {
-                              label: tierInfo.label,
+                              label: t(tierInfo.labelKey),
                             })}
                           />
                           {value.tier_labels?.[row.id as keyof ComplexityTiers] && (
@@ -810,7 +812,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                               <InputGroupButton
                                 size="icon-xs"
                                 aria-label={t("addModel.complexityRouterConfig.displayName.clearAria", {
-                                  label: tierInfo.label,
+                                  label: t(tierInfo.labelKey),
                                 })}
                                 onClick={() => handleTierLabelChange(row.id as keyof ComplexityTiers, "")}
                               >
