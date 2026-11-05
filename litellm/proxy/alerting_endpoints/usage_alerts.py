@@ -13,10 +13,15 @@ from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
+    UsageAlertGroupList,
+    UsageAlertGroupUpdate,
+    UsageAlertGroupUpdateResult,
     UsageAlertList,
     UsageAlertMetric,
+    UsageAlertModelList,
     UsageAlertRule,
     UsageAlertRuleInput,
+    UsageAlertRuleKind,
     UsageAlertRuleList,
     UsageAlertScope,
     UsageAlertStatus,
@@ -93,10 +98,52 @@ async def list_usage_alert_rules(
     scope_id: ScopeId = None,
     limit: Limit = 50,
     offset: Offset = 0,
+    kind: UsageAlertRuleKind = "all",
 ) -> UsageAlertRuleList:
     store: Final = require_repository(repository)
     await require_scope(user, store, scope_type, scope_id, write=False)
-    return await store.list_rules(scope_type, scope_id, limit, offset)
+    return await store.list_rules(scope_type, scope_id, limit, offset, kind)
+
+
+@router.get("/alert-groups", response_model=UsageAlertGroupList)
+async def list_usage_alert_groups(
+    user: User,
+    repository: Repository,
+    scope_type: UsageAlertScope | None = None,
+    scope_id: ScopeId = None,
+    status: UsageAlertStatus | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: Limit = 50,
+    offset: Offset = 0,
+) -> UsageAlertGroupList:
+    store: Final = require_repository(repository)
+    await require_scope(user, store, scope_type, scope_id, write=False)
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must not be after end_date")
+    return await store.list_groups(scope_type, scope_id, status, start_date, end_date, limit, offset)
+
+
+@router.patch("/alert-groups", response_model=UsageAlertGroupUpdateResult)
+async def update_usage_alert_group(
+    data: UsageAlertGroupUpdate, user: User, repository: Repository
+) -> UsageAlertGroupUpdateResult:
+    store: Final = require_repository(repository)
+    await require_scope(user, store, data.scope_type, data.scope_id, write=True)
+    return await store.set_group_status(data)
+
+
+@router.get("/alert-models", response_model=UsageAlertModelList)
+async def list_usage_alert_models(
+    user: User,
+    repository: Repository,
+    search: ScopeId = None,
+    cursor: ScopeId = None,
+    limit: Limit = 20,
+) -> UsageAlertModelList:
+    store: Final = require_repository(repository)
+    await require_scope(user, store, "model", None, write=False)
+    return await store.list_reported_models(search, cursor, limit)
 
 
 @router.post("/alert-rules", response_model=UsageAlertRule, status_code=201)
@@ -129,6 +176,15 @@ async def update_usage_alert_rule(
     if rule is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
     await require_scope(user, store, rule.scope_type, rule.scope_id, write=True)
+    if rule.is_default and (rule.scope_type, rule.scope_id, rule.metric, rule.direction) != (
+        data.scope_type,
+        data.scope_id,
+        data.metric,
+        data.direction,
+    ):
+        raise HTTPException(
+            status_code=422, detail="Create a custom rule to change a built-in rule's scope, metric, or direction"
+        )
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
     saved: Final = await store.save_rule(data, user.user_id, existing=rule)
     if saved is None:

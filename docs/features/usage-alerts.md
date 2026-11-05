@@ -1,19 +1,40 @@
-# Daily usage alerts
+# Daily Performance alerts
 
-Daily usage alerts compare a completed UTC day with earlier recorded days. They cover spend, request count, average latency, and failed-request count for the gateway, a key, a user, a team, or a model. Open an incident to inspect its saved comparison and follow its Activity link to the corresponding usage view.
+Performance alerts compare a completed UTC day with earlier recorded days. They cover spend, request count, average latency, and failed-request count for the gateway, a key, a user, a team, or a model. The Performance tab groups alerts for the same resource and original UTC day. Open a resource to inspect its saved comparison and Activity. The API paths remain under `/usage`.
 
 This feature requires a database. Apply the normal LiteLLM database migrations when deploying a version that includes usage alerts. The API and dashboard use the same persisted rules and incidents; no enterprise license is required.
 
-## Read incidents
+## Read resource groups
 
 Set `LITELLM_API_BASE` to your gateway's base URL and `LITELLM_MANAGEMENT_KEY` to a management-capable credential. Keep the key in your environment.
 
 ```bash
-curl "$LITELLM_API_BASE/usage/alerts?status=open&limit=50" \
+curl "$LITELLM_API_BASE/usage/alert-groups?status=open&limit=50" \
   -H "Authorization: Bearer $LITELLM_MANAGEMENT_KEY"
 ```
 
-The response has `data`, `total`, `limit`, and `offset`. Each incident includes its scope, metric, direction, status, UTC day, observed value, baseline value, threshold, baseline date range, and `activity_path`. The Activity path is relative to the dashboard mount: for example, `/api-keys?...` is opened below the dashboard's `/ui` mount.
+The response has `data`, `total`, `limit`, and `offset`. `total` counts resource/day groups, including when the requested offset is beyond the last page. Filters are `scope_type`, `scope_id`, `status`, `start_date`, and `end_date`. Status filters apply to individual incidents before grouping, so a group with open and resolved incidents can appear under either filter with the corresponding members. No default date cutoff hides older open incidents.
+
+Each group includes its stable `id`, `scope_type`, exact `scope_id`, current `scope_label` when available, original UTC `day`, `incident_count`, and `activity_path`. Its `metrics` list contains up to four entries with a `metric`, `incident_count`, and the most recently detected matching `representative` incident. These representatives are summaries, not the entire group. Missing or deleted resources keep their original IDs. Names are current display labels, not historical evidence.
+
+To inspect every matching rule, use `GET /usage/alerts` with the group's scope and `start_date` and `end_date` both set to its `day`. Add `metric` and `status` as needed and paginate that response. Rules can have different baseline windows and thresholds, so their comparisons must not be combined into an error rate or a cost-per-request estimate.
+
+The group Activity link uses a representative's saved date range and alert context. The path is relative to the dashboard mount: for example, `/api-keys?...` is opened below the dashboard's `/ui` mount. A continuing episode retains its original day and evidence; the grouped row does not describe today's traffic.
+
+Resolve or dismiss all matching incidents in one resource/day group with an expected current status:
+
+```bash
+curl -X PATCH "$LITELLM_API_BASE/usage/alert-groups" \
+  -H "Authorization: Bearer $LITELLM_MANAGEMENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"scope_type":"team","scope_id":"team-example","day":"2026-11-04","expected_status":"open","status":"resolved"}'
+```
+
+The response contains `updated_count`. Only incidents in that exact group that still have `expected_status` are updated atomically. Other statuses remain unchanged; repeating the same request returns zero after all matching incidents have changed. Use `scope_type: "deployment"` with `scope_id: null` for the gateway.
+
+## Read individual incidents
+
+`GET /usage/alerts` retains the individual-incident view. Each incident includes its scope, metric, direction, status, UTC day, observed value, baseline value, threshold, baseline date range, and `activity_path`.
 
 `GET /usage/alerts/{alert_id}` returns one incident. List filters are `scope_type`, `scope_id`, `metric`, `status`, `start_date`, and `end_date`. Dates use `YYYY-MM-DD`; date filters include both endpoints. The maximum page size is 100.
 
@@ -55,10 +76,12 @@ The evaluator runs against daily aggregates. An hourly scheduler does not make t
 
 Use `scope_type: "deployment"` with no `scope_id` for the gateway. For `model`, use the underlying model identity recorded in Activity. For `key`, use its reporting ID, never the secret API key. Omitting `scope_id` for key, user, team, or model evaluates all entities of that type and requires a gateway administrator.
 
+`GET /usage/alert-models?limit=20&search=example` returns paginated model identities recorded in the most recent 30 UTC days. Its `data` entries contain `scope_id` and `label`; `start_date` and `end_date` state the searched window. Pass `next_cursor` as `cursor` to read the next page. A null cursor ends the result. Search matches literal text, not SQL wildcards. This endpoint requires gateway admin or admin-viewer access. Configured aliases and deployment IDs are not reporting-model identities. An existing rule's saved model remains valid even when it falls outside the options window.
+
 ## Manage rules and incidents
 
-- `GET /usage/alert-rules` lists rules; `GET /usage/alert-rules/{rule_id}` reads one.
-- `PUT /usage/alert-rules/{rule_id}` replaces the rule configuration. Send the configuration fields from the create example, including any notification settings you want to retain. Set `enabled` to `false` to pause it.
+- `GET /usage/alert-rules` lists rules; `GET /usage/alert-rules/{rule_id}` reads one. Use `kind=custom`, `kind=default`, or `kind=all` to choose which rules to list. Each rule exposes `is_default`. The list's `default_summary` counts total and enabled defaults within the requested scope, independent of `kind`, and reports evaluation-status counts among enabled defaults.
+- `PUT /usage/alert-rules/{rule_id}` replaces the rule configuration. Send the configuration fields from the create example, including any notification settings you want to retain. Set `enabled` to `false` to pause it. Built-in rules keep their scope, metric, and direction; create a custom rule to change those fields. Their names, thresholds, notification settings, and enabled state remain editable.
 - `DELETE /usage/alert-rules/{rule_id}` removes a rule from evaluation and preserves existing incidents. Deleted defaults stay deleted.
 - `PATCH /usage/alerts/{alert_id}` with `{"status":"dismissed"}` dismisses an incident. `open` and `resolved` are also accepted.
 

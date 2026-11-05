@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
-from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlertGroupUpdate, UsageAlertRuleInput
 
 RULE: Final = {
     "name": "Daily spend",
@@ -41,3 +41,21 @@ def test_zero_request_floor_and_daily_drop_multiplier_are_supported() -> None:
     assert rule.direction == "decrease"
     assert rule.multiplier == 2
     assert rule.min_requests == 0
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"scope_id": None}, {"scope_type": "deployment"}, {"status": "open"}, {"status": "unknown"}],
+)
+def test_group_updates_require_exact_resource_and_a_different_valid_status(changes: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        UsageAlertGroupUpdate.model_validate(
+            {
+                "scope_type": "team",
+                "scope_id": "team-example",
+                "day": "2026-11-04",
+                "expected_status": "open",
+                "status": "resolved",
+                **changes,
+            }
+        )

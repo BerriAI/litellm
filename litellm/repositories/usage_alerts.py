@@ -3,6 +3,8 @@
 import json
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
+from itertools import product
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -14,16 +16,26 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
     UsageAlertChannel,
+    UsageAlertDefaultSummary,
     UsageAlertEvaluationStatus,
+    UsageAlertGroup,
+    UsageAlertGroupList,
+    UsageAlertGroupMetric,
+    UsageAlertGroupUpdate,
+    UsageAlertGroupUpdateResult,
     UsageAlertList,
     UsageAlertMetric,
+    UsageAlertModelList,
+    UsageAlertModelOption,
     UsageAlertNotification,
     UsageAlertObservation,
     UsageAlertRule,
     UsageAlertRuleInput,
+    UsageAlertRuleKind,
     UsageAlertRuleList,
     UsageAlertScope,
     UsageAlertStatus,
@@ -45,6 +57,37 @@ class _Count(BaseModel, frozen=True):
     count: int
 
 
+class _RuleCounts(_Count, frozen=True):
+    default_summary: UsageAlertDefaultSummary
+
+
+class _GroupRow(BaseModel, frozen=True):
+    scope_type: UsageAlertScope
+    scope_id: str | None
+    day: date
+    incident_count: int
+    metrics: tuple[UsageAlertGroupMetric, ...]
+
+
+class _GroupPage(BaseModel, frozen=True):
+    total: int
+    data: tuple[_GroupRow, ...]
+
+
+class _ResourceLabel(BaseModel, frozen=True):
+    scope_type: UsageAlertScope
+    scope_id: str | None
+    label: str | None
+
+
+class _ModelIdentity(BaseModel, frozen=True):
+    model: str
+
+
+class _Identifier(BaseModel, frozen=True):
+    id: str
+
+
 class _Pending(_Record, frozen=True):
     rule: Mapping[str, object]
     notified_channels: tuple[UsageAlertChannel, ...]
@@ -53,6 +96,20 @@ class _Pending(_Record, frozen=True):
 class _Ownership(BaseModel, frozen=True):
     user_id: str | None
     team_id: str | None
+
+
+_DEFAULT_RULE_IDS: Final = frozenset(
+    str(uuid5(NAMESPACE_URL, f"litellm:usage-alert:{scope}:{metric}:{direction}"))
+    for scope, metric, direction in product(
+        ("deployment", "key", "user", "team", "model"),
+        ("spend", "requests", "latency", "errors"),
+        ("increase", "decrease"),
+    )
+)
+
+
+def _rule(record: Mapping[str, object]) -> UsageAlertRule:
+    return UsageAlertRule.model_validate({**record, "is_default": str(record.get("id")) in _DEFAULT_RULE_IDS})
 
 
 def activity_path(
@@ -151,7 +208,7 @@ class UsageAlertsRepository:
                 'SELECT record FROM "LiteLLM_UsageAlertRule" WHERE id=$1 AND NOT deleted', rule_id
             )
         )
-        return UsageAlertRule.model_validate(rows[0].record) if rows else None
+        return _rule(rows[0].record) if rows else None
 
     async def save_rule(
         self, data: UsageAlertRuleInput, created_by: str | None, existing: UsageAlertRule | None = None
@@ -177,7 +234,7 @@ class UsageAlertsRepository:
             rule.model_dump_json(),
         )
         saved: Final = TypeAdapter(tuple[_Record, ...]).validate_python(rows)
-        return UsageAlertRule.model_validate(saved[0].record) if saved else None
+        return _rule(saved[0].record) if saved else None
 
     async def delete_rule(self, rule_id: str) -> None:
         await self.database.query_raw(
@@ -185,28 +242,46 @@ class UsageAlertsRepository:
         )
 
     async def list_rules(
-        self, scope_type: UsageAlertScope | None = None, scope_id: str | None = None, limit: int = 50, offset: int = 0
+        self,
+        scope_type: UsageAlertScope | None = None,
+        scope_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        kind: UsageAlertRuleKind = "all",
     ) -> UsageAlertRuleList:
-        args: Final = (scope_type, scope_id)
+        args: Final = (scope_type, scope_id, json.dumps(tuple(sorted(_DEFAULT_RULE_IDS))), kind)
         where: Final = "NOT deleted AND ($1::text IS NULL OR scope_type=$1) AND ($2::text IS NULL OR scope_id=$2)"
-        count: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
+        builtin: Final = "id IN (SELECT jsonb_array_elements_text($3::jsonb))"
+        count: Final = TypeAdapter(tuple[_RuleCounts, ...]).validate_python(
             await self.database.query_raw(
-                f'SELECT count(*)::int AS count FROM "LiteLLM_UsageAlertRule" WHERE {where}', *args
+                f"""WITH scoped AS (
+                    SELECT enabled,record,({builtin}) AS builtin FROM "LiteLLM_UsageAlertRule" WHERE {where}
+                ) SELECT count(*) FILTER (WHERE $4='all' OR builtin=($4='default'))::int AS count,
+                    jsonb_build_object('total',count(*) FILTER (WHERE builtin),
+                        'enabled',count(*) FILTER (WHERE builtin AND enabled),
+                        'evaluation_status_counts',jsonb_build_object(
+                            'pending',count(*) FILTER (WHERE builtin AND enabled AND COALESCE(record->>'evaluation_status','pending')='pending'),
+                            'complete',count(*) FILTER (WHERE builtin AND enabled AND record->>'evaluation_status'='complete'),
+                            'insufficient_coverage',count(*) FILTER (WHERE builtin AND enabled AND record->>'evaluation_status'='insufficient_coverage'),
+                            'insufficient_history',count(*) FILTER (WHERE builtin AND enabled AND record->>'evaluation_status'='insufficient_history')
+                        )) AS default_summary FROM scoped""",
+                *args,
             )
         )
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw(
-                f'SELECT record FROM "LiteLLM_UsageAlertRule" WHERE {where} ORDER BY id LIMIT $3 OFFSET $4',
+                f"SELECT record FROM \"LiteLLM_UsageAlertRule\" WHERE {where} AND ($4='all' OR ({builtin})=($4='default')) ORDER BY id LIMIT $5 OFFSET $6",
                 *args,
                 limit,
                 offset,
             )
         )
         return UsageAlertRuleList(
-            data=tuple(UsageAlertRule.model_validate(row.record) for row in rows),
+            data=tuple(_rule(row.record) for row in rows),
             total=count[0].count,
             limit=limit,
             offset=offset,
+            default_summary=count[0].default_summary,
         )
 
     async def list_enabled_rules(self, limit: int = 100, offset: int = 0) -> tuple[UsageAlertRule, ...]:
@@ -274,6 +349,165 @@ class UsageAlertsRepository:
             )
         )
         return UsageAlert.model_validate(rows[0].record) if rows else None
+
+    async def list_groups(
+        self,
+        scope_type: UsageAlertScope | None = None,
+        scope_id: str | None = None,
+        status: UsageAlertStatus | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> UsageAlertGroupList:
+        rows: Final = TypeAdapter(tuple[_GroupPage, ...]).validate_python(
+            await self.database.query_raw(
+                """WITH groups AS MATERIALIZED (
+                    SELECT scope_type,scope_id,day,count(*)::int AS incident_count FROM "LiteLLM_UsageAlertIncident"
+                    WHERE ($1::text IS NULL OR scope_type=$1) AND ($2::text IS NULL OR scope_id=$2)
+                        AND ($3::text IS NULL OR status=$3) AND ($4::text IS NULL OR day >= $4)
+                        AND ($5::text IS NULL OR day <= $5)
+                    GROUP BY scope_type,scope_id,day
+                ), page AS MATERIALIZED (
+                    SELECT * FROM groups ORDER BY day DESC,scope_type,scope_id NULLS FIRST LIMIT $6 OFFSET $7
+                ), selected AS (
+                    SELECT i.* FROM page p JOIN "LiteLLM_UsageAlertIncident" i
+                        ON i.scope_type=p.scope_type AND i.scope_id=p.scope_id AND i.day=p.day
+                    WHERE ($3::text IS NULL OR i.status=$3)
+                    UNION ALL
+                    SELECT i.* FROM page p JOIN "LiteLLM_UsageAlertIncident" i
+                        ON i.scope_type=p.scope_type AND i.scope_id IS NULL AND i.day=p.day
+                    WHERE p.scope_id IS NULL AND ($3::text IS NULL OR i.status=$3)
+                ), ranked AS (
+                    SELECT scope_type,scope_id,day,metric,record,
+                        count(*) OVER (PARTITION BY scope_type,scope_id,day,metric)::int AS incident_count,
+                        row_number() OVER (PARTITION BY scope_type,scope_id,day,metric
+                            ORDER BY record->>'first_seen' DESC,id) AS rank
+                    FROM selected
+                ), packed AS (
+                    SELECT p.scope_type,p.scope_id,p.day,p.incident_count,
+                        jsonb_agg(jsonb_build_object('metric',r.metric,'incident_count',r.incident_count,
+                            'representative',r.record) ORDER BY CASE r.metric
+                                WHEN 'requests' THEN 0 WHEN 'spend' THEN 1 WHEN 'errors' THEN 2 ELSE 3 END) AS metrics
+                    FROM page p JOIN ranked r ON p.scope_type=r.scope_type
+                        AND p.scope_id IS NOT DISTINCT FROM r.scope_id AND p.day=r.day AND r.rank=1
+                    GROUP BY p.scope_type,p.scope_id,p.day,p.incident_count
+                ) SELECT (SELECT count(*)::int FROM groups) AS total,
+                    COALESCE((SELECT jsonb_agg(to_jsonb(packed) ORDER BY day DESC,scope_type,scope_id NULLS FIRST)
+                        FROM packed),'[]'::jsonb) AS data""",
+                scope_type,
+                scope_id,
+                status,
+                start_date.isoformat() if start_date else None,
+                end_date.isoformat() if end_date else None,
+                limit,
+                offset,
+            )
+        )
+        page: Final = rows[0]
+        labels: Final[Mapping[tuple[UsageAlertScope, str | None], str | None]] = (
+            await self._group_labels(page.data) if page.data else {}
+        )
+        return UsageAlertGroupList(
+            data=tuple(
+                UsageAlertGroup(
+                    id=str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            json.dumps(
+                                ["litellm:performance-group", row.scope_type, row.scope_id, row.day.isoformat()]
+                            ),
+                        )
+                    ),
+                    scope_type=row.scope_type,
+                    scope_id=row.scope_id,
+                    scope_label=labels.get((row.scope_type, row.scope_id)),
+                    day=row.day,
+                    incident_count=row.incident_count,
+                    metrics=row.metrics,
+                    activity_path=row.metrics[0].representative.activity_path,
+                )
+                for row in page.data
+            ),
+            total=page.total,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def _group_labels(
+        self, groups: tuple[_GroupRow, ...]
+    ) -> Mapping[tuple[UsageAlertScope, str | None], str | None]:
+        rows: Final = TypeAdapter(tuple[_ResourceLabel, ...]).validate_python(
+            await self.database.query_raw(
+                """WITH scopes AS (
+                    SELECT DISTINCT scope_type,scope_id,key_id FROM jsonb_to_recordset($1::jsonb)
+                    AS x(scope_type text,scope_id text,key_id text)
+                ) SELECT s.scope_type,s.scope_id,CASE s.scope_type
+                    WHEN 'key' THEN COALESCE(NULLIF(k.key_alias,''),NULLIF(k.key_name,''))
+                    WHEN 'team' THEN NULLIF(t.team_alias,'')
+                    WHEN 'user' THEN COALESCE(NULLIF(u.user_alias,''),NULLIF(u.user_email,''))
+                    WHEN 'model' THEN s.scope_id WHEN 'deployment' THEN 'Gateway' END AS label
+                FROM scopes s LEFT JOIN "LiteLLM_VerificationToken" k ON s.scope_type='key' AND k.token=s.key_id
+                    LEFT JOIN "LiteLLM_TeamTable" t ON s.scope_type='team' AND t.team_id=s.scope_id
+                    LEFT JOIN "LiteLLM_UserTable" u ON s.scope_type='user' AND u.user_id=s.scope_id""",
+                json.dumps(
+                    tuple(
+                        {
+                            "scope_type": row.scope_type,
+                            "scope_id": row.scope_id,
+                            "key_id": api_key_from_bucket(row.scope_id)
+                            if row.scope_type == "key" and row.scope_id
+                            else None,
+                        }
+                        for row in groups
+                    )
+                ),
+            )
+        )
+        return MappingProxyType({(row.scope_type, row.scope_id): row.label for row in rows})
+
+    async def set_group_status(self, data: UsageAlertGroupUpdate) -> UsageAlertGroupUpdateResult:
+        rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
+            await self.database.query_raw(
+                """WITH changed AS (
+                    UPDATE "LiteLLM_UsageAlertIncident" SET status=$5,
+                        record=jsonb_set(record,'{status}',to_jsonb($5::text)),updated_at=CURRENT_TIMESTAMP
+                    WHERE scope_type=$1 AND scope_id IS NOT DISTINCT FROM $2::text AND day=$3 AND status=$4
+                    RETURNING id
+                ) SELECT count(*)::int AS count FROM changed""",
+                data.scope_type,
+                data.scope_id,
+                data.day.isoformat(),
+                data.expected_status,
+                data.status,
+            )
+        )
+        return UsageAlertGroupUpdateResult(updated_count=rows[0].count)
+
+    async def list_reported_models(self, search: str | None, cursor: str | None, limit: int) -> UsageAlertModelList:
+        today: Final = datetime.now(timezone.utc).date()
+        rows: Final = TypeAdapter(tuple[_ModelIdentity, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT DISTINCT model FROM "LiteLLM_DailyUserSpend"
+                WHERE date >= $1 AND date <= $2 AND model IS NOT NULL AND model <> ''
+                    AND ($3::text IS NULL OR strpos(lower(model),lower($3))>0)
+                    AND ($4::text IS NULL OR model>$4)
+                ORDER BY model LIMIT $5""",
+                (today - timedelta(days=29)).isoformat(),
+                today.isoformat(),
+                search,
+                cursor,
+                limit + 1,
+            )
+        )
+        selected: Final = rows[:limit]
+        return UsageAlertModelList(
+            data=tuple(UsageAlertModelOption(scope_id=row.model, label=row.model) for row in selected),
+            limit=limit,
+            next_cursor=selected[-1].model if len(rows) > limit else None,
+            start_date=today - timedelta(days=29),
+            end_date=today,
+        )
 
     async def key_ownership(self, key_id: str) -> tuple[str | None, str | None] | None:
         rows: Final = TypeAdapter(tuple[_Ownership, ...]).validate_python(

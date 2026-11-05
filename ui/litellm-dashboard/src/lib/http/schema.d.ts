@@ -18834,6 +18834,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/usage/alert-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Usage Alert Groups */
+        get: operations["list_usage_alert_groups_usage_alert_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Usage Alert Group */
+        patch: operations["update_usage_alert_group_usage_alert_groups_patch"];
+        trace?: never;
+    };
+    "/usage/alert-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Usage Alert Models */
+        get: operations["list_usage_alert_models_usage_alert_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/usage/alert-rules": {
         parameters: {
             query?: never;
@@ -50472,6 +50507,120 @@ export interface components {
             /** Threshold */
             threshold: number;
         };
+        /** UsageAlertDefaultSummary */
+        UsageAlertDefaultSummary: {
+            /**
+             * Enabled
+             * @default 0
+             */
+            enabled: number;
+            evaluation_status_counts?: components["schemas"]["UsageAlertEvaluationCounts"];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /** UsageAlertEvaluationCounts */
+        UsageAlertEvaluationCounts: {
+            /**
+             * Complete
+             * @default 0
+             */
+            complete: number;
+            /**
+             * Insufficient Coverage
+             * @default 0
+             */
+            insufficient_coverage: number;
+            /**
+             * Insufficient History
+             * @default 0
+             */
+            insufficient_history: number;
+            /**
+             * Pending
+             * @default 0
+             */
+            pending: number;
+        };
+        /** UsageAlertGroup */
+        UsageAlertGroup: {
+            /** Activity Path */
+            activity_path: string;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Id */
+            id: string;
+            /** Incident Count */
+            incident_count: number;
+            /** Metrics */
+            metrics: components["schemas"]["UsageAlertGroupMetric"][];
+            /** Scope Id */
+            scope_id: string | null;
+            /** Scope Label */
+            scope_label: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "deployment" | "key" | "user" | "team" | "model";
+        };
+        /** UsageAlertGroupList */
+        UsageAlertGroupList: {
+            /** Data */
+            data: components["schemas"]["UsageAlertGroup"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** UsageAlertGroupMetric */
+        UsageAlertGroupMetric: {
+            /** Incident Count */
+            incident_count: number;
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "spend" | "requests" | "latency" | "errors";
+            representative: components["schemas"]["UsageAlert"];
+        };
+        /** UsageAlertGroupUpdate */
+        UsageAlertGroupUpdate: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "open" | "resolved" | "dismissed";
+            /** Scope Id */
+            scope_id?: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "deployment" | "key" | "user" | "team" | "model";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+        };
+        /** UsageAlertGroupUpdateResult */
+        UsageAlertGroupUpdateResult: {
+            /** Updated Count */
+            updated_count: number;
+        };
         /** UsageAlertList */
         UsageAlertList: {
             /** Data */
@@ -50482,6 +50631,32 @@ export interface components {
             offset: number;
             /** Total */
             total: number;
+        };
+        /** UsageAlertModelList */
+        UsageAlertModelList: {
+            /** Data */
+            data: components["schemas"]["UsageAlertModelOption"][];
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /** Limit */
+            limit: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+        };
+        /** UsageAlertModelOption */
+        UsageAlertModelOption: {
+            /** Label */
+            label: string;
+            /** Scope Id */
+            scope_id: string;
         };
         /** UsageAlertRule */
         UsageAlertRule: {
@@ -50520,6 +50695,11 @@ export interface components {
             evaluation_status: "pending" | "complete" | "insufficient_coverage" | "insufficient_history";
             /** Id */
             id: string;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
             /** Last Evaluated Day */
             last_evaluated_day?: string | null;
             /**
@@ -50635,6 +50815,7 @@ export interface components {
         UsageAlertRuleList: {
             /** Data */
             data: components["schemas"]["UsageAlertRule"][];
+            default_summary?: components["schemas"]["UsageAlertDefaultSummary"];
             /** Limit */
             limit: number;
             /** Offset */
@@ -78561,6 +78742,109 @@ export interface operations {
             };
         };
     };
+    list_usage_alert_groups_usage_alert_groups_get: {
+        parameters: {
+            query?: {
+                scope_type?: ("deployment" | "key" | "user" | "team" | "model") | null;
+                scope_id?: string | null;
+                status?: ("open" | "resolved" | "dismissed") | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertGroupList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_usage_alert_group_usage_alert_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageAlertGroupUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertGroupUpdateResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_usage_alert_models_usage_alert_models_get: {
+        parameters: {
+            query?: {
+                search?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertModelList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_usage_alert_rules_usage_alert_rules_get: {
         parameters: {
             query?: {
@@ -78568,6 +78852,7 @@ export interface operations {
                 scope_id?: string | null;
                 limit?: number;
                 offset?: number;
+                kind?: "all" | "default" | "custom";
             };
             header?: never;
             path?: never;

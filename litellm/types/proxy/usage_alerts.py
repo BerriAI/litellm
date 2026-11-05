@@ -11,6 +11,7 @@ UsageAlertDirection: TypeAlias = Literal["increase", "decrease"]
 UsageAlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
 UsageAlertChannel: TypeAlias = Literal["email", "slack"]
 UsageAlertEvaluationStatus: TypeAlias = Literal["pending", "complete", "insufficient_coverage", "insufficient_history"]
+UsageAlertRuleKind: TypeAlias = Literal["all", "default", "custom"]
 
 
 class UsageAlertRuleInput(BaseModel):
@@ -60,6 +61,7 @@ class UsageAlertRule(UsageAlertRuleInput):
     created_by: str | None
     last_evaluated_day: date | None = None
     evaluation_status: UsageAlertEvaluationStatus = "pending"
+    is_default: bool = False
 
 
 class UsageAlert(BaseModel):
@@ -90,11 +92,25 @@ class UsageAlertUpdate(BaseModel):
     status: UsageAlertStatus
 
 
+class UsageAlertEvaluationCounts(BaseModel, frozen=True):
+    pending: int = 0
+    complete: int = 0
+    insufficient_coverage: int = 0
+    insufficient_history: int = 0
+
+
+class UsageAlertDefaultSummary(BaseModel, frozen=True):
+    total: int = 0
+    enabled: int = 0
+    evaluation_status_counts: UsageAlertEvaluationCounts = Field(default_factory=UsageAlertEvaluationCounts)
+
+
 class UsageAlertRuleList(BaseModel, frozen=True):
     data: tuple[UsageAlertRule, ...]
     total: int
     limit: int
     offset: int
+    default_summary: UsageAlertDefaultSummary = Field(default_factory=UsageAlertDefaultSummary)
 
 
 class UsageAlertList(BaseModel, frozen=True):
@@ -102,6 +118,64 @@ class UsageAlertList(BaseModel, frozen=True):
     total: int
     limit: int
     offset: int
+
+
+class UsageAlertGroupMetric(BaseModel, frozen=True):
+    metric: UsageAlertMetric
+    incident_count: int
+    representative: UsageAlert
+
+
+class UsageAlertGroup(BaseModel, frozen=True):
+    id: str
+    scope_type: UsageAlertScope
+    scope_id: str | None
+    scope_label: str | None
+    day: date
+    incident_count: int
+    metrics: tuple[UsageAlertGroupMetric, ...] = Field(max_length=4)
+    activity_path: str
+
+
+class UsageAlertGroupList(BaseModel, frozen=True):
+    data: tuple[UsageAlertGroup, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+class UsageAlertGroupUpdate(BaseModel, frozen=True):
+    model_config = ConfigDict(extra="forbid")
+    scope_type: UsageAlertScope
+    scope_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    day: date
+    expected_status: UsageAlertStatus
+    status: UsageAlertStatus
+
+    @model_validator(mode="after")
+    def validate_group(self) -> Self:
+        if (self.scope_type == "deployment") != (self.scope_id is None):
+            raise ValueError("Specify a resource ID except for deployment alerts")
+        if self.expected_status == self.status:
+            raise ValueError("The new status must differ from the expected status")
+        return self
+
+
+class UsageAlertGroupUpdateResult(BaseModel, frozen=True):
+    updated_count: int
+
+
+class UsageAlertModelOption(BaseModel, frozen=True):
+    scope_id: str
+    label: str
+
+
+class UsageAlertModelList(BaseModel, frozen=True):
+    data: tuple[UsageAlertModelOption, ...]
+    limit: int
+    next_cursor: str | None
+    start_date: date
+    end_date: date
 
 
 class UsageAlertNotification(BaseModel):
