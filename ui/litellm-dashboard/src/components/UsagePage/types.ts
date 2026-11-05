@@ -64,6 +64,8 @@ export interface TopModelData {
   tokens: number;
 }
 
+export type OtherModelData = Omit<TopModelData, "model"> & { model_count: number };
+
 export interface ModelActivityData {
   label: string;
   key_metadata?: KeyMetadata;

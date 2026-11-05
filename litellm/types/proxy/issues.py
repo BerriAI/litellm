@@ -3,6 +3,9 @@ from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    BoundedDailyActivityResponse,
+)
 from litellm.types.proxy.model_deprecation import DeprecationAlertState, ModelDeprecationInfo
 from litellm.types.proxy.usage_alert_defaults import PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import (
@@ -14,6 +17,8 @@ from litellm.types.proxy.usage_alerts import (
     UsageAlertRule,
     UsageAlertStatus,
 )
+
+IssueActivityResponse: TypeAlias = BoundedDailyActivityResponse
 
 IssueKind: TypeAlias = Literal["performance", "model_deprecation"]
 IssueFamily: TypeAlias = Literal["retirement", "latency", "reliability", "spend", "traffic"]
@@ -132,6 +137,12 @@ class Issue(IssueInput, frozen=True):
     updated_at: datetime
     scope_label: str | None = None
     active: bool = True
+    can_update_status: bool | None = Field(
+        default=None, description="Current reader's status permission, evaluated by the issue-detail endpoint"
+    )
+    can_view_activity: bool | None = Field(
+        default=None, description="Current reader's permission to inspect Activity, keys, users and impact"
+    )
 
 
 class IssueList(BaseModel, frozen=True):
@@ -238,6 +249,7 @@ class IssueFamilySetting(BaseModel, frozen=True):
 
 class IssueFamilyList(BaseModel, frozen=True):
     data: tuple[IssueFamilySetting, ...]
+    projection_pending: bool = False
 
 
 class IssueFamilyPolicyUpdate(BaseModel, frozen=True):

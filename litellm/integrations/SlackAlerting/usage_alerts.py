@@ -1,9 +1,11 @@
 """Deliver persisted usage incidents through the existing configured transports."""
 
+import asyncio
+import hashlib
 import json
 import os
 from html import escape
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 from urllib.parse import urlencode, urlsplit
 
 from httpx import Response
@@ -51,6 +53,10 @@ def incident_message(alert: UsageAlert, url: str | None) -> str:
 
 
 class UsageAlertDelivery:
+    # One retained send per worker bounds SMTP threads even when a job is cancelled.
+    _email_task: ClassVar[asyncio.Task[None] | None] = None
+    _email_key: ClassVar[str | None] = None
+
     def __init__(self, slack: "SlackAlerting") -> None:
         self._slack = slack
 
@@ -74,8 +80,8 @@ class UsageAlertDelivery:
             pending.delivery.channel,
             pending.delivery.email_recipients,
             incident_message(pending.alert, None),
-            f"LiteLLM issue: {pending.issue.title}",
-            (("View issue", issue_url), ("View source activity", source_url)),
+            f"LiteLLM alert: {pending.issue.title}",
+            (("View alert", issue_url), ("View source activity", source_url)),
         )
 
     async def _send(
@@ -89,20 +95,11 @@ class UsageAlertDelivery:
         if channel not in configured_destinations(self._slack):
             return False
         if channel == "email":
-            from litellm.proxy.utils import send_email
-
+            html: Final = f"<p>{escape(message).replace(chr(10), '<br>')}</p>" + "".join(
+                f'<p><a href="{escape(url, quote=True)}">{escape(label)}</a></p>' for label, url in links
+            )
             for recipient in recipients:
-                await send_email(
-                    receiver_email=recipient,
-                    subject=subject,
-                    html=(
-                        f"<p>{escape(message).replace(chr(10), '<br>')}</p>"
-                        + "".join(
-                            f'<p><a href="{escape(url, quote=True)}">{escape(label)}</a></p>' for label, url in links
-                        )
-                    ),
-                    raise_on_error=True,
-                )
+                await self._email(recipient, subject, html)
             return bool(recipients)
         overrides: Final = self._slack.alert_to_webhook_url or {}
         configured_url: Final = (
@@ -118,11 +115,42 @@ class UsageAlertDelivery:
             await self._post(webhook, message + "\n" + "\n".join(f"{label}: {url}" for label, url in links))
         return True
 
+    @staticmethod
+    def _email_finished(task: asyncio.Task[None]) -> None:
+        if not task.cancelled():
+            task.exception()  # consume a late failure after the calling job was cancelled
+
+    @classmethod
+    async def _email(cls, recipient: str, subject: str, html: str) -> None:
+        key: Final = hashlib.sha256(json.dumps((recipient, subject, html)).encode()).hexdigest()
+        previous: Final = cls._email_task
+        if previous is not None:
+            if not previous.done():
+                raise RuntimeError("An alert email is still in flight; retry later")
+            if cls._email_key == key:
+                cls._email_task = None
+                cls._email_key = None
+                return previous.result()
+        task: Final = asyncio.create_task(cls._send_email(recipient, subject, html))
+        cls._email_task = task
+        cls._email_key = key
+        task.add_done_callback(cls._email_finished)
+        await asyncio.shield(task)
+        if cls._email_task is task:
+            cls._email_task = None
+            cls._email_key = None
+
+    @staticmethod
+    async def _send_email(recipient: str, subject: str, html: str) -> None:
+        from litellm.proxy.utils import send_email
+
+        await send_email(receiver_email=recipient, subject=subject, html=html, raise_on_error=True, attempt_timeout=2)
+
     async def _post(self, webhook: str, message: str) -> None:
         response: Final[Response] = await self._slack.async_http_handler.post(  # pyright: ignore[reportUnknownMemberType]  # legacy HTTP signature; supplied arguments are concrete
             url=webhook,
             headers={"Content-type": "application/json"},
-            data=json.dumps({"text": message}),
+            data=json.dumps({"text": escape(message, quote=False)}),
             timeout=10,
         )
         response.raise_for_status()

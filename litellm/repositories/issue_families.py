@@ -33,6 +33,10 @@ class _Count(BaseModel, frozen=True):
     count: int
 
 
+class _ProjectionState(BaseModel, frozen=True):
+    pending: bool
+
+
 def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) -> IssueFamilySetting:
     policies: Final = tuple(policy for policy in DEFAULT_USAGE_POLICIES if policy.family == family)
     groups: Final = tuple(
@@ -84,11 +88,18 @@ async def family_settings(database: AlertDatabase) -> IssueFamilyList:
             list(DEFAULT_USAGE_RULE_IDS),
         )
     )
+    projection: Final = TypeAdapter(tuple[_ProjectionState, ...]).validate_python(
+        await database.query_raw(
+            """SELECT EXISTS(SELECT 1 FROM "LiteLLM_UsageAlertCheckpoint"
+                WHERE id LIKE 'performance-dirty:%' AND NOT completed LIMIT 1) AS pending"""
+        )
+    )
     return IssueFamilyList(
         data=tuple(
             _setting(family, tuple(row.record for row in rows))
             for family in ("spend", "latency", "reliability", "traffic")
-        )
+        ),
+        projection_pending=projection[0].pending,
     )
 
 

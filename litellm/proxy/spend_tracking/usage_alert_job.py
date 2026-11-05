@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from itertools import chain, groupby
+from itertools import chain, groupby, takewhile
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -17,22 +17,30 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, configured_destinations
 from litellm.proxy.spend_tracking.daily_usage_alerts import compare_daily_usage
 from litellm.proxy.spend_tracking.performance_issues import PerformanceIssueProjector
+from litellm.repositories.analytics_budget import (
+    AnalyticsCapacityError,
+    AnalyticsDatabase,
+    BoundedAnalyticsDatabase,
+    analytics_deadline,
+)
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.provider_latency import ProviderLatencyRepository
 from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
-from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, MetricsDatabase, UsageAlertMetricsRepository
+from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.proxy.usage_alert_defaults import USAGE_ALERT_SCOPES, default_usage_rules, is_default_usage_rule
+from litellm.types.proxy.usage_alert_defaults import USAGE_ALERT_SCOPES, default_usage_rules
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
     UsageAlertChannel,
     UsageAlertEvaluationStatus,
     UsageAlertNotification,
     UsageAlertObservation,
+    UsageAlertProgress,
     UsageAlertRule,
     UsageAlertRuleInput,
     UsageAlertScope,
+    UsageAlertWorkCursor,
 )
 
 if TYPE_CHECKING:
@@ -76,7 +84,9 @@ def _observations(
     changed: Final[list[UsageAlertObservation]] = []  # mutable-ok: collect only persisted changes for this page
     evaluated = False  # rebind-ok: retain whether any entity had sufficient evidence, including healthy entities
     for entity, group in groupby(rows, lambda row: row.entity_id):
-        if None in suppressed or entity in suppressed:
+        if (is_suppressed := None in suppressed or entity in suppressed) and (
+            None if rule.scope_type == "deployment" else entity
+        ) not in active:
             continue
         if not _has_activity_page(rule.scope_type, entity):
             continue
@@ -85,6 +95,8 @@ def _observations(
         if (comparison := compare_daily_usage(rule, tuple(group), target)) is None:
             continue
         evaluated = True
+        if is_suppressed and comparison.breached:
+            continue
         if not comparison.breached and (None if rule.scope_type == "deployment" else entity) not in active:
             continue
         changed.append(
@@ -99,17 +111,6 @@ def _observations(
             )
         )
     return _Observations(evaluated, tuple(changed))
-
-
-def _suppressed_entities(rule: UsageAlertRule, enabled: tuple[UsageAlertRule, ...]) -> frozenset[str | None]:
-    if not is_default_usage_rule(rule):
-        return frozenset()
-    matching: Final = tuple(
-        other
-        for other in enabled
-        if (other.scope_type, other.metric, other.direction) == (rule.scope_type, rule.metric, rule.direction)
-    )
-    return frozenset(other.scope_id for other in matching if not is_default_usage_rule(other))
 
 
 class IncidentDelivery(Protocol):
@@ -127,6 +128,7 @@ class UsageAlertJob:
         *,
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
         performance_projection: PerformanceIssueProjector | None = None,
+        work_budget_seconds: float = 60,
     ) -> None:
         self._store = store
         self._metrics = metrics
@@ -136,6 +138,7 @@ class UsageAlertJob:
         self._defaults_registered = False
         self._deprecation_projection = deprecation_projection
         self._performance_projection = performance_projection
+        self._work_budget_seconds = work_budget_seconds
 
     @classmethod
     def from_prisma(
@@ -145,11 +148,14 @@ class UsageAlertJob:
         *,
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
     ) -> "UsageAlertJob":
-        database: Final = cast(MetricsDatabase, prisma.writer_db)  # cast-ok: generated Prisma delegate
+        database: Final = BoundedAnalyticsDatabase(
+            cast(AnalyticsDatabase, prisma.writer_db),  # cast-ok: generated Prisma transaction delegate
+            background=True,
+        )
         metrics: Final = UsageAlertMetricsRepository(database)
         delivery: Final = UsageAlertDelivery(slack)
         return cls(
-            UsageAlertsRepository.from_prisma(prisma),
+            UsageAlertsRepository(database),
             metrics,
             UsageAlertHealthRepository(database),
             delivery,
@@ -161,7 +167,7 @@ class UsageAlertJob:
             ),
             deprecation_projection=deprecation_projection,
             performance_projection=PerformanceIssueProjector(
-                IssuesRepository.from_prisma(prisma),
+                IssuesRepository(database),
                 metrics,
                 ProviderLatencyRepository(database),
                 delivery,
@@ -170,62 +176,122 @@ class UsageAlertJob:
 
     async def run(self, now: datetime | None = None) -> None:
         owner: Final = str(uuid4())
-        if not await self._store.claim_job(owner):
+        deadline: Final = asyncio.get_running_loop().time() + self._work_budget_seconds - 1
+        try:
+            with analytics_deadline(deadline):
+                claimed: Final = await self._store.claim_job(owner, lease_seconds=int(self._work_budget_seconds) + 15)
+        except AnalyticsCapacityError:
+            verbose_proxy_logger.info("Usage alert evaluation deferred while analytics capacity is busy")
+            return
+        if not claimed:
             return
         try:
-            await asyncio.wait_for(self._run(now or datetime.now(timezone.utc)), timeout=840)
-        except asyncio.TimeoutError:
-            verbose_proxy_logger.warning(
-                "Usage alert evaluation exceeded its 14-minute lease budget; retrying next hour"
+            await asyncio.wait_for(
+                self._run(now or datetime.now(timezone.utc), deadline),
+                timeout=max(0, deadline - asyncio.get_running_loop().time()),
             )
+        except AnalyticsCapacityError:
+            verbose_proxy_logger.info("Usage alert work deferred within its database budget")
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning("Usage alert evaluation reached its work budget; resuming next run")
         except Exception:  # noqa: BLE001  # the scheduler retries; completed rule/day checkpoints survive a failed pass
             verbose_proxy_logger.exception("Daily usage alert evaluation failed")
         finally:
-            await self._store.release_job(owner)
+            try:
+                with analytics_deadline(asyncio.get_running_loop().time() + 1):
+                    await self._store.release_job(owner)
+            except AnalyticsCapacityError:
+                verbose_proxy_logger.info("Usage alert lease will expire after bounded cleanup")
 
-    async def _rules(self) -> tuple[UsageAlertRule, ...]:
-        pages: Final[list[UsageAlertRule]] = []  # mutable-ok: collect configuration pages
-        offset = 0  # rebind-ok: configuration pagination cursor
-        while page := await self._store.list_enabled_rules(limit=500, offset=offset):
-            pages.extend(page)
-            if len(page) < 500:
-                return tuple(pages)
-            offset += len(page)
-        return tuple(pages)
+    async def _run(self, now: datetime, stop_at: float | None = None) -> None:
+        deadline: Final = (
+            stop_at if stop_at is not None else asyncio.get_running_loop().time() + self._work_budget_seconds - 1
+        )
+        with analytics_deadline(deadline):
+            await self._work(now, deadline)
 
-    async def _run(self, now: datetime) -> None:
+    async def _work(self, now: datetime, deadline: float) -> None:
         if self._deprecation_projection is not None:
             await self._deprecation_projection(now)
         if not self._defaults_registered:
             await self._store.ensure_default_rules(self._defaults)
             self._defaults_registered = True
         target: Final = completed_day(now)
-        rules: Final = await self._rules()
-        complete: Final[set[str]] = set()  # mutable-ok: batched completion lookup, bounded by configuration size
-        for offset in range(0, len(rules), 500):
-            complete.update(await self._store.completed_rule_ids(rules[offset : offset + 500], target))
-        due: Final = tuple(rule for rule in rules if rule.id not in complete)
-        for scoped in (tuple(rule for rule in due if rule.scope_type == scope) for scope in USAGE_ALERT_SCOPES):
-            if scoped:
-                await self._scope(scoped, target, rules)
-        if self._performance_projection is not None:
-            for offset in range(0, len(due), 500):
-                complete.update(await self._store.completed_rule_ids(due[offset : offset + 500], target))
-            await self._performance_projection.run(now, target, rules, ready=len(complete) == len(rules))
-        else:
-            await self._notify()
+        await self._store.ensure_projection_work(target)
+        await self._evaluate(
+            target, asyncio.get_running_loop().time() + max(0, deadline - asyncio.get_running_loop().time()) * 0.65
+        )
+        if self._performance_projection is None:
+            await self._notify(deadline)
+        elif work := await self._store.pending_projection_work():
+            # Source eligibility is per completed rule/day, never a global all-rules gate.
+            if await self._performance_projection.run_pending(now, work, self._store, deadline):
+                await self._store.finish_projection_work(work)
         await self._store.prune()
 
-    async def _scope(
-        self, rules: tuple[UsageAlertRule, ...], target: date, enabled: tuple[UsageAlertRule, ...]
-    ) -> None:
+    @staticmethod
+    def _position(rule: UsageAlertRule, target: date) -> UsageAlertProgress:
+        if rule.evaluation_progress is not None and rule.evaluation_progress.revision == rule.updated_at:
+            return rule.evaluation_progress
+        return UsageAlertProgress(day=target, revision=rule.updated_at)
+
+    async def _evaluate(self, target: date, deadline: float) -> None:
+        cursor = await self._store.work_cursor()  # rebind-ok: durable round-robin position
+        idle_phases = 0  # rebind-ok: stop once every phase has no remaining usable work
+        phase_progress = False  # rebind-ok: whether a page advanced in the current phase
+        while asyncio.get_running_loop().time() < deadline and idle_phases < 10:
+            cursor, advanced, finished = await self._evaluation_page(cursor, target)
+            phase_progress = phase_progress or advanced
+            if finished:
+                idle_phases = 0 if phase_progress else idle_phases + 1
+                phase_progress = False
+            await self._store.save_work_cursor(cursor)
+            await asyncio.sleep(0.01)
+
+    async def _evaluation_page(
+        self, cursor: UsageAlertWorkCursor, target: date
+    ) -> tuple[UsageAlertWorkCursor, bool, bool]:
+        scope: Final = USAGE_ALERT_SCOPES[cursor.phase // 2]
+        wildcard: Final = cursor.phase % 2 == 0
+        rules: Final = await self._store.enabled_rule_page(
+            scope, wildcard, cursor.after_id, limit=8 if wildcard else 10
+        )
+        if not rules:
+            return UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10), False, True
+        # Keep one date/cursor per page. A newly edited rule cannot rewind another rule.
+        position: Final = self._position(rules[0], target)
+        selected: Final = tuple(
+            takewhile(
+                lambda rule: (
+                    (
+                        self._position(rule, target).day,
+                        self._position(rule, target).cursor if wildcard else None,
+                    )
+                    == (position.day, position.cursor if wildcard else None)
+                ),
+                rules,
+            )
+        )
+        complete: Final = await self._store.completed_rule_ids(selected, position.day)
+        due: Final = tuple(rule for rule in selected if rule.id not in complete)
+        advanced: Final = bool(due) and await self._attempt_scope_page(due, position.day, wildcard)
+        return UsageAlertWorkCursor(phase=cursor.phase, after_id=selected[-1].id), advanced, False
+
+    async def _attempt_scope_page(self, rules: tuple[UsageAlertRule, ...], target: date, wildcard: bool) -> bool:
+        try:
+            return await self._scope_page(rules, target, wildcard)
+        except AnalyticsCapacityError:
+            await self._store.save_progress(tuple((rule, self._position(rule, target)) for rule in rules))
+            verbose_proxy_logger.info("Usage alert page deferred within its database budget")
+            return False
+
+    async def _scope_page(self, rules: tuple[UsageAlertRule, ...], target: date, wildcard: bool) -> bool:
         scope: Final = rules[0].scope_type
         start: Final = datetime.combine(target, time(), tzinfo=timezone.utc)
         coverage: Final = await self._health.coverage("team" if scope == "team" else "user", start)
         eligible: Final = tuple(
             rule for rule in rules if coverage.after_grace and (rule.direction == "increase" or coverage.hours == 24)
         )
-        suppressed: Final = {rule.id: _suppressed_entities(rule, enabled) for rule in eligible}
         eligible_ids: Final = frozenset(rule.id for rule in eligible)
         await self._record_evaluations(
             tuple((rule, "insufficient_coverage") for rule in rules if rule.id not in eligible_ids),
@@ -233,24 +299,60 @@ class UsageAlertJob:
             completed=False,
         )
         if not eligible:
-            return
+            return False
+        await self._store.save_progress(
+            tuple((rule, self._position(rule, target)) for rule in eligible if rule.evaluation_progress is None)
+        )
+        page: Final = await self._metrics.page(
+            scope,
+            target,
+            max(rule.baseline_days for rule in eligible),
+            cursor=self._position(eligible[0], target).cursor if wildcard else None,
+            entity_ids=None
+            if wildcard
+            else tuple(dict.fromkeys(rule.scope_id for rule in eligible if rule.scope_id is not None)),
+        )
         by_entity: Final = {
             entity: tuple(group)
             for entity, group in groupby(
                 sorted(eligible, key=lambda rule: rule.scope_id or ""), lambda rule: rule.scope_id
             )
         }
-        evaluated: Final[set[str]] = set()  # mutable-ok: at most one entry per configured rule across streaming pages
-        async for rows in self._metrics.batches(scope, target, max(rule.baseline_days for rule in eligible)):
-            evaluated.update(await self._page(by_entity, rows, target, suppressed))
-        await self._record_evaluations(
-            tuple(
-                (rule, "complete" if rule.id in evaluated or suppressed[rule.id] else "insufficient_history")
-                for rule in eligible
-            ),
-            target,
-            completed=True,
-        )
+        entities: Final = (None,) if scope == "deployment" else tuple(dict.fromkeys(row.entity_id for row in page.rows))
+        suppressed: Final = await self._store.suppressed_entities(eligible, entities)
+        evaluated: Final = frozenset(await self._page(by_entity, page.rows, target, suppressed))
+        if page.complete:
+            await self._record_evaluations(
+                tuple(
+                    (
+                        rule,
+                        "complete"
+                        if rule.id in evaluated or self._position(rule, target).evaluated or suppressed.get(rule.id)
+                        else "insufficient_history",
+                    )
+                    for rule in eligible
+                ),
+                target,
+                completed=True,
+            )
+        else:
+            await self._store.save_progress(
+                tuple(
+                    (
+                        rule,
+                        UsageAlertProgress(
+                            day=target,
+                            revision=rule.updated_at,
+                            cursor=page.cursor,
+                            evaluated=rule.id in evaluated
+                            or self._position(rule, target).evaluated
+                            or bool(suppressed.get(rule.id)),
+                        ),
+                    )
+                    for rule in eligible
+                )
+            )
+        return True
 
     async def _record_evaluations(
         self,
@@ -274,23 +376,36 @@ class UsageAlertJob:
         if not applicable:
             return ()
         entities: Final = (None,) if applicable[0].scope_type == "deployment" else tuple(by_entity)
-        active: Final[dict[str, frozenset[str | None]]] = {}  # mutable-ok: bounded active results for this entity page
-        for offset in range(0, len(applicable), 500):
-            active.update(
-                await self._store.breached_entities(
-                    tuple(rule.id for rule in applicable[offset : offset + 500]), entities
+        evaluated: Final[list[str]] = []  # mutable-ok: at most 500 rule IDs in the current config page
+        chunk_size: Final = 8 if None in rules else 500
+        for offset in range(0, len(applicable), chunk_size):
+            evaluated.extend(
+                await self._rule_chunk(
+                    applicable[offset : offset + chunk_size], entities, rows, by_entity, target, suppressed
                 )
             )
+        return tuple(evaluated)
+
+    async def _rule_chunk(
+        self,
+        selected: tuple[UsageAlertRule, ...],
+        entities: tuple[str | None, ...],
+        rows: tuple[DailyAlertMetrics, ...],
+        by_entity: Mapping[str, tuple[DailyAlertMetrics, ...]],
+        target: date,
+        suppressed: Mapping[str, frozenset[str | None]],
+    ) -> tuple[str, ...]:
+        active: Final = await self._store.breached_entities(tuple(rule.id for rule in selected), entities)
         return tuple(
             [
                 rule.id
-                for rule in applicable
+                for rule in selected
                 if await self._rule_page(
                     rule,
                     rows if rule.scope_id is None else by_entity[rule.scope_id],
                     target,
                     active.get(rule.id, frozenset()),
-                    suppressed[rule.id],
+                    suppressed.get(rule.id, frozenset()),
                 )
             ]
         )
@@ -308,9 +423,14 @@ class UsageAlertJob:
             await self._store.record_observations(rule, observations.changed)
         return observations.evaluated
 
-    async def _deliver_channel(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> str | None:
+    async def _deliver_channel(
+        self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel, deadline: float
+    ) -> str | None:
         try:
-            delivered: Final = await asyncio.wait_for(self._delivery.send(alert, rule, channel), timeout=30)
+            delivered: Final = await asyncio.wait_for(
+                self._delivery.send(alert, rule, channel),
+                timeout=min(30, max(0, deadline - asyncio.get_running_loop().time() - 1)),
+            )
             if not delivered:
                 return "transport_not_configured"
             await self._store.mark_notified(alert.id, channel)
@@ -319,18 +439,22 @@ class UsageAlertJob:
             return "delivery_failed"
         return None
 
-    async def _notify(self) -> None:
-        while page := await self._store.pending_notifications(limit=100):
+    async def _notify(self, deadline: float) -> None:
+        while asyncio.get_running_loop().time() + 2 < deadline and (
+            page := await self._store.pending_notifications(limit=10)
+        ):
             for pending in page:
-                await self._notify_incident(pending)
+                if asyncio.get_running_loop().time() + 2 >= deadline:
+                    return
+                await self._notify_incident(pending, deadline)
 
-    async def _notify_incident(self, pending: UsageAlertNotification) -> None:
+    async def _notify_incident(self, pending: UsageAlertNotification, deadline: float) -> None:
         current: Final = await self._store.get_rule(pending.rule.id)
         if current is None or not current.enabled or current.updated_at != pending.rule.updated_at:
             return
         failures: Final = tuple(
             [
-                await self._deliver_channel(pending.incident, pending.rule, channel)
+                await self._deliver_channel(pending.incident, pending.rule, channel, deadline)
                 for channel in pending.pending_channels
             ]
         )

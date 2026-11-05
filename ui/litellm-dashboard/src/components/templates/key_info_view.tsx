@@ -76,6 +76,7 @@ interface KeyInfoViewProps {
   onDelete?: () => void;
   teams: any[] | null;
   backButtonText?: string;
+  tabQueryKey?: string;
 }
 
 // Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
@@ -107,13 +108,14 @@ export default function KeyInfoView({
   onKeyDataUpdate,
   onDelete,
   backButtonText = i18n.t("keyDetail.keyInfoView.backToKeys"),
+  tabQueryKey = "detail_tab",
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const [activeTab, setActiveTab] = useUrlTab(
     ["overview", "activity", "savings", "auto-router-usage", "settings"],
     "overview",
-    "detail_tab",
+    tabQueryKey,
   );
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
@@ -770,7 +772,13 @@ export default function KeyInfoView({
 
         <div>
           <TabsContent value="activity">
-            {activeTab === "activity" && <EntityActivity scope="key" id={keyId} />}
+            {activeTab === "activity" && (
+              <EntityActivity
+                scope="key"
+                id={keyId}
+                teamId={keyData?.user_id !== userID ? keyData?.team_id ?? undefined : undefined}
+              />
+            )}
           </TabsContent>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>

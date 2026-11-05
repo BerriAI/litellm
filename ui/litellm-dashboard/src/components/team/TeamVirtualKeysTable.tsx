@@ -547,6 +547,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
+          tabQueryKey="key_detail_tab"
           onClose={() => setSelectedKey(null)}
           keyData={selectedKey}
           teams={[currentTeam]}

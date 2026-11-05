@@ -557,7 +557,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     resolve_realtime_route_model as _resolve_realtime_route_model,
 )
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
-from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
+from litellm.proxy.common_utils.model_deprecation import RouterDeprecationSource, collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
     DeployedModelGroups,
@@ -11678,14 +11678,14 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
-        from litellm.proxy.spend_tracking.usage_alert_job import USAGE_ALERT_JOB_ID, UsageAlertJob
         from litellm.proxy.spend_tracking.deprecation_issues import DeprecationIssueProjector
+        from litellm.proxy.spend_tracking.usage_alert_job import USAGE_ALERT_JOB_ID, UsageAlertJob
 
         usage_alert_job: Final = UsageAlertJob.from_prisma(
             prisma_client,
             proxy_logging_obj.slack_alerting_instance,
             deprecation_projection=DeprecationIssueProjector.from_prisma(
-                prisma_client, lambda today: collect_model_deprecations(llm_router, today=today)
+                prisma_client, RouterDeprecationSource(lambda: llm_router)
             ).run,
         )
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped

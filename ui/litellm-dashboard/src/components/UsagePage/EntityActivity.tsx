@@ -10,16 +10,17 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import type { ActivityScope } from "@/utils/entityLinks";
-import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData, type DailyActivityRequest } from "./dailyActivityApi";
-import { keyDetailFromResponse, overallUsageMetrics, reportingKeyId } from "./keyActivityData";
+import type { DailyActivityRequest } from "./dailyActivityApi";
+import { boundedActivityMetrics } from "./keyActivityData";
 import { activityPresets, defaultActivityDays, entityActivityParsers, localActivityDay } from "./entityActivityState";
 
 interface Props {
   scope: ActivityScope;
   id: string;
+  teamId?: string;
 }
 
-export default function EntityActivity({ scope, id }: Props) {
+export default function EntityActivity({ scope, id, teamId }: Props) {
   const { t } = useTranslation();
   const { accessToken, userId, userRole } = useAuthorized();
   const [params, setParams] = useQueryStates(entityActivityParsers);
@@ -29,9 +30,12 @@ export default function EntityActivity({ scope, id }: Props) {
   const invalidRange = from > to;
   const allowed = scope !== "model" || hasProxyWideSpendView(userRole);
   const currentUser = spendScopeUserId(userRole, userId);
+  const keyTeamId = scope === "key" && currentUser ? teamId : undefined;
+  const entity = scope === "team" || keyTeamId ? "team" : "user";
   const request = useMemo<DailyActivityRequest>(() => {
     let entityIds = currentUser ? [currentUser] : null;
     if (scope === "team" || scope === "user") entityIds = [id];
+    if (keyTeamId) entityIds = [keyTeamId];
     return {
       accessToken: accessToken ?? "",
       startTime: new Date(`${from}T00:00:00`),
@@ -40,24 +44,23 @@ export default function EntityActivity({ scope, id }: Props) {
       entityIds,
       apiKey: scope === "key" ? id : null,
       model: scope === "model" ? id : null,
-      apiKeyLimit: 1,
+      bounded: true,
+      includeModelBreakdown: scope === "key",
       includeCurrentUtcDay: true,
     };
-  }, [accessToken, currentUser, scope, id, from, to]);
+  }, [accessToken, currentUser, scope, id, keyTeamId, from, to]);
   const hasScope = Boolean(accessToken && id);
   const { data, loading, failed, reload } = useAggregatedDailyActivity({
-    fetch: () => ENTITY_API[scope === "team" ? "team" : "user"].aggregated(request),
+    fetch: () => ENTITY_API[entity].aggregated(request),
     enabled: hasScope && allowed && !invalidRange,
-    deps: [accessToken, currentUser, scope, id, from, to],
+    deps: [accessToken, currentUser, scope, id, keyTeamId, from, to],
   });
 
   const fetchTopApiKeys = useCallback(
     (model: string) => ENTITY_API.user.modelTopKeys(request, model, false),
     [request],
   );
-  const metrics =
-    (scope === "key" ? keyDetailFromResponse(data, reportingKeyId(id), []) : undefined) ??
-    overallUsageMetrics(toDailyData(data), data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA);
+  const { metrics, otherModels } = boundedActivityMetrics(data);
 
   if (!allowed) return <p className="text-sm text-muted-foreground">{t("entityActivity.modelRequiresGlobal")}</p>;
 
@@ -88,6 +91,7 @@ export default function EntityActivity({ scope, id }: Props) {
       <ModelSection
         modelName={id}
         metrics={metrics}
+        otherModels={otherModels}
         fetchTopApiKeys={scope === "model" ? fetchTopApiKeys : undefined}
       />
     );

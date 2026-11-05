@@ -7,6 +7,10 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
+from pydantic import BaseModel, TypeAdapter
+
+from litellm.repositories.analytics_budget import BoundedAnalyticsDatabase
+
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
@@ -150,4 +154,38 @@ class ConfigRepository:
         """Expire operational config records using the timestamp written by revision claims."""
         return await self._config_table.delete_many(
             where={"param_name": {"startswith": prefix}, "last_run_at": {"lt": before}}
+        )
+
+
+class _ConfigValue(BaseModel, frozen=True):
+    param_name: str
+    param_value: object
+
+
+class BoundedConfigRepository:
+    def __init__(self, database: BoundedAnalyticsDatabase) -> None:
+        self._database = database
+
+    async def get_params(self, names: Sequence[str]) -> tuple[_ConfigValue, ...]:
+        if len(names) > 10:
+            raise ValueError("Read at most 10 retirement states per page")
+        rows: Final = await self._database.query_raw(
+            """SELECT param_name, CASE WHEN jsonb_typeof(param_value)='string'
+                    THEN (param_value #>> '{}')::jsonb ELSE param_value END AS param_value
+               FROM "LiteLLM_Config" WHERE param_name=ANY($1::text[])""",
+            tuple(names),
+        )
+        return TypeAdapter(tuple[_ConfigValue, ...]).validate_python(rows)
+
+    async def get_param(self, name: str) -> _ConfigValue | None:
+        rows: Final = await self.get_params((name,))
+        return rows[0] if rows else None
+
+    async def set_param(self, name: str, value: object) -> None:
+        await self._database.query_raw(
+            """INSERT INTO "LiteLLM_Config" (param_name,param_value) VALUES($1,$2::jsonb)
+               ON CONFLICT(param_name) DO UPDATE SET param_value=EXCLUDED.param_value
+               RETURNING param_name""",
+            name,
+            json.dumps(value),
         )

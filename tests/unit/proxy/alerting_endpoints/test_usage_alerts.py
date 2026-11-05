@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.alerting_endpoints.usage_alerts import require_scope
+from litellm.proxy.alerting_endpoints.usage_alerts import require_scope, require_write_access
 from litellm.repositories.usage_alerts import UsageAlertsRepository, activity_path
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -14,6 +14,15 @@ from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 class NoDatabase:
     async def query_raw(self, query: str, *args: object) -> object:
         raise AssertionError("Unauthorized callers must not reach the database")
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+@pytest.mark.parametrize("key_type", [None, "default", "management"])
+def test_info_grants_do_not_authorize_mutations(role: LitellmUserRoles, key_type: str | None) -> None:
+    user: Final = UserAPIKeyAuth(user_role=role, key_type=key_type, allowed_routes=["info_routes", "openai_routes"])
+    with pytest.raises(HTTPException) as error:
+        require_write_access(user, "/usage/alert-rules/example")
+    assert error.value.status_code == 403
 
 
 @pytest.mark.asyncio

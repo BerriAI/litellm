@@ -20,6 +20,8 @@ class RuleRows:
 
     async def query_raw(self, query: str, *args: object) -> object:
         self.calls += 1
+        if "SELECT EXISTS" in query:
+            return ({"pending": False},)
         return tuple({"record": rule.model_dump(mode="json")} for rule in self.rules)
 
 
@@ -52,7 +54,7 @@ async def test_family_counts_only_its_enabled_rules_without_an_extra_query(statu
     database: Final = RuleRows(rules)
     result: Final = next(setting for setting in (await family_settings(database)).data if setting.family == "spend")
 
-    assert database.calls == 1
+    assert database.calls == 2  # existing rule rows plus the separate projection-backlog read
     assert result.enabled_rules == 2
     assert result.total_rules == 3
     assert result.evaluation_status_counts.model_dump() == {

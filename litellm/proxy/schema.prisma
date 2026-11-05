@@ -2110,7 +2110,6 @@ model LiteLLM_SubscriptionAccountTable {
   @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }
 
-// Daily alerts consume existing aggregate tables; no request-path writes.
 model LiteLLM_UsageAlertRule {
   id String @id
   scope_type String

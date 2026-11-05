@@ -1,34 +1,49 @@
-from collections.abc import Callable, Mapping, Sequence
+import asyncio
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # Prisma delegates the query protocol dynamically
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
-from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.usage_alert_metrics import MetricsDatabase, UsageAlertMetricsRepository
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.model_deprecation import (
+    DeprecationScanCursor,
+    RouterDeprecationSource,
+    deprecation_alert_state_key,
+)
+from litellm.repositories.analytics_budget import (
+    AnalyticsCapacityError,
+    AnalyticsDatabase,
+    BoundedAnalyticsDatabase,
+    analytics_deadline,
+)
+from litellm.repositories.config_repository import BoundedConfigRepository
+from litellm.repositories.usage_alert_metrics import UsageAlertMetricsRepository
 from litellm.types.proxy.issues import IssueCohort, IssueDeprecation, IssueImpact, IssueInput, IssueSignal
 from litellm.types.proxy.model_deprecation import (
     DeprecationAlertState,
     ModelDeprecationInfo,
-    ModelDeprecationResponse,
     ModelDeprecationUsage,
 )
 
 if TYPE_CHECKING:
     from litellm.models.issues import IssueStore
-
     from litellm.proxy.utils import PrismaClient
 
 _PROJECTION_CHECKPOINT: Final = "issues:deprecation_projection"
-_PAGE_SIZE: Final = 500
+_PAGE_SIZE: Final = 10
+_WORK_BUDGET_SECONDS: Final = 5
 
 
 class _ProjectionCheckpoint(BaseModel, frozen=True):
     hour: datetime
+    observed_at: datetime | None = None
+    source_revision: str = ""
+    cursor: DeprecationScanCursor = Field(default_factory=DeprecationScanCursor)
+    complete: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +69,12 @@ def _identity(candidate: DeprecationCandidate) -> tuple[str, date]:
     return candidate.usage_model, candidate.model.deprecation_date
 
 
-def deprecation_candidates(snapshot: ModelDeprecationResponse) -> tuple[DeprecationCandidate, ...]:
+def deprecation_candidates(models: Sequence[ModelDeprecationInfo]) -> tuple[DeprecationCandidate, ...]:
+    if len(models) > _PAGE_SIZE:
+        raise ValueError("Read at most 10 retirement models per page")
     ordered: Final = sorted(
-        chain.from_iterable(_candidates(model) for model in (*snapshot.deprecated, *snapshot.imminent)),
-        key=_identity,
+        chain.from_iterable(_candidates(model) for model in models if model.status != "upcoming"),
+        key=lambda candidate: (*_identity(candidate), candidate.model.model_name),
     )
     return tuple(next(group) for _, group in groupby(ordered, _identity))
 
@@ -119,28 +136,29 @@ def used_deprecation_issues(
 class DeprecationIssueProjector:
     def __init__(
         self,
-        config: ConfigRepository,
+        config: BoundedConfigRepository,
         metrics: UsageAlertMetricsRepository,
         issues: "IssueStore",
-        snapshot: Callable[[date], ModelDeprecationResponse],
+        source: RouterDeprecationSource,
     ) -> None:
         self._config = config
         self._metrics = metrics
         self._issues = issues
-        self._snapshot = snapshot
+        self._source = source
 
     @classmethod
-    def from_prisma(
-        cls, prisma: "PrismaClient", snapshot: Callable[[date], ModelDeprecationResponse]
-    ) -> "DeprecationIssueProjector":
+    def from_prisma(cls, prisma: "PrismaClient", source: RouterDeprecationSource) -> "DeprecationIssueProjector":
         from litellm.repositories.issues import IssuesRepository
 
-        database: Final = cast(MetricsDatabase, prisma.writer_db)  # cast-ok: generated Prisma query delegate
+        database: Final = BoundedAnalyticsDatabase(
+            cast(AnalyticsDatabase, prisma.writer_db),  # cast-ok: generated Prisma transaction delegate
+            background=True,
+        )
         return cls(
-            ConfigRepository(prisma, use_writer=True),
+            BoundedConfigRepository(database),
             UsageAlertMetricsRepository(database),
-            IssuesRepository.from_prisma(prisma),
-            snapshot,
+            IssuesRepository(database),
+            source,
         )
 
     async def _page(self, candidates: tuple[DeprecationCandidate, ...], now: datetime) -> None:
@@ -153,23 +171,55 @@ class DeprecationIssueProjector:
         )
         by_model: Final = MappingProxyType({row.model: row for row in usage})
         issues: Final = used_deprecation_issues(candidates, by_model, states, now)
-        await self._issues.upsert_issues(issues)
+        saved: Final = await self._issues.upsert_issues(issues)
         await self._issues.add_signal_batch(
             tuple(
                 IssueSignal(
                     issue_id=issue.id, source="model_deprecation", source_id=issue.id, deprecation=issue.deprecation
                 )
-                for issue in issues
+                for issue in saved
             )
         )
 
     async def run(self, now: datetime) -> None:
+        deadline: Final = asyncio.get_running_loop().time() + _WORK_BUDGET_SECONDS
+        try:
+            with analytics_deadline(deadline):
+                await asyncio.wait_for(self._run(now), timeout=_WORK_BUDGET_SECONDS)
+        except (AnalyticsCapacityError, asyncio.TimeoutError):
+            verbose_proxy_logger.debug("Model retirement scan deferred within its work budget")
+
+    async def _run(self, now: datetime) -> None:
         hour: Final = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
         previous: Final = await self._config.get_param(_PROJECTION_CHECKPOINT)
-        if previous is not None and _ProjectionCheckpoint.model_validate(previous.param_value).hour >= hour:
+        stored: Final = _ProjectionCheckpoint.model_validate(previous.param_value) if previous is not None else None
+        if stored is not None and stored.complete and stored.hour >= hour:
             return
-        candidates: Final = deprecation_candidates(self._snapshot(hour.date()))
-        for offset in range(0, len(candidates), _PAGE_SIZE):
-            await self._page(candidates[offset : offset + _PAGE_SIZE], now)
-        await self._issues.finish_deprecation_projection(now)
-        await self._config.set_param(_PROJECTION_CHECKPOINT, _ProjectionCheckpoint(hour=hour).model_dump(mode="json"))
+        state = (  # rebind-ok: durable continuation after each completed page
+            stored
+            if stored is not None
+            and not stored.complete
+            and stored.source_revision == self._source.revision
+            and stored.hour.date() == hour.date()
+            else _ProjectionCheckpoint(
+                hour=hour, observed_at=now, source_revision=self._source.revision, complete=False
+            )
+        )
+        while self._source.revision == state.source_revision:
+            page = self._source.page(state.hour.date(), state.cursor)
+            if not page.complete and not page.models and page.cursor == state.cursor:
+                return
+            observed_at = state.observed_at or now
+            candidates = deprecation_candidates(page.models)
+            for offset in range(0, len(candidates), _PAGE_SIZE):
+                await self._page(candidates[offset : offset + _PAGE_SIZE], observed_at)
+            state = state.model_copy(update={"cursor": page.cursor})
+            await self._config.set_param(_PROJECTION_CHECKPOINT, state.model_dump(mode="json"))
+            if self._source.revision != state.source_revision:
+                return
+            if page.complete:
+                await self._issues.finish_deprecation_projection(observed_at)
+                finished = state.model_copy(update={"hour": hour, "complete": True})
+                await self._config.set_param(_PROJECTION_CHECKPOINT, finished.model_dump(mode="json"))
+                return
+            await asyncio.sleep(0)

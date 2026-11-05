@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -16,7 +17,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.usage_alert_metrics import IssueMetricWindow
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRuleInput, UsageAlertScope
+from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRule, UsageAlertRuleInput, UsageAlertScope
 
 _DAY: Final = date(2026, 11, 4)
 _NOW: Final = datetime(2026, 11, 5, 3, microsecond=987654, tzinfo=timezone.utc)
@@ -218,7 +219,7 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
         assert len(original) == 2
         overridden: Final = next(item for item in original if item.alert.scope_id == _KEY_A)
         retained: Final = next(item for item in original if item.alert.scope_id == _KEY_B)
-        await UsageAlertsRepository.from_prisma(prisma).save_rule(
+        custom: Final = await UsageAlertsRepository.from_prisma(prisma).save_rule(
             UsageAlertRuleInput(
                 name="Project A high spend threshold",
                 scope_type="key",
@@ -229,6 +230,13 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
                 min_requests=0,
             ),
             None,
+        )
+        assert custom is not None
+        unprivileged: Final = await issues.active_signals(_DAY, scope_type="key", metric="spend")
+        assert overridden.alert.id in {item.alert.id for item in unprivileged}
+        await prisma.writer_db.query_raw(
+            'UPDATE "LiteLLM_UsageAlertRule" SET record=record || \'{"overrides_defaults":true}\'::jsonb WHERE id=$1 RETURNING id',
+            custom.id,
         )
         await job._run(_NOW + timedelta(minutes=1))
         attached: Final = await prisma.writer_db.query_raw('SELECT source_id FROM "LiteLLM_IssueSignal"')
@@ -305,6 +313,16 @@ async def test_provider_issue_keeps_an_independent_noisy_key_and_recovers_from_f
                 _KEY_B,
                 noisy,
             )
+        # Put the two correlated models on opposite sides of the former 100-pair page boundary.
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,custom_llm_provider,spend,api_requests,
+                 successful_requests,failed_requests,total_response_time_ms,timed_requests,updated_at)
+            SELECT 'boundary-'||n,'boundary-owner',$1,md5(n::text)||md5(n::text),
+                'unrelated-'||n,'aaa-unrelated',0,1,1,0,100,1,CURRENT_TIMESTAMP
+            FROM generate_series(1,99) n RETURNING id""",
+            _DAY.isoformat(),
+        )
         await _coverage(prisma, _DAY)
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         await job._run(_NOW)
@@ -336,3 +354,300 @@ async def test_provider_issue_keeps_an_independent_noisy_key_and_recovers_from_f
         assert recovered is not None and not recovered.active
         continuing: Final = await issues.get_issue(independent.id)
         assert continuing is not None and continuing.active
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_missing_drop_coverage_does_not_block_established_spend_issue(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        await prisma.writer_db.query_raw(
+            'DELETE FROM "LiteLLM_UsageAlertFlush" WHERE hour<$1::timestamp RETURNING source',
+            (_DAY + timedelta(days=1)).isoformat(),
+        )
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        await job._run(_NOW)
+        rules: Final = await UsageAlertsRepository.from_prisma(prisma).list_enabled_rules(limit=100)
+        assert any(rule.direction == "decrease" and rule.evaluation_status == "insufficient_coverage" for rule in rules)
+        issues: Final = await IssuesRepository.from_prisma(prisma).list_issues()
+        assert any(issue.family == "spend" and issue.cohort.scope_id == _KEY_A for issue in issues.data)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_entity_page_progress_resumes_old_day_without_early_completion(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,custom_llm_provider,spend,api_requests,
+                 successful_requests,failed_requests,total_response_time_ms,timed_requests,updated_at)
+            SELECT 'resume-'||k||'-'||d,'owner',($1::date-d)::text,md5(k::text)||md5(k::text),
+                'model','example-provider',CASE WHEN d=0 THEN 50 ELSE 1 END,
+                1000,1000,0,100000,1000,CURRENT_TIMESTAMP
+            FROM generate_series(1,31) k CROSS JOIN generate_series(0,7) d RETURNING id""",
+            _DAY.isoformat(),
+        )
+        await _coverage(prisma, _DAY)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        rule: Final = await job._store.save_rule(
+            UsageAlertRuleInput(
+                name="Resume each key",
+                scope_type="key",
+                metric="spend",
+                direction="increase",
+                min_requests=0,
+            ),
+            None,
+        )
+        assert rule is not None
+        await job._scope_page((rule,), _DAY, True)
+        partial: Final = await job._store.get_rule(rule.id)
+        assert partial is not None and partial.evaluation_status == "delayed"
+        assert partial.evaluation_progress is not None and partial.evaluation_progress.cursor is not None
+        assert not await job._store.is_day_complete(rule, _DAY)
+        assert "evaluation_progress" not in partial.model_dump()
+        assert "evaluation_progress" not in UsageAlertRule.model_json_schema(mode="serialization")["properties"]
+        first: Final = await job._store.list_alerts(limit=500)
+        assert first.total == 10
+        projector: Final = job._performance_projection
+        assert projector is not None
+        work: Final = await job._store.pending_projection_work()
+        assert work is not None
+        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
+        await job._store.finish_projection_work(work)
+        assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 10
+        await job._scope_page((partial,), _DAY, True)
+        next_work: Final = await job._store.pending_projection_work()
+        assert next_work is not None and next_work.version != work.version
+        assert await projector.run_pending(
+            _NOW + timedelta(hours=1), next_work, job._store, asyncio.get_running_loop().time() + 10
+        )
+        await job._store.finish_projection_work(next_work)
+        assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 20
+        await job._run(_NOW + timedelta(days=1))
+        assert await job._store.is_day_complete(rule, _DAY)
+        final: Final = await job._store.list_alerts(limit=500)
+        assert sum(1 for item in final.data if item.rule_id == rule.id) == 31
+        count: Final = await prisma.writer_db.query_raw(
+            'SELECT count(*)::int AS count FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1',
+            rule.id,
+        )
+        assert count == [{"count": 31}]
+        issues: Final = IssuesRepository.from_prisma(prisma)
+        first_page: Final = await issues.active_resource_issue_ids()
+        second_page: Final = await issues.active_resource_issue_ids(first_page[-1])
+        assert len(first_page) == len(second_page) == 10
+        assert set(first_page).isdisjoint(second_page)
+        with pytest.raises(ValueError, match="at most 10"):
+            await issues.recover_issues(_DAY, issue_ids=first_page + second_page[:1])
+        resumed: Final = await job._store.get_rule(rule.id)
+        assert resumed is not None and resumed.evaluation_progress is None
+        edited: Final = await job._store.save_rule(
+            UsageAlertRuleInput.model_validate(rule.model_dump(include=set(UsageAlertRuleInput.model_fields))),
+            None,
+            resumed,
+        )
+        assert edited is not None and edited.evaluation_progress is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_disabled_primary_requires_another_eligible_healthy_source_to_recover(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        definition: Final = UsageAlertRuleInput(
+            name="Extra key policy",
+            scope_type="key",
+            scope_id=_KEY_A,
+            metric="spend",
+            direction="increase",
+            min_requests=0,
+        )
+        custom: Final = await job._store.save_rule(definition, None)
+        assert custom is not None
+        await job._run(_NOW)
+        issues: Final = IssuesRepository.from_prisma(prisma)
+        issue: Final = next(
+            item
+            for item in (await issues.list_issues()).data
+            if item.family == "spend" and item.cohort.scope_id == _KEY_A
+        )
+        assert await job._store.save_rule(definition.model_copy(update={"enabled": False}), None, custom)
+        await issues.recover_issues(_DAY)
+        unchanged: Final = await issues.get_issue(issue.id)
+        assert unchanged is not None and unchanged.active
+        await _next_day(prisma, _DAY + timedelta(days=1), 1, 1)
+        await job._run(_NOW + timedelta(days=1))
+        recovered: Final = await issues.get_issue(issue.id)
+        assert recovered is not None and not recovered.active
+        history: Final = await job._store.list_alerts(scope_type="key", scope_id=_KEY_A)
+        assert any(item.rule_id == custom.id and item.status == "open" for item in history.data)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_lone_disabled_source_does_not_claim_recovery(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        await prisma.writer_db.query_raw(
+            'UPDATE "LiteLLM_DailyUserSpend" SET spend=5 WHERE date=$1 AND api_key=$2 RETURNING id',
+            _DAY.isoformat(),
+            _KEY_A,
+        )
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        definition: Final = UsageAlertRuleInput(
+            name="Sensitive key policy",
+            scope_type="key",
+            scope_id=_KEY_A,
+            metric="spend",
+            direction="increase",
+            min_requests=0,
+        )
+        custom: Final = await job._store.save_rule(definition, None)
+        assert custom is not None
+        await job._run(_NOW)
+        issues: Final = IssuesRepository.from_prisma(prisma)
+        issue: Final = next(
+            item
+            for item in (await issues.list_issues()).data
+            if item.family == "spend" and item.cohort.scope_id == _KEY_A
+        )
+        assert await job._store.save_rule(definition.model_copy(update={"enabled": False}), None, custom)
+        await _next_day(prisma, _DAY + timedelta(days=1), 1, 1)
+        await job._run(_NOW + timedelta(days=1))
+        preserved: Final = await issues.get_issue(issue.id)
+        assert preserved is not None and preserved.active
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_rule_edit_discards_old_cursor_and_rejects_stale_progress(db: ManagementDatabase) -> None:
+    from litellm.types.proxy.usage_alerts import UsageAlertProgress
+
+    async with _isolated(db) as prisma:
+        store: Final = UsageAlertsRepository.from_prisma(prisma)
+        definition: Final = UsageAlertRuleInput(
+            name="Resumable", scope_type="key", metric="spend", direction="increase"
+        )
+        rule: Final = await store.save_rule(definition, None)
+        assert rule is not None
+        position: Final = UsageAlertProgress(day=_DAY, revision=rule.updated_at, cursor="a" * 64, evaluated=True)
+        await store.save_progress(((rule, position),))
+        partial: Final = await store.get_rule(rule.id)
+        assert partial is not None and partial.evaluation_progress == position
+        edited: Final = await store.save_rule(definition.model_copy(update={"multiplier": 10}), None, partial)
+        assert edited is not None and edited.evaluation_progress is None
+        await store.save_progress(((rule, position),))
+        current: Final = await store.get_rule(rule.id)
+        assert current is not None and current.evaluation_progress is None
+        assert current.updated_at == edited.updated_at
+        await store.record_evaluations(((rule, "complete"),), _DAY, completed=True)
+        assert not await store.is_day_complete(edited, _DAY)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_busy_background_capacity_defers_and_releases_the_worker_lease(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        async with prisma.writer_db.tx() as transaction:
+            await transaction.query_raw("SELECT pg_advisory_xact_lock(1876539401,2)::text")
+            await job.run(_NOW)
+            assert not (await IssuesRepository.from_prisma(prisma).list_issues()).data
+            assert await prisma.writer_db.query_raw(
+                "SELECT count(*)::int AS count FROM \"LiteLLM_UsageAlertCheckpoint\" WHERE id='worker'"
+            ) == [{"count": 0}]
+        await job.run(_NOW)
+        assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 1
+        assert await prisma.writer_db.query_raw(
+            "SELECT count(*)::int AS count FROM \"LiteLLM_UsageAlertCheckpoint\" WHERE id='worker'"
+        ) == [{"count": 0}]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_partial_broad_default_waits_for_its_key_family_only(db: ManagementDatabase) -> None:
+    from litellm.types.proxy.usage_alert_defaults import default_usage_rules
+
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,custom_llm_provider,spend,api_requests,
+                 successful_requests,failed_requests,total_response_time_ms,timed_requests,updated_at)
+            SELECT 'extra-'||k||'-'||d,'owner',($1::date-d)::text,repeat('f',60)||lpad(k::text,4,'0'),
+                'model','example-provider',0.01,1000,1000,0,100000,1000,CURRENT_TIMESTAMP
+            FROM generate_series(1,30) k CROSS JOIN generate_series(0,7) d RETURNING id""",
+            _DAY.isoformat(),
+        )
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        await job._store.ensure_default_rules(default_usage_rules())
+        broad: Final = await job._store.enabled_rule_page("deployment", True, None)
+        await job._scope_page(broad, _DAY, True)
+        sources: Final = IssuesRepository.from_prisma(prisma)
+        assert await sources.active_signals(_DAY, scope_type="deployment", metric="spend")
+        assert not await sources.active_signals(_DAY, scope_type="deployment", metric="spend", completed_only=True)
+        key_rules: Final = await job._store.enabled_rule_page("key", True, None)
+        spend: Final = tuple(rule for rule in key_rules if rule.metric == "spend")
+        await job._scope_page(spend, _DAY, True)
+        assert await sources.active_signals(_DAY, scope_type="key", metric="spend", completed_only=True)
+        assert not await sources.active_signals(_DAY, scope_type="deployment", metric="spend", completed_only=True)
+        projector: Final = job._performance_projection
+        assert projector is not None
+        work: Final = await job._store.pending_projection_work()
+        assert work is not None
+        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
+        partial: Final = await sources.list_issues()
+        assert len(partial.data) == 1 and partial.data[0].cohort.scope_type == "key"
+        while not await job._store.is_day_complete(spend[0], _DAY):
+            current: Final = await job._store.get_rule(spend[0].id)
+            assert current is not None
+            await job._scope_page((current,), _DAY, True)
+        assert await sources.active_signals(_DAY, scope_type="deployment", metric="spend", completed_only=True)
+        unfinished: Final = tuple(rule for rule in key_rules if rule.metric != "spend")
+        assert not await job._store.completed_rule_ids(unfinished, _DAY)
+        await job._run(_NOW)
+        result: Final = await sources.list_issues()
+        assert result.total == 1 and result.data[0].cohort.scope_id == _KEY_A
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: ManagementDatabase) -> None:
+    from litellm.types.proxy.usage_alerts import UsageAlertProjectionCursor
+
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        await job._store.ensure_default_rules(job._defaults)
+        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 10)
+        work: Final = await job._store.pending_projection_work()
+        projector: Final = job._performance_projection
+        assert work is not None and projector is not None
+        observed_at: Final = _NOW.replace(microsecond=987000)
+        position = UsageAlertProjectionCursor(version=work.version, observed_at=observed_at)  # rebind-ok: cursor
+        while position.step < 21:
+            next_position: Final = await projector._projection_page(position, work, observed_at)
+            assert next_position is not None
+            position = next_position
+        await job._store.save_projection_cursor(position)
+        before: Final = await IssuesRepository.from_prisma(prisma).list_issues()
+        assert len(before.data) == 1 and before.data[0].family == "spend"
+        added: Final = await job._store.save_rule(
+            UsageAlertRuleInput(
+                name="Later policy", scope_type="key", scope_id=_KEY_B, metric="latency", direction="increase"
+            ),
+            None,
+        )
+        assert added is not None
+        await job._scope_page((added,), _DAY, False)
+        latest: Final = await job._store.pending_projection_work()
+        assert latest is not None and latest.version != work.version
+        retained: Final = await job._store.projection_cursor(latest)
+        assert retained.step == 21 and retained.version == work.version
+        restarted: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        assert restarted._performance_projection is not None
+        assert not await restarted._performance_projection.run_pending(
+            _NOW + timedelta(hours=1), latest, restarted._store, asyncio.get_running_loop().time() + 10
+        )
+        assert await restarted._performance_projection.run_pending(
+            _NOW + timedelta(hours=2), latest, restarted._store, asyncio.get_running_loop().time() + 10
+        )
+        after: Final = await IssuesRepository.from_prisma(prisma).list_issues()
+        assert tuple(item.id for item in after.data) == tuple(item.id for item in before.data)
+        links: Final = await IssuesRepository.from_prisma(prisma).list_signals(after.data[0].id)
+        assert any(link.usage_alert is not None and link.usage_alert.metric == "requests" for link in links.data)

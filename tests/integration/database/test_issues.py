@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
@@ -17,10 +17,13 @@ from prisma.types import DatasourceOverride
 from psycopg import sql
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase
+from litellm.repositories.daily_activity_sql import build_bounded_daily_activity_sql
 from litellm.repositories.issue_activity import IssueActivityRepository
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
 from litellm.types.proxy.issues import (
+    IssueActivityResponse,
     IssueCohort,
     IssueComparison,
     IssueDeliveryInput,
@@ -92,6 +95,7 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
         outsider: Final = scenario.user(user_role="internal_user")
         viewer: Final = scenario.user(user_role="proxy_admin_viewer")
         owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        info_key: Final = scenario.key(user_id=owner, key_type="default", allowed_routes=["info_routes"])
         outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
         viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
         inference_key: Final = scenario.key(user_id=owner, key_type="llm_api", key_alias="Example checkout")
@@ -152,6 +156,16 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
             path: Final = f"/issues/{first.id}"
             own: Final = gateway.request("GET", path, key=owner_key)
             assert own.status_code == 200 and own.json()["scope_label"] == "Example checkout"
+            assert own.json()["can_update_status"] is True
+            assert own.json()["can_view_activity"] is True
+            assert gateway.request("GET", path, key=viewer_key).json()["can_update_status"] is False
+            assert gateway.request("GET", path, key=info_key).json()["can_update_status"] is False
+            assert (
+                gateway.request(
+                    "PATCH", path, {"status": "resolved", "expected_status": "open"}, key=info_key
+                ).status_code
+                == 403
+            )
             assert "99999" not in own.text and "9999" not in own.text
             pages: Final = tuple(
                 gateway.request(
@@ -202,6 +216,159 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
             await _remove_issues(db, (first.id, second.id, global_issue.id))
             await alerts.delete_rule(rule.id)
             await _query(db, 'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id', rule.id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_detail_reports_team_status_permission(gateway: Gateway, db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    with gateway.scenario() as scenario:
+        admin: Final = scenario.user(user_role="internal_user")
+        member: Final = scenario.user(user_role="internal_user")
+        team: Final = scenario.team(
+            members_with_roles=[{"user_id": admin, "role": "admin"}, {"user_id": member, "role": "user"}]
+        )
+        permitted_team: Final = scenario.team(
+            members_with_roles=[{"user_id": member, "role": "user"}],
+            team_member_permissions=["/team/daily/activity"],
+        )
+        admin_key: Final = scenario.key(user_id=admin, key_type="management")
+        member_key: Final = scenario.key(user_id=member, key_type="management")
+        service_key: Final = scenario.key(
+            team_id=team,
+            user_id=None,
+            key_type="management",
+            metadata={"service_account_id": "example-activity-service"},
+        )
+        issue: Final = _issue(IssueCohort(scope_type="team", scope_id=team))
+        permitted_issue: Final = _issue(IssueCohort(scope_type="team", scope_id=permitted_team))
+        try:
+            await store.upsert_issues((issue, permitted_issue))
+            path: Final = f"/issues/{issue.id}"
+            assert gateway.request("GET", path, key=admin_key).json()["can_update_status"] is True
+            assert gateway.request("GET", path, key=admin_key).json()["can_view_activity"] is True
+            assert gateway.request("GET", path, key=member_key).json()["can_update_status"] is False
+            assert gateway.request("GET", path, key=member_key).json()["can_view_activity"] is False
+            for suffix in ("/activity", "/keys", "/users", "/impact"):
+                assert gateway.request("GET", path + suffix, key=member_key).status_code == 403
+                assert gateway.request("GET", path + suffix, key=service_key).status_code == 403
+            for suffix in ("/activity", "/keys", "/impact"):
+                assert gateway.request("GET", path + suffix, key=admin_key).status_code == 200
+                assert (
+                    gateway.request("GET", f"/issues/{permitted_issue.id}" + suffix, key=member_key).status_code == 200
+                )
+            assert (
+                gateway.request("GET", f"/issues/{permitted_issue.id}", key=member_key).json()["can_view_activity"]
+                is True
+            )
+            assert (
+                gateway.request(
+                    "PATCH", path, {"status": "resolved", "expected_status": "open"}, key=member_key
+                ).status_code
+                == 403
+            )
+            assert (
+                gateway.request(
+                    "PATCH", path, {"status": "resolved", "expected_status": "open"}, key=admin_key
+                ).status_code
+                == 200
+            )
+        finally:
+            await _remove_issues(db, (issue.id, permitted_issue.id))
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_activity_bounds_models_without_losing_totals(gateway: Gateway, db: ManagementDatabase) -> None:
+    from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity_aggregated
+    from litellm.repositories.issue_activity import issue_activity_scope
+
+    repository: Final = IssueActivityRepository.from_prisma(db.prisma)
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    identity: Final = str(uuid4())
+    key: Final = sha256(identity.encode()).hexdigest()
+    provider: Final = f"example-provider-{identity}"
+    day: Final = date.today() - timedelta(days=5)
+    model_count: Final = 137
+    cohort: Final = IssueCohort(scope_type="key", scope_id=key)
+    issue: Final = _issue(cohort).model_copy(update={"range_start": day, "range_end": day + timedelta(days=2)})
+    await _query(
+        db,
+        """INSERT INTO "LiteLLM_DailyUserSpend"
+        (id,user_id,date,api_key,model,model_group,custom_llm_provider,mcp_namespaced_tool_name,endpoint,
+        api_requests,spend,prompt_tokens,completion_tokens,successful_requests,failed_requests,
+        total_response_time_ms,timed_requests,updated_at)
+        SELECT $1||'-'||m||'-'||d,$1,($2::date+d::int)::text,$3,
+            CASE WHEN m=0 THEN 'Other' ELSE 'example-model-'||lpad(m::text,4,'0') END,
+            'group-'||m,$4,'tool-'||m,'endpoint-'||m,
+            m+2,CASE WHEN m=0 AND d=0 THEN 10000 ELSE m+1 END,m+1,2,m+1,1,(m+1)*200,m+1,CURRENT_TIMESTAMP
+        FROM generate_series(0,$5::int-1) m CROSS JOIN generate_series(0,2) d RETURNING id""",
+        identity,
+        day.isoformat(),
+        key,
+        provider,
+        model_count,
+    )
+    try:
+        await store.upsert_issue(issue)
+        scope: Final = issue_activity_scope(cohort, day, day + timedelta(days=2))
+        original: Final = await get_daily_activity_aggregated(repository.activity, scope, api_key_limit=20)
+        response: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
+        assert response.status_code == 200
+        bounded: Final = IssueActivityResponse.model_validate(response.json())
+        assert bounded.metadata.model_dump(exclude={"api_key_limit"}) == original.metadata.model_dump(
+            exclude={"api_key_limit"}
+        )
+        assert tuple((row.date, row.metrics) for row in bounded.results) == tuple(
+            (row.date, row.metrics) for row in original.results
+        )
+        models: Final = bounded.model_breakdown
+        assert models is not None and models.total_models == model_count and len(models.models) == models.limit == 20
+        assert models.models[0].model == "Other" and models.models[0].metrics.spend == 10002
+        assert models.other is not None and models.other.model_count == model_count - models.limit
+        components: Final = (*tuple(row.metrics for row in models.models), models.other.metrics)
+        assert sum(row.spend for row in components) == bounded.metadata.total_spend
+        assert sum(row.api_requests for row in components) == bounded.metadata.total_api_requests
+        assert sum(row.total_response_time_ms for row in components) == bounded.metadata.total_response_time_ms
+        assert all(not row.breakdown.models and not row.breakdown.endpoints for row in bounded.results)
+        query: Final = build_bounded_daily_activity_sql(scope, model_limit=100)
+        raw: Final = TypeAdapter(tuple[object, ...]).validate_python(
+            await repository.database.query_raw(query.sql, *query.params)
+        )
+        assert len(raw) == 3 + 1 + 100 + 1
+        largest: Final = gateway.request("GET", f"/issues/{issue.id}/activity", params={"model_limit": "100"})
+        assert largest.status_code == 200
+        large_models: Final = IssueActivityResponse.model_validate(largest.json()).model_breakdown
+        assert large_models is not None and len(large_models.models) == 100
+        assert large_models.other is not None and large_models.other.model_count == model_count - 100
+        assert gateway.request("GET", f"/issues/{issue.id}/activity", params={"model_limit": "101"}).status_code == 422
+        assert (
+            gateway.request(
+                "GET",
+                f"/issues/{issue.id}/activity",
+                params={"start_date": day.isoformat(), "end_date": (day + timedelta(days=366)).isoformat()},
+            ).status_code
+            == 422
+        )
+        non_key: Final = await repository.daily_activity(
+            IssueCohort(scope_type="provider", scope_id=provider), day, day + timedelta(days=2)
+        )
+        assert non_key.model_breakdown is None and non_key.metadata == bounded.metadata
+        assert len(non_key.results) == 3
+        schemas: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
+            await _query(db, "SELECT current_schema() AS name")
+        )
+        assert gateway.database_url is not None
+        with psycopg.connect(gateway.database_url) as blocker:
+            blocker.execute(
+                sql.SQL("LOCK TABLE {} IN ACCESS EXCLUSIVE MODE").format(
+                    sql.Identifier(schemas[0]["name"], "LiteLLM_DailyUserSpend")
+                )
+            )
+            busy: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
+            assert busy.status_code == 503 and busy.headers["Retry-After"] == "5"
+        assert gateway.request("GET", f"/issues/{issue.id}/activity").status_code == 200
+    finally:
+        await _remove_issues(db, (issue.id,))
+        await _query(db, 'DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id=$1 RETURNING id', identity)
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -332,12 +499,6 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
     next_issue_id: Final = str(uuid4())
     try:
         source: Final = (await alerts.record_observations(rule, (observation,)))[0]
-        await _query(
-            db,
-            'UPDATE "LiteLLM_UsageAlertIncident" SET evaluation_revision=$2 WHERE id=$1 RETURNING id',
-            source.id,
-            rule.updated_at.isoformat(),
-        )
         initial: Final = await store.upsert_issue(original)
         assert tuple(
             item.alert.id
@@ -359,12 +520,8 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
         assert disabled is not None and await store.pending_delivery(delivery.id) is None
         enabled: Final = await alerts.save_rule(definition, "qa-admin", disabled)
         assert enabled is not None and await store.pending_delivery(delivery.id) is None
-        await _query(
-            db,
-            'UPDATE "LiteLLM_UsageAlertIncident" SET evaluation_revision=$2 WHERE id=$1 RETURNING id',
-            source.id,
-            enabled.updated_at.isoformat(),
-        )
+        reevaluated: Final = await alerts.record_observations(enabled, (observation,))
+        assert len(reevaluated) == 1 and reevaluated[0].id == source.id
         await store.queue_delivery(delivery, enabled.id, enabled.updated_at.isoformat(), source.id)
         assert await store.pending_delivery(delivery.id) is not None
         await alerts.set_status(source.id, "dismissed")
@@ -448,14 +605,16 @@ async def _family_database(db: ManagementDatabase) -> AsyncGenerator[Prisma]:
     with psycopg.connect(url, autocommit=True) as setup:
         setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         try:
-            setup.execute(
-                sql.SQL('CREATE TABLE {} (LIKE "LiteLLM_UsageAlertRule" INCLUDING ALL)').format(
-                    sql.Identifier(schema, "LiteLLM_UsageAlertRule")
+            for table in ("LiteLLM_UsageAlertRule", "LiteLLM_UsageAlertCheckpoint", "LiteLLM_Config"):
+                setup.execute(
+                    sql.SQL("CREATE TABLE {} (LIKE {} INCLUDING ALL)").format(
+                        sql.Identifier(schema, table), sql.Identifier(table)
+                    )
                 )
-            )
             database: Final = Prisma(datasource=DatasourceOverride(url=scoped))
             await database.connect()
             try:
+                assert await database.query_raw("SELECT current_schema() AS name") == [{"name": schema}]
                 yield database
             finally:
                 await database.disconnect()
@@ -654,9 +813,7 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
 ) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    expired: Final = _issue(
-        IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}")
-    )
+    expired: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
     open_issue: Final = _issue(expired.cohort)
     recent: Final = _issue(expired.cohort)
     rule: Final = await alerts.save_rule(
@@ -671,8 +828,7 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
     )
     assert rule is not None
     deliveries: Final = tuple(
-        IssueDeliveryInput(id=str(uuid4()), issue_id=expired.id, channel="slack")
-        for _ in range(2)
+        IssueDeliveryInput(id=str(uuid4()), issue_id=expired.id, channel="slack") for _ in range(2)
     )
     try:
         await store.upsert_issues((expired, open_issue, recent))
@@ -693,16 +849,10 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
         )[0]
         await store.add_signals(
             expired.id,
-            (
-                IssueSignalInput(
-                    source="usage_alert", source_id=source.id, usage_alert=source
-                ),
-            ),
+            (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),),
         )
         for delivery in deliveries:
-            await store.queue_delivery(
-                delivery, rule.id, rule.updated_at.isoformat(), source.id
-            )
+            await store.queue_delivery(delivery, rule.id, rule.updated_at.isoformat(), source.id)
         assert await store.set_status(expired.id, "resolved", "open") is not None
         assert await store.set_status(recent.id, "resolved", "open") is not None
         await _query(
@@ -742,3 +892,181 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
             'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id',
             rule.id,
         )
+
+
+class _MeasuredActivityDatabase:
+    def __init__(self, database: DailyActivityQueryDatabase) -> None:
+        self.database = database
+        self.outputs: tuple[tuple[int, int], ...] = ()
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]] | None:
+        result: Final = await self.database.query_raw(query, *args)
+        self.outputs = (*self.outputs, (len(result or ()), len(json.dumps(result, default=str))))
+        return result
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
+    gateway: Gateway, db: ManagementDatabase
+) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    activity: Final = IssueActivityRepository.from_prisma(db.prisma)
+    measured: Final = _MeasuredActivityDatabase(activity.database)
+    repository: Final = IssueActivityRepository(activity.activity, measured)
+    identity: Final = uuid4().hex
+    reporting_key: Final = sha256(identity.encode()).hexdigest()
+    day: Final = date.today() - timedelta(days=3)
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        issue: Final = _issue(IssueCohort(scope_type="user", scope_id=owner)).model_copy(
+            update={"range_start": day, "range_end": day}
+        )
+        try:
+            await _query(
+                db,
+                """UPDATE "LiteLLM_UserTable" SET user_alias=repeat('u',1024),
+                user_email=repeat('m',400)||'@example.com' WHERE user_id=$1""",
+                owner,
+            )
+            await _query(
+                db,
+                """INSERT INTO "LiteLLM_DeletedVerificationToken"
+                (id,token,key_alias,user_id,models,metadata,deleted_at)
+                SELECT $1::text||'-'||n,$2::text,'archived-'||n||'-'||repeat('x',1024),$3::text,
+                    ARRAY[]::text[],jsonb_build_object('padding',repeat('x',65536)),
+                    CURRENT_TIMESTAMP+n*INTERVAL '1 second' FROM generate_series(1,400) n""",
+                identity,
+                reporting_key,
+                owner,
+            )
+            await _query(
+                db,
+                """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,api_requests,successful_requests,updated_at)
+                VALUES($1,$2,$3,$4,'example-model',10,10,CURRENT_TIMESTAMP)""",
+                identity,
+                owner,
+                day.isoformat(),
+                reporting_key,
+            )
+            await store.upsert_issue(issue)
+            keys: Final = await repository.keys(issue.cohort, day, day, 1, 0)
+            assert keys.total_api_keys == 1 and len(keys.api_keys) == 1
+            key: Final = keys.api_keys[0]
+            assert key.api_key == reporting_key and key.metadata.key_exists is False
+            assert key.metadata.key_alias is not None and key.metadata.key_alias.startswith("archived-400-")
+            assert len(key.metadata.key_alias) == 256 and key.metadata.user_id == owner
+            assert key.metadata.user_email is None
+            assert measured.outputs[-1][0] == 1 and measured.outputs[-1][1] < 2048
+            users: Final = await repository.users(issue.cohort, day, day, 1, 0)
+            assert users.total_users == 1 and len(users.users) == 1
+            assert users.users[0].user_id == owner and users.users[0].user_alias == "u" * 256
+            assert users.users[0].user_email is None
+            assert measured.outputs[-1][0] == 1 and measured.outputs[-1][1] < 2048
+            for endpoint in ("keys", "users"):
+                response: Final = gateway.request("GET", f"/issues/{issue.id}/{endpoint}", params={"limit": "1"})
+                assert response.status_code == 200 and len(response.content) < 2048
+                assert "padding" not in response.text
+        finally:
+            await _remove_issues(db, (issue.id,))
+            await _query(db, 'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id=$1', identity)
+            await _query(db, 'DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', reporting_key)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    issue: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    definition: Final = UsageAlertRuleInput(
+        name="Primary traffic",
+        scope_type="user",
+        scope_id=issue.cohort.scope_id,
+        metric="requests",
+        direction="increase",
+    )
+    first: Final = await alerts.save_rule(definition, "qa-admin")
+    second: Final = await alerts.save_rule(definition.model_copy(update={"name": "Another traffic policy"}), "qa-admin")
+    assert first is not None and second is not None
+    breach: Final = UsageAlertObservation(
+        entity_id=issue.cohort.scope_id,
+        day=issue.observed_on,
+        observed=420,
+        baseline=120,
+        threshold=360,
+        breached=True,
+    )
+    try:
+        sources: Final = tuple([(await alerts.record_observations(rule, (breach,)))[0] for rule in (first, second)])
+        await store.upsert_issue(issue)
+        await store.add_signals(
+            issue.id,
+            tuple(
+                IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source) for source in sources
+            ),
+        )
+        await alerts.record_observations(
+            first,
+            (
+                breach.model_copy(
+                    update={
+                        "day": issue.observed_on + timedelta(days=1),
+                        "observed": 120,
+                        "breached": False,
+                    }
+                ),
+            ),
+        )
+        await alerts.record_observations(
+            second,
+            (
+                breach.model_copy(
+                    update={
+                        "day": issue.observed_on + timedelta(days=2),
+                    }
+                ),
+            ),
+        )
+        assert await alerts.save_rule(definition.model_copy(update={"enabled": False}), "qa-admin", second)
+        await store.recover_issues(issue.observed_on + timedelta(days=3))
+        unresolved: Final = await store.get_issue(issue.id)
+        assert unresolved is not None and unresolved.active
+        await alerts.record_observations(
+            first,
+            (
+                breach.model_copy(
+                    update={
+                        "day": issue.observed_on + timedelta(days=3),
+                        "observed": 120,
+                        "breached": False,
+                    }
+                ),
+            ),
+        )
+        await store.recover_issues(issue.observed_on + timedelta(days=3))
+        recovered: Final = await store.get_issue(issue.id)
+        assert recovered is not None and not recovered.active
+    finally:
+        await _remove_issues(db, (issue.id,))
+        for rule in (first, second):
+            await alerts.delete_rule(rule.id)
+            await _query(db, 'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id', rule.id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_family_settings_expose_projection_backlog_without_delayed_rules(db: ManagementDatabase) -> None:
+    async with _family_database(db) as database:
+        borrowed: Final = cast(AlertDatabase, database)  # cast-ok: real generated Prisma query delegate
+        store: Final = IssuesRepository(borrowed)
+        assert not (await store.family_settings()).projection_pending
+        await borrowed.query_raw(
+            """INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,completed,owner)
+                VALUES ('performance-dirty:2026-11-04',false,'fixture') RETURNING id"""
+        )
+        pending: Final = await store.family_settings()
+        assert pending.projection_pending and all(item.total_rules == 0 for item in pending.data)
+        await borrowed.query_raw(
+            """UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true
+                WHERE id='performance-dirty:2026-11-04' RETURNING id"""
+        )
+        assert not (await store.family_settings()).projection_pending

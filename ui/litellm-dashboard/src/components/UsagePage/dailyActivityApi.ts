@@ -2,7 +2,9 @@ import type { components } from "@/lib/http/schema";
 import type { BreakdownMetrics, DailyData, KeyMetadata, KeyMetricWithMetadata, MetricWithMetadata } from "./types";
 
 export type DailyActivityEntity = "user" | "team" | "tag" | "organization" | "customer" | "agent";
-export type DailyActivityAggregatedResponse = components["schemas"]["SpendAnalyticsPaginatedResponse"];
+export type DailyActivityAggregatedResponse =
+  | components["schemas"]["SpendAnalyticsPaginatedResponse"]
+  | components["schemas"]["BoundedDailyActivityResponse"];
 export type DailyActivityMetadata = components["schemas"]["DailySpendMetadata"];
 export type ExportType = components["schemas"]["ExportType"];
 export type ExportFormat = "csv" | "json";
@@ -26,6 +28,9 @@ export interface DailyActivityRequest {
   model?: string | null;
   includeCurrentUtcDay?: boolean;
   apiKeyLimit?: number;
+  bounded?: boolean;
+  includeModelBreakdown?: boolean;
+  modelLimit?: number;
   timezoneOffsetMinutes?: number;
 }
 

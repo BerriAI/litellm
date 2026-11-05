@@ -41,6 +41,19 @@ afterEach(() => {
 });
 
 describe("dailyActivityAggregatedCall", () => {
+  it("opts into bounded model contributions without changing legacy requests", async () => {
+    const mockFetch = captureFetch();
+    const options = { apiKey: "key-hash", bounded: true, includeModelBreakdown: true, modelLimit: 20 };
+    await dailyActivityAggregatedCall("user", req(options));
+    await dailyActivityAggregatedCall("user", req());
+    expect(requestedUrl(mockFetch).searchParams.get("bounded")).toBe("true");
+    expect(requestedUrl(mockFetch).searchParams.get("include_model_breakdown")).toBe("true");
+    expect(requestedUrl(mockFetch).searchParams.get("model_limit")).toBe("20");
+    for (const key of ["bounded", "include_model_breakdown", "model_limit"]) {
+      expect(requestedUrl(mockFetch, 1).searchParams.has(key)).toBe(false);
+    }
+  });
+
   it("uses UTC for incident ranges while preserving the default timezone for other callers", async () => {
     const mockFetch = captureFetch();
     await dailyActivityAggregatedCall("user", req({ timezoneOffsetMinutes: 0 }));

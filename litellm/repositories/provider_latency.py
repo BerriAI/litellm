@@ -196,6 +196,17 @@ class ProviderLatencyRepository:
     def from_prisma(cls, prisma: "PrismaClient") -> "ProviderLatencyRepository":
         return cls(cast(MetricsDatabase, prisma.writer_db))  # cast-ok: generated Prisma query_raw interface
 
+    async def provider_pairs(self, provider: str, day: date) -> tuple[IssueModelPair, ...]:
+        return TypeAdapter(tuple[IssueModelPair, ...]).validate_python(
+            await self._database.query_raw(
+                """SELECT DISTINCT custom_llm_provider AS provider,model FROM "LiteLLM_DailyUserSpend"
+            WHERE date=$1 AND custom_llm_provider=$2 AND model IS NOT NULL AND model<>'' AND timed_requests>0
+            ORDER BY model LIMIT 101""",
+                day.isoformat(),
+                provider,
+            )
+        )
+
     async def candidate_pairs(
         self, day: date, cursor: IssueModelPair | None = None, limit: int = 100
     ) -> tuple[IssueModelPair, ...]:

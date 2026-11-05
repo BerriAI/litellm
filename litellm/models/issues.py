@@ -1,8 +1,10 @@
 from datetime import date, datetime
 from typing import Literal, Protocol
 
+from litellm.models.team import LiteLLM_TeamTable
 from litellm.types.proxy.issues import (
     Issue,
+    IssueActivityResponse,
     IssueCohort,
     IssueDeliveryBinding,
     IssueDeliveryInput,
@@ -24,7 +26,6 @@ from litellm.types.proxy.issues import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityKeyPageResponse,
     DailyActivityUserPageResponse,
-    SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.usage_alert_defaults import PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import UsageAlertMetric, UsageAlertStatus
@@ -32,6 +33,8 @@ from litellm.types.proxy.usage_alerts import UsageAlertMetric, UsageAlertStatus
 
 class IssueStore(Protocol):
     async def get_issue(self, issue_id: str) -> Issue | None: ...
+
+    async def team_activity_access(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None: ...
 
     async def list_issues(
         self,
@@ -86,9 +89,12 @@ class IssueStore(Protocol):
         scope_type: IssueScope | None = None,
         metric: UsageAlertMetric | None = None,
         scope_ids: tuple[str, ...] | None = None,
+        completed_only: bool = False,
     ) -> tuple[IssueProjectionSignal, ...]: ...
 
-    async def recover_issues(self, day: date) -> int: ...
+    async def active_resource_issue_ids(self, cursor: str | None = None) -> tuple[str, ...]: ...
+
+    async def recover_issues(self, day: date, issue_ids: tuple[str, ...] | None = None) -> int: ...
 
     async def active_provider_issues(self, limit: int = 500, cursor: str | None = None) -> tuple[Issue, ...]: ...
 
@@ -120,6 +126,8 @@ class IssueStore(Protocol):
 
     async def pending_delivery(self, delivery_id: str) -> IssuePendingDelivery | None: ...
 
+    async def reserve_delivery(self, delivery_id: str) -> bool: ...
+
     async def mark_delivery_sent(self, delivery_id: str) -> None: ...
 
     async def defer_delivery(
@@ -130,7 +138,9 @@ class IssueStore(Protocol):
 
 
 class IssueActivityStore(Protocol):
-    async def daily_activity(self, cohort: IssueCohort, start: date, end: date) -> SpendAnalyticsPaginatedResponse: ...
+    async def daily_activity(
+        self, cohort: IssueCohort, start: date, end: date, model_limit: int = 20
+    ) -> IssueActivityResponse: ...
 
     async def keys(
         self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int

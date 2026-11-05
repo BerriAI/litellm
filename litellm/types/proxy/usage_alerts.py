@@ -10,14 +10,16 @@ UsageAlertMetric: TypeAlias = Literal["spend", "requests", "latency", "errors", 
 UsageAlertDirection: TypeAlias = Literal["increase", "decrease"]
 UsageAlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
 UsageAlertChannel: TypeAlias = Literal["email", "slack"]
-UsageAlertEvaluationStatus: TypeAlias = Literal["pending", "complete", "insufficient_coverage", "insufficient_history"]
+UsageAlertEvaluationStatus: TypeAlias = Literal[
+    "pending", "complete", "insufficient_coverage", "insufficient_history", "delayed"
+]
 UsageAlertRuleKind: TypeAlias = Literal["all", "default", "custom"]
 
 
 class UsageAlertRuleInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    name: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x1f\x7f]+$")
     scope_type: UsageAlertScope
     scope_id: str | None = Field(default=None, min_length=1, max_length=1024)
     metric: UsageAlertMetric
@@ -54,7 +56,35 @@ class UsageAlertRuleInput(BaseModel):
         return self
 
 
+class UsageAlertProgress(BaseModel, frozen=True):
+    """Internal durable position; never part of rule input or public output."""
+
+    day: date
+    revision: datetime
+    cursor: str | None = None
+    evaluated: bool = False
+
+
+class UsageAlertWorkCursor(BaseModel, frozen=True):
+    phase: int = Field(default=0, ge=0, lt=10)
+    after_id: str | None = None
+
+
+class UsageAlertProjectionWork(BaseModel, frozen=True):
+    day: date
+    version: str
+
+
+class UsageAlertProjectionCursor(BaseModel, frozen=True):
+    version: str
+    day: date | None = None
+    step: int = Field(default=0, ge=0, le=26)
+    after_id: str | None = None
+    observed_at: datetime | None = None
+
+
 class UsageAlertRule(UsageAlertRuleInput):
+    overrides_defaults: bool = Field(default=False, exclude=True)
     id: str
     created_at: datetime
     updated_at: datetime
@@ -62,6 +92,8 @@ class UsageAlertRule(UsageAlertRuleInput):
     last_evaluated_day: date | None = None
     evaluation_status: UsageAlertEvaluationStatus = "pending"
     is_default: bool = False
+    evaluation_progress: UsageAlertProgress | None = Field(default=None, exclude=True)
+    overrides_defaults: bool = Field(default=False, exclude=True)
 
 
 class UsageAlert(BaseModel):
@@ -98,6 +130,7 @@ class UsageAlertUpdate(BaseModel):
 
 
 class UsageAlertEvaluationCounts(BaseModel, frozen=True):
+    delayed: int = 0
     pending: int = 0
     complete: int = 0
     insufficient_coverage: int = 0
