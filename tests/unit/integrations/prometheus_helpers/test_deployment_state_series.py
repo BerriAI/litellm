@@ -201,7 +201,7 @@ def test_a_cooling_deployment_stays_at_two_and_recovers_after_other_deployments_
     assert (gauge[chat], gauge[responses]) == (HEALTHY, HEALTHY)
 
 
-def test_the_oldest_cooldown_is_forgotten_with_its_series_left_at_two_once_more_than_the_cap_are_cooling():
+def test_the_oldest_cooldown_still_clears_every_series_it_marked_after_more_than_the_cap_cooled_down():
     tracker, gauge = tracker_and_gauge()
     chat: Final = request_series("oldest")
     responses: Final = request_series("oldest", "https://api.example/v1/responses")
@@ -215,7 +215,7 @@ def test_the_oldest_cooldown_is_forgotten_with_its_series_left_at_two_once_more_
     tracker.healthy(chat)
 
     assert during_cooldown == {chat: COMPLETE_OUTAGE, responses: COMPLETE_OUTAGE}
-    assert (gauge[chat], gauge[responses]) == (HEALTHY, COMPLETE_OUTAGE)
+    assert (gauge[chat], gauge[responses]) == (HEALTHY, HEALTHY)
 
 
 @pytest.mark.timeout(60)

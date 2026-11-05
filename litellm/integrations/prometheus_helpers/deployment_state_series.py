@@ -60,8 +60,8 @@ def stuck_at_two(history: SeriesHistory) -> tuple[DeploymentStateSeries, ...]:
 class DeploymentStateSeriesTracker:
     """
     A cooldown marks each series written since the last success, as its config labels can differ from the request
-    labels. The next success clears them. Serving and cooling deployments are capped separately, and a forgotten
-    deployment keeps the state last written.
+    labels. The next success clears them. Serving deployments are capped, and a cooling deployment is kept until its
+    next success.
     """
 
     def __init__(
@@ -71,7 +71,7 @@ class DeploymentStateSeriesTracker:
     ) -> None:
         self._write = write
         self._serving: OrderedDict[str | None, Serving] = OrderedDict()  # mutable-ok: O(1) LRU
-        self._cooling: OrderedDict[str | None, CoolingDown] = OrderedDict()  # mutable-ok: O(1) LRU
+        self._cooling: dict[str | None, CoolingDown] = {}  # mutable-ok: emptied by each deployment's next success
         self._lock: AbstractContextManager[object] = Lock() if lock is None else lock
 
     def healthy(self, series: DeploymentStateSeries) -> None:
@@ -122,8 +122,5 @@ class DeploymentStateSeriesTracker:
             case CoolingDown():
                 self._serving.pop(model_id, None)
                 self._cooling[model_id] = history
-                self._cooling.move_to_end(model_id)
-                if len(self._cooling) > MAX_TRACKED_DEPLOYMENTS:
-                    self._cooling.popitem(last=False)
             case _:
                 assert_never(history)
