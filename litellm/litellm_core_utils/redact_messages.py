@@ -212,6 +212,7 @@ def _redact_choice_content(choice):
             choice.message.content = REDACTED_BY_LITELLM
         if getattr(choice.message, "reasoning_content", None) is not None:
             choice.message.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.message, "refusal")
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
@@ -223,6 +224,7 @@ def _redact_choice_content(choice):
             choice.delta.content = REDACTED_BY_LITELLM
         if getattr(choice.delta, "reasoning_content", None) is not None:
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
+        _redact_field_when_present(choice.delta, "refusal")
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
@@ -479,7 +481,7 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
             if (
                 body := next((choice[key] for key in ("message", "delta") if isinstance(choice.get(key), dict)), None)
             ) is not None:
-                for field in ("content", "reasoning_content"):
+                for field in ("content", "reasoning_content", "refusal"):
                     if body.get(field) is not None:
                         body[field] = redacted_str
                 for field in ("thinking_blocks", "reasoning_items", "audio"):

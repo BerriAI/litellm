@@ -686,6 +686,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
             or delta.get("audio")
             or delta.get("images")
             or delta.get("annotations")
+            or getattr(delta, "refusal", None)
         ):
             return True
     return False

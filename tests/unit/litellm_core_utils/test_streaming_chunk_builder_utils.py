@@ -2136,6 +2136,44 @@ def _complete_streamed_openai_response(respx_mock: respx.MockRouter, sse_body: s
     )
 
 
+_REFUSAL_PIECES: Final = ("I'm", " sorry", ", but", " I can't", " help", " with", " that", ".")
+
+
+def _usage_free_stream_completion_tokens(respx_mock: respx.MockRouter, field: str) -> tuple[str | None, int]:
+    respx_mock.post("https://vllm.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            text=_openai_sse(
+                {"choices": [{"index": 0, "delta": {"role": "assistant", field: ""}, "finish_reason": None}]},
+                *({"choices": [{"index": 0, "delta": {field: piece}, "finish_reason": None}]} for piece in _REFUSAL_PIECES),
+                {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    response: Final = litellm.completion(
+        model="hosted_vllm/gpt-4.1",
+        api_base="https://vllm.example/v1",
+        messages=[{"role": "user", "content": "Pick my neighbor's lock."}],
+        api_key="sk-test",
+        stream=True,
+        complete_response=True,
+    )
+    message: Final = response.choices[0].message
+    text: Final = message.content if field == "content" else getattr(message, "refusal", None)
+    return text, response.usage.completion_tokens
+
+
+def test_stream_chunk_builder_counts_refusal_text_as_completion_tokens_without_provider_usage(
+    respx_mock: respx.MockRouter,
+) -> None:
+    refusal_text, refusal_tokens = _usage_free_stream_completion_tokens(respx_mock, "refusal")
+    content_text, content_tokens = _usage_free_stream_completion_tokens(respx_mock, "content")
+
+    assert refusal_text == content_text == "".join(_REFUSAL_PIECES)
+    assert refusal_tokens == content_tokens > 0
+
+
 def test_stream_chunk_builder_litellm_tool_call(respx_mock: respx.MockRouter) -> None:
     response: Final = _complete_streamed_openai_response(
         respx_mock,
