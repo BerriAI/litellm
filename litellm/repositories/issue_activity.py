@@ -7,18 +7,22 @@ from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # generated Prism
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.repositories.analytics_budget import AnalyticsDatabase, BoundedAnalyticsDatabase
+from litellm.repositories.bounded_daily_activity import BoundedDailyActivityRepository
 from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_from_bucket
-from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase, DailyActivityRepository
 from litellm.repositories.daily_activity_sql import PRISMA_TO_PG_TABLE, build_where_clause
-from litellm.repositories.usage_alerts import AlertDatabase
-from litellm.types.proxy.issues import IssueCohort, IssueImpact
+from litellm.types.proxy.issues import (
+    IssueActivityResponse,
+    IssueCohort,
+    IssueImpact,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityKeyPageResponse,
     DailyActivityUserPageResponse,
     KeyMetadata,
     KeySpendActivityRow,
     KeySpendMetrics,
-    SpendAnalyticsPaginatedResponse,
     UserActivityRow,
 )
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable
@@ -54,7 +58,7 @@ def issue_activity_scope(cohort: IssueCohort, start: date, end: date) -> DailyAc
 
 
 class IssueActivityRepository:
-    def __init__(self, activity: DailyActivityRepository, database: AlertDatabase) -> None:
+    def __init__(self, activity: DailyActivityRepository, database: DailyActivityQueryDatabase) -> None:
         self.activity = activity
         self.database = database
 
@@ -62,14 +66,14 @@ class IssueActivityRepository:
     def from_prisma(cls, prisma: "PrismaClient") -> "IssueActivityRepository":
         from litellm.proxy.management_endpoints.common_daily_activity import daily_activity_repository
 
-        database: Final = cast(AlertDatabase, prisma.db)  # cast-ok: generated Prisma query_raw
-        return cls(daily_activity_repository(prisma), database)
+        database: Final = BoundedAnalyticsDatabase(cast(AnalyticsDatabase, prisma.db))  # cast-ok: generated Prisma tx
+        return cls(daily_activity_repository(prisma, query_database=database), database)
 
-    async def daily_activity(self, cohort: IssueCohort, start: date, end: date) -> SpendAnalyticsPaginatedResponse:
-        from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity_aggregated
-
-        return await get_daily_activity_aggregated(
-            self.activity, issue_activity_scope(cohort, start, end), api_key_limit=20
+    async def daily_activity(
+        self, cohort: IssueCohort, start: date, end: date, model_limit: int = 20
+    ) -> IssueActivityResponse:
+        return await BoundedDailyActivityRepository(self.database).aggregate(
+            issue_activity_scope(cohort, start, end), model_limit=model_limit if cohort.scope_type == "key" else None
         )
 
     async def keys(

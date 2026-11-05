@@ -34901,6 +34901,16 @@ export interface components {
              * @default true
              */
             active: boolean;
+            /**
+             * Can Update Status
+             * @description Current reader's status permission, evaluated by the issue-detail endpoint
+             */
+            can_update_status?: boolean | null;
+            /**
+             * Can View Activity
+             * @description Current reader's permission to inspect Activity, keys, users and impact
+             */
+            can_view_activity?: boolean | null;
             cohort: components["schemas"]["IssueCohort"];
             /** Cohort Key */
             cohort_key: string;
@@ -65677,6 +65687,7 @@ export interface operations {
             query?: {
                 start_date?: string | null;
                 end_date?: string | null;
+                model_limit?: number;
             };
             header?: never;
             path: {
@@ -65692,7 +65703,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                    "application/json": components["schemas"]["BoundedDailyActivityResponse"];
                 };
             };
             /** @description Validation Error */

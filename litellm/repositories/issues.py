@@ -10,6 +10,7 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
 from litellm.types.proxy.issues import (
@@ -164,6 +165,25 @@ class IssuesRepository:
             await self.database.query_raw(f"SELECT {_RECORD} AS record {_JOIN} WHERE i.id=$1", issue_id)
         )
         return (await self._labels((rows[0].record,)))[0] if rows else None
+
+    async def team_activity_access(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
+        rows: Final = TypeAdapter(tuple[LiteLLM_TeamTable, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT t.team_id,
+                    CASE WHEN m.role IS NULL THEN '[]'::jsonb
+                        ELSE jsonb_build_array(jsonb_build_object('user_id',$2::text,'role',m.role)) END
+                        AS members_with_roles,
+                    CASE WHEN '/team/daily/activity'=ANY(t.team_member_permissions)
+                        THEN ARRAY['/team/daily/activity'] ELSE ARRAY[]::text[] END AS team_member_permissions
+                FROM "LiteLLM_TeamTable" t LEFT JOIN LATERAL (
+                    SELECT member->>'role' AS role FROM jsonb_array_elements(t.members_with_roles) member
+                    WHERE member->>'user_id'=$2 ORDER BY (member->>'role'='admin') DESC LIMIT 1
+                ) m ON true WHERE t.team_id=$1""",
+                team_id,
+                user_id,
+            )
+        )
+        return rows[0] if rows else None
 
     async def list_issues(
         self,
