@@ -241,20 +241,14 @@ print("compatible")
 
 
 @pytest.mark.parametrize("rust", (None, "0", "1"))
-def test_tokenization_without_native_extension_stays_offline(tmp_path: Path, rust: str | None) -> None:
+def test_tokenization_stays_offline(tmp_path: Path, rust: str | None) -> None:
     script: Final = """
-import importlib.abc
 import sys
 sys.path.insert(0, sys.argv[1])
 def reject_network(event, args):
     if event == "socket.connect":
         raise AssertionError("tokenizer attempted a network connection")
 sys.addaudithook(reject_network)
-class Block(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname == "litellm.rust_bridge._native":
-            raise ImportError("native extension is unavailable")
-sys.meta_path.insert(0, Block())
 import litellm
 from litellm.rust_bridge.tokenizer import get_encoding
 import tiktoken
@@ -408,14 +402,12 @@ def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeyp
     from unittest.mock import patch
 
     from litellm.utils import (
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES,
-        _load_huggingface_tokenizer,
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
         _select_tokenizer_helper,
     )
 
     monkeypatch.setenv("LITELLM_RUST", "false")
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     try:
         with caplog.at_level(log_level, logger="LiteLLM"), patch.dict(sys.modules, {"tokenizers": None}):
             result = _select_tokenizer_helper("llama-2")
@@ -424,8 +416,7 @@ def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeyp
         assert ("token counts may be approximate" in caplog.text) is (log_level == "WARNING")
         assert ("install tokenizers" in caplog.text) is (log_level == "WARNING")
     finally:
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 @pytest.mark.parametrize("python_installed", [False, True])
@@ -483,14 +474,12 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
     from unittest.mock import patch
 
     from litellm.utils import (
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES,
-        _load_huggingface_tokenizer,
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
         _select_tokenizer_helper,
     )
 
     monkeypatch.setenv("LITELLM_RUST", "false")
-    _load_huggingface_tokenizer.cache_clear()
-    _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
     model = "llama-2\r\nforged-model\x1b[31m\u2028\u2029"
     secret = "sk-" + "x" * 48
     failure = OSError("download failed\r\nforged-error\x1b[31m api_key=" + secret)
@@ -517,8 +506,7 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
         assert "REDACTED" in message
         assert "install tokenizers and huggingface-hub" in message
     finally:
-        _load_huggingface_tokenizer.cache_clear()
-        _HUGGINGFACE_TOKENIZER_LOAD_FAILURES.flush_cache()
+        _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
 
 
 @pytest.mark.parametrize("python_installed", [False, True])

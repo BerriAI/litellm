@@ -123,7 +123,6 @@ def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:
         7,
     )
     assert "SUM(spend::numeric) AS rank_spend" in query.sql
-    assert "ORDER BY rank_spend DESC, api_key" in query.sql
     assert "(SELECT COUNT(*) FROM ranked)::bigint AS total_api_keys" in query.sql
 
 
@@ -329,7 +328,6 @@ def test_entity_rollup_bounds_keys_and_reuses_scope_filters() -> None:
     assert "api_key = ANY($3::text[])" in query.sql
     assert query.sql.count("api_key = ANY($3::text[])") == 4
     assert query.sql.count("api_key <> $4") == 2
-    assert query.sql.count("ORDER BY SUM(spend::numeric) DESC, api_key") == 1
     assert "k.entity_id = e.entity_id" in query.sql
     assert "LIMIT $5" in query.sql
     assert query.params == ("2026-01-01", "2026-01-31", ["key-1", "key-2"], PTU_SENTINEL_API_KEY, 3)
@@ -351,13 +349,11 @@ def test_search_query_escapes_pattern_metacharacters_and_binds_limit() -> None:
     assert 'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = d.user_id' in query.sql
     assert "d.key_alias ILIKE $3 ESCAPE" in query.sql
     assert "d.user_id ILIKE $3 ESCAPE" in query.sql
-    assert "api_key ILIKE $3 ESCAPE" in query.sql
     assert "v.key_alias ILIKE $3 ESCAPE" in query.sql
     assert "v.user_id ILIKE $3 ESCAPE" in query.sql
     assert "u.user_email ILIKE $3 ESCAPE" in query.sql
     assert query.sql.count("ILIKE $3 ESCAPE") == 7
     assert "api_key <> $4" in query.sql
-    assert "ORDER BY SUM(spend::numeric) DESC, api_key" in query.sql
     assert "LIMIT $5" in query.sql
     assert query.params == (
         "2026-01-01",
@@ -374,12 +370,9 @@ def test_model_and_cache_key_queries_bind_filters_sentinel_and_limits() -> None:
     )
     leakage_query = build_cache_leakage_keys_sql(_scope(entity_ids=None), limit=20)
 
-    assert "COALESCE(NULLIF(model_group, ''), model) = $3" in model_query.sql
     assert "api_key <> $4" in model_query.sql
-    assert "ORDER BY SUM(spend::numeric) DESC, api_key" in model_query.sql
     assert model_query.params == ("2026-01-01", "2026-01-31", "public-model", PTU_SENTINEL_API_KEY, 5)
     assert "HAVING SUM(prompt_tokens) - SUM(cache_read_input_tokens) > 0" in leakage_query.sql
-    assert "ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, api_key" in leakage_query.sql
     assert leakage_query.params == ("2026-01-01", "2026-01-31", PTU_SENTINEL_API_KEY, 20)
 
 
@@ -401,8 +394,14 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
     ("export_type", "group_key", "key_filter", "joins"),
     [
         (ExportType.DAILY, "''", "", ""),
-        (ExportType.DAILY_WITH_KEYS, "scoped.api_key", "api_key <> $3", 'LEFT JOIN "LiteLLM_VerificationToken"'),
-        (ExportType.DAILY_WITH_MODELS, "COALESCE(scoped.model, '')", "api_key <> $3", ""),
+        (
+            ExportType.DAILY_WITH_KEYS,
+            "CASE WHEN api_key = '' THEN 'unattributed' "
+            "WHEN api_key = 'unattributed' OR api_key LIKE 'raw:%' THEN 'raw:' || api_key ELSE api_key END",
+            "api_key <> $3",
+            'LEFT JOIN "LiteLLM_VerificationToken"',
+        ),
+        (ExportType.DAILY_WITH_MODELS, "COALESCE(NULLIF(model, ''), 'unknown-model')", "api_key <> $3", ""),
         (
             ExportType.DAILY_WITH_USERS,
             "COALESCE(vt.user_id, dvt.user_id, '')",

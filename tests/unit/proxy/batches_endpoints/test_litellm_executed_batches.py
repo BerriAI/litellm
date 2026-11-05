@@ -249,10 +249,19 @@ class FakeRouter:
         )
         self.aresponses = AsyncMock(return_value=chat_response("default"))
 
-    def get_model_ids(self, model_name: str) -> list[str]:
-        return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
+    def registry(self) -> "FakeRegistry":
+        return FakeRegistry()
 
     def get_model_group_info(self, model_group: str) -> None:
+        return None
+
+
+class FakeRegistry:
+    def names(self, model_name: str | None = None, *, kind: str = "groups") -> list[str]:
+        assert kind == "ids"
+        return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
+
+    def group(self, name: str, *, field: str = "info") -> None:
         return None
 
 
@@ -647,11 +656,11 @@ async def test_resolve_litellm_executed_provider_asks_the_router_for_the_team_sc
     credentials: Mapping[str, object] | None, expected: str | None
 ) -> None:
     router = MagicMock(spec=Router)
-    router.get_deployment_credentials_with_provider.return_value = credentials
+    router.registry.return_value.credentials.return_value = credentials
     assert (
         await resolve_litellm_executed_provider(router, BATCH_MODEL, "team-1", FakeFilesApiProbe(True, [])) == expected
     )
-    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id=BATCH_MODEL, team_id="team-1")
+    router.registry.return_value.credentials.assert_called_once_with(BATCH_MODEL, form="with_provider", team_id="team-1")
 
 
 async def test_create_stores_a_validating_batch_and_completes_it_in_the_background() -> None:

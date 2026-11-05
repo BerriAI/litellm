@@ -76,8 +76,6 @@ def test_redact_string_catches_secret_patterns():
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_diagnostic_redaction_policy_matches_across_backends(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
 
     assert redact_string("GET /v1?api_key=abcdefgh12345&page=2") == "GET /v1?REDACTED&page=2"

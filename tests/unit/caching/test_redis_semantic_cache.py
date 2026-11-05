@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 
 @contextmanager
 def _fake_redisvl_modules(semantic_cache_mock: MagicMock, custom_vectorizer_mock: MagicMock) -> Iterator[None]:
@@ -842,7 +844,7 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1085,7 +1087,7 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1128,7 +1130,7 @@ def test_redis_get_embedding_truncates_to_deployment_max_input_tokens(monkeypatc
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     cache.embedding_model = "sem-embed"
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (5, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1149,7 +1151,7 @@ async def test_redis_async_embedding_explicit_limit_beats_deployment_limit(monke
     cache.embedding_model = "sem-embed"
     cache.embedding_max_input_tokens = 3
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (8191, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")
@@ -1270,7 +1272,7 @@ def test_redis_sync_embedding_call_is_bounded(monkeypatch):
     cache.embedding_model = "sem-embed"
     cache.embedding_timeout = 1.5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     monkeypatch.setitem(
@@ -1293,7 +1295,7 @@ async def test_redis_async_embedding_call_is_bounded(monkeypatch):
     cache.embedding_model = "sem-embed"
     cache.embedding_timeout = 1.5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     monkeypatch.setitem(
@@ -1322,7 +1324,7 @@ async def test_redis_async_embedding_gives_up_on_unresponsive_endpoint(monkeypat
         await asyncio.sleep(3)
         return {"data": [{"embedding": [0.1, 0.2]}]}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = never_responds
     monkeypatch.setitem(
@@ -1355,7 +1357,7 @@ async def test_redis_async_get_cache_fails_open_when_embedding_hangs(monkeypatch
         await asyncio.sleep(3)
         return {"data": [{"embedding": [0.1, 0.2]}]}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = never_responds
     monkeypatch.setitem(
@@ -1420,7 +1422,7 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     cache.embedding_max_input_tokens = 5
     cache.embedding_timeout = 5
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_configured_token_limits.return_value = (8191, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     _proxy_with_router(monkeypatch, router, "sem-embed")

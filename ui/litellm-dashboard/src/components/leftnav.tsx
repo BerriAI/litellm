@@ -1,21 +1,16 @@
+import { SidebarBrand } from "@/components/shared/SidebarBrand";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
-import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
-import { getProxyBaseUrl } from "@/components/networking";
 import { useTerminology } from "@/contexts/TerminologyContext";
-import { useTheme } from "@/contexts/ThemeContext";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -46,8 +41,6 @@ import {
   LayoutGrid,
   Network,
   Palette,
-  PanelLeftClose,
-  PanelLeftOpen,
   PiggyBank,
   PlayCircle,
   Route,
@@ -67,6 +60,8 @@ import {
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
@@ -86,14 +81,6 @@ import SidebarUsageCard from "./SidebarUsageCard";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 
 const ICON = { strokeWidth: 1.75 } as const;
-
-const LOGO_CLASS_NAME =
-  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-7 group-data-[collapsed=true]/sidebar:w-7";
-
-function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
-  const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
-  return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
-}
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -298,6 +285,13 @@ const menuGroups: MenuGroup[] = [
         label: "Usage",
       },
       {
+        key: "alerts",
+        page: "alerts",
+        label: "Alerts",
+        icon: <Bell {...ICON} />,
+        roles: rolesWithCapability("viewGlobalSpend"),
+      },
+      {
         key: "model-insights",
         page: "model-insights",
         icon: <Trophy {...ICON} />,
@@ -414,14 +408,6 @@ const menuGroups: MenuGroup[] = [
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
-          {
-            key: "4",
-            page: "usage",
-            route: "old-usage",
-            label: "Old Usage",
-            icon: <BarChart3 {...ICON} />,
-            roles: rolesWithCapability("viewGlobalSpend"),
-          },
         ],
       },
     ],
@@ -526,6 +512,7 @@ export const labelText = (item: MenuItem): string => (typeof item.label === "str
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
+  if (route === "aria") return { section: null, title: "Aria Agent" };
   for (const group of menuGroups) {
     for (const item of group.items) {
       const section = sectionText(group.groupLabel);
@@ -552,15 +539,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(item.label) : item.label);
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
-  const { logoUrl, logoUrlDark } = useTheme();
-  const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
-  const baseUrl = getProxyBaseUrl();
-  const version = healthData?.litellm_version;
   const currentRoute = routeForPathname(usePathname());
-  const selectedKey = findMenuItemKey(currentRoute);
+  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const parent = findParentKey(currentRoute);
@@ -695,49 +677,14 @@ const Sidebar_: React.FC<SidebarProps> = ({
     );
   };
 
-  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
-  const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
-
   return (
     <Sidebar collapsed={collapsed}>
-      <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
-        <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
-          <div className="flex min-w-0 items-center gap-2">
-            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
-              <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
-              <img
-                src={darkLogoSrc}
-                alt=""
-                aria-hidden
-                onError={() => setErroredDarkLogo(logoUrlDark)}
-                className={cn(LOGO_CLASS_NAME, "hidden dark:block")}
-              />
-            </Link>
-            {version && (
-              <Badge
-                variant="outline"
-                render={<a href="https://docs.litellm.ai/release_notes" target="_blank" rel="noopener noreferrer" />}
-                className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsed=true]/sidebar:hidden"
-              >
-                v{version}
-              </Badge>
-            )}
-          </div>
-          {onToggleCollapsed && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={onToggleCollapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="flex-none text-muted-foreground"
-            >
-              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-            </Button>
-          )}
-        </div>
-      </SidebarHeader>
+      <SidebarBrand accessToken={accessToken} collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
 
+      <div className="space-y-1 px-3 pt-3 pb-1">
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
+        <AriaSidebarLink active={currentRoute === "aria"} />
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <nav className="flex flex-col gap-0.5 px-3 pb-3">
           {visibleGroups.map((group, gi) => (

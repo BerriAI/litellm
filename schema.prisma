@@ -1163,6 +1163,7 @@ model LiteLLM_ManagedFileTable {
   @@index([unified_file_id])
   @@index([flat_model_file_ids], type: Gin)
   @@index([team_id, created_at(sort: Desc)])
+  @@index([created_by, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the
@@ -1614,8 +1615,17 @@ model LiteLLM_ClaudeCodePluginTable {
   updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
 
+  uploaded_archive LiteLLM_ClaudeCodePluginUpload?
+
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+model LiteLLM_ClaudeCodePluginUpload {
+  plugin_name String @id
+  content     Bytes
+  plugin      LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_name], references: [name], onDelete: Cascade, onUpdate: Cascade)
+}
+
 
 // User/team-scoped memory store with a GLOBAL unique key.
 // `value` is a string (typically markdown/text meant for LLM context);
@@ -2059,4 +2069,43 @@ model LiteLLM_TelemetryReport {
 
   @@index([window_end])
   @@index([created_at])
+}
+
+enum AccountingDeliveryState {
+  pending
+  applied
+  parked
+}
+
+model LiteLLM_SpendLogDelivery {
+  delivery_id        String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
+  request_id         String
+  state              AccountingDeliveryState @default(pending)
+  accounting_payload Json
+  is_batch           Boolean
+  attempts           Int                     @default(0)
+  next_attempt_at    DateTime                @default(now())
+  applied_at         DateTime?
+  last_error         String?
+  created_at         DateTime                @default(now())
+
+  @@index([state, next_attempt_at])
+  @@index([state, applied_at])
+  @@index([request_id])
+}
+
+model LiteLLM_SubscriptionAccountTable {
+  subscription_account_id String @id @default(uuid())
+  custom_llm_provider String
+  account_id String
+  label String?
+  monthly_fee Float
+  currency String
+  billing_period_start String
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+
+  @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
 }

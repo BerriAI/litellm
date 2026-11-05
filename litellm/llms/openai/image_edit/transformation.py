@@ -96,7 +96,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """
         # Build request params, only including non-None values
         request_params: Final = {
-            "model": model,
+            **({"model": model} if model else {}),
             **image_edit_optional_request_params,
         }
         if image is not None:
