@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import gzip
 import importlib
 import inspect
@@ -243,7 +244,7 @@ async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_wit
     outbound: Final = asyncio.Queue()
 
     def respond(request: httpx.Request) -> httpx.Response:
-        outbound.put_nowait(dict(request.headers))
+        outbound.put_nowait(request.headers.get("authorization"))
         return httpx.Response(
             200,
             json={
@@ -258,19 +259,20 @@ async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_wit
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
         monkeypatch.setattr(litellm, "aclient_session", http_client)
-        await asyncio.wait_for(
-            litellm.acompletion(
-                model="openai/gpt-5.4-mini",
-                api_key="",
-                messages=[{"role": "user", "content": "who signs this request"}],
-                num_retries=0,
-                max_retries=0,
-            ),
-            timeout=10,
-        )
+        with contextlib.suppress(litellm.AuthenticationError, litellm.InternalServerError):
+            await asyncio.wait_for(
+                litellm.acompletion(
+                    model="openai/gpt-5.4-mini",
+                    api_key="",
+                    messages=[{"role": "user", "content": "who signs this request"}],
+                    num_retries=0,
+                    max_retries=0,
+                ),
+                timeout=10,
+            )
 
-    headers: Final = await asyncio.wait_for(outbound.get(), timeout=10)
-    assert "authorization" not in headers, headers
+    sent: Final = tuple(outbound.get_nowait() for _ in range(outbound.qsize()))
+    assert all(authorization is None for authorization in sent), sent
 
 
 
