@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections import ChainMap
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from typing import Final
 
 import httpx
@@ -84,12 +84,18 @@ def _fetching_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _source(
-    tree: _RawTree, clock: _Clock | None = None, *, retry_seconds: float = 300.0, cached_versions: int = 16
+    tree: _RawTree,
+    clock: _Clock | None = None,
+    *,
+    retry_seconds: float = 300.0,
+    refresh_seconds: float = 3600.0,
+    cached_versions: int = 16,
 ) -> CodexCatalogSource:
     return CodexCatalogSource(
         client=tree,
         clock=clock if clock is not None else _Clock(),
         retry_seconds=retry_seconds,
+        refresh_seconds=refresh_seconds,
         cached_versions=cached_versions,
     )
 
@@ -283,7 +289,7 @@ def test_an_openai_key_fetches_the_live_catalog_from_openai_with_that_key_and_sk
     stock: Final = asyncio.run(_source(tree).stock(RELEASE, openai_api_key=OPENAI_KEY))
     entry: Final = _entry(stock.models, stock.instructions, FRESH_SLUG)
     assert stock.source == f"openai {RELEASE}" and stock.instructions == codex_base_instructions(), stock.source
-    assert entry["shell_type"] == "unified_exec", entry
+    assert entry["shell_type"] == "unified_exec" and entry["base_instructions"] == "# OpenAI live prompt", entry
     assert tree.calls == [_openai_url(RELEASE)] and tree.headers == [{"Authorization": f"Bearer {OPENAI_KEY}"}]
 
 
@@ -417,3 +423,121 @@ def test_catalogs_fetched_with_different_openai_keys_are_cached_apart() -> None:
         {"Authorization": f"Bearer {OPENAI_KEY}"},
         {"Authorization": "Bearer sk-unit-other-key"},
     ], tree.headers
+
+
+def _settled() -> Awaitable[list[object]]:
+    return asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()}))
+
+
+def _openai_catalog(display_name: str) -> bytes:
+    return json.dumps({"models": [{**OPENAI_ENTRY, "display_name": display_name}]}).encode()
+
+
+def test_openai_catalog_is_fetched_again_after_the_refresh_window_and_a_failed_refresh_keeps_the_last_one() -> None:
+    tree: Final = _RawTree({_openai_url(RELEASE): (200, _openai_catalog("First"))})
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, refresh_seconds=3600)
+
+    async def names() -> list[str]:
+        await _settled()
+        return [
+            model.display_name for model in (await source.stock(RELEASE, openai_api_key=OPENAI_KEY)).models.values()
+        ]
+
+    async def scenario() -> tuple[list[str], ...]:
+        first: Final = await names()
+        clock.now += 3599
+        tree.replies = {_openai_url(RELEASE): (200, _openai_catalog("Second"))}
+        inside_window: Final = await names()
+        clock.now += 2
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        refreshed: Final = await names()
+        clock.now += 3601
+        tree.replies = {}
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        refresh_failed: Final = await names()
+        clock.now += 301
+        tree.replies = {_openai_url(RELEASE): (200, _openai_catalog("Third"))}
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        retried: Final = await names()
+        return first, inside_window, refreshed, refresh_failed, retried
+
+    assert asyncio.run(asyncio.wait_for(scenario(), timeout=30)) == (
+        ["First"],
+        ["First"],
+        ["Second"],
+        ["Second"],
+        ["Third"],
+    )
+
+
+def test_a_github_answer_after_openai_failed_asks_openai_again_after_the_retry_window() -> None:
+    tree: Final = _RawTree({**_tree(RELEASE), _openai_url(RELEASE): (500, b"{}")})
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, refresh_seconds=3600)
+
+    async def scenario() -> tuple[str, str, str]:
+        first: Final = await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        clock.now += 299
+        inside_window: Final = await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        clock.now += 2
+        tree.replies = {_openai_url(RELEASE): (200, OPENAI_CATALOG)}
+        await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        await _settled()
+        recovered: Final = await source.stock(RELEASE, openai_api_key=OPENAI_KEY)
+        return first.source, inside_window.source, recovered.source
+
+    assert asyncio.run(asyncio.wait_for(scenario(), timeout=30)) == (
+        f"github rust-v{RELEASE}",
+        f"github rust-v{RELEASE}",
+        f"openai {RELEASE}",
+    )
+    assert tree.calls.count(_openai_url(RELEASE)) == 2, tree.calls
+
+
+def test_a_release_tag_fetched_without_an_openai_key_is_never_fetched_again() -> None:
+    tree: Final = _RawTree(_tree(RELEASE))
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, refresh_seconds=3600)
+
+    async def scenario() -> str:
+        await source.stock(RELEASE)
+        clock.now += 10 * 3600
+        await source.stock(RELEASE)
+        await _settled()
+        return (await source.stock(RELEASE)).source
+
+    assert asyncio.run(asyncio.wait_for(scenario(), timeout=30)) == f"github rust-v{RELEASE}"
+    assert len(tree.calls) == 2, tree.calls
+
+
+def test_openai_entries_drop_the_prompt_copy_of_their_template_so_a_codex_capped_at_1_mib_lists_every_model() -> None:
+    prompt: Final = "p" * 21_000
+    slugs: Final = tuple(f"gpt-big-{index}" for index in range(34))
+    catalog: Final = json.dumps(
+        {
+            "models": [
+                {
+                    **OPENAI_ENTRY,
+                    "slug": slug,
+                    "base_instructions": prompt,
+                    "model_messages": {"instructions_template": prompt},
+                }
+                for slug in slugs
+            ]
+        }
+    ).encode()
+    tree: Final = _RawTree({_openai_url("0.165.0"): (200, catalog)})
+    stock: Final = asyncio.run(_source(tree).stock("0.165.0", openai_api_key=OPENAI_KEY))
+    body: Final = codex_models_response_json(
+        tuple(CodexCatalogRow(id=slug, mode="responses") for slug in slugs),
+        stock=stock.models,
+        instructions=stock.instructions,
+        client_version="0.165.0",
+    )
+    entries: Final = JSON_OBJECT.validate_json(body.json)["models"]
+    assert isinstance(entries, list)
+    listed: Final = tuple(map(object_value, entries))
+    assert tuple(entry["slug"] for entry in listed) == slugs
+    assert all(entry["base_instructions"] == "" for entry in listed), listed[0]["base_instructions"]
+    assert all(object_value(entry["model_messages"])["instructions_template"] == prompt for entry in listed)

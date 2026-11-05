@@ -586,17 +586,36 @@ OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_HOST_SUFFIX: Final = "openai.com"
 
 
-def _is_openai_origin(api_base: object) -> bool:
+_DEPLOYMENT_BASE_PARAMS: Final = ("api_base", "base_url")
+
+
+def _is_openai_host(url: object) -> bool:
+    host: Final = urlparse(url).hostname if isinstance(url, str) else None
+    return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_HOST_SUFFIX}"))
+
+
+def _is_openai_origin(bases: Sequence[object]) -> bool:
     """Whether a deployment's OpenAI requests go to OpenAI itself, so its key may go to OpenAI's catalog
-    endpoint: its own api_base, else the global `litellm.api_base`, `OPENAI_BASE_URL` or `OPENAI_API_BASE`
-    override the OpenAI handler would apply, else OpenAI."""
+    endpoint: every `api_base` and `base_url` the deployment and its credential set, else the global
+    `litellm.api_base`, `OPENAI_BASE_URL` or `OPENAI_API_BASE` override the OpenAI handler would apply, else
+    OpenAI."""
     import litellm  # noqa: PLC0415  # litellm imports this module while it is initializing, so the global is read late
 
-    resolved: Final = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-    if not resolved:
-        return True
-    host: Final = urlparse(resolved).hostname if isinstance(resolved, str) else None
-    return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_HOST_SUFFIX}"))
+    named: Final = tuple(filter(None, bases))
+    if named:
+        return all(map(_is_openai_host, named))
+    fallback: Final = litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    return not fallback or _is_openai_host(fallback)
+
+
+def _credential_values(name: object) -> Mapping[str, object]:
+    if not isinstance(name, str) or not name:
+        return MappingProxyType({})
+    from litellm.litellm_core_utils.credential_accessor import (
+        CredentialAccessor,  # noqa: PLC0415  # credential_accessor imports litellm, which imports this module
+    )
+
+    return MappingProxyType(CredentialAccessor.get_credential_values(name))
 
 
 def _deployment_provider(params: Mapping[str, object]) -> str:
@@ -617,11 +636,19 @@ def _deployment_provider(params: Mapping[str, object]) -> str:
 
 
 def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
+    """The key a deployment sends OpenAI, its named credential's values overriding its own the way the call
+    path merges them, when every base either one sets is OpenAI's."""
     params: Final = MappingProxyType[str, object](deployment["litellm_params"])
-    api_key: Final = params.get("api_key")
+    credential: Final = _credential_values(params.get("litellm_credential_name"))
+    effective: Final = MappingProxyType({**params, **credential})
+    bases: Final = (
+        *(params.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
+        *(credential.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
+    )
+    api_key: Final = effective.get("api_key")
     if (
-        _deployment_provider(params) != "openai"
-        or not _is_openai_origin(params.get("api_base"))
+        _deployment_provider(effective) != "openai"
+        or not _is_openai_origin(bases)
         or not isinstance(api_key, str)
         or not api_key
     ):
@@ -634,7 +661,7 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
 
 
 def _environment_openai_key() -> str | None:
-    return (os.getenv("OPENAI_API_KEY") or None) if _is_openai_origin(None) else None
+    return (os.getenv("OPENAI_API_KEY") or None) if _is_openai_origin(()) else None
 
 
 def codex_catalog_openai_key(
@@ -643,9 +670,9 @@ def codex_catalog_openai_key(
     team_id: str | None = None,
 ) -> str | None:
     """The OpenAI API key the catalog fetch authenticates with: the first one among the listed entries'
-    deployments that routes to OpenAI with no api_base or OpenAI's own, else ``OPENAI_API_KEY`` from the
-    environment unless ``OPENAI_BASE_URL`` points elsewhere. A key for an OpenAI-compatible server never
-    leaves for OpenAI."""
+    deployments that routes to OpenAI with every `api_base` and `base_url` it or its credential sets being
+    OpenAI's own, else ``OPENAI_API_KEY`` from the environment unless ``OPENAI_BASE_URL`` points elsewhere. A key
+    for an OpenAI-compatible server never leaves for OpenAI."""
     registry: Final = llm_router.registry() if llm_router is not None else None
     deployments: Final = (
         tuple(

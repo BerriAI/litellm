@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     codex_models_response_json,
     configured_service_tiers,
 )
+from litellm.types.utils import CredentialItem
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -1039,3 +1040,42 @@ def test_a_key_for_an_openai_compatible_server_or_a_redirected_environment_never
     assert codex_catalog_openai_key(router, entries[:2]) is None
     monkeypatch.setattr(litellm, "api_base", None)
     assert codex_catalog_openai_key(router, entries[:2]) == "sk-through-the-gateway"
+
+
+def test_a_base_url_or_a_credential_naming_another_server_keeps_the_key_from_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="internal-server",
+                credential_values={
+                    "api_key": "sk-internal-credential",
+                    "api_base": "https://inference.internal.example/v1",
+                },
+                credential_info={},
+            ),
+            CredentialItem(
+                credential_name="openai-org", credential_values={"api_key": "sk-openai-credential"}, credential_info={}
+            ),
+        ],
+    )
+    router: Final = _router_with(
+        {
+            "model": "openai/gpt-5.5",
+            "api_key": "sk-base-url-server",
+            "base_url": "https://inference.internal.example/v1",
+        },
+        {"model": "openai/gpt-5.5", "litellm_credential_name": "internal-server"},
+        {"model": "openai/gpt-5.5", "api_key": "sk-own-key", "litellm_credential_name": "internal-server"},
+        {"model": "openai/gpt-5.5", "litellm_credential_name": "openai-org"},
+    )
+    entries: Final = [(f"catalog-model-{index}", f"catalog-model-{index}") for index in range(4)]
+    assert codex_catalog_openai_key(router, entries[:3]) is None
+    assert codex_catalog_openai_key(router, entries) == "sk-openai-credential"

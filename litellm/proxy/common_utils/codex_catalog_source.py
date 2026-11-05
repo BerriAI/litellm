@@ -2,18 +2,24 @@
 
 Codex pointed at ``/v1/models`` as its ``model_catalog_url`` replaces its bundled catalog with ours, so a
 model missing from the stock entries we serve runs on Codex's fallback metadata (no apply_patch tool, no
-parallel tool calls, a generic prompt). openai/codex publishes every release's entries at
+parallel tool calls, a generic prompt). With an OpenAI key at hand the catalog for the exact
+``client_version`` asking comes from OpenAI's ``CODEX_CATALOG_OPENAI_URL``, minus the ``base_instructions``
+copy of each entry's ``model_messages.instructions_template`` (every tagged Codex reads the template first,
+and the copy doubles a catalog that Codex before 0.166.0 drops past 1 MiB), and is fetched again after
+``CODEX_CATALOG_REFRESH_SECONDS``. Otherwise, or when OpenAI does not answer, it is the release's entries
+openai/codex publishes at
 ``https://raw.githubusercontent.com/openai/codex/rust-v<version>/codex-rs/models-manager/models.json``
-(Apache-2.0) with its ``prompt.md`` beside them, so the pair for the exact ``client_version`` asking is
-fetched once and kept for the life of the process, since a release tag never changes. A version without a
-tag (before 0.120, or not released yet), a fetch that fails, a body that does not parse, a request the
-fetch outlasts by ``CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS`` (Codex gives up on its catalog after five),
+(Apache-2.0) with its ``prompt.md`` beside them, kept for the life of the process since a release tag never
+changes, and OpenAI is asked again after ``CODEX_CATALOG_RETRY_SECONDS``. A version without a tag (before
+0.120, or not released yet), a fetch that fails, a body that does not parse, a request the fetch outlasts by
+``CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS`` (Codex gives up on its catalog after five),
 ``LITELLM_OFFLINE_MODE`` and ``LITELLM_LOCAL_CODEX_CATALOG=True`` all serve the vendored pair instead. A
-failed fetch is tried again in the background after ``CODEX_CATALOG_RETRY_SECONDS`` while its vendored pair
-keeps answering, and at most ``CODEX_CATALOG_CACHED_VERSIONS`` fetches start per retry window, so made-up
-versions cannot turn requests into outbound calls. ``LITELLM_CODEX_CATALOG_BASE_URL`` points the fetch at a
-mirror of the openai/codex raw tree, and an empty ``LITELLM_CODEX_CATALOG_OPENAI_URL`` keeps the OpenAI key
-home by skipping OpenAI's catalog.
+failed fetch is tried again in the background after ``CODEX_CATALOG_RETRY_SECONDS`` while the last catalog
+fetched for that release, else the vendored pair, keeps answering, and at most
+``CODEX_CATALOG_CACHED_VERSIONS`` fetches start per retry window, so made-up versions cannot turn requests
+into outbound calls. ``LITELLM_CODEX_CATALOG_BASE_URL`` points the fetch at a mirror of the openai/codex raw
+tree, and an empty ``LITELLM_CODEX_CATALOG_OPENAI_URL`` keeps the OpenAI key home by skipping OpenAI's
+catalog.
 """
 
 from __future__ import annotations
@@ -23,14 +29,14 @@ import os
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
 import httpx
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
@@ -39,13 +45,16 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BUNDLED_VERSION,
     CodexStock,
     CodexStockCatalog,
+    CodexStockModel,
     bundled_codex_models,
     codex_base_instructions,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 CODEX_CATALOG_OPENAI_URL: Final = "https://chatgpt.com/backend-api/codex/models"
 CODEX_CATALOG_BASE_URL: Final = "https://raw.githubusercontent.com/openai/codex"
 CODEX_CATALOG_RETRY_SECONDS: Final = 300.0
+CODEX_CATALOG_REFRESH_SECONDS: Final = 3600.0
 CODEX_CATALOG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS: Final = 3.0
 CODEX_CATALOG_MAX_BYTES: Final = 16 * 1024 * 1024
@@ -71,12 +80,35 @@ class _AsyncGetClient(Protocol):
 @dataclass(frozen=True, slots=True)
 class _Cached:
     stock: CodexStock
-    retry_at: float | None
+    refetch_at: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Fetched:
+    stock: CodexStock
+    refetch_after: float | None
 
 
 @dataclass(frozen=True, slots=True)
 class _FetchFailed:
     reason: str
+
+
+class _ModelMessages(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    instructions_template: str | None = None
+
+
+def _without_instructions_copy(model: CodexStockModel) -> CodexStockModel:
+    """`model` without the `base_instructions` OpenAI mirrors from its `model_messages.instructions_template`,
+    the way openai/codex's own models.json ships it."""
+    extra: Final[Mapping[str, object]] = model.model_extra or {}
+    try:
+        messages: Final = _ModelMessages.model_validate(extra.get("model_messages"))
+    except ValidationError:
+        return model
+    return model.model_copy(update={"base_instructions": ""}) if messages.instructions_template else model
 
 
 def _default_client() -> _AsyncGetClient:
@@ -103,7 +135,8 @@ def uses_vendored_codex_catalog() -> bool:
 
 def codex_release_tag(client_version: str | None) -> str | None:
     """The openai/codex tag the Codex sending `client_version` was built from, None when the value is no
-    release version (Codex sends its crate version, `0.166.0` or `0.167.0-alpha.4`)."""
+    release version. Codex sends its version without a pre-release suffix, so an alpha build of 0.167.0 asks
+    for `rust-v0.167.0`, which has no tag until that release ships."""
     if client_version is None or _RELEASE_VERSION.match(client_version) is None:
         return None
     return f"rust-v{client_version}"
@@ -112,7 +145,7 @@ def codex_release_tag(client_version: str | None) -> str | None:
 class CodexCatalogSource:
     """Resolves the stock catalog for a `client_version`, one fetch per release tag, concurrent requests
     for the same tag sharing that fetch. `client` is the HTTP client the fetch goes through (LiteLLM's
-    shared async client when None), `clock` the monotonic clock that times failed-fetch retries."""
+    shared async client when None), `clock` the monotonic clock that times retries and refreshes."""
 
     def __init__(
         self,
@@ -122,6 +155,7 @@ class CodexCatalogSource:
         openai_url: str | None = None,
         clock: Callable[[], float] = time.monotonic,
         retry_seconds: float = CODEX_CATALOG_RETRY_SECONDS,
+        refresh_seconds: float = CODEX_CATALOG_REFRESH_SECONDS,
         timeout: float = CODEX_CATALOG_FETCH_TIMEOUT_SECONDS,
         response_deadline: float = CODEX_CATALOG_RESPONSE_DEADLINE_SECONDS,
         cached_versions: int = CODEX_CATALOG_CACHED_VERSIONS,
@@ -137,6 +171,7 @@ class CodexCatalogSource:
         )
         self._clock = clock
         self._retry_seconds = retry_seconds
+        self._refresh_seconds = refresh_seconds
         self._timeout = timeout
         self._response_deadline = response_deadline
         self._cached_versions = cached_versions
@@ -154,7 +189,7 @@ class CodexCatalogSource:
         cached: Final = self._cache.get(slot)
         if cached is not None:
             self._cache.move_to_end(slot)
-            if cached.retry_at is not None and cached.retry_at <= self._clock():
+            if cached.refetch_at is not None and cached.refetch_at <= self._clock():
                 self._fetching(slot, tag, client_version, openai_api_key)
             return cached.stock
         fetch: Final = self._fetching(slot, tag, client_version, openai_api_key)
@@ -198,38 +233,51 @@ class CodexCatalogSource:
 
     async def _resolve(self, slot: _CacheSlot, tag: str, version: str, openai_api_key: str | None) -> CodexStock:
         fetched: Final = await self._fetch(tag, version, openai_api_key)
+        previous: Final = self._cache.get(slot)
+        now: Final = self._clock()
+        entry: Final = (
+            _Cached(
+                stock=previous.stock if previous is not None else vendored_codex_stock(),
+                refetch_at=now + self._retry_seconds,
+            )
+            if isinstance(fetched, _FetchFailed)
+            else _Cached(
+                stock=fetched.stock,
+                refetch_at=None if fetched.refetch_after is None else now + fetched.refetch_after,
+            )
+        )
         if isinstance(fetched, _FetchFailed):
             verbose_proxy_logger.warning(
                 "Codex catalog %s not fetched (%s), serving the %s one for the next %.0fs",
                 tag,
                 fetched.reason,
-                vendored_codex_stock().source,
+                entry.stock.source,
                 self._retry_seconds,
             )
         else:
             verbose_proxy_logger.info(
-                "Codex catalog %s fetched from %s, %d models", tag, fetched.source, len(fetched.models)
+                "Codex catalog %s fetched from %s, %d models", tag, entry.stock.source, len(entry.stock.models)
             )
-        entry: Final = (
-            _Cached(stock=vendored_codex_stock(), retry_at=self._clock() + self._retry_seconds)
-            if isinstance(fetched, _FetchFailed)
-            else _Cached(stock=fetched, retry_at=None)
-        )
         self._cache[slot] = entry
         self._cache.move_to_end(slot)
         while len(self._cache) > self._cached_versions:
             self._cache.popitem(last=False)
         return entry.stock
 
-    async def _fetch(self, tag: str, version: str, openai_api_key: str | None) -> CodexStock | _FetchFailed:
-        if openai_api_key and self._openai_url:
-            fetched: Final = await self._fetch_openai(version, openai_api_key)
-            if not isinstance(fetched, _FetchFailed):
-                return fetched
-            verbose_proxy_logger.info(
-                "Codex catalog %s not fetched from OpenAI (%s), trying GitHub", tag, fetched.reason
-            )
-        return await self._fetch_github(tag)
+    async def _fetch(self, tag: str, version: str, openai_api_key: str | None) -> _Fetched | _FetchFailed:
+        if not openai_api_key or not self._openai_url:
+            github: Final = await self._fetch_github(tag)
+            return github if isinstance(github, _FetchFailed) else _Fetched(stock=github, refetch_after=None)
+        openai: Final = await self._fetch_openai(version, openai_api_key)
+        if not isinstance(openai, _FetchFailed):
+            return _Fetched(stock=openai, refetch_after=self._refresh_seconds)
+        verbose_proxy_logger.info("Codex catalog %s not fetched from OpenAI (%s), trying GitHub", tag, openai.reason)
+        fallback: Final = await self._fetch_github(tag)
+        return (
+            fallback
+            if isinstance(fallback, _FetchFailed)
+            else _Fetched(stock=fallback, refetch_after=self._retry_seconds)
+        )
 
     async def _fetch_openai(self, version: str, openai_api_key: str) -> CodexStock | _FetchFailed:
         url: Final = f"{self._openai_url}?client_version={version}"
@@ -243,7 +291,7 @@ class CodexCatalogSource:
         if not catalog.models:
             return _FetchFailed(reason=f"{url} catalog is empty")
         return CodexStock(
-            models=MappingProxyType({model.slug: model for model in catalog.models}),
+            models=MappingProxyType({model.slug: _without_instructions_copy(model) for model in catalog.models}),
             instructions=codex_base_instructions(),
             source=f"openai {version}",
         )
