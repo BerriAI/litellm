@@ -281,8 +281,12 @@ impl Core {
         // No deployment for the name: route to the first default fallback.
         let default_target = crate::resolve::default_target(&snapshot.settings.dynamic);
         // `get_pattern`: a name no pattern matches is tried again under its inferred provider.
-        let wildcard_name =
-            crate::resolve::wildcard_name(registry, name, request.specific_deployment);
+        let wildcard_name = crate::resolve::wildcard_name(
+            registry,
+            name,
+            request.specific_deployment,
+            request.team_id.as_deref(),
+        );
         let wildcard_request = match wildcard_name {
             Some(model) => {
                 let scope = StrategyScope::Default;
