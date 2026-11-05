@@ -217,6 +217,26 @@ def test_future_metrics_with_end_user_are_filtered():
         litellm.enable_end_user_cost_tracking_prometheus_only = original_setting
 
 
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_prometheus_config_panel_obeys_suppress_startup_output(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], suppressed: bool
+):
+    """The processed-config panel is a startup print like the banner, so suppress_startup_output turns it off
+    while the label filters still load."""
+    clear_prometheus_registry()
+    monkeypatch.setattr(litellm, "suppress_startup_output", suppressed)
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [{"group": "service_metrics", "metrics": ["litellm_deployment_total_requests"], "include_labels": ["team"]}],
+    )
+
+    label_filters = PrometheusLogger()._parse_prometheus_config()
+
+    assert label_filters["litellm_deployment_total_requests"] == ["team"]
+    assert ("Prometheus Configuration Processed" in capfd.readouterr().out) is not suppressed
+
+
 def test_prometheus_config_parsing():
     """Test that prometheus metrics configuration is parsed correctly"""
     # Clear registry before test

@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
@@ -347,7 +348,14 @@ class _BatchInputLine:
     record: _OpenAIBatchRecord
 
 
-_BATCH_RECORD_CONVERSION_ERRORS: Final = (AttributeError, LookupError, TypeError, ValueError, BadRequestError)
+_BATCH_RECORD_CONVERSION_ERRORS: Final = (
+    AttributeError,
+    LookupError,
+    TypeError,
+    ValueError,
+    BadRequestError,
+    AnthropicError,
+)
 
 
 def _batch_line_error(line_number: int, problem: str) -> BedrockError:

@@ -1250,7 +1250,7 @@ mod tests {
     #[tokio::test]
     async fn request_endpoint_accepts_request_owned_key() {
         let connection = OcrConnection {
-            api_key: Some(litellm_auth::SecretValue::new("request-key")),
+            api_key: Some(litellm_secret_value::SecretValue::new("request-key")),
             api_key_source: InputSource::Request,
             api_base: Some("https://request.example".into()),
             api_base_source: InputSource::Request,

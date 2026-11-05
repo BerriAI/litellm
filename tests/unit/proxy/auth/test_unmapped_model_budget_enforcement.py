@@ -759,15 +759,16 @@ class TestUnmappedModelBudgetEnforcement:
         from litellm.types.router import ModelGroupInfo
 
         mock_router = MagicMock(spec=Router)
-        mock_router.model_list = []
-        mock_router.get_model_group_info.return_value = ModelGroupInfo(
+        registry = mock_router.registry.return_value
+        registry.all.return_value = []
+        registry.group.return_value = ModelGroupInfo(
             model_group="paid-model",
             providers=["openai"],
             input_cost_per_token=0.001,
             output_cost_per_token=0.002,
         )
-        # Strip the attribute so the helper falls back to the no-cache path.
-        del mock_router._zero_cost_cache
+        # No zero-cost cache exposed, so the helper falls back to the no-cache path.
+        registry.zero_cost.return_value = None
 
         result = is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
