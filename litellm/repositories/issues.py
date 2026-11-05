@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
 from litellm.types.proxy.issues import (
     Issue,
+    IssueCohort,
     IssueDeliveryBinding,
     IssueDeliveryInput,
     IssueFamily,
@@ -54,8 +55,13 @@ class _Identifier(BaseModel, frozen=True):
 
 
 _ACK: Final = "CASE WHEN jsonb_typeof(c.param_value)='string' THEN (c.param_value#>>'{}')::jsonb ELSE c.param_value END"
+_ACK_CURRENT: Final = f"""(({_ACK})->>'last_seen_date' > i.record->'deprecation'->>'last_used_date'
+    OR (({_ACK})->>'last_seen_date' = i.record->'deprecation'->>'last_used_date'
+        AND COALESCE((({_ACK})->>'last_seen_requests')::bigint,0)
+            >= (i.record->'deprecation'->>'last_day_requests')::bigint))"""
 _STATUS: Final = f"""CASE WHEN i.kind <> 'model_deprecation' THEN i.status
-    WHEN NOT i.active THEN CASE WHEN ({_ACK})->>'status'='dismissed' THEN 'dismissed' ELSE 'resolved' END
+    WHEN NOT i.active THEN CASE WHEN ({_ACK})->>'status'='dismissed' AND ({_ACK_CURRENT})
+        THEN 'dismissed' ELSE 'resolved' END
     WHEN COALESCE(({_ACK})->>'status','open')='open'
         OR ({_ACK})->>'last_seen_date' IS NULL
         OR i.record->'deprecation'->>'last_used_date' > ({_ACK})->>'last_seen_date'
@@ -63,6 +69,7 @@ _STATUS: Final = f"""CASE WHEN i.kind <> 'model_deprecation' THEN i.status
             AND (i.record->'deprecation'->>'last_day_requests')::bigint
                 > COALESCE((({_ACK})->>'last_seen_requests')::bigint,0)) THEN 'open'
     ELSE ({_ACK})->>'status' END"""
+_PRIOR_STATUS: Final = _STATUS.replace(_ACK, _ACK.replace("c.param_value", "prior.param_value"))
 _JOIN: Final = 'FROM "LiteLLM_Issue" i LEFT JOIN "LiteLLM_Config" c ON c.param_name=i.ack_key'
 _RECORD: Final = f"""i.record || jsonb_build_object('status',({_STATUS}),'active',i.active,
     'first_seen',i.first_seen AT TIME ZONE 'UTC','last_seen',i.last_seen AT TIME ZONE 'UTC',
@@ -226,6 +233,7 @@ class IssuesRepository:
             await self.database.query_raw(
                 f"""WITH candidate AS MATERIALIZED (
                     SELECT i.*,({_STATUS}) AS effective_status {_JOIN} WHERE i.id=$1
+                        AND NOT(i.kind='model_deprecation' AND NOT i.active AND $2='open')
                 ), ack AS (
                     INSERT INTO "LiteLLM_Config" AS prior (param_name,param_value)
                     SELECT ack_key,jsonb_build_object('model',record->'deprecation'->>'usage_model',
@@ -235,13 +243,8 @@ class IssuesRepository:
                         'updated_at',CURRENT_TIMESTAMP,'updated_by',$4::text)
                     FROM candidate WHERE kind='model_deprecation' AND effective_status=$3
                     ON CONFLICT(param_name) DO UPDATE SET param_value=EXCLUDED.param_value
-                    WHERE (CASE WHEN COALESCE((CASE WHEN jsonb_typeof(prior.param_value)='string' THEN (prior.param_value#>>'{{}}')::jsonb ELSE prior.param_value END)->>'status','open')='open'
-                        OR (CASE WHEN jsonb_typeof(prior.param_value)='string' THEN (prior.param_value#>>'{{}}')::jsonb ELSE prior.param_value END)->>'last_seen_date' IS NULL
-                        OR EXCLUDED.param_value->>'last_seen_date' > (CASE WHEN jsonb_typeof(prior.param_value)='string' THEN (prior.param_value#>>'{{}}')::jsonb ELSE prior.param_value END)->>'last_seen_date'
-                        OR (EXCLUDED.param_value->>'last_seen_date'=(CASE WHEN jsonb_typeof(prior.param_value)='string' THEN (prior.param_value#>>'{{}}')::jsonb ELSE prior.param_value END)->>'last_seen_date'
-                            AND (EXCLUDED.param_value->>'last_seen_requests')::bigint
-                                > COALESCE(((CASE WHEN jsonb_typeof(prior.param_value)='string' THEN (prior.param_value#>>'{{}}')::jsonb ELSE prior.param_value END)->>'last_seen_requests')::bigint,0))
-                        THEN 'open' ELSE (CASE WHEN jsonb_typeof(prior.param_value)='string' THEN (prior.param_value#>>'{{}}')::jsonb ELSE prior.param_value END)->>'status' END)=$3
+                    WHERE EXISTS(SELECT 1 FROM candidate i WHERE i.ack_key=prior.param_name
+                        AND ({_PRIOR_STATUS})=$3)
                     RETURNING param_name
                 ) UPDATE "LiteLLM_Issue" i SET status=$2,updated_at=CURRENT_TIMESTAMP
                 FROM candidate c WHERE i.id=c.id AND c.effective_status=$3 AND
@@ -269,25 +272,36 @@ class IssuesRepository:
             """INSERT INTO "LiteLLM_IssueSignal" (issue_id,source,source_id,record)
             SELECT DISTINCT ON(x->>'issue_id',x->>'source',x->>'source_id')
                 x->>'issue_id',x->>'source',x->>'source_id',x FROM jsonb_array_elements($1::jsonb) x
-            WHERE EXISTS(SELECT 1 FROM "LiteLLM_Issue" i WHERE i.id=x->>'issue_id'
-                AND (i.scope_type NOT IN ('key','team','user') OR
-                    (x->'usage_alert'->>'scope_type'=i.scope_type
-                     AND x->'usage_alert'->>'scope_id'=i.scope_id)))
+            WHERE EXISTS(SELECT 1 FROM "LiteLLM_Issue" i WHERE i.id=x->>'issue_id')
             ON CONFLICT(issue_id,source,source_id) DO NOTHING RETURNING source_id""",
             json.dumps(tuple(signal.model_dump(mode="json") for signal in signals)),
         )
 
-    async def list_signals(self, issue_id: str, limit: int = 50, offset: int = 0) -> IssueSignalList:
+    async def list_signals(
+        self,
+        issue_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        visible_scope: IssueCohort | None = None,
+    ) -> IssueSignalList:
+        where: Final = """issue_id=$1 AND ($2::text IS NULL OR (source='usage_alert'
+            AND record->'usage_alert'->>'scope_type'=$2
+            AND record->'usage_alert'->>'scope_id' IS NOT DISTINCT FROM $3::text))"""
+        args: Final = (
+            issue_id,
+            visible_scope.scope_type if visible_scope else None,
+            visible_scope.scope_id if visible_scope else None,
+        )
         counts: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
             await self.database.query_raw(
-                'SELECT count(*)::int AS count FROM "LiteLLM_IssueSignal" WHERE issue_id=$1',
-                issue_id,
+                f'SELECT count(*)::int AS count FROM "LiteLLM_IssueSignal" WHERE {where}',
+                *args,
             )
         )
         rows: Final = TypeAdapter(tuple[_SignalRow, ...]).validate_python(
             await self.database.query_raw(
-                'SELECT record FROM "LiteLLM_IssueSignal" WHERE issue_id=$1 ORDER BY source,source_id LIMIT $2 OFFSET $3',
-                issue_id,
+                f'SELECT record FROM "LiteLLM_IssueSignal" WHERE {where} ORDER BY source,source_id LIMIT $4 OFFSET $5',
+                *args,
                 limit,
                 offset,
             )
@@ -419,6 +433,13 @@ class IssuesRepository:
         )
 
     async def pending_deliveries(self, limit: int = 100) -> tuple[IssuePendingDelivery, ...]:
+        return await self._pending_deliveries(limit, None)
+
+    async def pending_delivery(self, delivery_id: str) -> IssuePendingDelivery | None:
+        rows: Final = await self._pending_deliveries(1, delivery_id)
+        return rows[0] if rows else None
+
+    async def _pending_deliveries(self, limit: int, delivery_id: str | None) -> tuple[IssuePendingDelivery, ...]:
         if not 1 <= limit <= 500:
             raise ValueError("Read between one and 500 deliveries")
         return TypeAdapter(tuple[IssuePendingDelivery, ...]).validate_python(
@@ -442,8 +463,10 @@ class IssuesRepository:
                 ORDER BY b.rule_id,b.source_id LIMIT 1
             ) bound ON true
             WHERE NOT d.sent AND d.next_attempt<=CURRENT_TIMESTAMP AND i.active AND ({_STATUS})='open'
+                AND ($2::text IS NULL OR d.id=$2)
             ORDER BY d.next_attempt,d.id LIMIT $1""",
                 limit,
+                delivery_id,
             )
         )
 

@@ -389,7 +389,8 @@ class UsageAlertsRepository:
                     SELECT p.scope_type,p.scope_id,p.day,p.incident_count,
                         jsonb_agg(jsonb_build_object('metric',r.metric,'incident_count',r.incident_count,
                             'representative',r.record) ORDER BY CASE r.metric
-                                WHEN 'requests' THEN 0 WHEN 'spend' THEN 1 WHEN 'errors' THEN 2 ELSE 3 END) AS metrics
+                                WHEN 'requests' THEN 0 WHEN 'spend' THEN 1 WHEN 'error_rate' THEN 2
+                                WHEN 'errors' THEN 3 ELSE 4 END) AS metrics
                     FROM page p JOIN ranked r ON p.scope_type=r.scope_type
                         AND p.scope_id IS NOT DISTINCT FROM r.scope_id AND p.day=r.day AND r.rank=1
                     GROUP BY p.scope_type,p.scope_id,p.day,p.incident_count

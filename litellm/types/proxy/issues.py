@@ -18,6 +18,9 @@ IssueKind: TypeAlias = Literal["performance", "model_deprecation"]
 IssueFamily: TypeAlias = Literal["retirement", "latency", "reliability", "spend", "traffic"]
 IssueScope: TypeAlias = Literal["deployment", "key", "user", "team", "model", "provider"]
 IssueGroupingReason: TypeAlias = Literal["same_resource", "dominant_key", "provider_cohort", "model_deprecation"]
+IssueSignalGroupingReason: TypeAlias = Literal[
+    "same_resource", "same_key_traffic", "dominant_key", "provider_cohort", "volume_explains_spend", "model_deprecation"
+]
 
 
 class IssueModelPair(BaseModel, frozen=True):
@@ -52,7 +55,7 @@ class IssueComparison(BaseModel, frozen=True):
     direction: UsageAlertDirection
     observed_value: float = Field(ge=0)
     baseline_value: float = Field(ge=0)
-    threshold: float
+    threshold: float | None = None
     baseline_start: date
     baseline_end: date
     baseline_sample_days: int | None = Field(default=None, ge=1, le=30)
@@ -151,6 +154,8 @@ class IssueSignalInput(BaseModel, frozen=True):
     source_id: str = Field(min_length=1, max_length=200)
     usage_alert: UsageAlert | None = None
     deprecation: IssueDeprecation | None = None
+    grouping_reason: IssueSignalGroupingReason = "same_resource"
+    explanation: str = Field(default="", max_length=2000)
 
     @model_validator(mode="after")
     def validate_signal(self) -> Self:

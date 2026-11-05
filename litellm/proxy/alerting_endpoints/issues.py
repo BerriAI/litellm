@@ -15,6 +15,7 @@ from litellm.proxy.alerting_endpoints.usage_alerts import (
     require_scope,
 )
 from litellm.proxy.deps.repositories import IssueActivityRepositoryDep, IssuesRepositoryDep, UsageAlertsRepositoryDep
+from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.issues import (
     Issue,
     IssueFamily,
@@ -147,7 +148,9 @@ async def update_issue(
     repository: IssuesRepositoryDep,
     alerts: UsageAlertsRepositoryDep,
 ) -> Issue:
-    await authorized_issue(issue_id, user, repository, alerts, write=True)
+    issue: Final = await authorized_issue(issue_id, user, repository, alerts, write=True)
+    if issue.kind == "model_deprecation" and not issue.active and data.status == "open":
+        raise HTTPException(status_code=409, detail="This retirement issue reopens when the model receives new traffic")
     changed: Final = await require_issues(repository).set_status(
         issue_id, data.status, data.expected_status, user.user_id
     )
@@ -165,8 +168,17 @@ async def list_issue_signals(
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> IssueSignalList:
-    await authorized_issue(issue_id, user, repository, alerts)
-    return await require_issues(repository).list_signals(issue_id, limit, offset)
+    issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    visible_scope: Final = (
+        None
+        if user.user_role
+        in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        )
+        else issue.cohort
+    )
+    return await require_issues(repository).list_signals(issue_id, limit, offset, visible_scope)
 
 
 @router.get("/{issue_id}/activity", response_model=SpendAnalyticsPaginatedResponse)

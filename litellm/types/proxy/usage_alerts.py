@@ -133,7 +133,7 @@ class UsageAlertGroup(BaseModel, frozen=True):
     scope_label: str | None
     day: date
     incident_count: int
-    metrics: tuple[UsageAlertGroupMetric, ...] = Field(max_length=4)
+    metrics: tuple[UsageAlertGroupMetric, ...] = Field(max_length=5)
     activity_path: str
 
 

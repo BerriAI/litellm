@@ -34992,7 +34992,7 @@ export interface components {
             /** Observed Value */
             observed_value: number;
             /** Threshold */
-            threshold: number;
+            threshold?: number | null;
         };
         /** IssueDeprecation */
         IssueDeprecation: {
@@ -35125,6 +35125,17 @@ export interface components {
         /** IssueSignal */
         IssueSignal: {
             deprecation?: components["schemas"]["IssueDeprecation"] | null;
+            /**
+             * Explanation
+             * @default
+             */
+            explanation: string;
+            /**
+             * Grouping Reason
+             * @default same_resource
+             * @enum {string}
+             */
+            grouping_reason: "same_resource" | "same_key_traffic" | "dominant_key" | "provider_cohort" | "volume_explains_spend" | "model_deprecation";
             /** Issue Id */
             issue_id: string;
             /**

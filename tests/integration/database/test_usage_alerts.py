@@ -276,7 +276,13 @@ async def test_grouped_http_pages_preserve_all_metrics_history_and_scoped_action
         outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
         viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
         inference_key: Final = scenario.key(user_id=owner, key_type="llm_api")
-        metrics: Final[tuple[UsageAlertMetric, ...]] = (*(("requests",) * 27), "spend", "errors", "latency")
+        metrics: Final[tuple[UsageAlertMetric, ...]] = (
+            *(("requests",) * 27),
+            "spend",
+            "errors",
+            "latency",
+            "error_rate",
+        )
         rules: Final = tuple(
             [
                 await repository.save_rule(
@@ -303,9 +309,9 @@ async def test_grouped_http_pages_preserve_all_metrics_history_and_scoped_action
                             UsageAlertObservation(
                                 entity_id=owner,
                                 day=day,
-                                observed=420,
-                                baseline=0 if index == 0 else 120,
-                                threshold=100 if index == 0 else 360,
+                                observed=14 if rule.metric == "error_rate" else 420,
+                                baseline=4 if rule.metric == "error_rate" else 0 if index == 0 else 120,
+                                threshold=12 if rule.metric == "error_rate" else 100 if index == 0 else 360,
                                 breached=True,
                             ),
                         ),
@@ -367,12 +373,13 @@ async def test_grouped_http_pages_preserve_all_metrics_history_and_scoped_action
             assert page.total == 2 and len(page.data) == 1
             group: Final = page.data[0]
             assert group.day == day and group.scope_label == "Checkout operator"
-            assert group.incident_count == 30 and len(group.metrics) == 4
+            assert group.incident_count == 31 and len(group.metrics) == 5
             assert {metric.metric: metric.incident_count for metric in group.metrics} == {
                 "requests": 27,
                 "spend": 1,
                 "errors": 1,
                 "latency": 1,
+                "error_rate": 1,
             }
             assert all(metric.representative.id in {incident.id for incident in incidents} for metric in group.metrics)
             assert group.activity_path in {incident.activity_path for incident in incidents}
@@ -405,7 +412,7 @@ async def test_grouped_http_pages_preserve_all_metrics_history_and_scoped_action
                 assert gateway.request("PATCH", "/usage/alert-groups", body, key=forbidden).status_code == 403
             assert gateway.request("GET", "/usage/alert-groups", key=viewer_key, params=params).status_code == 200
             updated: Final = gateway.request("PATCH", "/usage/alert-groups", body, key=owner_key)
-            assert updated.status_code == 200 and updated.json()["updated_count"] == 29
+            assert updated.status_code == 200 and updated.json()["updated_count"] == 30
             assert gateway.request("PATCH", "/usage/alert-groups", body, key=owner_key).json()["updated_count"] == 0
             assert await repository.get_alert(old.id) == old
             assert await repository.get_alert(other.id) == other
