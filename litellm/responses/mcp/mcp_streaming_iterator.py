@@ -550,6 +550,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Phase 4: Tool Execution Events
         if self.phase == "tool_execution":
+            if self._stream_error is not None:
+                self.phase = "finished"
+                return await self._anext_impl()
             # Emit any queued tool execution events
             if self.tool_execution_events:
                 return self.tool_execution_events.pop(0)
@@ -713,6 +716,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.phase = "tool_execution"
         await self._generate_tool_execution_events()
 
+        if self._stream_error is not None:
+            return None
         if not isinstance(response_obj, ResponsesAPIResponse):
             return chunk
         if self._follow_up_pending():
@@ -974,6 +979,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         except Exception as e:
             verbose_logger.error("Error in tool execution: %s", e)
+            if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
+                self._stream_error = e
+                return
             import traceback
 
             traceback.print_exc()

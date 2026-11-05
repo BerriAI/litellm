@@ -8,10 +8,8 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import Unpack
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
-from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.utils import (
@@ -966,7 +964,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
-                if LiteLLM_Proxy_MCP_Handler._should_raise_mcp_guardrail_block(e):
+                if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
                     raise
                 error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e}"
                 tool_results.append(
@@ -984,7 +982,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
-                if LiteLLM_Proxy_MCP_Handler._should_raise_mcp_guardrail_block(e):
+                if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
                     raise
                 error_message = (
                     f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e}"
@@ -1004,7 +1002,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
-                if LiteLLM_Proxy_MCP_Handler._should_raise_mcp_guardrail_block(e):
+                if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
                     raise
                 error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
                 tool_results.append(
@@ -1035,17 +1033,8 @@ class LiteLLM_Proxy_MCP_Handler:
     _execute_tool_calls = execute_tool_calls
 
     @staticmethod
-    def _should_raise_mcp_guardrail_block(error: Exception) -> bool:
-        match (getattr(error, "guardrail_name", None), getattr(error, "detail", None)):
-            case (str() as guardrail_name, _) | (_, {"guardrail_name": str() as guardrail_name}):
-                return any(
-                    isinstance(callback, CustomGuardrail)
-                    and callback.guardrail_name == guardrail_name
-                    and callback.mcp_block_behavior == "raise"
-                    for callback in litellm.logging_callback_manager.get_all_callbacks()
-                )
-            case _:
-                return False
+    def should_raise_mcp_guardrail_block(error: Exception) -> bool:
+        return getattr(error, "mcp_block_behavior", None) == "raise"
 
     @staticmethod
     def create_follow_up_messages_for_chat(
