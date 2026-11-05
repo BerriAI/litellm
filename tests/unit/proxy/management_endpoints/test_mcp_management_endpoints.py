@@ -7622,6 +7622,32 @@ async def test_edit_mcp_server_dcr_bridge_on_unknown_server_returns_404_not_400(
     update_mock.assert_called_once()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_auth_type,fields,status_code",
+    [("api_key", {"auth_type": "secret_headers"}, 400), ("secret_headers", {"description": "renamed"}, 404)],
+)
+async def test_edit_mcp_server_checks_secret_headers_against_the_stored_server(
+    stored_auth_type: str, fields: Mapping[str, str], status_code: int
+) -> None:
+    from litellm.proxy._types import UpdateMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import edit_mcp_server
+
+    old_record = MagicMock()
+    old_record.auth_type = stored_auth_type
+    old_record.spec_path = None
+    update_mock = AsyncMock(return_value=None)
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(old_record, update_mock)
+    with p1, p2, p3, p4, p5:
+        payload: Final = UpdateMCPServerRequest(server_id="srv-1", **fields)
+        user_auth = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with pytest.raises(HTTPException) as exc:
+            await edit_mcp_server(payload=payload, user_api_key_dict=user_auth)
+
+    assert exc.value.status_code == status_code
+    assert update_mock.call_count == (0 if status_code == 400 else 1)
+
+
 class TestPerUserCredentialConfigServerResolution:
     """Per-user credential and env-var endpoints must resolve config-defined MCP
     servers, which live only in the in-memory registry and never get a DB row, so
@@ -11791,3 +11817,136 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+_DD_URL: Final = "https://upstream.example/mcp"
+_DD_CREDENTIAL_HEADERS: Final = {"DD-API-KEY": "dd-api-secret", "DD-APPLICATION-KEY": "dd-app-secret"}
+_DD_STATIC_HEADERS: Final = {"X-Datadog-Site": "datadoghq.com"}
+
+
+@pytest.mark.parametrize(
+    "payload,error",
+    [
+        (
+            NewMCPServerRequest(server_name="dd", url=_DD_URL, auth_type=MCPAuth.secret_headers),
+            "auth_type secret_headers requires credentials.headers",
+        ),
+        (
+            NewMCPServerRequest(
+                server_name="dd", url=_DD_URL, auth_type=MCPAuth.secret_headers, credentials={"headers": {}}
+            ),
+            "credentials.headers must name at least one header",
+        ),
+        (
+            NewMCPServerRequest(
+                server_name="dd", url=_DD_URL, auth_type=MCPAuth.api_key, credentials={"headers": {"DD-API-KEY": "key"}}
+            ),
+            "credentials.headers is only used with auth_type secret_headers",
+        ),
+        (
+            NewMCPServerRequest(server_name="dd", url=_DD_URL, credentials={"headers": dict(_DD_CREDENTIAL_HEADERS)}),
+            "credentials.headers is only used with auth_type secret_headers",
+        ),
+        (
+            UpdateMCPServerRequest(server_id="srv-dd", credentials={"headers": None}),
+            "credentials.headers cannot be null",
+        ),
+        (
+            NewMCPServerRequest(
+                server_name="dd",
+                spec_path="https://spec.example/openapi.json",
+                auth_type=MCPAuth.secret_headers,
+                credentials={"headers": dict(_DD_CREDENTIAL_HEADERS)},
+            ),
+            "auth_type secret_headers is not supported for OpenAPI servers",
+        ),
+        (
+            UpdateMCPServerRequest(server_id="srv-dd", credentials={"headers": {"DD-API-KEY": "a\nb"}}),
+            "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space",
+        ),
+        (
+            NewMCPServerRequest(
+                server_name="dd",
+                url=_DD_URL,
+                auth_type=MCPAuth.secret_headers,
+                credentials={"headers": {"DD-API-KEY": "key"}},
+                static_headers={"dd-api-key": "old"},
+            ),
+            "Header 'DD-API-KEY' is in both static_headers and credentials.headers",
+        ),
+    ],
+)
+def test_saving_unusable_secret_headers_is_rejected(
+    payload: NewMCPServerRequest | UpdateMCPServerRequest, error: str
+) -> None:
+    with pytest.raises(HTTPException) as rejected:
+        assert mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload) is None
+    assert (rejected.value.status_code, rejected.value.detail) == (400, {"error": error})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        NewMCPServerRequest(
+            server_name="dd",
+            url=_DD_URL,
+            auth_type=MCPAuth.secret_headers,
+            credentials={"headers": dict(_DD_CREDENTIAL_HEADERS)},
+            static_headers=dict(_DD_STATIC_HEADERS),
+        ),
+        UpdateMCPServerRequest(server_id="srv-dd", auth_type=MCPAuth.secret_headers),
+        UpdateMCPServerRequest(server_id="srv-dd", description="renamed"),
+        UpdateMCPServerRequest(server_id="srv-dd", credentials={"headers": dict(_DD_CREDENTIAL_HEADERS)}),
+    ],
+)
+def test_saving_usable_or_unchanged_secret_headers_is_accepted(
+    payload: NewMCPServerRequest | UpdateMCPServerRequest,
+) -> None:
+    assert mgmt_endpoints.validate_and_normalize_mcp_server_payload(payload) is None
+
+
+@pytest.mark.parametrize(
+    "payload,stored_auth_type,stored_spec_path,error",
+    [
+        (
+            UpdateMCPServerRequest(server_id="srv-dd", auth_type=MCPAuth.secret_headers),
+            MCPAuth.api_key,
+            None,
+            "auth_type secret_headers requires credentials.headers",
+        ),
+        (
+            UpdateMCPServerRequest(server_id="srv-dd", credentials={"headers": dict(_DD_CREDENTIAL_HEADERS)}),
+            MCPAuth.api_key,
+            None,
+            "credentials.headers is only used with auth_type secret_headers",
+        ),
+        (
+            UpdateMCPServerRequest(server_id="srv-dd", description="renamed"),
+            MCPAuth.secret_headers,
+            "https://spec.example/openapi.json",
+            "auth_type secret_headers is not supported for OpenAPI servers",
+        ),
+        (UpdateMCPServerRequest(server_id="srv-dd", description="renamed"), MCPAuth.secret_headers, None, None),
+        (
+            UpdateMCPServerRequest(server_id="srv-dd", auth_type=MCPAuth.secret_headers),
+            MCPAuth.secret_headers,
+            None,
+            None,
+        ),
+        (
+            UpdateMCPServerRequest(
+                server_id="srv-dd", auth_type=MCPAuth.secret_headers, credentials={"headers": dict(_DD_CREDENTIAL_HEADERS)}
+            ),
+            MCPAuth.api_key,
+            None,
+            None,
+        ),
+        (UpdateMCPServerRequest(server_id="srv-dd", description="renamed"), MCPAuth.api_key, None, None),
+    ],
+)
+def test_updating_a_stored_server_checks_its_secret_headers_against_what_is_stored(
+    payload: UpdateMCPServerRequest, stored_auth_type: MCPAuth, stored_spec_path: str | None, error: str | None
+) -> None:
+    assert (
+        mgmt_endpoints.credential_headers_update_error(payload, stored_auth_type, stored_spec_path) == error
+    )

@@ -351,6 +351,54 @@ def same_header(name: str, other: str) -> bool:
     return name.lower() == other.lower()
 
 
+_HOP_BY_HOP_HEADERS: Final = frozenset(
+    (
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    )
+)
+_CLIENT_MANAGED_HEADERS: Final = _HOP_BY_HOP_HEADERS | frozenset(
+    ("accept", "content-type", "content-length", "host", "cookie", "last-event-id")
+)
+_CLIENT_MANAGED_PREFIX: Final = "mcp-"
+
+
+def credential_headers_problem(headers: Mapping[str, str], static_headers: Mapping[str, str] | None) -> str | None:
+    """The first reason ``headers`` cannot be sent upstream, or None."""
+    if not headers:
+        return "credentials.headers must name at least one header"
+    for name, value in headers.items():
+        if normalize_upstream_header_name(name) != name:
+            return f"Invalid header name {name!r}: must be a valid HTTP header name (RFC 7230 token)"
+        if (
+            not value.strip()
+            or value != value.strip()
+            or any(char != "\t" and not " " <= char <= "~" for char in value)
+        ):
+            return f"Invalid value for header {name!r}: must be printable ASCII with no leading or trailing space"
+    lowered: Final = [name.lower() for name in headers]
+    if len(set(lowered)) != len(lowered):
+        return "credentials.headers names must be unique, ignoring case"
+    reserved: Final = next(
+        (
+            name
+            for name in headers
+            if name.lower() in _CLIENT_MANAGED_HEADERS or name.lower().startswith(_CLIENT_MANAGED_PREFIX)
+        ),
+        None,
+    )
+    if reserved is not None:
+        return f"Header {reserved!r} is set by the gateway and cannot be configured"
+    clash: Final = next((name for name in headers if has_header(static_headers, name)), None)
+    return None if clash is None else f"Header {clash!r} is in both static_headers and credentials.headers"
+
+
 def has_header(headers: Mapping[str, str] | None, name: str) -> bool:
     """Whether ``headers`` carries ``name`` under any casing."""
     return bool(headers) and any(same_header(key, name) for key in headers or {})
