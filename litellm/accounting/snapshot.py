@@ -4,10 +4,11 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.compression_savings import extract_compression_saved_tokens
-from litellm.proxy.spend_tracking.savings import compute_savings_spend, marks_gateway_injection
+from litellm.proxy.spend_tracking.savings import SavingsSpend, compute_savings_spend, marks_gateway_injection
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -66,20 +67,7 @@ def build_accounting_payload(
     router: "Callable[[], Router | None]",
 ) -> Mapping[str, object]:
     metadata: Final = _FIELDS.validate_json(payload["metadata"])
-    savings: Final = compute_savings_spend(
-        model=payload["model"],
-        custom_llm_provider=payload["custom_llm_provider"],
-        compression_saved_tokens=extract_compression_saved_tokens(metadata),
-        gateway_injected_cache=marks_gateway_injection(metadata, payload["model_id"]),
-        routing_decision=_mapping(metadata.get("routing_decision")),
-        model_id=payload["model_id"],
-        llm_router=router,
-        usage_object=_mapping(metadata.get("usage_object")),
-        cost_breakdown=_mapping(metadata.get("cost_breakdown")),
-        recorded_autorouter_savings=metadata.get("autorouter_savings"),
-        recorded_autorouter_savings_estimate=_mapping(metadata.get("autorouter_savings_estimate")),
-        billed_at=payload["endTime"],
-    )
+    savings: Final = _savings_or_zero(payload, metadata, router)
     accounting_metadata: Final = {
         **{key: _accounting_metadata_field(key, value) for key, value in metadata.items() if key in _METADATA_FIELDS},
         "accounting_entities": entities,
@@ -99,6 +87,39 @@ def build_accounting_payload(
             },
             non_finite_as_null=True,
         )
+    )
+
+
+def _savings_or_zero(
+    payload: SpendLogsPayload, metadata: Mapping[str, object], router: "Callable[[], Router | None]"
+) -> SavingsSpend:
+    """Savings are analytics computed from caller-supplied counts, so one that cannot be computed is stored as zero
+    rather than losing the charge it rides with."""
+    try:
+        return _savings(payload, metadata, router)
+    except (ArithmeticError, ValueError, TypeError) as error:
+        verbose_proxy_logger.warning(
+            "Recording zero savings for request_id=%s, savings could not be computed: %s", payload["request_id"], error
+        )
+        return SavingsSpend(compression=0.0, prompt_caching=0.0)
+
+
+def _savings(
+    payload: SpendLogsPayload, metadata: Mapping[str, object], router: "Callable[[], Router | None]"
+) -> SavingsSpend:
+    return compute_savings_spend(
+        model=payload["model"],
+        custom_llm_provider=payload["custom_llm_provider"],
+        compression_saved_tokens=extract_compression_saved_tokens(metadata),
+        gateway_injected_cache=marks_gateway_injection(metadata, payload["model_id"]),
+        routing_decision=_mapping(metadata.get("routing_decision")),
+        model_id=payload["model_id"],
+        llm_router=router,
+        usage_object=_mapping(metadata.get("usage_object")),
+        cost_breakdown=_mapping(metadata.get("cost_breakdown")),
+        recorded_autorouter_savings=metadata.get("autorouter_savings"),
+        recorded_autorouter_savings_estimate=_mapping(metadata.get("autorouter_savings_estimate")),
+        billed_at=payload["endTime"],
     )
 
 

@@ -519,3 +519,39 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
     assert [dict(item.increments) for item in usage_rows] == [{"units": 1, "cost": 0.25, "untracked_units": 0}]
     daily_user: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
     assert dict(daily_user.increments)["compression_saved_tokens"] == 7
+
+
+def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "savings-overflow-test",
+        {"input_cost_per_token": 0.002, "output_cost_per_token": 0.004, "litellm_provider": "openai", "mode": "chat"},
+    )
+    payload: Final[SpendLogsPayload] = {
+        **get_logging_payload(
+            kwargs={
+                "model": "savings-overflow-test",
+                "custom_llm_provider": "openai",
+                "call_type": "acompletion",
+                "litellm_call_id": "overflow-request",
+                "litellm_params": {"metadata": {"user_api_key": "key"}},
+            },
+            response_obj=ModelResponse(
+                id="overflow-request", model="savings-overflow-test", usage=Usage(prompt_tokens=10, completion_tokens=5)
+            ),
+            start_time=_NOW,
+            end_time=_NOW,
+        ),
+        "spend": 0.5,
+        "metadata": json.dumps({"compression_savings": {"tokens_saved": 10**400}}),
+    }
+    accounting: Final = build_accounting_payload(
+        payload, entities={"api_key": "key"}, model_access_groups=(), windows=(), router=lambda: None
+    )
+    restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
+    assert dict(restored["metadata"])["accounting_savings"]["compression"] == 0.0
+    assert [dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"] == [
+        0.5
+    ]
