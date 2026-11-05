@@ -17,6 +17,11 @@ _REJECTION: Final = BedrockError(
     status_code=400,
     message='{"message":"The model returned the following errors: output_config.format: Extra inputs are not permitted"}',
 )
+_GRAMMAR_REJECTION: Final = BedrockError(
+    status_code=400,
+    message='{"message":"The model returned the following errors: The compiled grammar is too large, which would cause '
+    'performance issues. Simplify your tool schemas or reduce the number of strict tools."}',
+)
 _SCHEMA_REFUSAL: Final = BedrockError(
     status_code=400, message='{"message":"output_config.format.schema: pattern is too complex for structured output"}'
 )
@@ -58,8 +63,15 @@ _MODES: Final = pytest.mark.parametrize("asynchronous", [False, True], ids=["syn
 
 
 @_MODES
-def test_a_native_output_rejection_is_sent_again_once_with_the_fallback_params(asynchronous: bool) -> None:
-    bedrock: Final = ScriptedBedrock(errors=(_REJECTION, None), asynchronous=asynchronous)
+@pytest.mark.parametrize(
+    "rejection",
+    [_REJECTION, _GRAMMAR_REJECTION],
+    ids=["format_not_permitted", "compiled_grammar_too_large"],
+)
+def test_a_native_output_rejection_is_sent_again_once_with_the_fallback_params(
+    asynchronous: bool, rejection: BedrockError
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(rejection, None), asynchronous=asynchronous)
 
     response: Final = _call(bedrock, _FALLBACK)
 

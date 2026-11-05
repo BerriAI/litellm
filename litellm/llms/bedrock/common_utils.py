@@ -418,6 +418,7 @@ _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs 
 _BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
     _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
     "compilation exceeded limits: Schema is too complex",
+    "The compiled grammar is too large",
     "output_config.format.schema:",
 )
 

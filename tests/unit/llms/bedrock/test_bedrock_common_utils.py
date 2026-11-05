@@ -2329,6 +2329,10 @@ def test_bedrock_capability_model_reads_base_model_only_for_application_profile_
 
 _FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
 _COMPILE_REJECTION: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_GRAMMAR_REJECTION: Final = (
+    "The model returned the following errors: The compiled grammar is too large, which would cause performance issues. "
+    "Simplify your tool schemas or reduce the number of strict tools."
+)
 _SCHEMA_PATTERN_REJECTION: Final = (
     "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
     "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
@@ -2341,6 +2345,7 @@ _SCHEMA_PATTERN_REJECTION: Final = (
     [
         (400, f'{{"message":"{_FORMAT_REJECTION}"}}', True),
         (400, f'{{"message":"{_COMPILE_REJECTION}"}}', True),
+        (400, _GRAMMAR_REJECTION, True),
         (400, f'{{"message":"{_SCHEMA_PATTERN_REJECTION}"}}', True),
         (400, "Malformed input request: #: extraneous key [output_config] is not permitted", False),
         (400, "The model returned the following errors: messages.0.content: Field required", False),
@@ -2350,6 +2355,7 @@ _SCHEMA_PATTERN_REJECTION: Final = (
     ids=[
         "format_not_permitted",
         "schema_too_complex",
+        "compiled_grammar_too_large",
         "schema_pattern_too_complex",
         "other_key_not_permitted",
         "other_400",
