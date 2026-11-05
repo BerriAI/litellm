@@ -2034,9 +2034,9 @@ class TestPkceLogoutCommand:
             patch("litellm.proxy.client.cli.interface.show_commands"),
         ):
             if logout_while_locked:
-                self.runner.invoke(logout, obj={"secret_vault": locked})
-            self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": locked})
-            result = self.runner.invoke(logout, obj={"secret_vault": unlocked})
+                self.runner.invoke(cli, ["logout"], obj={"secret_vault": locked})
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            result = self.runner.invoke(cli, ["logout"], obj={"secret_vault": unlocked})
 
         assert result.output == "Logged out successfully. Authentication token cleared.\n"
         assert unlocked.blob is None
@@ -2047,6 +2047,30 @@ class TestPkceLogoutCommand:
                 {"token": token, "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
             )
             for token in ("llm_srefresh_old", "llm_srefresh_fresh")
+        ]
+
+    def test_a_login_after_a_locked_keychain_login_revokes_the_login_the_keychain_kept(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            result = self.runner.invoke(
+                cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": unlocked}
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Could not revoke" not in result.output
+        assert [post["token"] for session in _FakeSession.instances for _, post in session.posts] == [
+            "llm_srefresh_old",
+            "llm_srefresh_fresh",
         ]
 
     def test_a_logout_after_the_keychain_refused_the_erase_does_not_revoke_the_login_again(
