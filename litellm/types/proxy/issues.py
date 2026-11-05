@@ -249,6 +249,7 @@ class IssueFamilySetting(BaseModel, frozen=True):
 
 class IssueFamilyList(BaseModel, frozen=True):
     data: tuple[IssueFamilySetting, ...]
+    projection_pending: bool = False
 
 
 class IssueFamilyPolicyUpdate(BaseModel, frozen=True):
