@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
-from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
 )
@@ -467,6 +466,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/skills/{skill_id}",
         "/claude-code/marketplace.json",
         "/claude-code/plugins",
+        "/claude-code/plugins/upload",
+        "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
         "/claude-code/plugins/{plugin_name}",
     ]
 
@@ -2479,20 +2480,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
-    accounting_capture: UsageCaptureSettings | None = Field(
-        None,
-        description="Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes.",
-    )
-    accounting_sync_ack: bool = Field(
+    use_spend_logs_ledger: bool = Field(
         False,
-        description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
-        "Other requests remain supported with asynchronous usage capture.",
-    )
-    accounting_sync_ack_timeout_seconds: float = Field(
-        20.0, gt=0, description="Maximum response wait for usage commit, including the batch flush interval"
-    )
-    accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
-        "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"
+        description="Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
@@ -3815,6 +3805,9 @@ class SpendLogsMetadata(TypedDict):
 
 
 class SpendLogsPayload(TypedDict):
+    accounting_payload: NotRequired[Mapping[str, object]]  # writable-ok: capture before buffering
+    accounting_log_disabled: NotRequired[bool]  # writable-ok: capture logging mode before buffering
+    accounting_delivery_id: NotRequired[str]  # writable-ok: assigned once before buffering
     request_id: str
     call_type: str
     api_key: str

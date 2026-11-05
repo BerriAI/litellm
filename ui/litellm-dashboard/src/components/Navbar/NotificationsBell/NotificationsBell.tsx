@@ -12,12 +12,15 @@ import {
 } from "@/app/(dashboard)/hooks/useAnnouncementRead";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DashboardResources } from "@/components/Navbar/DashboardResources";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { Bell } from "lucide-react";
+import { ArrowUpRight, Bell } from "lucide-react";
 import React, { Fragment } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 
 export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
 
@@ -37,14 +40,11 @@ const AUTO_ROUTER_ANNOUNCEMENT: Announcement = {
   href: AUTO_ROUTER_DOCS_URL,
 };
 
-const plural = (count: number, singular: string, pluralForm: string): string =>
-  `${count} ${count === 1 ? singular : pluralForm}`;
-
 const describeRelease = ({ new_features, bug_fixes, other_updates }: LatestReleaseInfo): string =>
   [
-    plural(new_features, "new feature", "new features"),
-    plural(bug_fixes, "fix", "fixes"),
-    `and ${plural(other_updates, "other update", "other updates")}`,
+    i18n.t("shell.notifications.release.newFeatures", { count: new_features }),
+    i18n.t("shell.notifications.release.fixes", { count: bug_fixes }),
+    i18n.t("shell.notifications.release.otherUpdates", { count: other_updates }),
   ].join(", ");
 
 const upgradeAnnouncement = (
@@ -56,31 +56,44 @@ const upgradeAnnouncement = (
   }
   return {
     readKey: `litellm:upgradeBannerDismissed:${latestRelease.version}`,
-    title: `LiteLLM v${latestRelease.version} is available`,
-    description: `${describeRelease(latestRelease)}. Your current version is v${currentVersion}`,
-    linkLabel: "View release notes",
+    title: i18n.t("shell.notifications.upgrade.title", { version: latestRelease.version }),
+    description: i18n.t("shell.notifications.upgrade.description", {
+      summary: describeRelease(latestRelease),
+      current: currentVersion,
+    }),
+    linkLabel: i18n.t("shell.notifications.upgrade.link"),
     href: latestRelease.release_url,
   };
 };
 
 const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announcement }) => {
+  const { t } = useTranslation();
   const read = useAnnouncementRead(announcement.readKey);
   return (
     <article aria-label={announcement.title} className="flex flex-col gap-2">
       <p className="text-sm font-medium">{announcement.title}</p>
-      <p className="text-sm leading-snug text-muted-foreground">{announcement.description}</p>
-      <div className="flex flex-wrap items-center gap-2">
+      <p className="text-xs leading-relaxed text-muted-foreground">{announcement.description}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <a
-          className={cn(buttonVariants({ size: "sm" }))}
+          className={cn(
+            buttonVariants({ variant: "link", size: "sm" }),
+            "h-auto gap-1 p-0 text-xs font-normal text-muted-foreground hover:text-foreground",
+          )}
           href={announcement.href}
           target="_blank"
           rel="noopener noreferrer"
         >
           {announcement.linkLabel}
+          <ArrowUpRight className="size-3" aria-hidden />
         </a>
         {read ? null : (
-          <Button variant="link" size="sm" className="px-1!" onClick={() => markAnnouncementRead(announcement.readKey)}>
-            Mark as read
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto px-0! text-xs font-normal text-muted-foreground"
+            onClick={() => markAnnouncementRead(announcement.readKey)}
+          >
+            {t("shell.notifications.announcement.markAsRead")}
           </Button>
         )}
       </div>
@@ -89,11 +102,17 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
 };
 
 interface NotificationsBellViewProps {
+  deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
 }
 
-export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ currentVersion, latestRelease }) => {
+export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
+  currentVersion,
+  latestRelease,
+  deploymentHealthLink,
+}) => {
+  const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
@@ -101,28 +120,53 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({ cu
   return (
     <Popover>
       <PopoverTrigger
-        className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
-        aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
+        render={<Button variant="ghost" size="icon" className="text-muted-foreground" />}
+        aria-label={
+          unreadCount > 0
+            ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
+            : t("shell.notifications.bell.trigger")
+        }
       >
         <span className="relative inline-flex">
           <Bell className="size-4" aria-hidden />
           {unreadCount > 0 ? <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden /> : null}
         </span>
       </PopoverTrigger>
-      <PopoverContent align="end" aria-label="Notifications">
-        {announcements.map((announcement, index) => (
-          <Fragment key={announcement.readKey}>
-            {index > 0 ? <Separator /> : null}
-            <AnnouncementItem announcement={announcement} />
-          </Fragment>
-        ))}
+      <PopoverContent
+        align="end"
+        aria-label={t("shell.notifications.bell.trigger")}
+        className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
+      >
+        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
+          {t("shell.notifications.bell.title")}
+        </PopoverTitle>
+        <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
+          <div className="space-y-4 p-4">
+            {announcements.map((announcement, index) => (
+              <Fragment key={announcement.readKey}>
+                {index > 0 ? <Separator /> : null}
+                <AnnouncementItem announcement={announcement} />
+              </Fragment>
+            ))}
+          </div>
+          <DashboardResources>{deploymentHealthLink}</DashboardResources>
+        </div>
       </PopoverContent>
     </Popover>
   );
 };
 
-export const NotificationsBell: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
+export const NotificationsBell: React.FC<{ accessToken: string | null; deploymentHealthLink?: React.ReactNode }> = ({
+  accessToken,
+  deploymentHealthLink,
+}) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  return <NotificationsBellView currentVersion={healthData?.litellm_version} latestRelease={latestRelease} />;
+  return (
+    <NotificationsBellView
+      currentVersion={healthData?.litellm_version}
+      latestRelease={latestRelease}
+      deploymentHealthLink={deploymentHealthLink}
+    />
+  );
 };

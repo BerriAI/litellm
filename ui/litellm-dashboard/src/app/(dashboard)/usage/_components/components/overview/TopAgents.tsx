@@ -2,6 +2,7 @@
 
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowRight, Bot, Monitor, Terminal } from "lucide-react";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -85,6 +86,7 @@ function AgentItem({
   color: string | undefined;
   onOpen?: (agent: AgentRow) => void;
 }) {
+  const { t } = useTranslation();
   const term = useTerminology();
   const openRow = onOpen && agent.tags.length > 0 ? () => onOpen(agent) : undefined;
   const content = (
@@ -104,7 +106,7 @@ function AgentItem({
         <span className="block truncate text-sm font-medium text-foreground">{agent.label}</span>
         {openRow ? (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">
-            View activity
+            {t("usage.topAgents.viewActivity")}
             <ArrowRight aria-hidden="true" className="size-3 transition-transform group-hover:translate-x-0.5" />
           </span>
         ) : (
@@ -112,7 +114,9 @@ function AgentItem({
         )}
       </span>
       <span className="text-right">
-        <span className="block text-sm tabular-nums text-foreground">{formatCompact(agent.tokens)} tokens</span>
+        <span className="block text-sm tabular-nums text-foreground">
+          {t("usage.topAgents.tokens", { tokens: formatCompact(agent.tokens) })}
+        </span>
         <span className="block text-xs tabular-nums text-muted-foreground">
           {formatCompactUsd(agent.spend)} · {share.toFixed(1)}%
         </span>
@@ -126,7 +130,7 @@ function AgentItem({
       {openRow ? (
         <button
           type="button"
-          aria-label={`View ${agent.label} usage`}
+          aria-label={t("usage.topAgents.viewAgentUsage", { agent: agent.label })}
           onClick={openRow}
           className={cn(
             rowClassName,
@@ -143,8 +147,9 @@ function AgentItem({
 }
 
 function TopAgentsBody({ loading, empty, children }: { loading: boolean; empty: boolean; children: React.ReactNode }) {
+  const { t } = useTranslation();
   if (loading) return <ChartSkeleton className="mx-5 h-64 w-auto" />;
-  if (empty) return <p className="py-10 text-center text-xs text-muted-foreground">No agent traffic in this range</p>;
+  if (empty) return <p className="py-10 text-center text-xs text-muted-foreground">{t("usage.topAgents.empty")}</p>;
   return <>{children}</>;
 }
 
@@ -169,6 +174,7 @@ export default function TopAgents({
   totalTokens: number;
   onOpenAgent?: (agent: AgentRow) => void;
 }) {
+  const { t } = useTranslation();
   const [metric, setMetric] = useState<UsageMetric>("tokens");
   const allAgents = useMemo(() => topAgents(rows ?? []), [rows]);
   const agents = useMemo(
@@ -191,17 +197,19 @@ export default function TopAgents({
   const coverage = totalTokens > 0 ? Math.min(attributedTokens / totalTokens, 1) : 1;
   const subtitle =
     coverage < COVERAGE_NOTE_BELOW
-      ? `Daily usage by agent. ${Math.round(coverage * 100)}% of tokens came with a User-Agent; the rest is unattributed`
-      : "Daily usage by agent, from each request's User-Agent";
+      ? t("usage.topAgents.subtitleLowCoverage", { percent: Math.round(coverage * 100) })
+      : t("usage.topAgents.subtitle");
   const half = Math.ceil(agents.length / 2);
 
   return (
     <Panel
       icon={Bot}
-      title="Top agents"
+      title={t("usage.topAgents.title")}
       subtitle={subtitle}
       testId="top-agents"
-      action={<Segmented label="Agent metric" value={metric} options={METRICS} onChange={setMetric} />}
+      action={
+        <Segmented label={t("usage.topAgents.metricLabel")} value={metric} options={METRICS} onChange={setMetric} />
+      }
       bodyClassName="px-0 pt-4 pb-0"
     >
       <TopAgentsBody loading={loading} empty={agents.length === 0}>

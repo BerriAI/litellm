@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
@@ -4293,6 +4294,62 @@ class TestHandleLLMApiExceptionPricesWhatTheServerDispatched:
         assert resent >= dispatched_after_trim
 
 
+class TestHandleLLMApiExceptionReportsWhatAFailedAgenticFollowUpBills:
+    async def _error_response_cost(self, raise_the_follow_up_error: bool) -> float:
+        from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
+        from litellm.types.utils import ModelResponse, Usage
+
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "what is 6*7?"}]}
+        )
+        caller: Final = ProxyUserAPIKeyAuth(request_route="/v1/chat/completions")
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
+        _, logging_obj = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=caller,
+            proxy_logging_obj=proxy_logging,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+        logging_obj.model_call_details.update(first_api_call_start_time=datetime.datetime.now())
+        follow_up_error: Final = litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o")
+
+        async def failing_follow_up() -> ModelResponse:
+            raise follow_up_error
+
+        with pytest.raises(litellm.RateLimitError):
+            await bill_first_round_on_failure(
+                failing_follow_up(),
+                logging_obj=logging_obj,
+                response=ModelResponse(
+                    model="gpt-4o", usage=Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+                ),
+                stream=False,
+            )
+        with pytest.raises(ProxyException) as raised:
+            await processing_obj.handle_llm_api_exception(
+                e=follow_up_error
+                if raise_the_follow_up_error
+                else litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o"),
+                user_api_key_dict=caller,
+                proxy_logging_obj=proxy_logging,
+            )
+        return float(raised.value.headers["x-litellm-response-cost"])
+
+    @pytest.mark.asyncio
+    async def test_the_error_response_reports_the_served_first_call_its_failure_row_bills(self) -> None:
+        price: Final = litellm.model_cost["gpt-4o"]
+
+        assert await self._error_response_cost(raise_the_follow_up_error=True) == pytest.approx(
+            559 * price["input_cost_per_token"] + 113 * price["output_cost_per_token"]
+        )
+        assert await self._error_response_cost(raise_the_follow_up_error=False) == 0
+
+
 @pytest.mark.asyncio
 class TestHandleLLMApiExceptionDictDetail:
     """
@@ -5069,6 +5126,138 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert body["type"] == "rate_limit_error"
         assert body["code"] == "429"
         assert "All deployments for selected model are in cooldown" not in body["message"]
+
+
+class TestHandleLLMApiExceptionProviderOverload:
+    class _RecordingFailureHook(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.original_exception: Exception | None = None
+
+        async def async_post_call_failure_hook(
+            self,
+            request_data: dict,
+            original_exception: Exception,
+            user_api_key_dict: UserAPIKeyAuth,
+            traceback_str: str | None = None,
+        ) -> None:
+            self.original_exception = original_exception
+
+    async def _invoke(
+        self,
+        exc: Exception,
+        route_type: str,
+        monkeypatch: pytest.MonkeyPatch,
+        recording_hook: _RecordingFailureHook | None = None,
+    ) -> ProxyException:
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+        processor.route_type = route_type
+        callback: Final = recording_hook if recording_hook is not None else self._RecordingFailureHook()
+        monkeypatch.setattr(litellm, "callbacks", [callback])
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+
+        with pytest.raises(ProxyException) as raised:
+            await processor.handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+        return raised.value
+
+    @pytest.mark.parametrize("route_type", ("acompletion", "atext_completion", "aresponses"))
+    async def test_openai_routes_answer_provider_overload_as_503(
+        self, route_type: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exc: Final = InternalServerError(
+            message="Overloaded",
+            llm_provider="anthropic",
+            model="claude",
+            provider_status_code=529,
+        )
+
+        proxy_exc: Final = await self._invoke(exc, route_type, monkeypatch)
+
+        assert proxy_exc.code == "503"
+        assert proxy_exc.type == "service_unavailable_error"
+        assert proxy_exc.to_dict()["code"] == "server_is_overloaded"
+
+    @pytest.mark.parametrize(
+        ("route_type", "provider_status_code"),
+        (("acompletion", 500), ("anthropic_messages", 529)),
+    )
+    async def test_non_overload_and_non_openai_routes_keep_their_status(
+        self, route_type: str, provider_status_code: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exc: Final = InternalServerError(
+            message="Internal server error",
+            llm_provider="anthropic",
+            model="claude",
+            provider_status_code=provider_status_code,
+        )
+
+        proxy_exc: Final = await self._invoke(exc, route_type, monkeypatch)
+
+        assert proxy_exc.code == "500"
+        assert proxy_exc.type == "internal_server_error"
+        assert proxy_exc.to_dict()["code"] == "500"
+
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original: Final = InternalServerError(
+            message="Overloaded",
+            llm_provider="anthropic",
+            model="claude",
+            provider_status_code=529,
+        )
+        exc: Final = MidStreamFallbackError(
+            message="Fallback failed",
+            llm_provider="anthropic",
+            model="claude",
+            original_exception=original,
+        )
+
+        proxy_exc: Final = await self._invoke(exc, "acompletion", monkeypatch)
+
+        assert proxy_exc.code == "503"
+        assert proxy_exc.type == "service_unavailable_error"
+        assert proxy_exc.to_dict()["code"] == "server_is_overloaded"
+
+    async def test_anthropic_text_api_overload_answers_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        exc: Final = APIError(
+            status_code=529,
+            message="Overloaded",
+            llm_provider="anthropic_text",
+            model="claude",
+        )
+
+        proxy_exc: Final = await self._invoke(exc, "atext_completion", monkeypatch)
+
+        assert proxy_exc.code == "503"
+        assert proxy_exc.type == "service_unavailable_error"
+        assert proxy_exc.to_dict()["code"] == "server_is_overloaded"
+
+    @pytest.mark.parametrize(
+        ("route_type", "expected_status"),
+        (("acompletion", 503), ("anthropic_messages", 500)),
+    )
+    async def test_failure_hook_receives_the_answered_overload_status(
+        self, route_type: str, expected_status: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exc: Final = InternalServerError(
+            message="Overloaded",
+            llm_provider="anthropic",
+            model="claude",
+            provider_status_code=529,
+        )
+        recording_hook: Final = self._RecordingFailureHook()
+
+        await self._invoke(exc, route_type, monkeypatch, recording_hook)
+
+        original_exception: Final = recording_hook.original_exception
+        assert original_exception is not None
+        assert original_exception.status_code == expected_status
 
 
 class TestHandleLLMApiExceptionFramingHeaders:
@@ -7699,7 +7888,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-synthetic"},
                     "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
                 },
-                {"model_name": "chat-model", "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"}},
+                {
+                    "model_name": "chat-model",
+                    "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-synthetic"},
+                },
             ],
             fallbacks=[{"rate-limited": ["embed-alias", "chat-model"]}],
         )
@@ -9773,10 +9965,13 @@ def _hook_data(**kwargs: object) -> object:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prompt, proxy_field, client_field", [
-    ({"input": "hi"}, "litellm_metadata", "metadata"),
-    ({"messages": [{"role": "user", "content": "hi"}]}, "metadata", "litellm_metadata"),
-])
+@pytest.mark.parametrize(
+    "prompt, proxy_field, client_field",
+    [
+        ({"input": "hi"}, "litellm_metadata", "metadata"),
+        ({"messages": [{"role": "user", "content": "hi"}]}, "metadata", "litellm_metadata"),
+    ],
+)
 async def test_cursor_route_writes_proxy_fields_only_to_the_field_its_body_shape_picks(
     prompt: dict[str, str | list[dict[str, str]]],
     proxy_field: str,
@@ -9786,7 +9981,9 @@ async def test_cursor_route_writes_proxy_fields_only_to_the_field_its_body_shape
 
     logging: Final = MagicMock(spec=ProxyLogging)
     logging.pre_call_hook = AsyncMock(side_effect=_hook_data)
-    processor: Final = ProxyBaseLLMRequestProcessing(data={"model": "gpt-x", "metadata": {"client": "cursor"}, **prompt})
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={"model": "gpt-x", "metadata": {"client": "cursor"}, **prompt}
+    )
     data, _ = await processor.common_processing_pre_call_logic(
         request=Request({"type": "http", "method": "POST", "path": "/cursor/chat/completions", "headers": []}),
         general_settings={},
@@ -9801,6 +9998,7 @@ async def test_cursor_route_writes_proxy_fields_only_to_the_field_its_body_shape
     assert "user_api_key_alias" not in data.get(client_field, {})
     assert "queue_time_seconds" not in data.get(client_field, {})
     assert data["metadata"]["client"] == "cursor"
+
 
 class TestPerRequestModelGroupAlias:
     """``router_settings.model_group_alias`` on a key or team has to be resolved
@@ -12637,7 +12835,9 @@ class TestResponseCostFromLoggingObjForCacheHits:
             proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
         )
 
-        cost_headers: Final = {name: value for name, value in headers.items() if name.startswith("x-litellm-response-cost")}
+        cost_headers: Final = {
+            name: value for name, value in headers.items() if name.startswith("x-litellm-response-cost")
+        }
         assert cost_headers == {"x-litellm-response-cost-output": "0.0012"}
 
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):

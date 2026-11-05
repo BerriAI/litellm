@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Combobox,
   ComboboxChip,
@@ -14,6 +15,7 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
+import i18n from "@/i18n/i18n";
 
 export interface MultiSelectOption {
   label: string;
@@ -57,14 +59,15 @@ export function MultiSelect({
   options,
   value = [],
   onValueChange,
-  placeholder = "Select options",
-  emptyText = "No options found",
+  placeholder = i18n.t("shared.multiSelect.placeholder"),
+  emptyText = i18n.t("shared.multiSelect.empty"),
   disabled = false,
   loading = false,
   allowCustomValues = false,
   className,
   contentClassName,
 }: MultiSelectProps) {
+  const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
   const safeOptions = options.filter(
@@ -84,7 +87,7 @@ export function MultiSelect({
   const customOptionExists = safeOptions.some((option) => option.value.toLowerCase() === customOption.toLowerCase());
   const items =
     allowCustomValues && customOption && !customOptionExists
-      ? [...safeOptions, { label: `Create "${customOption}"`, value: customOption }]
+      ? [...safeOptions, { label: t("shared.multiSelect.createOption", { value: customOption }), value: customOption }]
       : safeOptions;
 
   const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
@@ -121,11 +124,13 @@ export function MultiSelect({
               ))}
               <ComboboxChipsInput
                 id={id}
-                placeholder={loading ? "Loading..." : placeholder}
+                placeholder={loading ? t("shared.multiSelect.loading") : placeholder}
                 className="min-w-24"
                 aria-label={placeholder || undefined}
               />
-              {canClear(selected) && <ComboboxClear className="ml-auto self-center" aria-label="Clear all" />}
+              {canClear(selected) && (
+                <ComboboxClear className="ml-auto self-center" aria-label={t("shared.multiSelect.clearAll")} />
+              )}
             </>
           )}
         </ComboboxValue>
