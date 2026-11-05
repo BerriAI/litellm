@@ -559,28 +559,34 @@ class TestInteractionsAcreateOffline:
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
-    async def test_acreate_gemini_keeps_continuation_token_out_of_the_request(self, respx_mock: MockRouter) -> None:
+    async def test_acreate_gemini_sends_a_caller_continuation_token_to_resume_a_decode(
+        self, respx_mock: MockRouter
+    ) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
             return_value=httpx.Response(
                 200,
                 json={
                     "id": "interaction-offline",
                     "object": "interaction",
-                    "model": "gemini-3.8-flash",
+                    "model": "gemini-4-argon",
                     "status": "completed",
                     "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hi"}]}],
-                    "usage": {"input_tokens": 6, "output_tokens": 3},
+                    "usage": {"total_input_tokens": 6, "total_output_tokens": 3},
                 },
             )
         )
         response: Final = await interactions.acreate(
-            model="gemini/gemini-3.8-flash",
-            input="Prove it",
+            model="gemini/gemini-4-argon",
+            previous_interaction_id="interaction-hop-1",
             continuation_token="dG9rLTE=",
             api_key="gemini-offline",
         )
-        # The Interactions API answered 400 "Unknown parameter 'continuation_token'." on 2026-10-13
-        assert json.loads(route.calls.last.request.content) == {"model": "gemini-3.8-flash", "input": "Prove it"}
+        # Google's spec (2026-11-05) takes continuation_token on CreateModelInteractionParams; a 2026-10-13 400 is gone
+        assert json.loads(route.calls.last.request.content) == {
+            "model": "gemini-4-argon",
+            "previous_interaction_id": "interaction-hop-1",
+            "continuation_token": "dG9rLTE=",
+        }
         assert response.status == "completed"
 
     @pytest.mark.usefixtures("fake_provider_credentials")
@@ -746,9 +752,7 @@ def test_create_with_system_instruction_for_google_and_responses(
 def test_create_streaming_returns_interaction_events(
     respx_mock: MockRouter,
 ) -> None:
-    route: Final = respx_mock.post(
-        "https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse"
-    ).mock(
+    route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse").mock(
         return_value=httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -856,3 +860,180 @@ def test_create_streaming_hands_completed_interaction_to_success_callback(
     )
 
     assert recorder.logged == (_GEMINI_COMPLETED_INTERACTION,)
+
+
+_GEMINI_URL: Final = "https://generativelanguage.googleapis.com/v1beta/interactions"
+_LONG_DECODE_REQUEST_CONFIG: Final = {"generation_config": {"max_output_tokens": 120000, "thinking_level": "high"}}
+_LONG_DECODE_REQUEST: Final = {
+    "model": "gemini/gemini-4-argon",
+    "input": "Prove the prime number theorem.",
+    **_LONG_DECODE_REQUEST_CONFIG,
+}
+_LONG_DECODE_WIRE_REQUEST: Final = {
+    "model": "gemini-4-argon",
+    "input": "Prove the prime number theorem.",
+    **_LONG_DECODE_REQUEST_CONFIG,
+}
+
+
+def _long_decode_hop(hop_id: str, status: str, text: str, token: str | None, output: int) -> dict[str, object]:
+    return {
+        "id": hop_id,
+        "object": "interaction",
+        "model": "gemini-4-argon",
+        "status": status,
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}],
+        "usage": {
+            "total_input_tokens": 79 if hop_id == "hop-1" else 79 + 32768,
+            "total_output_tokens": output,
+            "total_thought_tokens": 100,
+            "total_tokens": (79 if hop_id == "hop-1" else 79 + 32768) + output + 100,
+            "initial_input_tokens": 79,
+        },
+        "continuation_token": token,
+    }
+
+
+_LONG_DECODE_HOPS: Final = (
+    _long_decode_hop("hop-1", "requires_continuation", "Lemma 1.", "tok-1", 32668),
+    _long_decode_hop("hop-2", "completed", " QED.", None, 1200),
+)
+
+
+async def _create_long_decode(sync_mode: bool) -> dict[str, object]:
+    if sync_mode:
+        return interactions.create(**_LONG_DECODE_REQUEST, api_key="gemini-offline").model_dump(exclude_none=True)
+    response: Final = await interactions.acreate(**_LONG_DECODE_REQUEST, api_key="gemini-offline")
+    return response.model_dump(exclude_none=True)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.asyncio
+async def test_a_requires_continuation_answer_is_continued_and_returned_as_one_interaction(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(_GEMINI_URL).mock(
+        side_effect=[httpx.Response(200, json=hop) for hop in _LONG_DECODE_HOPS]
+    )
+
+    response: Final = await _create_long_decode(sync_mode)
+
+    assert [json.loads(call.request.content) for call in route.calls] == [
+        _LONG_DECODE_WIRE_REQUEST,
+        {
+            "model": "gemini-4-argon",
+            **_LONG_DECODE_REQUEST_CONFIG,
+            "previous_interaction_id": "hop-1",
+            "continuation_token": "tok-1",
+        },
+    ]
+    assert response["id"] == "hop-2"
+    assert response["status"] == "completed"
+    assert "continuation_token" not in response
+    assert [content["text"] for step in response["steps"] for content in step["content"]] == ["Lemma 1.", " QED."]
+    assert response["usage"] == {
+        "total_input_tokens": 79 + 79 + 32768,
+        "total_output_tokens": 32668 + 1200,
+        "total_thought_tokens": 200,
+        "total_tokens": 79 + 32668 + 100 + 79 + 32768 + 1200 + 100,
+        "initial_input_tokens": 79,
+    }
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_a_failed_continuation_hop_returns_the_first_hop_with_its_token() -> None:
+    with MockRouter(assert_all_called=True) as respx_mock:
+        respx_mock.post(_GEMINI_URL).mock(
+            side_effect=[httpx.Response(200, json=_LONG_DECODE_HOPS[0]), httpx.Response(503, json={"error": "busy"})]
+        )
+
+        response: Final = interactions.create(**_LONG_DECODE_REQUEST, api_key="gemini-offline")
+
+    assert response.status == "requires_continuation"
+    assert response.continuation_token == "tok-1"
+    assert response.id == "hop-1"
+
+
+def _hop_stream(hop: dict[str, object], text: str) -> str:
+    interaction: Final = {key: hop[key] for key in ("id", "object", "model")}
+    completed: Final = {key: value for key, value in hop.items() if key != "steps"}
+    return (
+        f"data: {json.dumps({'event_type': 'interaction.created', 'interaction': interaction})}\n\n"
+        f"data: {json.dumps({'event_type': 'step.delta', 'delta': {'type': 'text', 'text': text}})}\n\n"
+        f"data: {json.dumps({'event_type': 'interaction.completed', 'interaction': completed})}\n\n"
+    )
+
+
+async def _stream_long_decode(sync_mode: bool) -> list[dict[str, object]]:
+    if sync_mode:
+        return [
+            chunk.model_dump(exclude_none=True)
+            for chunk in interactions.create(**_LONG_DECODE_REQUEST, stream=True, api_key="gemini-offline")
+        ]
+    response_stream: Final = await interactions.acreate(**_LONG_DECODE_REQUEST, stream=True, api_key="gemini-offline")
+    return [chunk.model_dump(exclude_none=True) async for chunk in response_stream]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.asyncio
+async def test_a_requires_continuation_stream_goes_on_with_the_next_hop_as_one_stream(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(_GEMINI_STREAM_URL).mock(
+        side_effect=[
+            httpx.Response(200, text=_hop_stream(hop, text), headers={"content-type": "text/event-stream"})
+            for hop, text in zip(_LONG_DECODE_HOPS, ("Lemma 1.", " QED."), strict=True)
+        ]
+    )
+
+    chunks: Final = await _stream_long_decode(sync_mode)
+
+    assert [json.loads(call.request.content) for call in route.calls] == [
+        {**_LONG_DECODE_WIRE_REQUEST, "stream": True},
+        {
+            "model": "gemini-4-argon",
+            **_LONG_DECODE_REQUEST_CONFIG,
+            "stream": True,
+            "previous_interaction_id": "hop-1",
+            "continuation_token": "tok-1",
+        },
+    ]
+    assert [chunk["event_type"] for chunk in chunks] == [
+        "interaction.created",
+        "step.delta",
+        "step.delta",
+        "interaction.completed",
+    ]
+    assert [chunk["delta"]["text"] for chunk in chunks if chunk["event_type"] == "step.delta"] == ["Lemma 1.", " QED."]
+    assert chunks[-1]["interaction"]["id"] == "hop-2"
+    assert chunks[-1]["interaction"]["status"] == "completed"
+    assert chunks[-1]["interaction"]["usage"]["total_output_tokens"] == 32668 + 1200
+    assert chunks[-1]["interaction"]["usage"]["initial_input_tokens"] == 79
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_a_stream_whose_next_hop_fails_ends_with_the_requires_continuation_event() -> None:
+    with MockRouter(assert_all_called=True) as respx_mock:
+        respx_mock.post(_GEMINI_STREAM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    text=_hop_stream(_LONG_DECODE_HOPS[0], "Lemma 1."),
+                    headers={"content-type": "text/event-stream"},
+                ),
+                httpx.Response(503, json={"error": "busy"}),
+            ]
+        )
+
+        chunks: Final = [
+            chunk.model_dump(exclude_none=True)
+            for chunk in interactions.create(**_LONG_DECODE_REQUEST, stream=True, api_key="gemini-offline")
+        ]
+
+    assert [chunk["event_type"] for chunk in chunks] == ["interaction.created", "step.delta", "interaction.completed"]
+    assert chunks[-1]["interaction"]["status"] == "requires_continuation"
+    assert chunks[-1]["interaction"]["continuation_token"] == "tok-1"

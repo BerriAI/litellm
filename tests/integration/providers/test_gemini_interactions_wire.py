@@ -147,6 +147,7 @@ def test_interaction_forwards_native_body_to_gemini(gateway: Gateway, prefix: st
             "agent": None,
             "updated": None,
             "outputs": None,
+            "continuation_token": None,
         }, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
@@ -179,6 +180,7 @@ def test_interaction_authenticates_google_key_header(gateway: Gateway, prefix: s
             "agent": None,
             "updated": None,
             "outputs": None,
+            "continuation_token": None,
         }, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
@@ -218,6 +220,7 @@ def test_agent_interaction_uses_env_gemini_credentials(gateway: Gateway, tmp_pat
                 "agent": "deep-research-pro-preview-12-2025",
                 "updated": None,
                 "outputs": None,
+                "continuation_token": None,
             }, response.text
             assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")], response.text
 
@@ -277,3 +280,120 @@ def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway
         expected: Final = b"".join(_proxy_stream_event(payload, model) for _event_type, payload in _STREAM_EVENTS)
         assert response.content == expected, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]
+
+
+_LONG_DECODE_MODEL: Final = "gemini/gemini-4-argon"
+_LONG_DECODE_BODY: Final = {
+    "input": "prove the prime number theorem",
+    "generation_config": {"max_output_tokens": 120000, "thinking_level": "high"},
+}
+
+
+def _hop(hop_id: str, status: str, text: str, token: str | None, input_tokens: int, output_tokens: int) -> dict:
+    return {
+        "id": hop_id,
+        "object": "interaction",
+        "model": "gemini-4-argon",
+        "status": status,
+        "created": "2026-11-05T00:00:00Z",
+        "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}],
+        "usage": {
+            "total_input_tokens": input_tokens,
+            "total_output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "initial_input_tokens": 79,
+        },
+        "continuation_token": token,
+    }
+
+
+_LONG_DECODE_HOPS: Final = (
+    _hop("interaction-hop-1", "requires_continuation", "Lemma 1.", "tok-1", 79, 32768),
+    _hop("interaction-hop-2", "completed", " QED.", None, 32847, 1533),
+)
+
+
+def test_interaction_continues_a_requires_continuation_answer_into_one_interaction(gateway: Gateway) -> None:
+    replies: Final = iter(_LONG_DECODE_HOPS)
+
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1beta/interactions"
+        return Reply(body=json.dumps(next(replies)).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_LONG_DECODE_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST", "/v1beta/interactions", {"model": model, **_LONG_DECODE_BODY}, key=key
+        )
+        assert response.status_code == 200, response.text
+        sent: Final = [json.loads(r.body) for r in wire.drain()]
+
+    assert sent == [
+        {"model": "gemini-4-argon", **_LONG_DECODE_BODY},
+        {
+            "model": "gemini-4-argon",
+            "generation_config": _LONG_DECODE_BODY["generation_config"],
+            "previous_interaction_id": "interaction-hop-1",
+            "continuation_token": "tok-1",
+        },
+    ], sent
+    payload: Final = response.json()
+    assert payload["id"] == "interaction-hop-2", response.text
+    assert payload["status"] == "completed", response.text
+    assert payload["continuation_token"] is None, response.text
+    assert [c["text"] for step in payload["steps"] for c in step["content"]] == ["Lemma 1.", " QED."], response.text
+    assert payload["usage"] == {
+        "total_input_tokens": 79 + 32847,
+        "total_output_tokens": 32768 + 1533,
+        "total_tokens": 79 + 32768 + 32847 + 1533,
+        "initial_input_tokens": 79,
+    }, response.text
+
+
+def _hop_frames(hop: dict, text: str) -> tuple[bytes, ...]:
+    created: Final = {key: hop[key] for key in ("id", "object", "model")}
+    completed: Final = {key: value for key, value in hop.items() if key != "steps"}
+    return (
+        _sse_event("interaction.created", {"event_type": "interaction.created", "interaction": created}),
+        _sse_event("step.delta", {"event_type": "step.delta", "delta": {"type": "text", "text": text}}),
+        _sse_event("interaction.completed", {"event_type": "interaction.completed", "interaction": completed}),
+    )
+
+
+def test_stream_interaction_continues_a_requires_continuation_answer_as_one_stream(gateway: Gateway) -> None:
+    replies: Final = iter(zip(_LONG_DECODE_HOPS, ("Lemma 1.", " QED."), strict=True))
+
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1beta/interactions?alt=sse"
+        hop, text = next(replies)
+        return Reply(content_type="text/event-stream", chunks=_hop_frames(hop, text))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_LONG_DECODE_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY)
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST", "/v1beta/interactions", {"model": model, **_LONG_DECODE_BODY, "stream": True}, key=key
+        )
+        assert response.status_code == 200, response.text
+        sent: Final = [json.loads(r.body) for r in wire.drain()]
+
+    assert [(body.get("previous_interaction_id"), body.get("continuation_token")) for body in sent] == [
+        (None, None),
+        ("interaction-hop-1", "tok-1"),
+    ], sent
+    events: Final = [
+        json.loads(line.removeprefix(b"data: "))
+        for line in response.content.split(b"\n\n")
+        if line.startswith(b"data: ") and line != _KNOWN_DONE_TERMINATOR.strip()
+    ]
+    assert [event["event_type"] for event in events] == [
+        "interaction.created",
+        "step.delta",
+        "step.delta",
+        "interaction.completed",
+    ], response.text
+    assert [event["delta"]["text"] for event in events if event["event_type"] == "step.delta"] == ["Lemma 1.", " QED."]
+    assert events[-1]["interaction"]["id"] == "interaction-hop-2", response.text
+    assert events[-1]["interaction"]["status"] == "completed", response.text
+    assert events[-1]["interaction"]["usage"]["total_output_tokens"] == 32768 + 1533, response.text
