@@ -437,3 +437,39 @@ async def test_a_rejected_charge_rescue_is_logged_and_the_flush_continues():
     rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
 
     assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) == 9
+
+
+class _StatementValidatingRepository:
+    def __init__(self):
+        self.written = []
+        self.charges_kept = []
+
+    async def insert_with_deliveries(self, rows):
+        from litellm.repositories.spend_log_insert import spend_log_insert_statement
+
+        if all(row.get("accounting_log_disabled") for row in rows):
+            self.charges_kept.extend(row["request_id"] for row in rows)
+            return len(rows)
+        spend_log_insert_statement(rows)
+        self.written.extend(row["request_id"] for row in rows)
+        return len(rows)
+
+
+@pytest.mark.asyncio
+async def test_a_row_the_insert_statement_rejects_is_dropped_alone_and_keeps_its_charge():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _StatementValidatingRepository()
+    rows = [
+        {"request_id": "good", "call_type": "acompletion", "messages": "[]"},
+        {
+            "request_id": "unparseable",
+            "call_type": "acompletion",
+            "messages": "not json",
+            "accounting_payload": {"spend": 1.0},
+        },
+    ]
+
+    assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) < 10
+    assert repo.written == ["good"]
+    assert repo.charges_kept == ["unparseable"]

@@ -9174,7 +9174,7 @@ async def _keep_charges_of_dropped_logs(repo: SpendLogsRepository, rows: Sequenc
     try:
         await repo.insert_with_deliveries(charged)
     except Exception as e:  # noqa: BLE001  # the request log is already lost; keep the flush going for other rows
-        if not (PrismaDBExceptionHandler.is_rejected_row_error(e) or isinstance(e, UnicodeEncodeError)):
+        if not (PrismaDBExceptionHandler.is_rejected_row_error(e) or isinstance(e, (UnicodeEncodeError, ValueError))):
             raise
         spend_log_error(
             "Spend tracking - could not keep the charges of %d dropped spend log rows. error=%s",
@@ -9215,7 +9215,7 @@ async def _create_spend_logs_with_poison_isolation(
         await repo.insert_with_deliveries(rows)
         return failure_budget
     except Exception as e:
-        if not (PrismaDBExceptionHandler.is_rejected_row_error(e) or isinstance(e, UnicodeEncodeError)):
+        if not (PrismaDBExceptionHandler.is_rejected_row_error(e) or isinstance(e, (UnicodeEncodeError, ValueError))):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise
