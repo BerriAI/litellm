@@ -13760,7 +13760,9 @@ async def test_failure_with_redaction_off_logs_the_error_as_raised(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_failure_redacts_messages_and_error_for_a_callback_that_opted_out_of_message_logging(monkeypatch):
+async def test_failure_redacts_messages_and_error_for_a_callback_that_opted_out_of_message_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     opted_out: Final = _FailureCapture(message_logging=False)
     logging_everything: Final = _FailureCapture()
     monkeypatch.setattr(litellm, "turn_off_message_logging", False)
@@ -13776,7 +13778,9 @@ async def test_failure_redacts_messages_and_error_for_a_callback_that_opted_out_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capture_type", [_FailureCapture, _SelfRedactingFailureCapture])
-async def test_failure_scrubs_the_error_for_a_callback_with_its_own_turn_off_message_logging(monkeypatch, capture_type):
+async def test_failure_scrubs_the_error_for_a_callback_with_its_own_turn_off_message_logging(
+    monkeypatch: pytest.MonkeyPatch, capture_type: type[_FailureCapture]
+) -> None:
     capture: Final = capture_type(turn_off_message_logging=True)
 
     kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error(), capture=capture)
@@ -13786,7 +13790,7 @@ async def test_failure_scrubs_the_error_for_a_callback_with_its_own_turn_off_mes
 
 
 @pytest.mark.asyncio
-async def test_failure_payload_keeps_the_excluded_fields(monkeypatch):
+async def test_failure_payload_keeps_the_excluded_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["metadata"])
 
     kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error())
