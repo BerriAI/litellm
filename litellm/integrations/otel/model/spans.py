@@ -343,6 +343,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_ClaudeCodePluginUpload",
         "LiteLLM_ClaudeCodePluginVersion",
         "LiteLLM_SkillSubmission",
+        "LiteLLM_ClaudeCodePluginDownload",
         "LiteLLM_MemoryTable",
         "LiteLLM_AdaptiveRouterState",
         "LiteLLM_AdaptiveRouterSession",

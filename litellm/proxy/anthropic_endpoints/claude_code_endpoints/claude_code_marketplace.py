@@ -27,14 +27,17 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, get_args
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import Json, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import is_https_url_with_host
 from litellm.models.plugin_upload import (
+    PluginDownloader,
+    PluginDownloadResult,
+    PluginDownloadsResponse,
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
@@ -240,6 +243,27 @@ async def upload_plugin(
     )
 
 
+def require_download_recorded(result: PluginDownloadResult) -> None:
+    match result:
+        case PluginDownloadResult.RECORDED:
+            return
+        case PluginDownloadResult.SKILL_NOT_FOUND:
+            raise _error_response(404, "Skill archive not found")
+        case _:
+            assert_never(result)
+
+
+def plugin_downloader(caller: UserAPIKeyAuth | None) -> PluginDownloader:
+    return PluginDownloader(
+        authenticated=caller is not None,
+        user_id=caller.user_id if caller is not None else None,
+        user_email=caller.user_email if caller is not None else None,
+        key_alias=caller.key_alias if caller is not None else None,
+        team_id=caller.team_id if caller is not None else None,
+        team_alias=caller.team_alias if caller is not None else None,
+    )
+
+
 @router.get(
     "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
     tags=["Claude Code Marketplace"],
@@ -273,6 +297,7 @@ async def download_plugin_archive(
     content: Final = await uploads.get_content(archive)
     if content is None:
         raise _error_response(404, "Skill archive not found")
+    require_download_recorded(await uploads.record_download(archive, digest, plugin_downloader(caller)))
     return Response(
         content=content,
         media_type="application/zip",
@@ -282,6 +307,35 @@ async def download_plugin_archive(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get(
+    "/claude-code/plugins/{plugin_name}/downloads",
+    tags=["Claude Code Marketplace"],
+    response_model=PluginDownloadsResponse,
+)
+async def get_plugin_downloads(
+    plugin_name: str,
+    uploads: PluginUploadRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    limit: Annotated[int, Query(ge=1, le=100, description="Maximum number of download events")] = 25,
+    cursor: Annotated[str | None, Query(pattern=r"^[1-9][0-9]{0,18}$", description="Previous next_cursor")] = None,
+) -> PluginDownloadsResponse:
+    """Admin-only ZIP download totals and authenticated downloader history.
+
+    Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+    starting when tracking is deployed. External sources and installation completion are not observed.
+    """
+    _require_proxy_admin(user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    before: Final = int(cursor) if cursor is not None else None
+    if before is not None and before > 9223372036854775807:
+        raise _error_response(422, "Invalid download cursor")
+    result: Final = await uploads.downloads(plugin_name, limit, before)
+    if result is None:
+        raise _error_response(404, "Plugin not found")
+    return result
 
 
 @router.get(

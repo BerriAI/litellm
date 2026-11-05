@@ -25,6 +25,7 @@ const published: SkillHubSkill = {
   download_url: "/skill-hub/skills/shared-skill/archive",
   content_url: "/skill-hub/skills/shared-skill/content",
   updated_at: "2026-10-20T00:00:00Z",
+  download_count: 0,
 };
 
 const pending: SkillSubmission = {
@@ -234,6 +235,24 @@ const openEdit = async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Edit Skill" }));
   return screen.getByRole("dialog");
 };
+
+it.each(["current", "retained"])("refreshes published counts after a %s download", async (kind) => {
+  URL.createObjectURL = vi.fn(() => "blob:skill-download");
+  renderWithProviders(<ClaudeCodePluginsPanel accessToken="admin-token" userRole="Admin" />);
+  expect(await screen.findByRole("cell", { name: "0" })).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByText(published.name));
+  await screen.findByRole("button", { name: "Edit Skill" });
+  if (kind === "retained") fireEvent.click(screen.getByRole("tab", { name: "Version history" }));
+  const button = await screen.findByRole("button", {
+    name: kind === "retained" ? "Download retained ZIP" : "Download ZIP",
+  });
+  catalog = [{ ...published, download_count: 1 }];
+  fireEvent.click(button);
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(screen.getByText("Skills"));
+  expect(await screen.findByRole("cell", { name: "1" })).toBeInTheDocument();
+});
 
 it("paginates the neutral catalog and refreshes detail for a recreated skill", async () => {
   catalog = [
@@ -624,6 +643,7 @@ it.each(["role", "read-only"])("does not reuse a published admin snapshot after 
   expect(screen.queryByText("Approved instructions")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Edit Skill" })).not.toBeInTheDocument();
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not refresh published skills");
+  expect(screen.queryByRole("columnheader", { name: "Downloads" })).not.toBeInTheDocument();
 });
 
 it("does not reuse admin review metadata when the same account loses its role and detail refresh fails", async () => {

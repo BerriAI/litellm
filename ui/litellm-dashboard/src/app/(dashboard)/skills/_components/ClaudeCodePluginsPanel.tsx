@@ -57,11 +57,20 @@ interface CatalogSkillDetailProps {
   accessToken: string | null;
   queryScope: QueryKey;
   canWrite: boolean;
+  isAdmin: boolean;
   onBack: () => void;
   onEdit: (skill: SkillHubSkill) => void;
 }
 
-function CatalogSkillDetail({ skill, accessToken, queryScope, canWrite, onBack, onEdit }: CatalogSkillDetailProps) {
+function CatalogSkillDetail({
+  skill,
+  accessToken,
+  queryScope,
+  canWrite,
+  isAdmin,
+  onBack,
+  onEdit,
+}: CatalogSkillDetailProps) {
   const { t } = useTranslation();
   const detail = useQuery({
     queryKey: [...queryScope, "detail", skill.id, skill.name],
@@ -82,6 +91,7 @@ function CatalogSkillDetail({ skill, accessToken, queryScope, canWrite, onBack, 
         skill={skillHubDetail(detail.data ?? skill)}
         onBack={onBack}
         accessToken={accessToken}
+        isAdmin={isAdmin}
         onEditClick={canWrite && detail.isSuccess && !detail.isFetching ? () => onEdit(detail.data) : undefined}
       />
     </>
@@ -156,6 +166,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
       {selectedSkill ? (
         <CatalogSkillDetail
           skill={selectedSkill}
+          isAdmin={isAdmin}
           accessToken={accessToken}
           queryScope={queryScope}
           canWrite={canWrite}

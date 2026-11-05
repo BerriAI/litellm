@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from types import MappingProxyType
 from typing import Literal, Protocol
 
@@ -97,6 +98,43 @@ class PluginSnapshot:
     created_by: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class PluginDownloader:
+    authenticated: bool
+    user_id: str | None
+    user_email: str | None
+    key_alias: str | None
+    team_id: str | None
+    team_alias: str | None
+
+
+class PluginDownloadResult(Enum):
+    RECORDED = "recorded"
+    SKILL_NOT_FOUND = "skill_not_found"
+
+
+@dataclass(frozen=True, slots=True)
+class PluginDownloadEvent:
+    id: str
+    downloaded_at: datetime
+    version: str | None
+    digest: str
+    authenticated: bool
+    user_id: str | None
+    user_email: str | None
+    key_alias: str | None
+    team_id: str | None
+    team_alias: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PluginDownloadsResponse:
+    total_downloads: int
+    anonymous_downloads: int
+    downloads: tuple[PluginDownloadEvent, ...]
+    next_cursor: str | None
+
+
 class PluginUploadStore(Protocol):
     async def create(self, upload: PluginUpload) -> str | None: ...
 
@@ -117,3 +155,11 @@ class PluginUploadStore(Protocol):
     async def get_content(self, metadata: PluginArchiveMetadata) -> bytes | None: ...
 
     def public_metadata(self) -> AsyncIterator[PluginArchiveMetadata]: ...
+
+    async def record_download(
+        self, metadata: PluginArchiveMetadata, digest: str, downloader: PluginDownloader
+    ) -> PluginDownloadResult: ...
+
+    async def downloads(self, name: str, limit: int, cursor: int | None) -> PluginDownloadsResponse | None: ...
+
+    async def download_counts(self, plugin_ids: tuple[str, ...]) -> Mapping[str, int]: ...
