@@ -27,6 +27,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
+from litellm.caching.caching import REQUEST_MESSAGE_COUNT_KWARG
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
@@ -422,6 +423,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "guardrail_scan_metadata",
     "routing_decision",
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
+    REQUEST_MESSAGE_COUNT_KWARG,
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",

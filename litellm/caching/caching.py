@@ -114,6 +114,8 @@ def request_message_count(kwargs: Mapping[str, object]) -> int:
     if isinstance(messages, list):
         return len(messages)
     input_items: Final = kwargs.get("input")
+    if isinstance(input_items, str):
+        return 0 if kwargs.get("call_type") in ("embedding", "aembedding") else 1
     if not isinstance(input_items, list):
         return 0
     items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown

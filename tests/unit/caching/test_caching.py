@@ -1125,6 +1125,37 @@ def test_bridged_responses_counts_caller_input_items_against_max_messages(
     assert second._hidden_params.get("cache_hit") is None
 
 
+@respx.mock
+def test_bridged_responses_counts_string_input_as_one_message_against_max_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.caching import REQUEST_MESSAGE_COUNT_KWARG
+    from litellm.proxy.litellm_pre_call_utils import _UNTRUSTED_ROOT_CONTROL_FIELDS
+
+    assert REQUEST_MESSAGE_COUNT_KWARG in _UNTRUSTED_ROOT_CONTROL_FIELDS
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, max_messages=0))
+    route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.responses(model="anthropic/claude-sonnet-4-5", input="hello", api_key="k")
+    second: Final = litellm.responses(model="anthropic/claude-sonnet-4-5", input="hello", api_key="k")
+
+    assert route.call_count == 2
+    assert second._hidden_params.get("cache_hit") is None
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_bridged_aresponses_counts_caller_input_items_against_max_messages(
