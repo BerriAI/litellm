@@ -261,16 +261,18 @@ REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = Ma
         "avideo_create_character": ("name", "video"),
         "acreate_container": ("name",),
         "aupload_container_file": ("file",),
+        "acreate_interaction": ("input",),
         "acreate_eval": ("data_source_config", "testing_criteria"),
         "acreate_run": ("data_source",),
     }
 )
 
-REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[tuple[str, str], ...]]] = MappingProxyType(
-    {
-        "acreate_interaction": (("model", "agent"), ("input", "continuation_token")),
-        "acreate_agent": (("id", "name"),),
-    }
+REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {"acreate_interaction": ("model", "agent"), "acreate_agent": ("id", "name")}
+)
+
+BODY_PARAM_ALTERNATIVES_BY_ROUTE: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = MappingProxyType(
+    {"acreate_interaction": MappingProxyType({"input": ("continuation_token",)})}
 )
 
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -313,24 +315,20 @@ def _find_missing_required_body_param(
     data: Mapping[str, object],
     llm_router: LitellmRouter | None,
 ) -> MissingBodyParam | None:
-    missing_one_of_group: Final = next(
-        (
-            group
-            for group in REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type, ())
-            if all(data.get(param) is None for param in group)
-        ),
-        None,
-    )
-    if missing_one_of_group is not None:
-        return MissingBodyParam(name=missing_one_of_group[0], model_deployments_loaded=True)
+    one_of_params: Final = REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type)
+    if one_of_params is not None and all(data.get(param) is None for param in one_of_params):
+        return MissingBodyParam(name=one_of_params[0], model_deployments_loaded=True)
     missing_merge_base_param: Final = next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
         None,
     )
     if missing_merge_base_param is not None:
         return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
+    alternatives: Final = BODY_PARAM_ALTERNATIVES_BY_ROUTE.get(route_type, {})
     missing_present_params: Final = tuple(
-        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+        param
+        for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ())
+        if param not in data and not any(alternative in data for alternative in alternatives.get(param, ()))
     )
     if not missing_present_params:
         return None
