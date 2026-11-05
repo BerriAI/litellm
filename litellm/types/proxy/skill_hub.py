@@ -1,9 +1,10 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import ConfigDict, Field
 
+from litellm.models.skill_submission import SubmissionOperation, SubmissionStatus
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -19,6 +20,9 @@ class SkillHubSkill(LiteLLMBaseModel):
     source: Mapping[str, str]
     download_url: str | None = None
     content_url: str | None = None
+    domain: str | None = None
+    namespace: str | None = None
+    keywords: tuple[str, ...] | None = None
 
 
 class SkillHubList(LiteLLMBaseModel):
@@ -74,3 +78,85 @@ class SkillHubVersions(LiteLLMBaseModel):
 
     versions: tuple[SkillHubVersion, ...]
     next_offset: int | None
+
+
+class SkillHubAgentSkill(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str
+    digest: str
+    origin: str | None
+
+
+class SkillHubProposal(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str | None
+    version: str | None
+    domain: str | None = None
+    namespace: str | None = None
+    keywords: tuple[str, ...] | None = None
+    source: Mapping[str, str]
+    agent_skill: SkillHubAgentSkill | None = None
+
+
+class SkillHubPendingSkill(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["pending_review"] = "pending_review"
+    action: Literal["submitted"] = "submitted"
+    submission_id: str
+    proposal: SkillHubProposal
+
+
+SkillHubMutationResponse: TypeAlias = SkillHubSkill | SkillHubPendingSkill
+
+
+class SkillHubSubmission(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    skill_name: str
+    operation: SubmissionOperation
+    status: SubmissionStatus
+    proposal: SkillHubProposal
+    has_archive: bool
+    submitted_by: str
+    created_at: datetime
+    base_skill_id: str | None
+    base_updated_at: datetime | None
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    rejection_reason: str | None
+
+
+class SkillHubSubmissionList(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    submissions: tuple[SkillHubSubmission, ...]
+    count: int
+    has_more: bool
+
+
+class SkillHubSubmissionDetail(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    submission: SkillHubSubmission
+    current_skill: SkillHubSkill | None
+
+
+class SkillHubReviewResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["success"] = "success"
+    action: Literal["approved", "rejected"]
+    submission: SkillHubSubmission
+    skill: SkillHubSkill | None
+
+
+class SkillHubRejection(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: str | None = Field(None, max_length=2000)

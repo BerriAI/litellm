@@ -1,11 +1,22 @@
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Literal, Protocol
 
 
 def has_agent_skill_metadata(manifest: Mapping[str, object]) -> bool:
     return isinstance(manifest.get("agent_skill"), dict)
+
+
+def uploaded_plugin_source(base_url: str, name: str, digest: str) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            "source": "archive",
+            "url": f"{base_url.rstrip('/')}/claude-code/plugins/{name}/archive/{digest}.zip",
+            "sha256": digest,
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,8 +84,23 @@ class PluginVersion:
     archive_available: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PluginSnapshot:
+    id: str
+    name: str
+    version: str | None
+    description: str | None
+    manifest: Mapping[str, object]
+    enabled: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+    created_by: str | None
+
+
 class PluginUploadStore(Protocol):
     async def create(self, upload: PluginUpload) -> str | None: ...
+
+    async def get_plugin(self, name: str) -> PluginSnapshot | None: ...
 
     async def publish(
         self, publication: PluginPublication, expected: PluginPublicationBase | None = None
