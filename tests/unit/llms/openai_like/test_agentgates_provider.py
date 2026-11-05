@@ -1,6 +1,7 @@
 import json
+from functools import partial
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 import respx
@@ -249,3 +250,45 @@ async def test_agentgates_anthropic_messages_request_is_bridged_to_chat_completi
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert body["max_tokens"] == 32
     assert any(block.get("text") == "Hello from Agentgates" for block in response["content"])
+
+
+@pytest.mark.parametrize("provider_api", ("chat", "responses", "messages"))
+def test_missing_agentgates_key_does_not_use_other_provider_credentials(
+    provider_api: Literal["chat", "responses", "messages"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AGENTGATES_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "unrelated-openai-key")
+    call: Final = {
+        "chat": partial(
+            litellm.completion, model="agentgates/gpt-oss-120b", messages=[{"role": "user", "content": "Say hello"}]
+        ),
+        "responses": partial(litellm.responses, model="agentgates/gpt-oss-120b", input="Say hello"),
+        "messages": partial(
+            litellm.anthropic.messages.create,
+            model="agentgates/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+        ),
+    }[provider_api]
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="AGENTGATES_API_KEY"):
+            call()
+
+    assert route.call_count == 0
+
+
+def test_agentgates_env_key_is_sent_without_the_openai_organization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTGATES_API_KEY", "ag_env_key")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "unrelated-openai-org")
+    monkeypatch.delenv("OPENAI_ORG_ID", raising=False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    with respx.mock() as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(model="agentgates/gpt-oss-120b", messages=[{"role": "user", "content": "Say hello"}])
+
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer ag_env_key"
+    assert "openai-organization" not in request.headers
