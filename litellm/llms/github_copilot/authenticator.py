@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import time
-from typing import Final
+from typing import Final, Protocol, cast  # noqa: TID251  # pins untyped clients and caches to local Protocols
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -45,12 +45,27 @@ class _AccessTokenPoll(TypedDict):
     error: ReadOnly[NotRequired[object]]
 
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_OBJECT: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
-_COPILOT_API_BASE_CACHE: Final = InMemoryCache(
-    max_size_in_memory=1000,
-    default_ttl=GITHUB_COPILOT_USER_SESSION_TTL_SECONDS,
+
+
+class _CopilotAPIBaseCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: str, ttl: float | None = None) -> object: ...
+
+
+class _SyncGetClient(Protocol):
+    def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response: ...
+
+
+_COPILOT_API_BASE_CACHE: Final[_CopilotAPIBaseCache] = cast(
+    _CopilotAPIBaseCache,
+    InMemoryCache(
+        max_size_in_memory=1000,
+        default_ttl=GITHUB_COPILOT_USER_SESSION_TTL_SECONDS,
+    ),
 )
 
 
@@ -61,16 +76,14 @@ def _copilot_api_base_for_token(access_token: str) -> str | None:
         return cached_api_base
 
     try:
-        response: Final = get_httpx_client().get(
+        response: Final = cast(_SyncGetClient, get_httpx_client()).get(
             DEFAULT_GITHUB_COPILOT_USER_URL,
             headers=github_api_headers(access_token),
         )
         if not response.is_success:
             return None
-        payload: Final = _JSON_OBJECT.validate_python(response.json())
-        endpoints: Final[object] = payload.get("endpoints")
-        if not isinstance(endpoints, dict):
-            return None
+        payload: Final[dict[str, object]] = _JSON_OBJECT.validate_python(response.json())
+        endpoints: Final[dict[str, object]] = _JSON_OBJECT.validate_python(payload.get("endpoints"))
         api_base: Final[object] = endpoints.get("api")
         if not isinstance(api_base, str):
             return None

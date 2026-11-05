@@ -14,6 +14,7 @@ import pytest
 import litellm
 from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST, GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 from litellm.exceptions import (
+    APIConnectionError,
     AuthenticationError,
     BadRequestError,
     CallerCredentialAuthenticationError,
@@ -306,6 +307,42 @@ async def test_acheck_copilot_seat_rejects_models_403(per_user_credential):
         "https://api.githubcopilot.com/models",
     ]
     assert requests[1].headers["Authorization"] == "Bearer gh-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "error_type"),
+    [(429, CallerCredentialRateLimitError), (500, ServiceUnavailableError)],
+)
+async def test_acheck_copilot_seat_maps_models_failures(
+    per_user_credential,
+    status: int,
+    error_type: type[Exception],
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == COPILOT_USER_URL:
+            return httpx.Response(200, json=_user_payload(), request=request)
+        if str(request.url) == "https://api.githubcopilot.com/models":
+            return httpx.Response(status, request=request)
+        pytest.fail(f"unexpected request to {request.url}")
+
+    with github_http(respond):
+        with pytest.raises(error_type):
+            await acheck_copilot_seat("user-a", "gh-token", "copilot-cred", _GITHUB_ENDPOINTS)
+
+
+@pytest.mark.asyncio
+async def test_acheck_copilot_seat_maps_models_request_errors(per_user_credential) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == COPILOT_USER_URL:
+            return httpx.Response(200, json=_user_payload(), request=request)
+        if str(request.url) == "https://api.githubcopilot.com/models":
+            raise httpx.ConnectError("connection failed", request=request)
+        pytest.fail(f"unexpected request to {request.url}")
+
+    with github_http(respond):
+        with pytest.raises(APIConnectionError, match="models check request failed"):
+            await acheck_copilot_seat("user-a", "gh-token", "copilot-cred", _GITHUB_ENDPOINTS)
 
 
 @pytest.mark.asyncio

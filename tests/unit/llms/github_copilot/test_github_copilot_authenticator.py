@@ -137,6 +137,22 @@ def test_get_api_base_returns_none_when_user_lookup_response_has_no_endpoint(
         assert Authenticator().get_api_base() is None
 
 
+def test_get_api_base_returns_none_when_user_lookup_endpoints_are_not_a_mapping(
+    logged_in_token_dir: tuple[Path, str],
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.get(COPILOT_USER_URL).respond(json={"endpoints": []})
+        assert Authenticator().get_api_base() is None
+
+
+def test_get_api_base_rejects_untrusted_user_endpoint(
+    logged_in_token_dir: tuple[Path, str],
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.get(COPILOT_USER_URL).respond(json={"endpoints": {"api": "https://attacker.example"}})
+        assert Authenticator().get_api_base() is None
+
+
 def test_get_api_base_does_not_trigger_device_login_without_saved_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
