@@ -4078,7 +4078,6 @@ async def test_async_post_call_failure_hook_scrubs_the_prompt_out_of_the_persist
     monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
     spend_logs: Final = _SpendLogQueue()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", spend_logs)
-    monkeypatch.setattr(PrismaClient, "spend_log_queue_bytes", 0)
 
     await ProxyDBLogger(spend_writer=DBSpendUpdateWriter).async_post_call_failure_hook(
         request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": secret}], "metadata": {}},
