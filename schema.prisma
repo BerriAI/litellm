@@ -1652,6 +1652,7 @@ model LiteLLM_SkillSubmission {
   reviewed_by      String?
   reviewed_at      DateTime?
   rejection_reason String?
+  scan_json        String?
 
   @@index([submitted_by, created_at(sort: Desc), id(sort: Desc)])
   @@index([submitted_by, status, created_at(sort: Desc), id(sort: Desc)])

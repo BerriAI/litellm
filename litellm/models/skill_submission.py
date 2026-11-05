@@ -9,6 +9,7 @@ from litellm.models.plugin_upload import (
     PluginPublicationError,
     PublishedPlugin,
 )
+from litellm.types.proxy.skill_scanning import SkillScan
 
 SubmissionStatus: TypeAlias = Literal["pending_review", "approved", "rejected"]
 SubmissionOperation: TypeAlias = Literal["create", "update"]
@@ -70,7 +71,22 @@ class SubmissionReviewed:
 SubmissionReviewResult: TypeAlias = SubmissionReviewed | SubmissionMissing | SubmissionConflict | PluginPublicationError
 
 
+@dataclass(frozen=True, slots=True)
+class SkillScanInput:
+    scan: SkillScan
+    source: Mapping[str, str]
+    content: bytes | None
+
+
 class SkillSubmissionStore(Protocol):
+    async def get_scan(self, submission_id: str) -> SkillScan | SubmissionMissing | None: ...
+
+    async def start_scan(
+        self, submission_id: str, scan: SkillScan
+    ) -> SkillScanInput | SubmissionMissing | SubmissionConflict: ...
+
+    async def finish_scan(self, submission_id: str, scan: SkillScan) -> None: ...
+
     async def submit(
         self, upload: PluginPublication, submitted_by: str, base: PluginPublicationBase | None
     ) -> SkillSubmission | SubmissionLimitExceeded: ...

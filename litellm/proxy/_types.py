@@ -88,6 +88,7 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -467,6 +468,7 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/submissions/{submission_id}/archive",
         "/skill-hub/submissions/{submission_id}/approve",
         "/skill-hub/submissions/{submission_id}/reject",
+        "/skill-hub/submissions/{submission_id}/scan",
     )
 
     litellm_native_routes = [
@@ -3040,6 +3042,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
+    skill_scanner: SkillScannerConfig | None = Field(
+        None, description="Opt-in external scanner for manual admin review of skill submissions"
     )
     mcp_required_fields: list[str] | None = Field(
         None,
