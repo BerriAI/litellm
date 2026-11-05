@@ -90,6 +90,8 @@ def _is_permanent_failure(error: Exception) -> bool:
     and clears once it recovers."""
     from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(error):
+        return False
     return isinstance(error, (ValueError, TypeError, KeyError)) or PrismaDBExceptionHandler.is_rejected_row_error(error)
 
 

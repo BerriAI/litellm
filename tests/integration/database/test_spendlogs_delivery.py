@@ -245,6 +245,26 @@ async def test_a_locked_database_never_parks_a_valid_delivery(delivery_database,
     assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
 
 
+@pytest.mark.asyncio
+async def test_an_unreachable_database_reported_as_a_data_error_never_parks_a_delivery(
+    delivery_database, delivery_client
+):
+    from prisma.errors import DataError
+
+    _insert(delivery_database, (_row("valid"),))
+
+    async def unreachable(transaction, deliveries):
+        raise DataError(data={"user_facing_error": {"message": "Can't reach database server at `db`:`5432`"}})
+
+    repository = AccountingDeliveryRepository(delivery_client)
+    for _ in range(3):
+        assert (await repository.apply_pending(unreachable, max_attempts=2)).parked == ()
+        delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
+    assert delivery_database.execute('SELECT state::text, attempts FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+        ("pending", 3)
+    ]
+
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def delivery_client(delivery_database: psycopg.Connection[tuple[object, ...]]) -> AsyncIterator[Prisma]:
     url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
