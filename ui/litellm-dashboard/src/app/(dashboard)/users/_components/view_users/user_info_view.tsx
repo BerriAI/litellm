@@ -36,6 +36,7 @@ import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
+import { toUserEditData } from "../user_edit_data";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
@@ -410,25 +411,7 @@ export default function UserInfoView({
     userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
-  // Build a legacy-compatible shape for UserEditView
-  const userDataForEdit = {
-    user_id: userData.user_id,
-    user_info: {
-      user_email: userData.user_email,
-      user_alias: userData.user_alias,
-      user_role: userData.user_role,
-      models: userData.models,
-      max_budget: userData.max_budget,
-      tpm_limit: userData.tpm_limit,
-      rpm_limit: userData.rpm_limit,
-      budget_duration: userData.budget_duration,
-      metadata: userData.metadata,
-      // Without these the per-model budget editor mounts empty and a save
-      // replaces the user's existing budgets with whatever was typed.
-      model_max_budget: userData.model_max_budget,
-      model_max_budget_usage: userData.model_max_budget_usage,
-    },
-  };
+  const userDataForEdit = toUserEditData(userData);
 
   return (
     <div className="p-4">

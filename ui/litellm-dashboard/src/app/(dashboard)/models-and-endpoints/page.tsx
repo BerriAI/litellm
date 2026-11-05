@@ -208,7 +208,7 @@ export default function ModelsAndEndpointsPage() {
 
         {!isViewOnly && <DecisionModelsBanner />}
 
-        {activityModel ? (
+        {activityModel && (
           <div className="space-y-4">
             <Button variant="ghost" onClick={() => void setActivityModel(null)}>
               <ArrowLeft className="h-4 w-4" />
@@ -217,7 +217,8 @@ export default function ModelsAndEndpointsPage() {
             <h2 className="text-lg font-semibold">{activityModel}</h2>
             <EntityActivity scope="model" id={activityModel} />
           </div>
-        ) : modelId ? (
+        )}
+        {!activityModel && modelId && (
           <ModelInfoView
             modelId={modelId}
             onClose={close}
@@ -228,7 +229,8 @@ export default function ModelsAndEndpointsPage() {
             onModelUpdate={invalidateModels}
             modelAccessGroups={availableModelAccessGroups}
           />
-        ) : (
+        )}
+        {!activityModel && !modelId && (
           <Tabs value={activeKey} onValueChange={handleTabChange}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
