@@ -23,7 +23,11 @@ from litellm.proxy.hooks.responses_id_security import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
+from litellm.types.interactions import (
+    CancelInteractionResult,
+    InteractionsAPIResponse,
+    InteractionsAPIStreamingResponse,
+)
 from litellm.types.llms.openai import (
     GenericEvent,
     ResponseAPIUsage,
@@ -898,6 +902,35 @@ async def test_interaction_lifecycle_ids_are_authorized_before_provider_calls(
             call_type=call_type,
         )
     assert refusal.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cancel_interaction_returns_the_managed_id_held_by_the_caller(salt_key_env: str) -> None:
+    hook: Final = _hook(signing_key=salt_key_env)
+    owner: Final = _auth()
+    provider_id: Final = "interaction-provider-id"
+    issued_response: Final = hook._encrypt_response_id(  # pyright: ignore[reportPrivateUsage]  # mints ids the way create does
+        InteractionsAPIResponse(id=provider_id, status="in_progress"),
+        owner,
+    )
+    issued: Final = InteractionsAPIResponse.model_validate(issued_response).id
+    assert issued is not None
+    authorized: Final = TypeAdapter(dict[str, object]).validate_python(
+        await hook.async_pre_call_hook(
+            user_api_key_dict=owner,
+            cache=DualCache(),
+            data={"interaction_id": issued},
+            call_type="acancel_interaction",
+        )
+    )
+
+    result: Final = await hook.async_post_call_success_hook(  # pyright: ignore[reportArgumentType]  # interactions share this proxy hook
+        data=authorized,
+        user_api_key_dict=owner,
+        response=CancelInteractionResult(id=provider_id, status="cancelled"),
+    )
+
+    assert CancelInteractionResult.model_validate(result).id == issued
 
 
 @pytest.mark.asyncio

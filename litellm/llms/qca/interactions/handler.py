@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.exceptions import APIError, AuthenticationError, RateLimitError
+from litellm.exceptions import APIError, AuthenticationError, BadRequestError, RateLimitError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.interactions import InteractionsAPIResponse, InteractionsAPIStreamingResponse
@@ -68,9 +68,13 @@ class QCAEventsPage(BaseModel):
     data: tuple[QCAEvent, ...]
 
 
+class QCAValidationError(ValueError):
+    pass
+
+
 def _require_identifier(value: str | None, prefix: str, name: str) -> str:
     if value is None or not value.startswith(prefix):
-        raise ValueError(f"QCA {name} must start with {prefix!r}")
+        raise QCAValidationError(f"QCA {name} must start with {prefix!r}")
     return value
 
 
@@ -85,13 +89,13 @@ def _api_base(value: str | None) -> str:
         or bool(parsed.fragment)
     )
     if invalid:
-        raise ValueError("QCA api_base must be an absolute HTTP URL without credentials, query, or fragment")
+        raise QCAValidationError("QCA api_base must be an absolute HTTP URL without credentials, query, or fragment")
     return base
 
 
 def _text_input(value: object) -> str:
     if not isinstance(value, str) or not value:
-        raise ValueError("QCA interactions currently require a non-empty text input")
+        raise QCAValidationError("QCA interactions currently require a non-empty text input")
     return value
 
 
@@ -100,7 +104,7 @@ def _previous_session_id(previous_interaction_id: str | None) -> str | None:
         return None
     parts: Final = previous_interaction_id.split(".")
     if len(parts) != 3 or parts[0] != "qca1":
-        raise ValueError("QCA previous_interaction_id is invalid")
+        raise QCAValidationError("QCA previous_interaction_id is invalid")
     _require_identifier(parts[2], "evt_", "event id")
     return _require_identifier(parts[1], "sess_", "session id")
 
@@ -205,11 +209,19 @@ async def _stream_events(response: httpx.Response) -> AsyncIterator[QCAEvent]:
 async def _normalized_stream(
     response: httpx.Response, interaction_id: str, agent: str
 ) -> AsyncIterator[InteractionsAPIStreamingResponse]:
+    created: Final = datetime.now(timezone.utc).isoformat()
     try:
         yield InteractionsAPIStreamingResponse(
             event_type="interaction.created",
             interaction_id=interaction_id,
-            interaction={"id": interaction_id, "agent": agent, "status": "in_progress", "steps": []},
+            interaction={
+                "id": interaction_id,
+                "agent": agent,
+                "status": "in_progress",
+                "created": created,
+                "updated": created,
+                "steps": [],
+            },
         )
         async for event in _stream_events(response):
             step, status = _normalized_event(event)
@@ -228,6 +240,8 @@ async def _normalized_stream(
                         "id": interaction_id,
                         "agent": agent,
                         "status": status,
+                        "created": created,
+                        "updated": datetime.now(timezone.utc).isoformat(),
                         "usage": _usage(event),
                     },
                 )
@@ -257,11 +271,15 @@ def _response_from_terminal(
         raise httpx.RemoteProtocolError("QCA terminal event is missing its interaction")
     status: Final = terminal.interaction.get("status")
     usage_value: Final = terminal.interaction.get("usage")
+    created: Final = terminal.interaction.get("created")
+    updated: Final = terminal.interaction.get("updated")
     usage: Final = _JSON_OBJECT.validate_python(usage_value) if isinstance(usage_value, dict) else None
     return InteractionsAPIResponse(
         id=interaction_id,
         agent=agent,
         status=status if isinstance(status, str) else None,
+        created=created if isinstance(created, str) else None,
+        updated=updated if isinstance(updated, str) else None,
         steps=[dict(step) for step in steps],
         usage=usage,
     )
@@ -327,7 +345,7 @@ async def _session_id(
         session: Final = QCASession.model_validate(existing_response.json())
         session_agent: Final = session.agent.id if isinstance(session.agent, QCASessionAgent) else session.agent
         if session.id != previous_session_id or session_agent != agent_id or session.environment_id != environment_id:
-            raise ValueError("QCA previous_interaction_id does not match the configured agent and environment")
+            raise QCAValidationError("QCA previous_interaction_id does not match the configured agent and environment")
         return previous_session_id
     create_response: Final = await client.post(
         f"{base}/sessions",
@@ -352,25 +370,28 @@ async def create_qca_interaction(
     logging_obj: LiteLLMLoggingObj,
     client: httpx.AsyncClient | None = None,
 ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
-    unsupported: Final = tuple(
-        name
-        for name, value in unsupported_params.items()
-        if value not in (None, (), {}) and (name == "store" or value is not False)
-    )
-    if unsupported:
-        raise ValueError(f"QCA interactions do not support {', '.join(sorted(unsupported))}")
-    agent_id: Final = _require_identifier(agent, "agent_", "agent id")
-    environment_id: Final = _require_identifier(
-        environment if isinstance(environment, str) else None,
-        "env_",
-        "environment id",
-    )
-    token: Final = api_key
-    if not token:
-        raise ValueError("QCA api_key is required")
-    base: Final = _api_base(api_base)
-    text: Final = _text_input(input)
-    previous_session_id: Final = _previous_session_id(previous_interaction_id)
+    try:
+        unsupported: Final = tuple(
+            name
+            for name, value in unsupported_params.items()
+            if value not in (None, (), {}) and (name == "store" or value is not False)
+        )
+        if unsupported:
+            raise QCAValidationError(f"QCA interactions do not support {', '.join(sorted(unsupported))}")
+        agent_id: Final = _require_identifier(agent, "agent_", "agent id")
+        environment_id: Final = _require_identifier(
+            environment if isinstance(environment, str) else None,
+            "env_",
+            "environment id",
+        )
+        token: Final = api_key
+        if not token:
+            raise QCAValidationError("QCA api_key is required")
+        base: Final = _api_base(api_base)
+        text: Final = _text_input(input)
+        previous_session_id: Final = _previous_session_id(previous_interaction_id)
+    except QCAValidationError as error:
+        raise BadRequestError(message=str(error), model=agent or "", llm_provider="qca") from error
     owns_client: Final = client is None
     http_client: Final = client or httpx.AsyncClient(timeout=timeout)
     start_time: Final = datetime.now(timezone.utc)
@@ -409,6 +430,10 @@ async def create_qca_interaction(
         if owns_client:
             await http_client.aclose()
         raise _provider_error(error, agent_id) from error
+    except QCAValidationError as error:
+        if owns_client:
+            await http_client.aclose()
+        raise BadRequestError(message=str(error), model=agent_id, llm_provider="qca") from error
     except BaseException:
         if owns_client:
             await http_client.aclose()
