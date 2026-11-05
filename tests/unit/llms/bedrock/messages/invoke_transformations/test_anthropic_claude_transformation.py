@@ -2371,21 +2371,20 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
 
 
 def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_output_config(
-    local_model_cost_map, local_beta_headers_config
-):
+    local_model_cost_map: None, local_beta_headers_config: None
+) -> None:
     """A live InvokeModel call on 2026-11-05 answered 200 with per-turn-control-2026-07-01 on every Claude model the
     QA account can reach, and a made-up beta answered 400, so the client's beta must reach ``anthropic_beta``."""
     from litellm.types.router import GenericLiteLLMParams
 
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-    messages = [
+    messages: Final = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
         {"role": "system", "content": [], "output_config": {"effort": "low"}},
         {"role": "user", "content": "continue"},
     ]
 
-    result = cfg.transform_anthropic_messages_request(
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
         model="us.anthropic.claude-opus-5-5",
         messages=copy.deepcopy(messages),
         anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
