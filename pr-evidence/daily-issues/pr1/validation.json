@@ -1,0 +1,19 @@
+{
+  "source": "16d1e1ebb91b85e09c30e9f01e6fce3f87bcf8f6",
+  "base": "2eed3b40ffa68948b60a7d0a948f067efd36436b",
+  "checked_at": "2026-11-05T07:45:54.863148+00:00",
+  "focused_files": 14,
+  "passed_tests": 549,
+  "expected_failures": 4,
+  "expected_failure_scope": "Existing model cost-edit payload tests marked it.fails in the base",
+  "type_errors": 0,
+  "production_typescript": "passed",
+  "schema": "PR1 own unchanged generated schema",
+  "live_media": "passed",
+  "video": "pr1-entity-activity.mp4",
+  "live_scoped_requests": 1260,
+  "live_scoped_spend": 126.0,
+  "workers_serving": 2,
+  "later_issues_api_absent": true,
+  "full_make_check": "deferred for user-requested demo priority during bootstrap"
+}

@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "source_commit": "76275022d44bd4768124492f9517af001e702dd6",
+  "checks": [
+    "test_issue_http_scope_pagination_and_source_visibility",
+    "test_issue_provider_pairs_filter_activity_pages_counts_and_exports",
+    "test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery",
+    "test_family_settings_preserve_custom_deleted_rules_and_abort_concurrent_edits",
+    "test_resource_recovery_ignores_broader_and_traffic_context",
+    "test_provider_recovery_pages_saved_cohorts_and_rejects_stale_observations",
+    "test_issue_prune_removes_expired_children_in_bounded_passes",
+    "test_grouped_http_pages_preserve_all_metrics_history_and_scoped_actions"
+  ],
+  "case_count": 8,
+  "runtime": "Python3.13.15",
+  "real_http_and_prisma": true,
+  "schema_verified": true
+}

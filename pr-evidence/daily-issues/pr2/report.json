@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "fixture": "Synthetic saved Issues, source signals and eight daily aggregate rows; no automatic detection claim",
+  "issues": 3,
+  "unified_pagination": true,
+  "admin_sources": 2,
+  "owner_sources": 1,
+  "provider_access": 403,
+  "status_restored": true,
+  "family_partial_update": true,
+  "api_transport": "Actual HTTP requests from browser controls via local credential-holding test bridge; no mocked API",
+  "fixtures_removed": true,
+  "source_commit": "6d31c9536412caab41928b4ed0e1baa7fadae878",
+  "baseline_source_commit": "16d1e1ebb91",
+  "topology": "two API workers; dedicated Redis; isolated temporary PostgreSQL schema",
+  "schema_verified": true,
+  "client_schema_matches_source": true,
+  "client_schema_sha256": "5d1fa22cf199dfdbf7c3533f90aa6db66281a490734148baccc89a32b3e308c5",
+  "source_clean_before_and_after": true
+}

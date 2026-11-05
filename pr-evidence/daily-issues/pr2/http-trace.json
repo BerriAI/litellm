@@ -1,0 +1,2560 @@
+[
+  {
+    "method": "GET",
+    "path": "/issues/families",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "data": [
+        {
+          "family": "spend",
+          "enabled": true,
+          "total_rules": 5,
+          "enabled_rules": 5,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 3.0,
+              "min_value": 10.0,
+              "min_requests": 0,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        },
+        {
+          "family": "latency",
+          "enabled": true,
+          "total_rules": 5,
+          "enabled_rules": 5,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 3.0,
+              "min_value": 500.0,
+              "min_requests": 100,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        },
+        {
+          "family": "reliability",
+          "enabled": true,
+          "total_rules": 5,
+          "enabled_rules": 5,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 3.0,
+              "min_value": 2.0,
+              "min_requests": 500,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        },
+        {
+          "family": "traffic",
+          "enabled": true,
+          "total_rules": 10,
+          "enabled_rules": 10,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 10.0,
+              "min_value": 1000.0,
+              "min_requests": 0,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            },
+            {
+              "direction": "decrease",
+              "enabled": true,
+              "multiplier": 5.0,
+              "min_value": 0.0,
+              "min_requests": 500,
+              "baseline_days": 7,
+              "min_history_days": 7,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues?limit=1",
+    "actor": "admin",
+    "baseline": true,
+    "request": null,
+    "status": 404,
+    "response": {
+      "detail": "Not Found"
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/usage/alert-rules?limit=1",
+    "actor": "admin",
+    "baseline": true,
+    "request": null,
+    "status": 404,
+    "response": {
+      "detail": "Not Found"
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues?limit=1",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "data": [
+        {
+          "id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+          "cohort_key": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+          "kind": "performance",
+          "family": "spend",
+          "title": "Spend increased for Checkout key",
+          "cohort": {
+            "scope_type": "key",
+            "scope_id": "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b",
+            "model_pairs": []
+          },
+          "observed_on": "2026-11-04",
+          "observed_at": "2026-11-05T07:43:05.166021Z",
+          "range_start": "2026-10-28",
+          "range_end": "2026-11-04",
+          "grouping_reason": "same_resource",
+          "explanation": "Daily key spend exceeded its saved comparison.",
+          "comparisons": [
+            {
+              "metric": "spend",
+              "direction": "increase",
+              "observed_value": 600.0,
+              "baseline_value": 12.0,
+              "threshold": 36.0,
+              "baseline_start": "2026-10-28",
+              "baseline_end": "2026-11-03",
+              "baseline_sample_days": 7
+            }
+          ],
+          "impact": {
+            "keys": null,
+            "users": null,
+            "teams": null,
+            "models": null,
+            "requests": null,
+            "measured_keys": null,
+            "measured_models": null
+          },
+          "deprecation": null,
+          "status": "open",
+          "first_seen": "2026-11-05T15:43:05.166000+08:00",
+          "last_seen": "2026-11-05T15:43:05.166000+08:00",
+          "updated_at": "2026-11-05T15:43:05.166000+08:00",
+          "scope_label": "Checkout key",
+          "active": true
+        }
+      ],
+      "total": 3,
+      "limit": 1,
+      "offset": 0
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues?limit=1&offset=2",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "data": [
+        {
+          "id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-retirement",
+          "cohort_key": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-retirement",
+          "kind": "model_deprecation",
+          "family": "retirement",
+          "title": "Example model retires soon",
+          "cohort": {
+            "scope_type": "model",
+            "scope_id": "example/retiring-model",
+            "model_pairs": []
+          },
+          "observed_on": "2026-11-04",
+          "observed_at": "2026-11-05T07:43:03.166021Z",
+          "range_start": "2026-10-06",
+          "range_end": "2026-11-04",
+          "grouping_reason": "model_deprecation",
+          "explanation": "Synthetic retirement schedule and saved usage.",
+          "comparisons": [],
+          "impact": {
+            "keys": null,
+            "users": null,
+            "teams": null,
+            "models": null,
+            "requests": null,
+            "measured_keys": null,
+            "measured_models": null
+          },
+          "deprecation": {
+            "model": {
+              "model_name": "Example model",
+              "team_public_model_name": null,
+              "litellm_model": "example/retiring-model",
+              "deprecation_date": "2026-11-19",
+              "days_until_deprecation": 15,
+              "status": "imminent",
+              "litellm_provider": null,
+              "successor_model": "example/replacement",
+              "successor_model_source": null,
+              "deprecation_source": null
+            },
+            "usage_model": "example/retiring-model",
+            "requests": 120,
+            "last_used_date": "2026-11-04",
+            "last_day_requests": 20,
+            "state": {
+              "model": "example/retiring-model",
+              "deprecation_date": "2026-11-19",
+              "status": "open",
+              "last_seen_date": null,
+              "last_seen_requests": 0,
+              "updated_at": null,
+              "updated_by": null
+            }
+          },
+          "status": "open",
+          "first_seen": "2026-11-05T15:43:03.166000+08:00",
+          "last_seen": "2026-11-05T15:43:03.166000+08:00",
+          "updated_at": "2026-11-05T15:43:03.166000+08:00",
+          "scope_label": "example/retiring-model",
+          "active": true
+        }
+      ],
+      "total": 3,
+      "limit": 1,
+      "offset": 2
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+      "cohort_key": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+      "kind": "performance",
+      "family": "spend",
+      "title": "Spend increased for Checkout key",
+      "cohort": {
+        "scope_type": "key",
+        "scope_id": "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b",
+        "model_pairs": []
+      },
+      "observed_on": "2026-11-04",
+      "observed_at": "2026-11-05T07:43:05.166021Z",
+      "range_start": "2026-10-28",
+      "range_end": "2026-11-04",
+      "grouping_reason": "same_resource",
+      "explanation": "Daily key spend exceeded its saved comparison.",
+      "comparisons": [
+        {
+          "metric": "spend",
+          "direction": "increase",
+          "observed_value": 600.0,
+          "baseline_value": 12.0,
+          "threshold": 36.0,
+          "baseline_start": "2026-10-28",
+          "baseline_end": "2026-11-03",
+          "baseline_sample_days": 7
+        }
+      ],
+      "impact": {
+        "keys": null,
+        "users": null,
+        "teams": null,
+        "models": null,
+        "requests": null,
+        "measured_keys": null,
+        "measured_models": null
+      },
+      "deprecation": null,
+      "status": "open",
+      "first_seen": "2026-11-05T15:43:05.166000+08:00",
+      "last_seen": "2026-11-05T15:43:05.166000+08:00",
+      "updated_at": "2026-11-05T15:43:05.166000+08:00",
+      "scope_label": "Checkout key",
+      "active": true
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key/activity",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "results": [
+        {
+          "date": "2026-11-04",
+          "metrics": {
+            "spend": 600.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 380,
+            "failed_requests": 40,
+            "api_requests": 420,
+            "total_response_time_ms": 342000,
+            "timed_requests": 380
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 600.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 380,
+                  "failed_requests": 40,
+                  "api_requests": 420,
+                  "total_response_time_ms": 342000,
+                  "timed_requests": 380
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 600.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 380,
+                      "failed_requests": 40,
+                      "api_requests": 420,
+                      "total_response_time_ms": 342000,
+                      "timed_requests": 380
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 600.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 380,
+                  "failed_requests": 40,
+                  "api_requests": 420,
+                  "total_response_time_ms": 342000,
+                  "timed_requests": 380
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 600.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 380,
+                      "failed_requests": 40,
+                      "api_requests": 420,
+                      "total_response_time_ms": 342000,
+                      "timed_requests": 380
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 600.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 380,
+                  "failed_requests": 40,
+                  "api_requests": 420,
+                  "total_response_time_ms": 342000,
+                  "timed_requests": 380
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 600.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 380,
+                      "failed_requests": 40,
+                      "api_requests": 420,
+                      "total_response_time_ms": 342000,
+                      "timed_requests": 380
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 600.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 380,
+                  "failed_requests": 40,
+                  "api_requests": 420,
+                  "total_response_time_ms": 342000,
+                  "timed_requests": 380
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-11-03",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-11-02",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-11-01",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-10-31",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-10-30",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-10-29",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        },
+        {
+          "date": "2026-10-28",
+          "metrics": {
+            "spend": 12.0,
+            "flat_cost": 0.0,
+            "ptu_hours": 0.0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "compression_saved_tokens": 0,
+            "compression_savings_spend": 0.0,
+            "prompt_caching_savings_spend": 0.0,
+            "gateway_injected_caching_savings_spend": 0.0,
+            "autorouter_savings_spend": 0.0,
+            "total_tokens": 0,
+            "successful_requests": 116,
+            "failed_requests": 4,
+            "api_requests": 120,
+            "total_response_time_ms": 23200,
+            "timed_requests": 116
+          },
+          "breakdown": {
+            "mcp_servers": {},
+            "models": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "model_groups": {
+              "example/checkout-model": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "providers": {
+              "example-provider": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {},
+                "api_key_breakdown": {
+                  "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                    "metrics": {
+                      "spend": 12.0,
+                      "flat_cost": 0.0,
+                      "ptu_hours": 0.0,
+                      "prompt_tokens": 0,
+                      "completion_tokens": 0,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0,
+                      "compression_saved_tokens": 0,
+                      "compression_savings_spend": 0.0,
+                      "prompt_caching_savings_spend": 0.0,
+                      "gateway_injected_caching_savings_spend": 0.0,
+                      "autorouter_savings_spend": 0.0,
+                      "total_tokens": 0,
+                      "successful_requests": 116,
+                      "failed_requests": 4,
+                      "api_requests": 120,
+                      "total_response_time_ms": 23200,
+                      "timed_requests": 116
+                    },
+                    "metadata": {
+                      "key_alias": "Checkout key",
+                      "team_id": null,
+                      "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                      "user_email": "checkout@example.com",
+                      "key_exists": true
+                    }
+                  }
+                }
+              }
+            },
+            "endpoints": {},
+            "api_keys": {
+              "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b": {
+                "metrics": {
+                  "spend": 12.0,
+                  "flat_cost": 0.0,
+                  "ptu_hours": 0.0,
+                  "prompt_tokens": 0,
+                  "completion_tokens": 0,
+                  "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0,
+                  "compression_saved_tokens": 0,
+                  "compression_savings_spend": 0.0,
+                  "prompt_caching_savings_spend": 0.0,
+                  "gateway_injected_caching_savings_spend": 0.0,
+                  "autorouter_savings_spend": 0.0,
+                  "total_tokens": 0,
+                  "successful_requests": 116,
+                  "failed_requests": 4,
+                  "api_requests": 120,
+                  "total_response_time_ms": 23200,
+                  "timed_requests": 116
+                },
+                "metadata": {
+                  "key_alias": "Checkout key",
+                  "team_id": null,
+                  "user_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce",
+                  "user_email": "checkout@example.com",
+                  "key_exists": true
+                }
+              }
+            },
+            "entities": {},
+            "guardrails": {}
+          }
+        }
+      ],
+      "metadata": {
+        "total_spend": 684.0,
+        "total_flat_cost": 0.0,
+        "total_ptu_hours": 0.0,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0,
+        "total_tokens": 0,
+        "total_api_requests": 1260,
+        "total_successful_requests": 1192,
+        "total_failed_requests": 68,
+        "total_cache_read_input_tokens": 0,
+        "total_cache_creation_input_tokens": 0,
+        "total_compression_saved_tokens": 0,
+        "total_compression_savings_spend": 0.0,
+        "total_prompt_caching_savings_spend": 0.0,
+        "total_gateway_injected_caching_savings_spend": 0.0,
+        "total_autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 504400,
+        "total_timed_requests": 1192,
+        "page": 1,
+        "total_pages": 1,
+        "has_more": false,
+        "api_key_limit": 20,
+        "total_api_keys": 1,
+        "entity_total_api_keys": null
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key/signals",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "data": [
+        {
+          "source": "usage_alert",
+          "source_id": "2ac270a8-c1af-51ed-9133-9cf6c2280372",
+          "usage_alert": {
+            "id": "2ac270a8-c1af-51ed-9133-9cf6c2280372",
+            "rule_id": "aad51d01-0210-4703-82af-934a10f88d86",
+            "rule_name": "Saved API proof key",
+            "scope_type": "key",
+            "scope_id": "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b",
+            "metric": "spend",
+            "direction": "increase",
+            "status": "open",
+            "day": "2026-11-04",
+            "baseline_start": "2026-10-28",
+            "baseline_end": "2026-11-03",
+            "baseline_sample_days": null,
+            "observed_value": 600.0,
+            "baseline_value": 12.0,
+            "threshold": 36.0,
+            "first_seen": "2026-11-05T07:43:05.350730Z",
+            "last_seen": "2026-11-05T07:43:05.350730Z",
+            "activity_path": "/api-keys?activity_from=2026-10-28&activity_to=2026-11-04&alert=2ac270a8-c1af-51ed-9133-9cf6c2280372&key=c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b&detail_tab=activity"
+          },
+          "deprecation": null,
+          "grouping_reason": "same_resource",
+          "explanation": "",
+          "issue_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key"
+        },
+        {
+          "source": "usage_alert",
+          "source_id": "b1f2917c-8ce3-539e-b746-e1ef6d27dd14",
+          "usage_alert": {
+            "id": "b1f2917c-8ce3-539e-b746-e1ef6d27dd14",
+            "rule_id": "f4244f15-c6c7-41fb-ac80-2a7fce711963",
+            "rule_name": "Saved API proof deployment",
+            "scope_type": "deployment",
+            "scope_id": null,
+            "metric": "spend",
+            "direction": "increase",
+            "status": "open",
+            "day": "2026-11-04",
+            "baseline_start": "2026-10-28",
+            "baseline_end": "2026-11-03",
+            "baseline_sample_days": null,
+            "observed_value": 1000.0,
+            "baseline_value": 20.0,
+            "threshold": 60.0,
+            "first_seen": "2026-11-05T07:43:05.359048Z",
+            "last_seen": "2026-11-05T07:43:05.359048Z",
+            "activity_path": "/usage?tab=keys&from=2026-10-28&to=2026-11-04&alert=b1f2917c-8ce3-539e-b746-e1ef6d27dd14"
+          },
+          "deprecation": null,
+          "grouping_reason": "same_resource",
+          "explanation": "",
+          "issue_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key"
+        }
+      ],
+      "total": 2,
+      "limit": 50,
+      "offset": 0
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key/signals",
+    "actor": "owner",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "data": [
+        {
+          "source": "usage_alert",
+          "source_id": "2ac270a8-c1af-51ed-9133-9cf6c2280372",
+          "usage_alert": {
+            "id": "2ac270a8-c1af-51ed-9133-9cf6c2280372",
+            "rule_id": "aad51d01-0210-4703-82af-934a10f88d86",
+            "rule_name": "Saved API proof key",
+            "scope_type": "key",
+            "scope_id": "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b",
+            "metric": "spend",
+            "direction": "increase",
+            "status": "open",
+            "day": "2026-11-04",
+            "baseline_start": "2026-10-28",
+            "baseline_end": "2026-11-03",
+            "baseline_sample_days": null,
+            "observed_value": 600.0,
+            "baseline_value": 12.0,
+            "threshold": 36.0,
+            "first_seen": "2026-11-05T07:43:05.350730Z",
+            "last_seen": "2026-11-05T07:43:05.350730Z",
+            "activity_path": "/api-keys?activity_from=2026-10-28&activity_to=2026-11-04&alert=2ac270a8-c1af-51ed-9133-9cf6c2280372&key=c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b&detail_tab=activity"
+          },
+          "deprecation": null,
+          "grouping_reason": "same_resource",
+          "explanation": "",
+          "issue_id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key"
+        }
+      ],
+      "total": 1,
+      "limit": 50,
+      "offset": 0
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-provider",
+    "actor": "owner",
+    "baseline": false,
+    "request": null,
+    "status": 403,
+    "response": {
+      "detail": "You cannot access this alert scope"
+    }
+  },
+  {
+    "method": "PATCH",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+    "actor": "admin",
+    "baseline": false,
+    "request": {
+      "status": "resolved",
+      "expected_status": "open"
+    },
+    "status": 200,
+    "response": {
+      "id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+      "cohort_key": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+      "kind": "performance",
+      "family": "spend",
+      "title": "Spend increased for Checkout key",
+      "cohort": {
+        "scope_type": "key",
+        "scope_id": "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b",
+        "model_pairs": []
+      },
+      "observed_on": "2026-11-04",
+      "observed_at": "2026-11-05T07:43:05.166021Z",
+      "range_start": "2026-10-28",
+      "range_end": "2026-11-04",
+      "grouping_reason": "same_resource",
+      "explanation": "Daily key spend exceeded its saved comparison.",
+      "comparisons": [
+        {
+          "metric": "spend",
+          "direction": "increase",
+          "observed_value": 600.0,
+          "baseline_value": 12.0,
+          "threshold": 36.0,
+          "baseline_start": "2026-10-28",
+          "baseline_end": "2026-11-03",
+          "baseline_sample_days": 7
+        }
+      ],
+      "impact": {
+        "keys": null,
+        "users": null,
+        "teams": null,
+        "models": null,
+        "requests": null,
+        "measured_keys": null,
+        "measured_models": null
+      },
+      "deprecation": null,
+      "status": "resolved",
+      "first_seen": "2026-11-05T15:43:05.166000+08:00",
+      "last_seen": "2026-11-05T15:43:05.166000+08:00",
+      "updated_at": "2026-11-05T23:44:12.751000+08:00",
+      "scope_label": "Checkout key",
+      "active": true
+    }
+  },
+  {
+    "method": "PATCH",
+    "path": "/issues/issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+    "actor": "admin",
+    "baseline": false,
+    "request": {
+      "status": "open",
+      "expected_status": "resolved"
+    },
+    "status": 200,
+    "response": {
+      "id": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+      "cohort_key": "issue-proof-fedd1e24900843eb9f6de767dcc5b6ce-key",
+      "kind": "performance",
+      "family": "spend",
+      "title": "Spend increased for Checkout key",
+      "cohort": {
+        "scope_type": "key",
+        "scope_id": "c20199b32b3f611cfde82404cde111f6ce6d647bf88ef6736bc1095a15e46b4b",
+        "model_pairs": []
+      },
+      "observed_on": "2026-11-04",
+      "observed_at": "2026-11-05T07:43:05.166021Z",
+      "range_start": "2026-10-28",
+      "range_end": "2026-11-04",
+      "grouping_reason": "same_resource",
+      "explanation": "Daily key spend exceeded its saved comparison.",
+      "comparisons": [
+        {
+          "metric": "spend",
+          "direction": "increase",
+          "observed_value": 600.0,
+          "baseline_value": 12.0,
+          "threshold": 36.0,
+          "baseline_start": "2026-10-28",
+          "baseline_end": "2026-11-03",
+          "baseline_sample_days": 7
+        }
+      ],
+      "impact": {
+        "keys": null,
+        "users": null,
+        "teams": null,
+        "models": null,
+        "requests": null,
+        "measured_keys": null,
+        "measured_models": null
+      },
+      "deprecation": null,
+      "status": "open",
+      "first_seen": "2026-11-05T15:43:05.166000+08:00",
+      "last_seen": "2026-11-05T15:43:05.166000+08:00",
+      "updated_at": "2026-11-05T23:44:24.986000+08:00",
+      "scope_label": "Checkout key",
+      "active": true
+    }
+  },
+  {
+    "method": "PATCH",
+    "path": "/issues/families/spend",
+    "actor": "admin",
+    "baseline": false,
+    "request": {
+      "policies": [
+        {
+          "direction": "increase",
+          "multiplier": 4,
+          "min_value": 25
+        }
+      ]
+    },
+    "status": 200,
+    "response": {
+      "family": "spend",
+      "enabled": true,
+      "total_rules": 5,
+      "enabled_rules": 5,
+      "policies": [
+        {
+          "direction": "increase",
+          "enabled": true,
+          "multiplier": 4.0,
+          "min_value": 25.0,
+          "min_requests": 0,
+          "baseline_days": 7,
+          "min_history_days": 3,
+          "mixed": false,
+          "total_rules": 5,
+          "enabled_rules": 5
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "path": "/issues/families",
+    "actor": "admin",
+    "baseline": false,
+    "request": null,
+    "status": 200,
+    "response": {
+      "data": [
+        {
+          "family": "spend",
+          "enabled": true,
+          "total_rules": 5,
+          "enabled_rules": 5,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 4.0,
+              "min_value": 25.0,
+              "min_requests": 0,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        },
+        {
+          "family": "latency",
+          "enabled": true,
+          "total_rules": 5,
+          "enabled_rules": 5,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 3.0,
+              "min_value": 500.0,
+              "min_requests": 100,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        },
+        {
+          "family": "reliability",
+          "enabled": true,
+          "total_rules": 5,
+          "enabled_rules": 5,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 3.0,
+              "min_value": 2.0,
+              "min_requests": 500,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        },
+        {
+          "family": "traffic",
+          "enabled": true,
+          "total_rules": 10,
+          "enabled_rules": 10,
+          "policies": [
+            {
+              "direction": "increase",
+              "enabled": true,
+              "multiplier": 10.0,
+              "min_value": 1000.0,
+              "min_requests": 0,
+              "baseline_days": 7,
+              "min_history_days": 3,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            },
+            {
+              "direction": "decrease",
+              "enabled": true,
+              "multiplier": 5.0,
+              "min_value": 0.0,
+              "min_requests": 500,
+              "baseline_days": 7,
+              "min_history_days": 7,
+              "mixed": false,
+              "total_rules": 5,
+              "enabled_rules": 5
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
