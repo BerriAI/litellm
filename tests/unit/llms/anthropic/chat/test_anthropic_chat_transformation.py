@@ -11047,3 +11047,24 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
     assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
     assert json.dumps(body).count('"cache_control"') == 4
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
+def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
+    local_model_cost_map, model: str
+):
+    """What get_supported_openai_params says about temperature/top_p must match what
+    map_openai_params does with them under drop_params, so a caller that pre-flights
+    from the list is never told a param is fine that the request path then drops."""
+    config = AnthropicConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    sent = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
+    assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)
