@@ -2493,6 +2493,7 @@ class MCPServerManager:
             server.auth_type
             and server.auth_type != MCPAuth.none
             and server.auth_type != MCPAuth.aws_sigv4
+            and server.auth_type != MCPAuth.secret_headers
             and not server.authentication_token
         ):
             return
@@ -3276,6 +3277,11 @@ class MCPServerManager:
 
         # AWS SigV4 credential fields
         aws_creds: Final = self._extract_aws_credentials(credentials_dict, credentials_are_encrypted)
+        credential_headers: Final = (
+            self._extract_credential_headers(credentials_dict, credentials_are_encrypted)
+            if mcp_server.auth_type == MCPAuth.secret_headers
+            else {}
+        )
 
         scopes: list[str] | None = None
         if credentials_dict:
@@ -3366,7 +3372,12 @@ class MCPServerManager:
             authentication_token=auth_value,
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
-            static_headers=static_headers_dict,
+            static_headers=(
+                self._with_credential_headers(static_headers_dict, credential_headers)
+                if credential_headers
+                else static_headers_dict
+            ),
+            credential_header_names=tuple(credential_headers),
             env_vars=env_vars_list,
             dcr_issuer=credentials_dict.get("dcr_issuer") if credentials_dict else None,
             dcr_server_url=credentials_dict.get("dcr_server_url") if credentials_dict else None,
@@ -4165,7 +4176,7 @@ class MCPServerManager:
         the literal ``${NAME}`` upstream and get rejected. Callers skip the probe
         and report ``unknown`` instead of a misleading ``unhealthy``.
         """
-        static_headers: Final = server.static_headers
+        static_headers: Final = server.listed_static_headers
         env_vars: Final[_EnvVarList | None] = getattr(server, "env_vars", None)
         if not static_headers or not env_vars:
             return False
@@ -4221,7 +4232,7 @@ class MCPServerManager:
         # also carries a global value is always covered by that global (globals
         # win in the merge below), so it can never be genuinely "missing" even if
         # the user hasn't filled it in -- only vars without a global fallback do.
-        referenced: Final = collect_env_var_references(strings=(static_headers or {}).values())
+        referenced: Final = collect_env_var_references(strings=(server.listed_static_headers or {}).values())
         referenced_user_vars: Final = referenced & user_var_names
         required_user_vars: Final = {name for name in referenced_user_vars if name not in global_values}
 
@@ -4267,6 +4278,11 @@ class MCPServerManager:
         merged_vars: Final[dict[str, str]] = {**scoped_user_values, **global_values}
         if not static_headers:
             return static_headers
+        if server.credential_header_names:
+            return {
+                **interpolate_headers(server.listed_static_headers or {}, merged_vars),
+                **server.credential_static_headers,
+            }
         return interpolate_headers(static_headers, merged_vars)
 
     async def _load_user_env_vars(
@@ -5625,6 +5641,30 @@ class MCPServerManager:
             "aws_service_name": credentials_dict.get("aws_service_name"),
             "aws_role_name": credentials_dict.get("aws_role_name"),
             "aws_session_name": credentials_dict.get("aws_session_name"),
+        }
+
+    @staticmethod
+    def _with_credential_headers(
+        static_headers: Mapping[str, str] | None, credential_headers: Mapping[str, str]
+    ) -> dict[str, str]:
+        secret: Final = {name.lower() for name in credential_headers}
+        kept: Final = {name: value for name, value in (static_headers or {}).items() if name.lower() not in secret}
+        return {**kept, **credential_headers}
+
+    def _extract_credential_headers(
+        self,
+        credentials_dict: dict[str, str] | None,
+        credentials_are_encrypted: bool,
+    ) -> dict[str, str]:
+        raw_headers: Final[object] = credentials_dict.get("headers") if credentials_dict else None
+        if not isinstance(raw_headers, dict):
+            return {}
+        headers: Final = cast(Mapping[str, object], raw_headers)  # cast-ok: dict shape validated above
+        return {
+            name: value
+            for name, stored in headers.items()
+            if isinstance(stored, str)
+            and (value := self._decrypt_credential_field(stored, "headers", credentials_are_encrypted))
         }
 
     def _extract_scopes(self, scopes_value: str | Sequence[object] | None) -> list[str] | None:
@@ -7641,6 +7681,7 @@ class MCPServerManager:
                 server.auth_type
                 and server.auth_type != MCPAuth.none
                 and server.auth_type != MCPAuth.aws_sigv4
+                and server.auth_type != MCPAuth.secret_headers
                 and not server.authentication_token
             )
             or self._references_per_user_env_var(server)
@@ -7702,7 +7743,7 @@ class MCPServerManager:
             allowed_tools=server.allowed_tools or [],
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
-            static_headers=server.static_headers,
+            static_headers=server.listed_static_headers,
             env_vars=self._env_vars_to_models(server.env_vars),
             status=status,
             last_health_check=datetime.now(),
@@ -7819,7 +7860,7 @@ class MCPServerManager:
             pinned_tools=server.pinned_tools,
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
-            static_headers=server.static_headers,
+            static_headers=server.listed_static_headers,
             env_vars=self._env_vars_to_models(server.env_vars),
             status=None,  # No health check performed
             last_health_check=None,  # No health check performed

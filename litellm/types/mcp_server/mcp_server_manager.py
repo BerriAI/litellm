@@ -116,6 +116,7 @@ class MCPServer(LiteLLMBaseModel):
     pinned_tools: dict[str, PinnedMCPTool] | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
+    credential_header_names: tuple[str, ...] = ()
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
@@ -356,12 +357,25 @@ class MCPServer(LiteLLMBaseModel):
             MCPAuth.authorization,
             MCPAuth.token,
             MCPAuth.aws_sigv4,
+            MCPAuth.secret_headers,
         ):
             return False
         return not any(
             header.lower() in ("authorization", "x-api-key", "api-key", "apikey")
             for header in (self.extra_headers or ())
         )
+
+    @property
+    def listed_static_headers(self) -> dict[str, str] | None:  # mutable-ok: feeds the API table model
+        if not self.static_headers:
+            return self.static_headers
+        return {name: value for name, value in self.static_headers.items() if name not in self.credential_header_names}
+
+    @property
+    def credential_static_headers(self) -> dict[str, str]:  # mutable-ok: merged back into request headers
+        return {
+            name: value for name, value in (self.static_headers or {}).items() if name in self.credential_header_names
+        }
 
     @property
     def is_true_passthrough(self) -> bool:
