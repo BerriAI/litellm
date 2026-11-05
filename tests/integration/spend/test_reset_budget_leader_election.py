@@ -45,25 +45,26 @@ def _make_team_budget_due(team: str, spend: float) -> None:
 
 
 @pytest.mark.covers("spend.budget_reset.one_pod_sweeps_per_tick")
+@pytest.mark.parametrize("starting_spend", (0.5, 40.080000000000005, 1009.9442791267694))
 def test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_after_release(
-    gateway: Gateway, tmp_path: Path
+    gateway: Gateway, tmp_path: Path, starting_spend: float
 ) -> None:
     with (
         gateway.scenario() as scenario,
         Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache,
     ):
         model: Final = scenario.model(input_cost_per_token=0.0, output_cost_per_token=0.0)
-        team: Final = scenario.team(max_budget=1.0, budget_duration="30d")
+        team: Final = scenario.team(max_budget=2000000.0, budget_duration="30d")
         key: Final = scenario.key(team_id=team)
-        _make_team_budget_due(team, spend=0.5)
-        assert _team_spend(team) == 0.5
+        _make_team_budget_due(team, spend=starting_spend)
+        assert _team_spend(team) == starting_spend
         eventually(
             lambda: cache.set(RESET_LEASE_KEY, PEER_POD_LEASE, ex=120, nx=True),
             lambda claimed: claimed is True,
             seconds=60,
         )
         try:
-            with owned_proxy(gateway, tmp_path, FAST_RESET_TICK) as replica:
+            with owned_proxy(gateway, tmp_path, FAST_RESET_TICK, workers=2) as replica:
                 response: Final = replica.request(
                     "POST",
                     "/v1/chat/completions",
@@ -72,12 +73,22 @@ def test_reset_sweep_skips_ticks_while_another_pod_holds_the_lease_and_resumes_a
                 )
                 assert response.status_code == 200, response.text
                 held: Final = eventually(
-                    lambda: _team_spend(team), lambda spend: spend != 0.5, seconds=8, return_last_on_timeout=True
+                    lambda: _team_spend(team),
+                    lambda spend: spend != starting_spend,
+                    seconds=8,
+                    return_last_on_timeout=True,
                 )
-                assert held == 0.5, f"team {team} was swept while another pod held the reset lease: spend={held}"
+                assert held == starting_spend, (
+                    f"team {team} was swept while another pod held the reset lease: spend={held}"
+                )
                 assert cache.get(RESET_LEASE_KEY) == PEER_POD_LEASE.encode()
                 cache.delete(RESET_LEASE_KEY)
-                swept: Final = eventually(lambda: _team_spend(team), lambda spend: spend == 0.0, seconds=15)
+                swept: Final = eventually(
+                    lambda: _team_spend(team), lambda spend: spend == 0.0, seconds=15, return_last_on_timeout=True
+                )
+                info: Final = replica.request("GET", f"/team/info?team_id={team}")
+                assert info.status_code == 200, info.text
+                assert info.json()["team_info"]["spend"] == 0.0
                 assert swept == 0.0
                 eventually(lambda: cache.get(RESET_LEASE_KEY), lambda value: value is None, seconds=15)
         finally:
