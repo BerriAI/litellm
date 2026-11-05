@@ -1416,7 +1416,7 @@ async def test_upstream_authentication_error_without_an_entra_rejection_stays_an
 
 
 @pytest.mark.asyncio
-async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
+async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_with_http_200():
     from litellm.proxy._types import UserAPIKeyAuth
 
     agent = _make_agent_mock()
@@ -1463,7 +1463,7 @@ async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400()
         )
 
     body = json.loads(response.body.decode())
-    assert response.status_code == 400
+    assert response.status_code == 200
     assert body["id"] == "req-1"
     assert body["error"]["code"] == -32602
     assert "Invalid AgentCore runtime session id" in body["error"]["message"]
@@ -1720,8 +1720,167 @@ async def test_unknown_method_returns_jsonrpc_error():
         )
 
     body = json.loads(response.body.decode())
+    assert response.status_code == 200
     assert body["error"]["code"] == -32601
     assert "SomeUnknownMethod" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_wrong_jsonrpc_version_returns_jsonrpc_error_with_http_200():
+    """a2a-sdk clients call raise_for_status() before reading the body, so a JSON-RPC
+    error behind a 4xx never reaches them as the typed error."""
+    mock_request = _make_request_mock("message/send", _HELLO_MESSAGE_PARAMS)
+    mock_request.json = AsyncMock(
+        return_value={"jsonrpc": "1.0", "id": "req-1", "method": "message/send", "params": _HELLO_MESSAGE_PARAMS}
+    )
+
+    with ExitStack() as stack:
+        for p in _base_patches(_make_agent_mock()):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    assert response.status_code == 200
+    assert json.loads(response.body.decode()) == {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "error": {"code": -32600, "message": "Invalid Request: jsonrpc must be '2.0'"},
+    }
+
+
+_SCRIPTED_AGENT_CARD: Final = {
+    "protocolVersion": "0.3.0",
+    "name": "Test Agent",
+    "url": "http://backend-agent:10001/",
+    "preferredTransport": "JSONRPC",
+    "version": "1.0.0",
+    "capabilities": {"streaming": True},
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [],
+}
+
+_SCRIPTED_AGENT_REPLY: Final = {
+    "jsonrpc": "2.0",
+    "id": "",
+    "result": {"messageId": "reply-1", "role": "agent", "parts": [{"kind": "text", "text": "pong"}], "kind": "message"},
+}
+
+
+class _ScriptedAgent:
+    """Answers the card GET and the JSON-RPC POST of a real a2a-sdk dispatch, recording the RPC bodies."""
+
+    def __init__(self) -> None:
+        self.rpc_bodies = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=dict(_SCRIPTED_AGENT_CARD), request=request)
+        self.rpc_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=dict(_SCRIPTED_AGENT_REPLY), request=request)
+
+
+async def _seed_scripted_agent(monkeypatch: pytest.MonkeyPatch) -> _ScriptedAgent:
+    """Put the pooled A2A httpx client behind a scripted upstream, so invoke_agent_a2a runs the real
+    asend_message, card resolution and response wrapping with no LiteLLM function replaced."""
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, httpxSpecialProvider
+
+    agent: Final = _ScriptedAgent()
+    handler: Final = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
+    pooled: Final = handler.client
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(agent))
+    await pooled.aclose()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key="async_httpx_client" + f"timeout_{DEFAULT_A2A_AGENT_TIMEOUT}" + httpxSpecialProvider.A2AProvider,
+        value=handler,
+    )
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_message_send_echoes_a_null_request_id(monkeypatch: pytest.MonkeyPatch):
+    """JSON-RPC 2.0 requires the response id to be null when the request's was. The SDK request type
+    cannot carry a null, so the real dispatch sends "" upstream and the proxy must restore the null."""
+    upstream = await _seed_scripted_agent(monkeypatch)
+    mock_request = _make_request_mock("message/send", _HELLO_MESSAGE_PARAMS, request_id=None)
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
+    mock_proxy_logging.post_call_success_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, response: response
+    )
+
+    with ExitStack() as stack:
+        for p in _base_patches(_make_agent_mock()):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling send tests use; the dispatch itself is real
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    body = json.loads(response.body.decode())
+    assert response.status_code == 200, body
+    assert "id" in body and body["id"] is None
+    assert body["result"]["parts"][0]["text"] == "pong"
+    assert upstream.rpc_bodies[-1]["method"] == "message/send"
+
+
+@pytest.mark.asyncio
+async def test_task_methods_echo_a_null_request_id():
+    mock_request = _make_request_mock("tasks/get", {"id": "nope"}, request_id=None)
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32001, "message": "Task not found"},
+    }
+    mock_http_response.is_success = True
+    mock_http_response.raise_for_status = MagicMock()
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
+
+    with ExitStack() as stack:
+        for p in _base_patches(_make_agent_mock()):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=mock_handler)
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    body = json.loads(response.body.decode())
+    assert response.status_code == 200
+    assert "id" in body and body["id"] is None
+    assert body["error"]["code"] == -32001
 
 
 @pytest.mark.asyncio
@@ -3199,6 +3358,7 @@ _EXPECTED_REJECTIONS: Final = (
     pytest.param(
         True,
         403,
+        403,
         "Agent 'denied-agent' is not allowed for your key/team. Contact proxy admin for access.",
         "registered-denied-id",
         "a2a_agent/Test Agent",
@@ -3206,6 +3366,7 @@ _EXPECTED_REJECTIONS: Final = (
     ),
     pytest.param(
         False,
+        200,
         404,
         {"jsonrpc": "2.0", "id": "rej-1", "error": {"code": -32000, "message": "Agent 'no-such-agent' not found"}},
         "no-such-agent",
@@ -3216,9 +3377,15 @@ _EXPECTED_REJECTIONS: Final = (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("registered", "status", "body", "target", "model"), _EXPECTED_REJECTIONS)
+@pytest.mark.parametrize(("registered", "status", "logged_status", "body", "target", "model"), _EXPECTED_REJECTIONS)
 async def test_rejected_agent_call_is_logged_once_as_the_caller_without_dispatch(
-    monkeypatch: pytest.MonkeyPatch, registered: bool, status: int, body: object, target: str, model: str
+    monkeypatch: pytest.MonkeyPatch,
+    registered: bool,
+    status: int,
+    logged_status: int,
+    body: object,
+    target: str,
+    model: str,
 ) -> None:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
@@ -3251,16 +3418,17 @@ async def test_rejected_agent_call_is_logged_once_as_the_caller_without_dispatch
     assert len(recorder.hook_calls) == 1
     hook_data, hook_exception = recorder.hook_calls[0]
     assert (hook_data["agent_id"], hook_data["metadata"]["agent_id"]) == (target, target)
-    assert isinstance(hook_exception, HTTPException) and hook_exception.status_code == status
+    assert isinstance(hook_exception, HTTPException) and hook_exception.status_code == logged_status
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("registered", "status", "body", "target", "model"), _EXPECTED_REJECTIONS)
+@pytest.mark.parametrize(("registered", "status", "logged_status", "body", "target", "model"), _EXPECTED_REJECTIONS)
 async def test_rejected_agent_call_response_survives_a_failing_failure_hook(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     registered: bool,
     status: int,
+    logged_status: int,
     body: object,
     target: str,
     model: str,
