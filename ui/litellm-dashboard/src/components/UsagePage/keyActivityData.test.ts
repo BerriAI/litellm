@@ -157,6 +157,25 @@ describe("key activity data", () => {
     ]);
   });
 
+  it("plots descending API days chronologically without reordering the cached response", () => {
+    const response = {
+      ...aggregatedResponse,
+      results: ["2026-09-29", "2026-09-27", "2026-09-28"].map((date, index) => ({
+        ...aggregatedResponse.results[0],
+        date,
+        metrics: { ...completeMetrics, api_requests: index + 10 },
+      })),
+    };
+    const summary = overallUsageMetrics(toDailyData(response), response.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA);
+    expect(summary.daily_data.map((day) => [day.date, day.metrics.api_requests])).toEqual([
+      ["2026-09-27", 11],
+      ["2026-09-28", 12],
+      ["2026-09-29", 10],
+    ]);
+    expect(response.results.map((day) => day.date)).toEqual(["2026-09-29", "2026-09-27", "2026-09-28"]);
+    expect(summary.total_requests).toBe(200);
+  });
+
   it("appends pages without duplicate keys and compares the server offset to the total", () => {
     const merged = mergeKeyActivityPages(
       [pageRow("key-a"), pageRow("key-b")],

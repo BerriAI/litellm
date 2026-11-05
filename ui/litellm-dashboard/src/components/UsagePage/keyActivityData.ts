@@ -32,24 +32,26 @@ export const overallUsageMetrics = (
   total_response_time_ms: metadata.total_response_time_ms,
   total_timed_requests: metadata.total_timed_requests,
   top_models: [],
-  daily_data: results.map((day) => ({
-    date: day.date,
-    metrics: {
-      prompt_tokens: day.metrics.prompt_tokens,
-      completion_tokens: day.metrics.completion_tokens,
-      total_tokens: day.metrics.total_tokens,
-      api_requests: day.metrics.api_requests,
-      spend: day.metrics.spend,
-      successful_requests: day.metrics.successful_requests,
-      failed_requests: day.metrics.failed_requests,
-      cache_read_input_tokens: day.metrics.cache_read_input_tokens,
-      cache_creation_input_tokens: day.metrics.cache_creation_input_tokens,
-      avg_response_time_ms:
-        day.metrics.timed_requests && day.metrics.timed_requests > 0
-          ? (day.metrics.total_response_time_ms ?? 0) / day.metrics.timed_requests
-          : null,
-    },
-  })),
+  daily_data: results
+    .map((day) => ({
+      date: day.date,
+      metrics: {
+        prompt_tokens: day.metrics.prompt_tokens,
+        completion_tokens: day.metrics.completion_tokens,
+        total_tokens: day.metrics.total_tokens,
+        api_requests: day.metrics.api_requests,
+        spend: day.metrics.spend,
+        successful_requests: day.metrics.successful_requests,
+        failed_requests: day.metrics.failed_requests,
+        cache_read_input_tokens: day.metrics.cache_read_input_tokens,
+        cache_creation_input_tokens: day.metrics.cache_creation_input_tokens,
+        avg_response_time_ms:
+          day.metrics.timed_requests && day.metrics.timed_requests > 0
+            ? (day.metrics.total_response_time_ms ?? 0) / day.metrics.timed_requests
+            : null,
+      },
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date)),
 });
 
 export const mergeKeyActivityPages = (
