@@ -54,7 +54,7 @@ export default function UsageAlertsPanel() {
           <a
             href={usageAlertHref(row.original)}
             title={usageAlertEntity(row.original)}
-            className="block max-w-80 truncate font-medium text-primary hover:underline"
+            className="block max-w-48 truncate font-medium text-primary hover:underline md:max-w-80"
           >
             {usageAlertEntity(row.original)}
           </a>

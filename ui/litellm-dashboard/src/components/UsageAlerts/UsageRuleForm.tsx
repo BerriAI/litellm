@@ -41,7 +41,7 @@ export default function UsageRuleForm({
         <Label htmlFor="rule-name">Name</Label>
         <Input id="rule-name" name="name" required maxLength={200} defaultValue={initial.name} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 items-end gap-4">
         <div className="space-y-1">
           <Label htmlFor="rule-scope">Scope</Label>
           <select
