@@ -4,9 +4,14 @@
      Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
      "## Affected release" with nothing under it must not appear in the final description -->
 
-<!-- Two or three plain sentences a teammate can read in 10 seconds, written the way you'd explain it in Slack
+## Handwritten 1-3 sentence description
+
+<!-- The author writes this in their own words, and it can be left empty. AI agents never write here and leave the
+     placeholder line below as is, and when updating an existing PR they keep whatever the author wrote. Keep this heading
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
-     No headings, bullets, tables, or code names here. Everything else goes inside the Details block below -->
+     No bullets, tables, or code names here. Everything else goes inside the Details block below -->
+
+[insert handwritten description here]
 
 <details>
 <summary>Details</summary>

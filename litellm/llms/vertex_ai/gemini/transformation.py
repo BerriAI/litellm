@@ -1256,6 +1256,7 @@ def sync_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1275,6 +1276,7 @@ def sync_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1390,6 +1392,7 @@ async def async_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1409,6 +1412,7 @@ async def async_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,

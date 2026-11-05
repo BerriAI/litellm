@@ -24,7 +24,8 @@ DASHSCOPE_ANTHROPIC_PATH: Final = "/apps/anthropic"
 DASHSCOPE_NATIVE_V1_PATH: Final = "/api/v1"
 DASHSCOPE_COMPATIBLE_API_PATH: Final = "/compatible-api/v1"
 DASHSCOPE_RERANK_PATH: Final = f"{DASHSCOPE_COMPATIBLE_API_PATH}/reranks"
-DASHSCOPE_IMAGE_PATH: Final = "/api/v1/services/aigc/multimodal-generation/generation"
+DASHSCOPE_MULTIMODAL_GENERATION_PATH: Final = "/api/v1/services/aigc/multimodal-generation/generation"
+DASHSCOPE_IMAGE_PATH: Final = DASHSCOPE_MULTIMODAL_GENERATION_PATH
 DASHSCOPE_DEFAULT_ORIGIN: Final = "https://dashscope.aliyuncs.com"
 
 _STANDARD_DASHSCOPE_HOSTS: Final = frozenset(
@@ -100,6 +101,21 @@ def is_dashscope_native_endpoint_url(api_base: str) -> bool:
     return urlparse(api_base).path.rstrip("/").startswith(f"{DASHSCOPE_NATIVE_V1_PATH}/")
 
 
+def dashscope_api_root(api_base: str) -> str:
+    endpoints: Final = resolve_dashscope_endpoints(api_base)
+    if endpoints is not None:
+        return endpoints.origin
+    trimmed: Final = api_base.rstrip("/")
+    if trimmed.endswith(DASHSCOPE_CHAT_COMPATIBLE_PATH):
+        return trimmed.removesuffix(DASHSCOPE_CHAT_COMPATIBLE_PATH)
+    root, separator, _ = trimmed.partition(DASHSCOPE_NATIVE_V1_PATH)
+    return root if separator else trimmed
+
+
+def is_aliyun_host(host: str | None) -> bool:
+    return host is not None and (host == "aliyuncs.com" or host.endswith(".aliyuncs.com"))
+
+
 def resolve_dashscope_openai_api_base(
     api_base: str | None,
     env_var: str = "DASHSCOPE_API_BASE",
@@ -140,9 +156,7 @@ def _chat_shaped_aliyun_origin(api_base: str | None) -> str | None:
     if api_base is None:
         return None
     parsed: Final = urlparse(api_base)
-    host: Final = parsed.hostname or ""
-    on_aliyun_host: Final = host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
-    if not on_aliyun_host or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
+    if not is_aliyun_host(parsed.hostname) or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
         return None
     return f"{parsed.scheme}://{parsed.netloc}"
 

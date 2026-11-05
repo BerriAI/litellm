@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployment_info,
@@ -13,17 +14,16 @@ from litellm.types.router import RouterRateLimitError
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.router import Router as _Router
+    from litellm.router_api import RoutingContext
 
-    LitellmRouter = _Router
     Span = _Span
 else:
-    LitellmRouter = Any
     Span = Any
 
 
+@renamed_router_param("litellm_router_instance")
 async def send_llm_exception_alert(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext | None",
     request_kwargs: dict,
     error_traceback_str: str,
     original_exception,
@@ -33,19 +33,17 @@ async def send_llm_exception_alert(
     Sends a Slack / MS Teams alert for the LLM API call failure. Only if router.slack_alerting_logger is set.
 
     Parameters:
-        litellm_router_instance (_Router): The LitellmRouter instance.
+        ctx (RoutingContext): The router's routing context.
         original_exception (Any): The original exception that occurred.
 
     Returns:
         None
     """
-    if litellm_router_instance is None:
+    if ctx is None:
         return
 
-    if not hasattr(litellm_router_instance, "slack_alerting_logger"):
-        return
-
-    if litellm_router_instance.slack_alerting_logger is None:
+    slack_alerting_logger: Final = ctx.observers().slack_alerting_logger
+    if slack_alerting_logger is None:
         return
 
     if "proxy_server_request" in request_kwargs:
@@ -62,7 +60,7 @@ async def send_llm_exception_alert(
     # Redact secrets before sending to external service (Slack / MS Teams)
     exception_str = redact_secrets(exception_str)
 
-    await litellm_router_instance.slack_alerting_logger.send_alert(
+    await slack_alerting_logger.send_alert(
         message=f"LLM API call failed: `{exception_str}`",
         level="High",
         alert_type=AlertType.llm_exceptions,
@@ -70,8 +68,9 @@ async def send_llm_exception_alert(
     )
 
 
+@renamed_router_param("litellm_router_instance")
 async def async_raise_no_deployment_exception(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     model: str,
     parent_otel_span: Span | None,
     route_model_ids: Collection[str] | None = None,
@@ -80,12 +79,12 @@ async def async_raise_no_deployment_exception(
     Raises a RouterRateLimitError if no deployment is found for the given model.
     """
     verbose_router_logger.info("get_available_deployment for model: %s, No deployment available", model)
-    model_ids: Final = litellm_router_instance.get_model_ids(model_name=model)
-    _cooldown_time: Final = litellm_router_instance.cooldown_cache.get_min_cooldown(
+    model_ids: Final = ctx.registry().names(model, kind="ids")
+    _cooldown_time: Final = ctx.health().cooldowns.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span
     )
     _cooldown_list: Final = await async_get_cooldown_deployments_with_debug_info(
-        litellm_router_instance=litellm_router_instance,
+        ctx=ctx,
         parent_otel_span=parent_otel_span,
     )
     verbose_router_logger.info(
@@ -96,12 +95,10 @@ async def async_raise_no_deployment_exception(
     return RouterRateLimitError(
         model=model,
         cooldown_time=_cooldown_time,
-        enable_pre_call_checks=litellm_router_instance.enable_pre_call_checks,
+        enable_pre_call_checks=ctx.settings().enable_pre_call_checks,
         cooldown_list=cooldown_list_ids,
         model_ids=model_ids,
         cooldown_deployments=(
-            None
-            if route_model_ids is None
-            else get_cooldown_deployment_info(litellm_router_instance, route_model_ids, cooldown_list_ids)
+            None if route_model_ids is None else get_cooldown_deployment_info(ctx, route_model_ids, cooldown_list_ids)
         ),
     )

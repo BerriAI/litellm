@@ -1,6 +1,9 @@
 """Tests for scripts/check_openapi_docs.py, the scan behind scripts/openapi_docs_gate.py."""
 
+from collections.abc import Mapping
 from typing import Final
+
+import pytest
 
 import check_openapi_docs as checker
 
@@ -9,8 +12,26 @@ _RESPONSES: Final = {"200": {"content": {"application/json": {"schema": {"$ref":
 _DOCUMENTED: Final = {"description": "Does a thing", "requestBody": _BODY, "responses": _RESPONSES}
 
 
-def test_a_fully_documented_post_has_no_findings() -> None:
-    assert checker.violations({"paths": {"/v1/thing": {"post": _DOCUMENTED}}}) == ()
+def _post_with_media_types(request_media_type: str, response_media_type: str) -> Mapping[str, object]:
+    return {
+        **_DOCUMENTED,
+        "requestBody": {"content": {request_media_type: {"schema": {"type": "string"}}}},
+        "responses": {"200": {"content": {response_media_type: {"schema": {"type": "string"}}}}},
+    }
+
+
+@pytest.mark.parametrize("request_type, response_type", [
+    ("application/json", "application/json"), ("application/sdp", "application/sdp"),
+    ("multipart/form-data", "application/json"),
+])
+def test_a_fully_documented_post_has_no_findings(request_type: str, response_type: str) -> None:
+    operation: Final = _post_with_media_types(request_type, response_type)
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
+
+
+def test_a_schema_under_another_media_type_still_counts_as_undocumented() -> None:
+    operation: Final = _post_with_media_types("application/octet-stream", "audio/wav")
+    assert {v.code for v in checker.violations({"paths": {"/v1/thing": {"post": operation}}})} == {"OA001", "OA003"}
 
 
 def test_each_missing_piece_is_its_own_rule() -> None:
@@ -19,8 +40,9 @@ def test_each_missing_piece_is_its_own_rule() -> None:
     assert codes == {"OA001", "OA002", "OA003"}
 
 
-def test_only_the_missing_piece_is_reported() -> None:
-    no_body: Final = {**_DOCUMENTED, "requestBody": {}}
+@pytest.mark.parametrize("body", [{}, {"content": {"multipart/form-data": {}}}])
+def test_only_the_missing_piece_is_reported(body: Mapping[str, object]) -> None:
+    no_body: Final = {**_DOCUMENTED, "requestBody": body}
     blank_description: Final = {**_DOCUMENTED, "description": "   "}
     untyped_200: Final = {**_DOCUMENTED, "responses": {"200": {"content": {"application/json": {"schema": {}}}}}}
     spec: Final = {
