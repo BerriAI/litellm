@@ -43,6 +43,7 @@ export const issuesHref = () => uiHref("alerts");
 export function issueResource(issue: Issue): string {
   const { scope_type: scope, scope_id: id } = issue.cohort;
   const label = SCOPE_LABELS[scope];
+  if (scope === "deployment" && issue.scope_label === label) return label;
   if (issue.scope_label) return `${label} · ${issue.scope_label}`;
   if (!id) return label;
   const short = id.length > 48 ? `${id.slice(0, 24)}…${id.slice(-8)}` : id;
@@ -113,7 +114,7 @@ export function useIssues(accessToken: string | null, listOptions: IssueListOpti
         params: { query: { status, family, kind, limit, offset } },
         signal,
       });
-      if (!data) throw new Error("Could not load issues");
+      if (!data) throw new Error("Could not load alerts");
       return data;
     },
     staleTime: 60_000,
@@ -135,7 +136,7 @@ export function useIssue(accessToken: string | null, id: string) {
         params: { path: { issue_id: id } },
         signal,
       });
-      if (!data) throw new Error("Could not load this issue");
+      if (!data) throw new Error("Could not load this alert");
       return data;
     },
     staleTime: 60_000,
@@ -150,6 +151,6 @@ export async function updateIssueStatus(issue: Issue, status: IssueStatus) {
     params: { path: { issue_id: issue.id } },
     body: { status, expected_status: issue.status },
   });
-  if (!data) throw new Error("Could not update this issue");
+  if (!data) throw new Error("Could not update this alert");
   return data;
 }

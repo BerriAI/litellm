@@ -3,14 +3,14 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ModelSection } from "@/components/activity_metrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
-import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData } from "@/components/UsagePage/dailyActivityApi";
-import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
+import { boundedActivityMetrics } from "@/components/UsagePage/keyActivityData";
 import { backgroundFetchClient } from "@/lib/http/api";
 import type { Issue } from "./issueApi";
 
 export default function IssueActivity({ issue, from, to }: { issue: Issue; from: string; to: string }) {
   const { userId, userRole, isAuthorized, accessToken } = useAuthorized();
-  const enabled = Boolean(isAuthorized && accessToken && from <= to);
+  const authorized = Boolean(isAuthorized && accessToken && issue.can_view_activity === true);
+  const enabled = authorized && from <= to;
   const options = {
     queryKey: ["issueActivity", getProxyBaseUrl(), userId, userRole, issue.id, from, to],
     enabled,
@@ -51,8 +51,6 @@ export default function IssueActivity({ issue, from, to }: { issue: Issue; from:
   if (query.data.results.length === 0)
     return <p className="text-sm text-muted-foreground">No recorded activity in this date range.</p>;
   const id = issue.cohort.scope_id ?? issue.id;
-  const keyMetrics = issue.cohort.scope_type === "key" ? keyDetailFromResponse(query.data, id, []) : undefined;
-  const metrics =
-    keyMetrics ?? overallUsageMetrics(toDailyData(query.data), query.data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA);
-  return <ModelSection modelName={id} metrics={metrics} />;
+  const { metrics, otherModels } = boundedActivityMetrics(query.data);
+  return <ModelSection modelName={id} metrics={metrics} otherModels={otherModels} />;
 }

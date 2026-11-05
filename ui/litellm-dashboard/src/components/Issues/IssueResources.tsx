@@ -50,7 +50,7 @@ const columns: ColumnDef<ResourceRow>[] = [
   { id: "spend", header: "Spend", cell: ({ row }) => formatAlertValue("spend", row.original.spend) },
   { id: "errors", header: "Failed requests", cell: ({ row }) => row.original.errors.toLocaleString() },
 ];
-const TABLE_STATE = {
+export const ISSUE_RESOURCE_TABLE_STATE = {
   sortFields: [],
   defaultSort: { id: "", desc: false },
   defaultPageSize: 20,
@@ -66,7 +66,7 @@ export default function IssueResources({ issue, from, to }: { issue: Issue; from
   );
   const supportsUsers = issue.cohort.scope_type !== "team";
   const resource = supportsUsers ? requestedResource : "keys";
-  const table = useUrlTableState(TABLE_STATE);
+  const table = useUrlTableState(ISSUE_RESOURCE_TABLE_STATE);
   const offset = table.pagination.pageIndex * table.pagination.pageSize;
   const options = {
     queryKey: [
@@ -122,13 +122,13 @@ export default function IssueResources({ issue, from, to }: { issue: Issue; from
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Resources with recorded usage in this issue’s traffic scope from {from} to {to} UTC. These totals describe
+        Resources with recorded usage in this alert’s traffic scope from {from} to {to} UTC. These totals describe
         exposure, not an independent finding for every resource.
       </p>
       {Boolean(issue.cohort.model_pairs?.length) && (
         <details>
           <summary className="cursor-pointer text-sm">
-            Models in this issue · {issue.cohort.model_pairs?.length}
+            Models in this alert · {issue.cohort.model_pairs?.length}
           </summary>
           <ul className="mt-2 max-h-48 divide-y overflow-y-auto text-sm">
             {issue.cohort.model_pairs?.map((pair) => (

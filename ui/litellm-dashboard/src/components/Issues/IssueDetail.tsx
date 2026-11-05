@@ -14,6 +14,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import { hasCapability } from "@/utils/capabilities";
 import { uiHref } from "@/utils/uiHref";
 import { ApiError } from "@/lib/http/client";
+import { useUrlTableState } from "@/components/shared/DataTable";
 import {
   Issue,
   IssueStatus,
@@ -26,7 +27,7 @@ import {
 } from "./issueApi";
 import IssueActivity from "./IssueActivity";
 import IssueComparisonTable from "./IssueComparisonTable";
-import IssueResources from "./IssueResources";
+import IssueResources, { ISSUE_RESOURCE_TABLE_STATE } from "./IssueResources";
 import IssueSignals from "./IssueSignals";
 
 function resourceHref(issue: Issue): string | undefined {
@@ -50,7 +51,8 @@ function IssueStatusActions({ issue }: { issue: Issue }) {
       ]),
   });
   const inactiveRetirement = issue.kind === "model_deprecation" && issue.active === false;
-  if (isViewOnly || (inactiveRetirement && issue.status !== "open")) return null;
+  if (isViewOnly || issue.can_update_status !== true) return null;
+  if (inactiveRetirement && issue.status !== "open") return null;
   const actions: IssueStatus[] = issue.status === "open" ? ["resolved", "dismissed"] : ["open"];
   const labels = { resolved: "Mark resolved", dismissed: "Dismiss", open: "Reopen" };
   const stale = mutation.error instanceof ApiError && mutation.error.status === 409;
@@ -71,7 +73,7 @@ function IssueStatusActions({ issue }: { issue: Issue }) {
       </div>
       {mutation.isError && (
         <p role="alert" className="max-w-sm text-xs text-destructive">
-          {stale ? "This issue changed. Refresh it before trying again." : "Could not update this issue. Please retry."}
+          {stale ? "This alert changed. Refresh it before trying again." : "Could not update this alert. Please retry."}
           {stale && (
             <Button
               variant="link"
@@ -112,7 +114,7 @@ function RetirementContext({ issue }: { issue: Issue }) {
         </a>
       </div>
       <p className="text-xs text-muted-foreground">
-        Resolve once migration is confirmed across teams. New traffic can reopen this issue.
+        Resolve once migration is confirmed across teams. New traffic can reopen this alert.
       </p>
     </div>
   );
@@ -120,12 +122,17 @@ function RetirementContext({ issue }: { issue: Issue }) {
 
 function IssueBody({ issue }: { issue: Issue }) {
   const [params, setParams] = useQueryStates(entityActivityParsers);
+  const resourcesTable = useUrlTableState(ISSUE_RESOURCE_TABLE_STATE);
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [signalsOpen, setSignalsOpen] = useState(false);
   const from = params.activity_from ?? issue.range_start;
   const to = params.activity_to ?? issue.range_end;
-  const href = resourceHref(issue);
+  const href = issue.can_view_activity === true ? resourceHref(issue) : undefined;
   const impact = issueImpactText(issue);
+  const updateRange = (from: string | null, to: string | null) => {
+    void setParams({ activity_from: from, activity_to: to });
+    resourcesTable.onPaginationChange({ ...resourcesTable.pagination, pageIndex: 0 });
+  };
   return (
     <div className="min-w-0 space-y-6">
       <header className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
@@ -141,7 +148,7 @@ function IssueBody({ issue }: { issue: Issue }) {
         </div>
         <IssueStatusActions issue={issue} />
       </header>
-      <section className="space-y-3" aria-label="Issue evidence">
+      <section className="space-y-3" aria-label="Alert evidence">
         {issue.kind === "performance" && <p className="text-sm text-muted-foreground">{issue.explanation}</p>}
         <IssueComparisonTable issue={issue} />
         <RetirementContext issue={issue} />
@@ -152,47 +159,45 @@ function IssueBody({ issue }: { issue: Issue }) {
           </a>
         )}
       </section>
-      <section className="space-y-4" aria-label="Issue activity">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold">Activity</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            {(from !== issue.range_start || to !== issue.range_end) && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void setParams({ activity_from: null, activity_to: null })}
-              >
-                Reset range
-              </Button>
+      {issue.can_view_activity === true ? (
+        <>
+          <section className="space-y-4" aria-label="Alert activity">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-base font-semibold">Activity</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                {(from !== issue.range_start || to !== issue.range_end) && (
+                  <Button size="sm" variant="ghost" onClick={() => updateRange(null, null)}>
+                    Reset range
+                  </Button>
+                )}
+                <span className="text-xs text-muted-foreground">UTC</span>
+                <AdvancedDatePicker
+                  compact
+                  label=""
+                  className="max-w-xs"
+                  presets={activityPresets}
+                  showTimeRange={false}
+                  value={{ from: new Date(`${from}T00:00:00`), to: new Date(`${to}T23:59:59`) }}
+                  onValueChange={(range) => {
+                    if (range.from && range.to) updateRange(localActivityDay(range.from), localActivityDay(range.to));
+                  }}
+                />
+              </div>
+            </div>
+            <IssueActivity issue={issue} from={from} to={to} />
+          </section>
+          <details className="border-t pt-4" onToggle={(event) => setResourcesOpen(event.currentTarget.open)}>
+            <summary className="cursor-pointer text-sm font-medium">Resources in this traffic</summary>
+            {resourcesOpen && (
+              <div className="pt-4">
+                <IssueResources key={`${from}-${to}`} issue={issue} from={from} to={to} />
+              </div>
             )}
-            <span className="text-xs text-muted-foreground">UTC</span>
-            <AdvancedDatePicker
-              compact
-              label=""
-              className="max-w-xs"
-              presets={activityPresets}
-              showTimeRange={false}
-              value={{ from: new Date(`${from}T00:00:00`), to: new Date(`${to}T23:59:59`) }}
-              onValueChange={(range) => {
-                if (range.from && range.to)
-                  void setParams({
-                    activity_from: localActivityDay(range.from),
-                    activity_to: localActivityDay(range.to),
-                  });
-              }}
-            />
-          </div>
-        </div>
-        <IssueActivity issue={issue} from={from} to={to} />
-      </section>
-      <details className="border-t pt-4" onToggle={(event) => setResourcesOpen(event.currentTarget.open)}>
-        <summary className="cursor-pointer text-sm font-medium">Resources in this traffic</summary>
-        {resourcesOpen && (
-          <div className="pt-4">
-            <IssueResources key={`${from}-${to}`} issue={issue} from={from} to={to} />
-          </div>
-        )}
-      </details>
+          </details>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">You don’t have access to this alert’s activity.</p>
+      )}
       <details className="border-t pt-4" onToggle={(event) => setSignalsOpen(event.currentTarget.open)}>
         <summary className="cursor-pointer text-sm font-medium">Source signals</summary>
         {signalsOpen && (
@@ -211,21 +216,21 @@ export default function IssueDetail({ id }: { id: string }) {
   const globalAccess = hasCapability(userRole, "viewGlobalSpend");
   const denied = query.error instanceof ApiError && query.error.status === 403;
   let back = { href: uiHref("usage?view=my-usage"), label: "My usage" };
-  if (globalAccess) back = { href: issuesHref(), label: "Issues" };
-  else if (query.data) {
+  if (globalAccess) back = { href: issuesHref(), label: "Alerts" };
+  else if (query.data?.can_view_activity === true) {
     const href = resourceHref(query.data);
     if (href) back = { href, label: "Resource activity" };
   }
   let content = (
     <p role="status" className="text-sm text-muted-foreground">
-      Loading issue…
+      Loading alert…
     </p>
   );
-  if (!accessToken) content = <p>Sign in to view this issue.</p>;
+  if (!accessToken) content = <p>Sign in to view this alert.</p>;
   else if (query.isError)
     content = (
       <div role="alert" className="space-y-2">
-        <p>{denied ? "You don’t have access to this issue." : "Could not load this issue."}</p>
+        <p>{denied ? "You don’t have access to this alert." : "Could not load this alert."}</p>
         <Button variant="outline" onClick={() => void query.refetch()}>
           Retry
         </Button>

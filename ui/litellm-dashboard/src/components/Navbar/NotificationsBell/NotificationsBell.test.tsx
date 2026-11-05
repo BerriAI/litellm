@@ -188,7 +188,7 @@ describe("issue notifications", () => {
   it("opens issue-owned investigations and keeps resources outside the scrolling content", async () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
-    await user.click(screen.getByRole("button", { name: "Notifications, 2 issues need attention" }));
+    await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
     const destination = screen.getByRole("link", { name: SPEND_ISSUE.title });
     expect(destination).toHaveAttribute("href", "/ui/alerts?issue=issue-checkout-spend");
     expect(screen.getByRole("article", { name: SPEND_ISSUE.title })).toHaveTextContent("↑ 20× · $600.00 vs $30.00");
@@ -201,13 +201,13 @@ describe("issue notifications", () => {
     await user.click(screen.getByRole("button", { name: /What’s new/ }));
     expect(announcement("LiteLLM Auto Router")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^mark as read$/i }));
-    expect(screen.getByRole("button", { name: "Notifications, 2 issues need attention" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" })).toBeInTheDocument();
   });
 
   it("preserves retirement recommendation provenance alongside performance issues", async () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
-    await user.click(screen.getByRole("button", { name: "Notifications, 2 issues need attention" }));
+    await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
     expect(screen.getByRole("link", { name: RETIREMENT_ISSUE.title })).toHaveAttribute(
       "href",
       "/ui/alerts?issue=issue-model-retirement",

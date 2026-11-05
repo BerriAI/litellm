@@ -176,7 +176,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
-  if (needsAttention) label = `Notifications, ${count} ${count === 1 ? "issue needs" : "issues need"} attention`;
+  if (needsAttention) label = `Notifications, ${count} ${count === 1 ? "alert needs" : "alerts need"} attention`;
 
   return (
     <Popover>
@@ -208,7 +208,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
           <div className="space-y-3 p-4">
             {showIssues && (
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">Issues</p>
+                <p className="text-sm font-medium">Alerts</p>
                 <a className="text-xs text-primary hover:underline" href={issuesHref()}>
                   View all{count > 0 ? ` ${count}` : ""}
                 </a>
@@ -216,11 +216,11 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
             )}
             {issuesPending && (
               <p role="status" className="text-xs text-muted-foreground">
-                Loading issues…
+                Loading alerts…
               </p>
             )}
             {issuesFailed && (
-              <p className="text-xs text-muted-foreground">Could not load issues. Open Issues to retry.</p>
+              <p className="text-xs text-muted-foreground">Could not load alerts. Open Alerts to retry.</p>
             )}
             {issues?.data.map((issue) => (
               <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
@@ -239,7 +239,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                 {issue.deprecation && <RecommendedReplacement recommendation={issue.deprecation.model} />}
               </article>
             ))}
-            {issues?.total === 0 && <p className="text-xs text-muted-foreground">No open issues.</p>}
+            {issues?.total === 0 && <p className="text-xs text-muted-foreground">No open alerts.</p>}
           </div>
         </div>
         <ProductUpdates announcements={announcements} unreadCount={unreadCount} hasAlerts={needsAttention} />

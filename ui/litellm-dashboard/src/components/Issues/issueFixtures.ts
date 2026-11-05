@@ -44,6 +44,8 @@ export const SPEND_ISSUE: Issue = {
   last_seen: "2026-11-05T01:00:00Z",
   updated_at: "2026-11-05T01:00:00Z",
   active: true,
+  can_update_status: true,
+  can_view_activity: true,
 };
 
 export const RETIREMENT_ISSUE: Issue = {

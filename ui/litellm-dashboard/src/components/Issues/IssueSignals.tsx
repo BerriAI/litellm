@@ -44,7 +44,7 @@ export default function IssueSignals({ issue }: { issue: Issue }) {
   return (
     <div className="space-y-3 text-sm">
       <p className="text-xs text-muted-foreground">
-        Recorded observations grouped into this issue. Each rule keeps its own baseline and condition.
+        Recorded observations grouped into this alert. Each rule keeps its own baseline and condition.
       </p>
       <ul className="divide-y">
         {query.data.data.map((signal) => {

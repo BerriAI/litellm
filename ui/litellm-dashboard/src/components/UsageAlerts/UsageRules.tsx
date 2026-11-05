@@ -80,7 +80,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editorTitle(editing)}</DialogTitle>
-          <DialogDescription>Choose which daily changes should create an issue.</DialogDescription>
+          <DialogDescription>Choose which daily changes should create an alert.</DialogDescription>
         </DialogHeader>
         {error && (
           <p role="alert" className="text-sm text-destructive">

@@ -31,9 +31,11 @@ export function formatAlertChange(alert: Pick<UsageAlert, "baseline_value" | "ob
 
 export function formatAlertValue(metric: UsageAlert["metric"], value: number): string {
   if (metric === "spend")
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(
-      value,
-    );
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: Math.abs(value) >= 0.01 ? 2 : 4,
+    }).format(value);
   if (metric === "latency") return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`;
   if (metric === "error_rate") return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   return value.toLocaleString(undefined, { maximumFractionDigits: 1 });

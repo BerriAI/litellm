@@ -26,7 +26,7 @@ const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defa
 const columns: ColumnDef<Issue>[] = [
   {
     id: "issue",
-    header: "Issue",
+    header: "Alert",
     meta: { className: "whitespace-normal" },
     cell: ({ row }) => (
       <div className="min-w-0 space-y-1 py-1">
@@ -99,7 +99,7 @@ export default function IssuesInbox() {
   if (query.isError)
     return (
       <div role="alert" className="space-y-2">
-        <p>Could not load issues.</p>
+        <p>Could not load alerts.</p>
         <Button variant="outline" onClick={() => void query.refetch()}>
           Retry
         </Button>
@@ -126,10 +126,10 @@ export default function IssuesInbox() {
           fillHeight
           size="compact"
           isLoading={query.isPending}
-          loadingMessage="Loading issues…"
+          loadingMessage="Loading alerts…"
           noDataMessage={
             <div className="space-y-1">
-              <p>No {status} issues.</p>
+              <p>No {status} alerts.</p>
               <p className="text-xs text-muted-foreground">
                 Daily performance checks need enough recorded usage history.
               </p>
@@ -147,12 +147,12 @@ export default function IssuesInbox() {
               showViewOptions={false}
             >
               <select
-                aria-label="Issue type"
+                aria-label="Alert type"
                 value={family ?? kind ?? "all"}
                 onChange={(event) => changeFamily(event.target.value)}
                 className="h-8 rounded-md border border-input bg-background px-2 text-xs"
               >
-                <option value="all">All issue types</option>
+                <option value="all">All alert types</option>
                 {kind && <option value="performance">All performance types</option>}
                 {ISSUE_FAMILIES.map((value) => (
                   <option key={value} value={value}>

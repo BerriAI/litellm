@@ -198,7 +198,7 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
   const query = useQuery(options);
   const save = useMutation({
     mutationFn: async (body: FamilyUpdate) => {
-      if (!editing) throw new Error("Choose an issue type");
+      if (!editing) throw new Error("Choose an alert type");
       const { data } = await backgroundFetchClient.PATCH("/issues/families/{family}", {
         params: { path: { family: editing.family } },
         body,
@@ -248,7 +248,7 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
         <>
           <p className="text-xs text-muted-foreground">
             Daily monitoring is enabled by default. Checks wait for a usable baseline and complete usage data. Model
-            retirement issues appear automatically for used models.
+            retirement alerts appear automatically for used models.
           </p>
           <ul className="divide-y">
             {query.data.data.map((family) => (

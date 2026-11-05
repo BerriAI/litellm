@@ -23,7 +23,7 @@ export default function AlertsPage() {
     );
   return (
     <Page className="h-full gap-4">
-      <h1 className="text-xl font-semibold">Issues</h1>
+      <h1 className="text-xl font-semibold">Alerts</h1>
       <IssuesInbox />
     </Page>
   );

@@ -14,6 +14,7 @@ import IssueDetail from "./IssueDetail";
 import { FAMILY_SETTINGS, RETIREMENT_ISSUE, SPEND_ISSUE } from "./issueFixtures";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import type { Issue } from "./issueApi";
+import type { components } from "@/lib/http/schema";
 
 const auth = vi.hoisted(() => ({
   accessToken: "test-session",
@@ -31,6 +32,8 @@ let staleStatus = false;
 let empty = false;
 let allFailed = false;
 let deniedDetail = false;
+let resourceTotal = 1;
+let modelBreakdown: NonNullable<components["schemas"]["BoundedDailyActivityResponse"]["model_breakdown"]> | null = null;
 let families = FAMILY_SETTINGS;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -51,6 +54,7 @@ function activity() {
     timed_requests: 42,
   };
   return {
+    model_breakdown: modelBreakdown,
     results: [{ date: "2026-11-04", metrics, breakdown: {} }],
     metadata: {
       ...EMPTY_DAILY_ACTIVITY_METADATA,
@@ -78,6 +82,18 @@ function listResponse(query: URLSearchParams) {
   return json(page);
 }
 
+function resourceKeyPage(query: URLSearchParams) {
+  const offset = Number(query.get("offset") ?? 0);
+  const total = query.get("start_date") === detail.range_start ? resourceTotal : 1;
+  const key = {
+    api_key: "resource-key",
+    metadata: { key_alias: "Related checkout key", user_email: "owner@example.com" },
+    metrics: { spend: 12, api_requests: 42, failed_requests: 2 },
+  };
+  const page = { api_keys: offset < total ? [key] : [], total_api_keys: total, limit: 20, offset };
+  return json(page);
+}
+
 describe("unified issue investigations", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -89,6 +105,8 @@ describe("unified issue investigations", () => {
     empty = false;
     allFailed = false;
     deniedDetail = false;
+    resourceTotal = 1;
+    modelBreakdown = null;
     families = FAMILY_SETTINGS;
     auth.isViewOnly = false;
     auth.isAuthorized = true;
@@ -111,21 +129,7 @@ describe("unified issue investigations", () => {
       if (url.pathname === "/issues/families/spend") return json(FAMILY_SETTINGS.data[0]);
       if (url.pathname.endsWith("/activity"))
         return failActivity ? json({ detail: "Unavailable" }, 503) : json(activity());
-      if (url.pathname.endsWith("/keys")) {
-        const page = {
-          api_keys: [
-            {
-              api_key: "resource-key",
-              metadata: { key_alias: "Related checkout key", user_email: "owner@example.com" },
-              metrics: { spend: 12, api_requests: 42, failed_requests: 2 },
-            },
-          ],
-          total_api_keys: 1,
-          limit: 20,
-          offset: 0,
-        };
-        return json(page);
-      }
+      if (url.pathname.endsWith("/keys")) return resourceKeyPage(url.searchParams);
       if (url.pathname.endsWith("/users")) {
         const page = {
           users: [
@@ -177,7 +181,7 @@ describe("unified issue investigations", () => {
         .at(-1)
         ?.query.get("offset"),
     ).toBe("25");
-    fireEvent.change(screen.getByLabelText("Issue type"), { target: { value: "retirement" } });
+    fireEvent.change(screen.getByLabelText("Alert type"), { target: { value: "retirement" } });
     expect(await screen.findByRole("link", { name: RETIREMENT_ISSUE.title })).toBeInTheDocument();
     expect(
       calls
@@ -211,18 +215,18 @@ describe("unified issue investigations", () => {
     failList = true;
     const user = userEvent.setup();
     renderWithProviders(<IssuesInbox />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load issues");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load alerts");
     failList = false;
     empty = true;
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("No open issues.")).toBeInTheDocument();
+    expect(await screen.findByText("No open alerts.")).toBeInTheDocument();
     expect(screen.getByText(/enough recorded usage history/)).toBeInTheDocument();
   });
 
   it("loads saved comparisons and only the issue-scoped Activity, with lazy resources", async () => {
     const user = userEvent.setup();
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
-    const table = await screen.findByRole("table", { name: "Saved issue comparisons" });
+    const table = await screen.findByRole("table", { name: "Saved alert comparisons" });
     expect(within(table).getByText("$600.00")).toBeInTheDocument();
     expect(within(table).getByText("$30.00")).toBeInTheDocument();
     expect(within(table).getByText("At least $90.00")).toBeInTheDocument();
@@ -243,9 +247,48 @@ describe("unified issue investigations", () => {
     expect(calls.some((call) => call.path.includes("/user/daily"))).toBe(false);
   });
 
-  it("preserves saved evidence when the Activity date range changes", async () => {
+  it.each([false, null, undefined])(
+    "keeps saved evidence without fetching unavailable activity (%s)",
+    async (canView) => {
+      detail = { ...SPEND_ISSUE, can_view_activity: canView };
+      renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
+      expect(await screen.findByRole("table", { name: "Saved alert comparisons" })).toBeInTheDocument();
+      expect(screen.getByText("You don’t have access to this alert’s activity.")).toBeInTheDocument();
+      expect(screen.queryByText("Resources in this traffic")).not.toBeInTheDocument();
+      expect(calls.some((call) => /\/(activity|keys|users|impact)$/.test(call.path))).toBe(false);
+    },
+  );
+
+  it("keeps exact totals and shows the explicit remainder from bounded model contributions", async () => {
+    modelBreakdown = {
+      limit: 20,
+      total_models: 137,
+      models: Array.from({ length: 20 }, (_, index) => ({
+        model: index === 0 ? "Other" : `model-${index}`,
+        metrics: { spend: 0.1, api_requests: 1, successful_requests: 1, failed_requests: 0, total_tokens: 10 },
+      })),
+      other: {
+        model_count: 117,
+        metrics: { spend: 10, api_requests: 22, successful_requests: 20, failed_requests: 2, total_tokens: 4000 },
+      },
+    };
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
+    const remainder = await screen.findByRole("row", { name: /Other \(117 models\)/ });
+    expect(within(remainder).getByText("$10.00")).toBeInTheDocument();
+    expect(within(remainder).getByText("4,000")).toBeInTheDocument();
+    expect(screen.getByText("Other")).toBeInTheDocument();
+    expect(screen.getByText("42")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "$12.00" })).toBeInTheDocument();
+    expect(calls.filter((call) => call.path.endsWith("/activity"))).toHaveLength(1);
+  });
+
+  it("preserves saved evidence when the Activity date range changes", async () => {
+    resourceTotal = 41;
+    renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />, { searchParams: "resourcespage=3" });
     await screen.findByText("Total Requests");
+    await userEvent.click(screen.getByText("Resources in this traffic", { selector: "summary" }));
+    await screen.findByRole("link", { name: "Related checkout key" });
+    expect(calls.find((call) => call.path.endsWith("/keys"))?.query.get("offset")).toBe("40");
     fireEvent.click(screen.getByRole("button", { name: /28 Oct.*4 Nov/ }));
     fireEvent.change(screen.getByDisplayValue("2026-10-28"), { target: { value: "2026-10-30" } });
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -259,6 +302,19 @@ describe("unified issue investigations", () => {
     );
     expect(screen.getByText("Observed · 2026-11-04 UTC")).toBeInTheDocument();
     expect(screen.getByText("At least $90.00")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        calls
+          .filter((call) => call.path.endsWith("/keys"))
+          .at(-1)
+          ?.query.get("offset"),
+      ).toBe("0"),
+    );
+    expect(await screen.findByRole("link", { name: "Related checkout key" })).toBeInTheDocument();
+    const firstNarrowedPage = calls.find(
+      (call) => call.path.endsWith("/keys") && call.query.get("start_date") === "2026-10-30",
+    );
+    expect(firstNarrowedPage?.query.get("offset")).toBe("0");
     await userEvent.click(screen.getByRole("button", { name: "Reset range" }));
     expect(screen.queryByRole("button", { name: "Reset range" })).not.toBeInTheDocument();
   });
@@ -268,7 +324,7 @@ describe("unified issue investigations", () => {
     staleStatus = true;
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
     await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("This issue changed");
+    expect(await screen.findByRole("alert")).toHaveTextContent("This alert changed");
     expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
       status: "resolved",
       expected_status: "open",
@@ -299,7 +355,7 @@ describe("unified issue investigations", () => {
     allFailed = true;
     renderWithProviders(<IssueDetail id={detail.id} />);
     await screen.findByText("Total Requests");
-    expect(screen.getByLabelText("Issue activity")).not.toHaveTextContent(/NaN|Infinity|∞/);
+    expect(screen.getByLabelText("Alert activity")).not.toHaveTextContent(/NaN|Infinity|∞/);
   });
 
   it("retries failed Activity without losing saved issue evidence", async () => {
@@ -331,6 +387,23 @@ describe("unified issue investigations", () => {
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
   });
 
+  it.each([false, null, undefined])(
+    "hides status actions without explicit write permission (%s)",
+    async (permission) => {
+      auth.userRole = "Internal User";
+      auth.userId = "team-member";
+      detail = {
+        ...detail,
+        cohort: { scope_type: "team", scope_id: "team-example", model_pairs: [] },
+        can_update_status: permission,
+      };
+      renderWithProviders(<IssueDetail id={detail.id} />);
+      await screen.findByText("Total Requests");
+      expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    },
+  );
+
   it("opens an authorized key issue for an internal user without reading global issues", async () => {
     auth.userRole = "Internal User";
     auth.userId = "member-owner";
@@ -343,13 +416,20 @@ describe("unified issue investigations", () => {
     );
     expect(calls.some((call) => call.path === "/issues")).toBe(false);
     expect(calls.some((call) => call.path.includes("/user/daily"))).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Mark resolved" }));
+    await waitFor(() =>
+      expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
+        status: "resolved",
+        expected_status: "open",
+      }),
+    );
   });
 
   it("shows a scoped permission failure without exposing foreign metadata or fetching activity", async () => {
     auth.userRole = "Internal User";
     auth.userId = "member-owner";
     renderWithProviders(<IssueDetail id="foreign-issue" />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this issue.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this alert.");
     expect(screen.getByRole("link", { name: "My usage" })).toHaveAttribute("href", "/ui/usage?view=my-usage");
     expect(screen.queryByText(/private-project/)).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: SPEND_ISSUE.title })).not.toBeInTheDocument();
@@ -366,7 +446,7 @@ describe("unified issue investigations", () => {
     await act(async () => {
       await testQueryClient.invalidateQueries({ queryKey: ["issues"] });
     });
-    expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this issue.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this alert.");
     expect(screen.queryByRole("heading", { name: SPEND_ISSUE.title })).not.toBeInTheDocument();
     expect(screen.queryByText("Total Requests")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Resource activity" })).not.toBeInTheDocument();
@@ -380,7 +460,7 @@ describe("unified issue investigations", () => {
       ),
     };
     renderWithProviders(<IssueDetail id={detail.id} />);
-    const table = await screen.findByRole("table", { name: "Saved issue comparisons" });
+    const table = await screen.findByRole("table", { name: "Saved alert comparisons" });
     const row = within(table).getByRole("row", { name: /^Requests/ });
     expect(row).toHaveTextContent("1,200");
     expect(row).toHaveTextContent("Context only");

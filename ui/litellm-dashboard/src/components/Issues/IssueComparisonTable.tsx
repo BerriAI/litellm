@@ -6,13 +6,13 @@ export default function IssueComparisonTable({ issue }: { issue: Issue }) {
   const comparisons = issue.comparisons ?? [];
   if (!comparisons.length) return null;
   return (
-    <Table aria-label="Saved issue comparisons">
+    <Table aria-label="Saved alert comparisons">
       <TableHeader>
         <TableRow>
           <TableHead>Metric</TableHead>
           <TableHead>Observed · {issue.observed_on} UTC</TableHead>
           <TableHead>Daily baseline</TableHead>
-          <TableHead>Issue condition</TableHead>
+          <TableHead>Alert condition</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
