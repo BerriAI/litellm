@@ -3,6 +3,7 @@
 import pytest
 from fastapi import HTTPException
 
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
 from litellm.router_strategy.oracle_router.verifier import (
@@ -59,6 +60,47 @@ class _RecordingGuardrail:
         if self.error is not None:
             raise self.error
         return inputs
+
+
+@pytest.mark.asyncio
+async def test_feedback_payload_cannot_pose_as_the_proxy_to_the_guardrail():
+    judge = _RecordingGuardrail("success")
+    outcome = ProgramOutcome(
+        program_id="p",
+        model="smart",
+        prompt="task",
+        response_text="answer",
+        cost=0.1,
+        payload={
+            "container": "c1",
+            "user_api_key_team_id": "someone-else",
+            "user_api_key": "sk-forged",
+            "internal_call_origin": "shadow_eval_judge",
+            "headers": {"litellm-disable-message-redaction": "true"},
+            "routing_decision": {"router_type": "oracle"},
+        },
+    )
+    assert await GuardrailVerifier("judge", lookup={"judge": judge}.get).verify(outcome) == 1.0
+    assert judge.seen == {"container": "c1", "program_id": "p"}
+
+
+@pytest.mark.asyncio
+async def test_guardrail_verifier_refuses_a_final_answer_litellm_redacted_instead_of_judging_the_placeholder():
+    judge = _Guardrail(blocks=False)
+    outcome = ProgramOutcome(program_id="p", model="smart", prompt="task", response_text=REDACTED_BY_LITELLM, cost=0.1)
+    with pytest.raises(RuntimeError, match="redacted before verification"):
+        await GuardrailVerifier("ok", lookup={"ok": judge}.get).verify(outcome)
+    stale_answer_behind_a_redacted_turn = ProgramOutcome(
+        program_id="p",
+        model="smart",
+        prompt="task",
+        response_text="an earlier public answer",
+        cost=0.1,
+        messages=[{"role": "user", "content": REDACTED_BY_LITELLM}],
+    )
+    with pytest.raises(RuntimeError, match="redacted before verification"):
+        await GuardrailVerifier("ok", lookup={"ok": judge}.get).verify(stale_answer_behind_a_redacted_turn)
+    assert judge.seen == []
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,10 @@ import math
 
 import pytest
 
+from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params,
+)
 from litellm.router_strategy.oracle_router.config import (
     CHOSEN_MODEL_METADATA_KEY,
     PROGRAM_ID_HEADER,
@@ -29,6 +33,7 @@ class _RecordingMaker:
     def __init__(self) -> None:
         self.selections = 0
         self.updates: list[tuple[str, str, float]] = []
+        self.contexts: list[ProgramContext] = []
 
     @property
     def models(self):
@@ -36,6 +41,7 @@ class _RecordingMaker:
 
     async def select(self, context: ProgramContext) -> str:
         self.selections += 1
+        self.contexts.append(context)
         return MODELS[(self.selections - 1) % 2]
 
     def update(self, context: ProgramContext, model: str, score: float) -> None:
@@ -231,8 +237,94 @@ async def test_a_program_s_message_logging_opt_out_is_kept_on_its_context():
     await router.async_pre_routing_hook(
         model="oracle", request_kwargs={"metadata": {"program_id": "public"}}, messages=_messages()
     )
+    await router.async_pre_routing_hook(
+        model="oracle",
+        request_kwargs={
+            "metadata": {"program_id": "by-header", "headers": {"litellm-enable-message-redaction": "true"}}
+        },
+        messages=_messages(),
+    )
     assert router.binding("private").context.message_logging_off is True
+    assert router.binding("by-header").context.message_logging_off is True
     assert router.binding("public").context.message_logging_off is False
+
+
+@pytest.mark.asyncio
+async def test_the_decision_maker_sees_the_caller_s_identity_and_none_of_the_request_s_other_state():
+    router, maker = _router()
+    kwargs = {
+        "metadata": {
+            "program_id": "t",
+            "user_api_key_hash": "hash-1",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_budget_reservation": {"amount": 1.0},
+            "user_api_key_auth": {"api_key": "hash-1", "budget_reservation": {"amount": 1.0}},
+            "routing_decision": {"router_type": "oracle"},
+            "custom": "value",
+        },
+        "litellm_metadata": {"user_api_key_user_id": "user-1", "_autorouter_baseline_route": "stamp"},
+    }
+    await router.async_pre_routing_hook(model="oracle", request_kwargs=kwargs, messages=_messages())
+    await router.async_pre_routing_hook(
+        model="oracle", request_kwargs={"litellm_metadata": {"user_api_key_hash": "hash-2"}}, messages=_messages()
+    )
+    bound, stateless = maker.contexts
+    assert bound.caller == {
+        "user_api_key_hash": "hash-1",
+        "user_api_key_team_id": "team-1",
+        "user_api_key_user_id": "user-1",
+        "user_api_key_auth": {"api_key": "hash-1"},
+        "internal_call_origin": "autorouter_classifier",
+    }
+    assert budget_reservation_from_metadata(dict(bound.caller)) is None
+    assert stateless.caller == {"user_api_key_hash": "hash-2", "internal_call_origin": "autorouter_classifier"}
+    assert router.context_for("", "task", {"metadata": {"routing_decision": {}}}).caller == {
+        "internal_call_origin": "autorouter_classifier"
+    }
+    assert router.binding("t", "hash-1").context.caller == {}
+
+
+@pytest.mark.asyncio
+async def test_an_opt_out_on_a_later_turn_makes_the_whole_program_s_verification_private():
+    seen: list[tuple[bool, bool | None]] = []
+
+    class _Peek:
+        async def verify(self, outcome: ProgramOutcome) -> float:
+            inherited = initialize_standard_callback_dynamic_params({}).get("turn_off_message_logging")
+            seen.append((outcome.message_logging_off, inherited))
+            return 1.0
+
+    router, _ = _router(verifier=_Peek())
+    for program_id in ("public", "late-private"):
+        await router.async_pre_routing_hook(
+            model="oracle", request_kwargs={"metadata": {"program_id": program_id}}, messages=_messages()
+        )
+    router.observe_request("public", cost=0.1, response_text="a")
+    router.observe_request("late-private", cost=0.1, response_text="a")
+    router.mark_message_logging_off("late-private")
+    router.observe_request("late-private", cost=0.1, response_text="c")
+    assert router.binding("public").message_logging_off is False
+    assert router.binding("late-private").message_logging_off is True
+    assert await router.complete("public", score=1.0) == 1.0
+    assert await router.complete("late-private", score=1.0) == 1.0
+    assert seen == [(False, None), (True, True)]
+    assert initialize_standard_callback_dynamic_params({}).get("turn_off_message_logging") is None
+
+
+@pytest.mark.asyncio
+async def test_a_responses_api_request_binds_its_program_on_the_input_text():
+    router, _ = _router()
+    response = await router.async_pre_routing_hook(
+        model="oracle",
+        request_kwargs={"metadata": {"program_id": "r"}},
+        messages=None,
+        input=[{"role": "user", "content": [{"type": "input_text", "text": "write a limerick"}]}],
+    )
+    assert response.messages is None and router.binding("r").context.prompt == "write a limerick"
+    await router.async_pre_routing_hook(
+        model="oracle", request_kwargs={"metadata": {"program_id": "s"}}, messages=None, input="plain text"
+    )
+    assert router.binding("s").context.prompt == "plain text"
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ from litellm.router_strategy.oracle_router.config import (
     PROGRAM_SCORE_KEY,
     RESPONSE_HEADER,
 )
-from litellm.router_strategy.oracle_router.oracle_router import OracleRouter, as_str_mapping
+from litellm.router_strategy.oracle_router.oracle_router import OracleRouter, as_str_mapping, logged_request_is_private
 from litellm.router_strategy.oracle_router.verifier import response_text
 
 if TYPE_CHECKING:
@@ -102,6 +102,8 @@ class OracleRouterPostCallHook(CustomLogger):
             if not isinstance(program_id, str):
                 return
             owner: Final = _owner(metadata)
+            if logged_request_is_private(kwargs):
+                self.oracle_router.mark_message_logging_off(program_id, owner)
             if succeeded:
                 cost: Final = kwargs.get("response_cost")
                 self.oracle_router.observe_request(

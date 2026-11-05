@@ -94,6 +94,7 @@ class _FakeStrategy:
 
     async def async_pre_routing_hook(self, model, request_kwargs, messages=None, input=None, specific_deployment=False):
         self.calls.append({"model": model, "messages": messages})
+        self.request_kwargs = request_kwargs
         self.privacy = (
             effective_turn_off_message_logging(request_kwargs),
             initialize_standard_callback_dynamic_params({}).get("turn_off_message_logging"),
@@ -121,6 +122,23 @@ async def test_pre_routing_forwards_the_program_s_message_logging_opt_out_to_the
     assert strategy.privacy == (True, True)
     assert await maker.select(_ctx("public")) == "fast"
     assert strategy.privacy == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_pre_routing_forwards_the_caller_s_identity_so_a_classifier_call_is_billed_to_the_caller():
+    strategy = _FakeStrategy("fast")
+    maker = PreRoutingDecisionMaker(MODELS, router_name="tiered", strategy=strategy)
+    caller = {"user_api_key_hash": "hash-1", "user_api_key_team_id": "team-1", "user_api_key_user_id": "user-1"}
+    private = ProgramContext(
+        program_id="p", prompt="task", request_type=RequestType.GENERAL, message_logging_off=True, caller=caller
+    )
+    assert await maker.select(private) == "fast"
+    assert strategy.request_kwargs == {"metadata": {**caller, "turn_off_message_logging": True}}
+    first_call = strategy.request_kwargs
+    assert await maker.select(private) == "fast"
+    assert strategy.request_kwargs == first_call and strategy.request_kwargs is not first_call
+    assert await maker.select(_ctx()) == "fast"
+    assert strategy.request_kwargs == {"metadata": {}}
 
 
 @pytest.mark.asyncio

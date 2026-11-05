@@ -11,7 +11,8 @@ import importlib
 import itertools
 import random
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
@@ -24,6 +25,8 @@ from litellm.types.router import (
     RequestType,
 )
 
+_NO_CALLER: Final[Mapping[str, object]] = MappingProxyType({})
+
 
 @dataclass(frozen=True, slots=True)
 class ProgramContext:
@@ -33,6 +36,8 @@ class ProgramContext:
     prompt: str
     request_type: RequestType
     message_logging_off: bool = False
+    caller: Mapping[str, object] = field(default_factory=lambda: _NO_CALLER)
+    """The caller's identity metadata, so a sub-call made on the program's behalf is billed to the caller."""
 
 
 @runtime_checkable
@@ -143,6 +148,14 @@ class FixedDecisionMaker:
         return {"type": "fixed", "model": self._model, "updates": self._updates}
 
 
+def strategy_request_kwargs(context: ProgramContext) -> dict[str, object]:  # mutable-ok: pre-routing contract
+    """The request a wrapped strategy router sees for the program: the caller's identity, so a classifier call
+    the strategy makes is billed to the caller's key and team, and the program's message-logging opt-out where
+    LiteLLM reads it. A fresh dict per call: the strategies write their decision into the bucket they are handed."""
+    privacy: Final[Mapping[str, object]] = {"turn_off_message_logging": True} if context.message_logging_off else {}
+    return {"metadata": {**context.caller, **privacy}}
+
+
 class PreRoutingDecisionMaker:
     """Let one of LiteLLM's own strategy routers propose the model, once per program.
 
@@ -169,7 +182,7 @@ class PreRoutingDecisionMaker:
         with inherit_message_logging_privacy(context.message_logging_off):
             response: Final = await self._strategy.async_pre_routing_hook(
                 model=self._router_name,
-                request_kwargs={"metadata": {"turn_off_message_logging": True} if context.message_logging_off else {}},
+                request_kwargs=strategy_request_kwargs(context),
                 messages=[{"role": "user", "content": context.prompt}],
             )
         proposed: Final = response.model if response is not None and response.model in self._models else None

@@ -78,6 +78,34 @@ async def test_success_events_accumulate_spend_and_the_latest_answer(bound):
 
 
 @pytest.mark.asyncio
+async def test_a_turn_that_opted_out_of_message_logging_marks_the_program_private_for_good(bound):
+    router, _, hook = bound
+    await hook.async_log_success_event(_kwargs(cost=0.01), _response("first"), None, None)
+    assert router.binding("t1").message_logging_off is False
+    await hook.async_log_success_event(
+        _kwargs(cost=0.01, turn_off_message_logging=True), _response("second"), None, None
+    )
+    assert router.binding("t1").message_logging_off is True
+    await hook.async_log_success_event(_kwargs(cost=0.01), _response("third"), None, None)
+    assert router.binding("t1").message_logging_off is True
+
+
+@pytest.mark.asyncio
+async def test_a_private_turn_that_failed_still_marks_the_program_private(bound):
+    router, _, hook = bound
+    await hook.async_log_failure_event(_kwargs(cost=0.5, turn_off_message_logging=True), None, None, None)
+    assert router.binding("t1").message_logging_off is True and router.binding("t1").requests == 0
+
+
+@pytest.mark.asyncio
+async def test_a_turn_litellm_resolved_as_private_marks_the_program_private(bound):
+    router, _, hook = bound
+    resolved = {**_kwargs(cost=0.01), "standard_callback_dynamic_params": {"turn_off_message_logging": True}}
+    await hook.async_log_success_event(resolved, _response("first"), None, None)
+    assert router.binding("t1").message_logging_off is True
+
+
+@pytest.mark.asyncio
 async def test_program_done_completes_the_program_with_the_reported_score(bound):
     router, maker, hook = bound
     await hook.async_log_success_event(

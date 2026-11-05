@@ -21,7 +21,15 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,  # pyright: ignore[reportUnknownVariableType]  # upstream helper returns a bare dict
 )
-from litellm.litellm_core_utils.internal_call_metadata import effective_turn_off_message_logging
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    inherit_message_logging_privacy,
+    initialize_standard_callback_dynamic_params,
+)
+from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
+from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+from litellm.litellm_core_utils.redact_messages import (
+    should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # upstream helper takes a bare dict
+)
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.oracle_router.config import (
     CHOSEN_MODEL_METADATA_KEY,
@@ -35,7 +43,11 @@ from litellm.router_strategy.oracle_router.decision import DecisionMaker, Progra
 from litellm.router_strategy.oracle_router.verifier import ProgramOutcome, Verifier, clamp_score
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import OracleRouterConfig, PreRoutingHookResponse, RequestType
-from litellm.types.utils import RoutingDecisionCause, StandardLoggingRoutingDecision
+from litellm.types.utils import (
+    AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    RoutingDecisionCause,
+    StandardLoggingRoutingDecision,
+)
 
 _LEARNING_DECISION_MAKERS: Final[frozenset[str]] = frozenset({"thompson"})
 _MESSAGES: Final = TypeAdapter(Sequence[AllMessageValues])
@@ -84,6 +96,8 @@ class ProgramBinding:
     last_response_text: str = ""
     last_messages: Sequence[AllMessageValues] = ()
     deferred: DeferredCompletion | None = None
+    message_logging_off: bool = False
+    """True once any request of the program opted out of message logging; verification then runs privately."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +108,21 @@ class FeedbackRecord:
     score: float
     cost: float
     verified_at: float
+
+
+def program_messages(
+    messages: list[dict[str, object]] | None,  # mutable-ok: pre-routing contract
+    input: str | list[object] | None,  # mutable-ok: pre-routing contract
+    request_kwargs: Mapping[str, object],
+) -> Sequence[Mapping[str, object]] | None:
+    """The request's messages in chat shape whichever surface sent them: a Responses API ``input`` is converted
+    the way guardrails convert it, so a program started through ``/v1/responses`` is bound on its real prompt."""
+    if messages or input is None:
+        return messages
+    return resolve_structured_messages(
+        None,
+        {**request_kwargs, "input": input, "litellm_metadata": as_str_mapping(request_kwargs.get("litellm_metadata"))},
+    )
 
 
 def first_user_text(messages: Sequence[Mapping[str, object]] | None) -> str:
@@ -141,6 +170,45 @@ def _transcript(messages: object, fallback: Sequence[AllMessageValues]) -> Seque
         return tuple(_MESSAGES.validate_python(messages))
     except ValidationError:
         return fallback
+
+
+def request_is_private(request_kwargs: Mapping[str, object]) -> bool:
+    """Whether LiteLLM will redact this request's messages when it logs them, by the logger's own rule: the
+    request's ``turn_off_message_logging``, its redaction headers, or the global setting."""
+    kwargs: Final = dict(request_kwargs)
+    return _redacts(
+        {
+            "litellm_params": kwargs,
+            "standard_callback_dynamic_params": initialize_standard_callback_dynamic_params(kwargs),
+        }
+    )
+
+
+def logged_request_is_private(kwargs: Mapping[str, object]) -> bool:
+    """Whether LiteLLM redacted a logged request's messages, from the kwargs it hands a logging callback."""
+    return _redacts(
+        {
+            **kwargs,
+            "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params")
+            or initialize_standard_callback_dynamic_params(dict(kwargs)),
+        }
+    )
+
+
+def _redacts(model_call_details: dict[str, object]) -> bool:  # mutable-ok: the logger's own parameter shape
+    try:
+        return should_redact_message_logging(model_call_details)
+    except AttributeError:  # malformed metadata makes the logger raise and log nothing, so the program stays private
+        return True
+
+
+def forwardable_caller(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """What a classifier call made on the program's behalf inherits from the request that bound it: the caller's
+    identity from whichever metadata bucket the surface used, with its budget reservation removed, stamped as the
+    sub-call it becomes. The routing decision, the logging payload and every other per-request state stay behind."""
+    return MappingProxyType(
+        sanitized_forwardable_call_metadata(_metadata(request_kwargs), AUTOROUTER_CLASSIFIER_CALL_ORIGIN)
+    )
 
 
 def _api_key_hash(request_kwargs: Mapping[str, object]) -> str | None:
@@ -221,7 +289,8 @@ class OracleRouter:
             program_id=program_id,
             prompt=prompt,
             request_type=classify_prompt(prompt),
-            message_logging_off=effective_turn_off_message_logging(request_kwargs) is True,
+            message_logging_off=request_is_private(request_kwargs),
+            caller=forwardable_caller(request_kwargs),
         )
 
     def binding(self, program_id: str, owner: str | None = None) -> ProgramBinding | None:
@@ -277,7 +346,12 @@ class OracleRouter:
         context: Final = self.context_for(key.program_id, prompt, request_kwargs)
         model: Final = await self.decision_maker.select(context)
         binding: Final = ProgramBinding(
-            program_id=key.program_id, model=model, context=context, api_key_hash=key.owner, bound_at=now
+            program_id=key.program_id,
+            model=model,
+            context=replace(context, caller=_EMPTY),
+            api_key_hash=key.owner,
+            bound_at=now,
+            message_logging_off=context.message_logging_off,
         )
         self._bindings[key] = binding
         self.programs_bound += 1
@@ -293,7 +367,7 @@ class OracleRouter:
     ) -> PreRoutingHookResponse | None:
         """Route the request to its program's model, binding the program on its first request."""
         program_id: Final = resolve_program_id(request_kwargs, self.config.program_id_key)
-        prompt: Final = first_user_text(messages)
+        prompt: Final = first_user_text(program_messages(messages, input, request_kwargs))
         chosen_model, request_type = await self._decide(program_id, prompt, request_kwargs)
         _stamp_internal(request_kwargs, CHOSEN_MODEL_METADATA_KEY, chosen_model)
         _stamp_internal(request_kwargs, PROGRAM_ID_METADATA_KEY, program_id)
@@ -318,6 +392,14 @@ class OracleRouter:
             return await self.decision_maker.select(context), context.request_type
         binding: Final = await self.bind(program_id, prompt, _api_key_hash(request_kwargs), request_kwargs)
         return binding.model, binding.context.request_type
+
+    def mark_message_logging_off(self, program_id: str, owner: str | None = None) -> None:
+        """A request of the program opted out of message logging, whether or not it produced an answer: the
+        whole program is private from here on, and its verification runs under that opt-out."""
+        key: Final = ProgramKey(owner, program_id)
+        binding: Final = self._bindings.get(key)
+        if binding is not None and not binding.message_logging_off:
+            self._bindings[key] = replace(binding, message_logging_off=True)
 
     def observe_request(
         self, program_id: str, cost: float, response_text: str, messages: object = None, owner: str | None = None
@@ -379,6 +461,7 @@ class OracleRouter:
             messages=binding.last_messages,
             score=score,
             payload=payload,
+            message_logging_off=binding.message_logging_off,
         )
         self.programs_completed += 1
         task: Final = asyncio.create_task(self._verify_and_learn(binding, outcome))
@@ -388,9 +471,12 @@ class OracleRouter:
 
     async def _verify_and_learn(self, binding: ProgramBinding, outcome: ProgramOutcome) -> float:
         try:
-            score: Final = clamp_score(
-                await asyncio.wait_for(self.verifier.verify(outcome), timeout=self.config.verification_timeout_seconds)
-            )
+            with inherit_message_logging_privacy(outcome.message_logging_off):
+                score: Final = clamp_score(
+                    await asyncio.wait_for(
+                        self.verifier.verify(outcome), timeout=self.config.verification_timeout_seconds
+                    )
+                )
         except Exception as error:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
             self.verifications_failed += 1
             self.note_failure("verification", error)

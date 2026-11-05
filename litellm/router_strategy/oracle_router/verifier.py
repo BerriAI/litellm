@@ -14,6 +14,7 @@ from typing import Final, Protocol, runtime_checkable
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, REDACTED_BY_LITELLM
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.llms.openai import AllMessageValues
@@ -26,6 +27,9 @@ _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _STATUS_RECORDS: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _STATUS_RECORD_KEY: Final[str] = "standard_logging_guardrail_information"
+_PROXY_OWNED_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    {_STATUS_RECORD_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY, "headers", "routing_decision"}
+)
 _BLOCKED_STATUSES: Final[frozenset[str]] = frozenset({"guardrail_intervened", "guardrail_flagged"})
 _UNVERIFIED_STATUSES: Final[frozenset[str]] = frozenset({"guardrail_failed_to_respond", "not_run"})
 
@@ -42,6 +46,8 @@ class ProgramOutcome:
     messages: Sequence[AllMessageValues] = ()
     score: float | None = None
     payload: Mapping[str, object] = field(default_factory=lambda: _EMPTY)
+    message_logging_off: bool = False
+    """Whether any request of the program opted out of message logging; the router verifies under that opt-out."""
 
 
 @runtime_checkable
@@ -82,17 +88,29 @@ def find_guardrail(name: str) -> CustomGuardrail | None:
     return next((guardrail for guardrail in guardrails if guardrail.guardrail_name == name), None)
 
 
+def _redacted(outcome: ProgramOutcome) -> bool:
+    """Whether LiteLLM replaced the program's final answer or transcript with its redaction placeholder."""
+    return outcome.response_text == REDACTED_BY_LITELLM or any(
+        _STR_MAPPING.validate_python(message).get("content") == REDACTED_BY_LITELLM for message in outcome.messages
+    )
+
+
 def _verifier_metadata(outcome: ProgramOutcome) -> dict[str, object]:  # mutable-ok: the guardrail writes into it
     """The feedback payload as the guardrail's request metadata.
 
     The verdict is read from the status record the guardrail writes here, so the caller's payload must not
-    pre-seed that key (a non-record entry would make the whole list unreadable and hide a rejection), and
-    it cannot rename the program.
+    pre-seed that key (a non-record entry would make the whole list unreadable and hide a rejection), it
+    cannot rename the program, and it cannot pose as the proxy: the ``user_api_key_*`` identity a guardrail
+    may forward to its vendor, the sub-call origin and the request headers are the proxy's to stamp.
     """
     return {
-        **{key: value for key, value in outcome.payload.items() if key != _STATUS_RECORD_KEY},
+        **{key: value for key, value in outcome.payload.items() if not _proxy_owned(key)},
         "program_id": outcome.program_id,
     }
+
+
+def _proxy_owned(key: str) -> bool:
+    return key.startswith("user_api_key") or key in _PROXY_OWNED_METADATA_KEYS
 
 
 def _status_records(bucket: object) -> Sequence[Mapping[str, object]]:
@@ -173,6 +191,9 @@ class GuardrailVerifier:
         if not outcome.response_text.strip():
             # A judge skips an empty answer without recording a verdict; that must not read as a pass.
             raise RuntimeError(f"guardrail {self._name!r}: the program has no response text to verify")
+        if _redacted(outcome):
+            # The request opted out of message logging, so the router only ever saw LiteLLM's placeholder.
+            raise RuntimeError(f"guardrail {self._name!r}: the program's final turn was redacted before verification")
         transcript: Final = list(outcome.messages) or [{"role": "user", "content": outcome.prompt}]
         inputs: Final = GenericGuardrailAPIInputs(
             texts=[outcome.response_text], model=outcome.model, structured_messages=transcript
