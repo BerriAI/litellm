@@ -1798,7 +1798,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
-    def supports_tool_description_scan(self) -> bool:
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
         return True
 
     def supports_structured_messages(self) -> bool:

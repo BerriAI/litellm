@@ -1093,12 +1093,12 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
-    scan_tool_definitions_in_guardrail: bool | None = Field(
+    scan_tool_descriptions_as_text: bool | None = Field(
         default=None,
         description=(
             "When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the "
             "request's tools[] definitions, and can block the request or mask those descriptions. Off by default. "
-            "Other guardrails reject this setting."
+            "Guardrails that already send tools[] to their vendor don't need this and reject it."
         ),
     )
 

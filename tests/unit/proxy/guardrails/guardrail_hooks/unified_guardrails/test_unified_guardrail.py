@@ -3339,6 +3339,27 @@ _TOOL_DEFINITION_REQUESTS: Final = (
         id="responses",
     ),
     pytest.param(
+        CallTypes.aresponses.value,
+        {
+            "input": "weather in Paris?",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "weather",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "get_weather",
+                            "description": _POISONED_DESCRIPTION,
+                            "parameters": _WEATHER_SCHEMA,
+                        }
+                    ],
+                }
+            ],
+        },
+        id="responses_namespace",
+    ),
+    pytest.param(
         CallTypes.anthropic_messages.value,
         {
             "max_tokens": 64,
@@ -3351,10 +3372,10 @@ _TOOL_DEFINITION_REQUESTS: Final = (
 
 
 class PhraseGuardrail(RecordingGuardrail):
-    def __init__(self, *, mask: bool, scan_tool_definitions: bool | None) -> None:
+    def __init__(self, *, mask: bool, scan_tool_descriptions: bool | None) -> None:
         super().__init__()
         self.mask: Final = mask
-        self.scan_tool_definitions_in_guardrail = scan_tool_definitions
+        self.scan_tool_descriptions_as_text = scan_tool_descriptions
 
     async def apply_guardrail(
         self,
@@ -3370,12 +3391,12 @@ class PhraseGuardrail(RecordingGuardrail):
             texts=[text.replace("IGNORE PRIOR INSTRUCTIONS", "[MASKED]") for text in recorded["texts"]]
         )
 
-    def supports_tool_description_scan(self) -> bool:
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
         return True
 
 
 class NoToolScanPhraseGuardrail(PhraseGuardrail):
-    def supports_tool_description_scan(self) -> bool:
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
         return False
 
 
@@ -3393,12 +3414,14 @@ def _tool_definition_request(
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_description(call_type: str, body: Mapping[str, object]) -> None:
+async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_description(
+    call_type: str, body: Mapping[str, object]
+) -> None:
     with pytest.raises(HTTPException) as exc_info:
         await UnifiedLLMGuardrails().async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             cache=DualCache(),
-            data=_tool_definition_request(PhraseGuardrail(mask=False, scan_tool_definitions=True), body),
+            data=_tool_definition_request(PhraseGuardrail(mask=False, scan_tool_descriptions=True), body),
             call_type=call_type,
         )
 
@@ -3408,14 +3431,16 @@ async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_descr
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(call_type: str, body: Mapping[str, object]) -> None:
-    async def blocked(scan_tool_definitions: bool | None) -> bool:
+async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(
+    call_type: str, body: Mapping[str, object]
+) -> None:
+    async def blocked(scan_tool_descriptions: bool | None) -> bool:
         try:
             await UnifiedLLMGuardrails().async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 cache=DualCache(),
                 data=_tool_definition_request(
-                    PhraseGuardrail(mask=False, scan_tool_definitions=scan_tool_definitions), body
+                    PhraseGuardrail(mask=False, scan_tool_descriptions=scan_tool_descriptions), body
                 ),
                 call_type=call_type,
             )
@@ -3429,11 +3454,13 @@ async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(call_type:
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(call_type: str, body: Mapping[str, object]) -> None:
+async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(
+    call_type: str, body: Mapping[str, object]
+) -> None:
     result: Final = await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
         cache=DualCache(),
-        data=_tool_definition_request(PhraseGuardrail(mask=True, scan_tool_definitions=True), body),
+        data=_tool_definition_request(PhraseGuardrail(mask=True, scan_tool_descriptions=True), body),
         call_type=call_type,
     )
 
@@ -3446,8 +3473,10 @@ async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(call
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_skips_tool_description_scan_for_guardrails_without_support(call_type: str, body: Mapping[str, object]) -> None:
-    guardrail: Final = NoToolScanPhraseGuardrail(mask=False, scan_tool_definitions=True)
+async def test_pre_call_skips_tool_description_scan_for_guardrails_without_support(
+    call_type: str, body: Mapping[str, object]
+) -> None:
+    guardrail: Final = NoToolScanPhraseGuardrail(mask=False, scan_tool_descriptions=True)
 
     await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
@@ -3512,7 +3541,7 @@ async def test_pre_call_masks_nested_schema_descriptions_but_not_schema_values(
     result: Final = await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
         cache=DualCache(),
-        data=_tool_definition_request(PhraseGuardrail(mask=True, scan_tool_definitions=True), body),
+        data=_tool_definition_request(PhraseGuardrail(mask=True, scan_tool_descriptions=True), body),
         call_type=call_type,
     )
 

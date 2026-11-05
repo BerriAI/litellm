@@ -16443,7 +16443,7 @@
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
             },
-            "scan_tool_definitions_in_guardrail": {
+            "scan_tool_descriptions_as_text": {
               "anyOf": [
                 {
                   "type": "boolean"
@@ -16452,8 +16452,8 @@
                   "type": "null"
                 }
               ],
-              "description": "When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails reject this setting.",
-              "title": "Scan Tool Definitions In Guardrail"
+              "description": "When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Guardrails that already send tools[] to their vendor don't need this and reject it.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "sensitive_data_route_to_model": {
               "anyOf": [
@@ -19489,7 +19489,7 @@
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
             },
-            "scan_tool_definitions_in_guardrail": {
+            "scan_tool_descriptions_as_text": {
               "anyOf": [
                 {
                   "type": "boolean"
@@ -19498,8 +19498,8 @@
                   "type": "null"
                 }
               ],
-              "description": "When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails reject this setting.",
-              "title": "Scan Tool Definitions In Guardrail"
+              "description": "When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Guardrails that already send tools[] to their vendor don't need this and reject it.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "send_user_api_key_alias": {
               "anyOf": [

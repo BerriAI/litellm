@@ -24,10 +24,10 @@ _Located: TypeAlias = tuple[DescriptionPath, JsonValue]
 _TOOLS: Final = TypeAdapter(list[JsonValue])
 
 
-def effective_scan_tool_definitions_for_guardrail(guardrail_to_apply: CustomGuardrail) -> bool:
+def effective_scan_tool_descriptions_as_text_for_guardrail(guardrail_to_apply: CustomGuardrail) -> bool:
     return (
-        guardrail_to_apply.supports_tool_description_scan()
-        and getattr(guardrail_to_apply, "scan_tool_definitions_in_guardrail", None) is True
+        guardrail_to_apply.supports_scan_tool_descriptions_as_text()
+        and getattr(guardrail_to_apply, "scan_tool_descriptions_as_text", None) is True
         and not effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
     )
 
@@ -56,6 +56,10 @@ def _tool_holders(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[Desc
     yield path, tool
     if isinstance(function := tool.get("function"), dict):
         yield (*path, "function"), function
+    if tool.get("type") == "namespace" and isinstance(members := tool.get("tools"), list):
+        for index, member in enumerate(members):
+            if isinstance(member, dict):
+                yield (*path, "tools", index), member
 
 
 def _schemas(
@@ -108,13 +112,13 @@ def with_replaced_descriptions(tools: Sequence[JsonValue], replacements: Mapping
     return rewritten
 
 
-async def scan_tool_definitions(
+async def scan_tool_descriptions(
     data: dict[str, object],  # mutable-ok: apply_guardrail contract takes the request body as a dict
     guardrail_to_apply: CustomGuardrail,
 ) -> dict[str, object]:  # mutable-ok: pre-call hooks hand the request body on as a dict
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    if not effective_scan_tool_definitions_for_guardrail(guardrail_to_apply):
+    if not effective_scan_tool_descriptions_as_text_for_guardrail(guardrail_to_apply):
         return data
     raw_tools: Final = data.get("tools")
     if not isinstance(raw_tools, list) or not raw_tools:

@@ -253,7 +253,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
 
-    def supports_tool_description_scan(self) -> bool:
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
         return True
 
     @classmethod

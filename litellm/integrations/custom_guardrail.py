@@ -1246,7 +1246,7 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
-    def supports_tool_description_scan(self) -> bool:
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
         return False
 
     def structured_messages_cover_full_request(self) -> bool:

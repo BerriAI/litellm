@@ -27672,10 +27672,10 @@ export interface components {
              */
             scan_raw_request?: boolean | null;
             /**
-             * Scan Tool Definitions In Guardrail
-             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails reject this setting.
+             * Scan Tool Descriptions As Text
+             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Guardrails that already send tools[] to their vendor don't need this and reject it.
              */
-            scan_tool_definitions_in_guardrail?: boolean | null;
+            scan_tool_descriptions_as_text?: boolean | null;
             /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
@@ -37797,10 +37797,10 @@ export interface components {
              */
             scan_raw_request?: boolean | null;
             /**
-             * Scan Tool Definitions In Guardrail
-             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails reject this setting.
+             * Scan Tool Descriptions As Text
+             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Guardrails that already send tools[] to their vendor don't need this and reject it.
              */
-            scan_tool_definitions_in_guardrail?: boolean | null;
+            scan_tool_descriptions_as_text?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers

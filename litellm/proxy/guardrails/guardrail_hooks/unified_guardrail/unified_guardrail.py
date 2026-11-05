@@ -25,7 +25,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
-from litellm.llms.base_llm.guardrail_translation.tool_definitions import scan_tool_definitions
+from litellm.llms.base_llm.guardrail_translation.tool_descriptions import scan_tool_descriptions
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -303,7 +303,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             guardrail_to_apply=guardrail_to_apply,
             litellm_logging_obj=data.get("litellm_logging_obj"),
         )
-        scanned_data: Final = await scan_tool_definitions(data, guardrail_to_apply)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+        scanned_data: Final = await scan_tool_descriptions(data, guardrail_to_apply)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
 
         if not guardrail_to_apply.records_own_guardrail_information:
             add_guardrail_to_applied_guardrails_header(

@@ -1997,16 +1997,16 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     ],
     ids=["panw_prisma_airs", "presidio"],
 )
-def test_scan_tool_definitions_in_guardrail_is_accepted_on_text_guardrails(params: Mapping[str, str]) -> None:
+def test_scan_tool_descriptions_as_text_is_accepted_on_text_guardrails(params: Mapping[str, str]) -> None:
     guardrail = TestScanOnlyToolResultsInitRefusal()._initialize(
-        f"{params['guardrail']}-tool-scan", {**params, "scan_tool_definitions_in_guardrail": True}
+        f"{params['guardrail']}-tool-scan", {**params, "scan_tool_descriptions_as_text": True}
     )
 
     assert guardrail is not None
-    assert guardrail["litellm_params"].scan_tool_definitions_in_guardrail is True
+    assert guardrail["litellm_params"].scan_tool_descriptions_as_text is True
 
 
-def test_scan_tool_definitions_in_guardrail_is_rejected_on_other_guardrails() -> None:
+def test_scan_tool_descriptions_as_text_is_rejected_on_other_guardrails() -> None:
     with pytest.raises(ValueError, match="only supported on panw_prisma_airs and presidio"):
         TestScanOnlyToolResultsInitRefusal()._initialize(
             "generic-tool-scan",
@@ -2014,6 +2014,6 @@ def test_scan_tool_definitions_in_guardrail_is_rejected_on_other_guardrails() ->
                 "guardrail": "generic_guardrail_api",
                 "mode": "pre_call",
                 "api_base": "http://localhost:8092",
-                "scan_tool_definitions_in_guardrail": True,
+                "scan_tool_descriptions_as_text": True,
             },
         )
