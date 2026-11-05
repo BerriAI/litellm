@@ -1624,6 +1624,12 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
 
 
 _OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+_DEEP_ROOT_REF_CHAIN_LENGTH: Final = 3000
+
+
+def _deep_root_ref_chain(end: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    links: Final = {f"d{i}": {"$ref": f"#/$defs/d{i + 1}"} for i in range(_DEEP_ROOT_REF_CHAIN_LENGTH)}
+    return {"$ref": "#/$defs/d0", "$defs": {**links, f"d{_DEEP_ROOT_REF_CHAIN_LENGTH}": end}}
 
 
 @pytest.mark.parametrize(
@@ -1649,6 +1655,9 @@ _OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"anyOf": [_OBJECT_BRANCH]}}}, True),
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": _OBJECT_BRANCH}}, False),
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A", "anyOf": [_OBJECT_BRANCH]}}}, False),
+        (_deep_root_ref_chain({"anyOf": [_OBJECT_BRANCH]}), True),
+        (_deep_root_ref_chain(_OBJECT_BRANCH), False),
     ],
     ids=[
         "object",
@@ -1671,6 +1680,9 @@ _OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"
         "chained-root-ref-to-union",
         "chained-root-ref-to-object",
         "cyclic-root-ref",
+        "cyclic-root-ref-through-a-union",
+        "deep-root-ref-chain-to-union",
+        "deep-root-ref-chain-to-object",
     ],
 )
 def test_needs_parameters_json_schema(parameters: Mapping[str, JsonValue], expected: bool) -> None:

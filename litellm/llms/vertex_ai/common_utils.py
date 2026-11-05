@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache
+from functools import lru_cache, reduce
 from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
@@ -913,22 +913,23 @@ def _root_cannot_be_vertex_parameters(root: Mapping[str, object]) -> bool:
     ) or not _is_absent_or_object_type(root.get("type"))
 
 
-def _resolve_root_ref(
-    schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue], seen_refs: frozenset[str]
-) -> Mapping[str, JsonValue]:
+def _root_ref_target(schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     match schema.get("$ref"):
-        case str() as ref if ref.startswith(_ROOT_DEFS_REF_PREFIX) and ref not in seen_refs:
+        case str() as ref if ref.startswith(_ROOT_DEFS_REF_PREFIX):
             target: Final = defs.get(ref.removeprefix(_ROOT_DEFS_REF_PREFIX))
-            return _resolve_root_ref(target, defs, seen_refs | {ref}) if isinstance(target, dict) else schema
+            return target if isinstance(target, dict) else schema
         case _:
             return schema
 
 
+def _resolve_root_ref(schema: Mapping[str, JsonValue], defs: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    resolved: Final = reduce(lambda current, _: _root_ref_target(current, defs), range(len(defs)), schema)
+    return resolved if _root_ref_target(resolved, defs) is resolved else schema
+
+
 def needs_parameters_json_schema(parameters: Mapping[str, JsonValue]) -> bool:
     defs: Final = parameters.get("$defs")
-    return _root_cannot_be_vertex_parameters(
-        _resolve_root_ref(parameters, defs if isinstance(defs, dict) else {}, frozenset())
-    )
+    return _root_cannot_be_vertex_parameters(_resolve_root_ref(parameters, defs if isinstance(defs, dict) else {}))
 
 
 def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
