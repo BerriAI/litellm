@@ -7,9 +7,11 @@ from typing import ClassVar, Final
 import litellm
 from litellm._logging import verbose_logger
 from litellm.utils import (
+    ModelInfoLookupMiss,
     declared_value_factory,
     has_catalog_entry,
     is_explicitly_disabled_factory,
+    lookup_catalog_model_info,
     supports_factory,
 )
 
@@ -97,9 +99,12 @@ def unsupported_reasoning_effort_message(param: str, level: str, model: str) -> 
     return f"{param}={level} is not supported for {model}. To drop unsupported params set `litellm.drop_params = True`"
 
 
+def is_gpt_5_chat_name(model: str) -> bool:
+    return "gpt-5-chat" in model.split("/")[-1]
+
+
 def is_gpt_reasoning_series_name(model: str) -> bool:
-    normalized: Final = model.split("/")[-1]
-    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
+    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and not is_gpt_5_chat_name(model)
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -115,10 +120,26 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh",))
     ROUTE_SPECIFIC_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("max",))
     LOOKS_UP_BASE_MODEL: ClassVar[bool] = False
+    COST_MAP_PROVIDER: ClassVar[str] = "openai"
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return is_gpt_reasoning_series_name(model)
+        return is_gpt_reasoning_series_name(model) or cls.cost_map_declares_reasoning_effort(model)
+
+    @classmethod
+    def cost_map_declares_reasoning_effort(cls, model: str) -> bool:
+        """Routes a cost-map row with any ``supports_<level>_reasoning_effort`` here with no code change.
+        ``supports_reasoning`` alone is not enough (computer-use-preview refuses ``reasoning_effort``), gpt-5-chat
+        stays excluded by name, a ``responses`` row keeps its route, and a deployment row may carry no ``mode``."""
+        if is_gpt_5_chat_name(model):
+            return False
+        row: Final = lookup_catalog_model_info(cls._model_map_lookup_name(model), cls.COST_MAP_PROVIDER)
+        if isinstance(row, ModelInfoLookupMiss) or row.get("mode") not in (None, "chat"):
+            return False
+        return any(
+            key.startswith("supports_") and key.endswith("_reasoning_effort") and value is True
+            for key, value in row.items()
+        )
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:

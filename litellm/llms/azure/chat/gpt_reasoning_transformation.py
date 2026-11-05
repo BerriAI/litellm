@@ -25,6 +25,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
     OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh", "none"))
     LOOKS_UP_BASE_MODEL: ClassVar[bool] = True
+    COST_MAP_PROVIDER: ClassVar[str] = "azure"
 
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
@@ -50,7 +51,11 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return is_gpt_reasoning_series_name(model) or "gpt5_series" in model
+        return (
+            is_gpt_reasoning_series_name(model)
+            or "gpt5_series" in model
+            or cls.cost_map_declares_reasoning_effort(model)
+        )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.

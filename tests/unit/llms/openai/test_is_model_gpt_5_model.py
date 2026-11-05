@@ -96,54 +96,45 @@ NON_GPT5_MODELS = [
 
 
 class TestOpenAIGPT5ConfigIsModelGpt5Model:
-
     @pytest.mark.parametrize("model", GPT5_MODELS)
     def test_gpt5_models_are_classified_as_gpt5(self, model: str):
-        assert OpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected '{model}' to be classified as a GPT-5 model"
+        assert OpenAIGPT5Config.is_model_gpt_5_model(model), f"Expected '{model}' to be classified as a GPT-5 model"
 
     @pytest.mark.parametrize("model", NON_GPT5_MODELS)
     def test_non_gpt5_models_are_not_classified_as_gpt5(self, model: str):
-        assert not OpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected '{model}' NOT to be classified as a GPT-5 model"
+        assert not OpenAIGPT5Config.is_model_gpt_5_model(model), (
+            f"Expected '{model}' NOT to be classified as a GPT-5 model"
+        )
 
     def test_versioned_chat_models_are_not_excluded_by_prefix(self):
         """Core regression guard: gpt-5-chat prefix must not match versioned models."""
         versioned_chat_models = ["gpt-5.1-chat", "gpt-5.2-chat", "gpt-5.3-chat"]
         for model in versioned_chat_models:
-            assert OpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Regression: '{model}' was incorrectly excluded from GPT-5 path"
+            assert OpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Regression: '{model}' was incorrectly excluded from GPT-5 path"
+            )
 
     def test_gpt5_chat_family_is_excluded(self):
         """gpt-5-chat family should stay on the regular chat path."""
         for model in ["gpt-5-chat", "gpt-5-chat-latest", "gpt-5-chat-2025-08-07"]:
-            assert not OpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Expected '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            assert not OpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Expected '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            )
 
     def test_responses_api_gpt5_chat_aliases_are_not_gpt5(self):
         for model in ["ft:gpt-5-chat-latest:org:abc", "openai/my-custom-gpt-5-chat"]:
-            assert not OpenAIResponsesAPIConfig._is_gpt_5_model(
-                model
-            ), f"Expected Responses API '{model}' NOT to be on the GPT-5 path"
+            assert not OpenAIResponsesAPIConfig._is_gpt_5_model(model), (
+                f"Expected Responses API '{model}' NOT to be on the GPT-5 path"
+            )
 
     @pytest.mark.parametrize("model", ["ft:gpt-5-chat-latest:org:abc", "my-custom-gpt-5-chat"])
     def test_gpt5_chat_aliases_keep_non_default_temperature(self, model: str):
-        chat_params: Final = litellm.get_optional_params(
-            model=model, custom_llm_provider="openai", temperature=0.7
-        )
+        chat_params: Final = litellm.get_optional_params(model=model, custom_llm_provider="openai", temperature=0.7)
         responses_params: Final = OpenAIResponsesAPIConfig().map_openai_params(
             response_api_optional_params={"temperature": 0.7}, model=model, drop_params=False
         )
-        assert chat_params["temperature"] == 0.7, (
-            f"chat completions dropped or rejected temperature for '{model}'"
-        )
-        assert responses_params["temperature"] == 0.7, (
-            f"responses dropped or rejected temperature for '{model}'"
-        )
+        assert chat_params["temperature"] == 0.7, f"chat completions dropped or rejected temperature for '{model}'"
+        assert responses_params["temperature"] == 0.7, f"responses dropped or rejected temperature for '{model}'"
 
 
 # Models that are gpt-5.4 or newer. main.py gates the automatic switch to the
@@ -173,18 +164,17 @@ GPT5_PRE_5_4_MODELS = [
 
 
 class TestOpenAIGPT5ConfigIsModelGpt54PlusModel:
-
     @pytest.mark.parametrize("model", GPT5_4_PLUS_MODELS)
     def test_gpt5_4_plus_models_are_classified_as_5_4_plus(self, model: str):
-        assert OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
-            model
-        ), f"Expected '{model}' to be classified as gpt-5.4-or-newer"
+        assert OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model), (
+            f"Expected '{model}' to be classified as gpt-5.4-or-newer"
+        )
 
     @pytest.mark.parametrize("model", GPT5_PRE_5_4_MODELS)
     def test_pre_5_4_models_are_not_classified_as_5_4_plus(self, model: str):
-        assert not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(
-            model
-        ), f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
+        assert not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model), (
+            f"Expected '{model}' NOT to be classified as gpt-5.4-or-newer"
+        )
 
 
 GPT5_6_PLUS_MODELS = [
@@ -221,7 +211,6 @@ GPT_PRE_6_MODELS = [
 
 
 class TestOpenAIGPT5ConfigSeriesBoundaries:
-
     @pytest.mark.parametrize("model", GPT5_6_PLUS_MODELS)
     def test_gpt5_6_plus_models_are_classified_as_5_6_plus(self, model: str):
         assert OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
@@ -245,38 +234,119 @@ class TestOpenAIGPT5ConfigSeriesBoundaries:
 
 
 class TestAzureOpenAIGPT5ConfigIsModelGpt5Model:
-
     @pytest.mark.parametrize("model", GPT5_MODELS)
     def test_gpt5_models_are_classified_as_gpt5(self, model: str):
-        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected Azure '{model}' to be classified as a GPT-5 model"
+        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+            f"Expected Azure '{model}' to be classified as a GPT-5 model"
+        )
 
     @pytest.mark.parametrize("model", NON_GPT5_MODELS)
     def test_non_gpt5_models_are_not_classified_as_gpt5(self, model: str):
-        assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(
-            model
-        ), f"Expected Azure '{model}' NOT to be classified as a GPT-5 model"
+        assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+            f"Expected Azure '{model}' NOT to be classified as a GPT-5 model"
+        )
 
     def test_versioned_chat_models_are_not_excluded_by_prefix(self):
         """Core regression guard: gpt-5-chat prefix must not match versioned models."""
         versioned_chat_models = ["gpt-5.1-chat", "gpt-5.2-chat", "gpt-5.3-chat"]
         for model in versioned_chat_models:
-            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Regression: Azure '{model}' was incorrectly excluded from GPT-5 path"
+            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Regression: Azure '{model}' was incorrectly excluded from GPT-5 path"
+            )
 
     def test_gpt5_chat_family_is_excluded(self):
         """gpt-5-chat family should stay on the regular chat path."""
         for model in ["gpt-5-chat", "gpt-5-chat-latest", "gpt-5-chat-2025-08-07"]:
-            assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Expected Azure '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            assert not AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Expected Azure '{model}' (gpt-5-chat family) NOT to be on the GPT-5 path"
+            )
 
     def test_gpt5_series_routing_prefix_is_always_classified_as_gpt5(self):
         """Models using the gpt5_series/ manual-routing prefix must always match."""
         series_models = ["gpt5_series/my-deployment", "gpt5_series/prod"]
         for model in series_models:
-            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
-                model
-            ), f"Azure '{model}' with gpt5_series/ prefix should be classified as GPT-5"
+            assert AzureOpenAIGPT5Config.is_model_gpt_5_model(model), (
+                f"Azure '{model}' with gpt5_series/ prefix should be classified as GPT-5"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Cost-map capability routing (LIT-8530)
+# ---------------------------------------------------------------------------
+
+COST_MAP_ONLY_SERIES: Final = "gpt-7-nova"
+COST_MAP_ONLY_SERIES_ROW: Final = {
+    "mode": "chat",
+    "litellm_provider": "openai",
+    "input_cost_per_token": 1e-6,
+    "output_cost_per_token": 1e-6,
+    "supports_function_calling": True,
+    "supports_reasoning": True,
+    "supports_none_reasoning_effort": True,
+}
+WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+}
+
+
+@pytest.fixture
+def cost_map_only_series(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setitem(litellm.model_cost, COST_MAP_ONLY_SERIES, COST_MAP_ONLY_SERIES_ROW)
+    monkeypatch.setitem(
+        litellm.model_cost, f"azure/{COST_MAP_ONLY_SERIES}", {**COST_MAP_ONLY_SERIES_ROW, "litellm_provider": "azure"}
+    )
+    return COST_MAP_ONLY_SERIES
+
+
+class TestCostMapRoutesToReasoningConfig:
+    def test_series_known_only_to_the_cost_map_selects_the_reasoning_config(self, cost_map_only_series: str):
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        assert OpenAIGPT5Config.is_model_gpt_5_model(cost_map_only_series)
+        assert AzureOpenAIGPT5Config.is_model_gpt_5_model(cost_map_only_series)
+        openai_config = ProviderConfigManager.get_provider_chat_config(cost_map_only_series, LlmProviders.OPENAI)
+        azure_config = ProviderConfigManager.get_provider_chat_config(cost_map_only_series, LlmProviders.AZURE)
+        assert isinstance(openai_config, OpenAIGPT5Config)
+        assert isinstance(azure_config, AzureOpenAIGPT5Config)
+
+    def test_series_known_only_to_the_cost_map_keeps_reasoning_effort_none_with_tools(self, cost_map_only_series: str):
+        optional_params = litellm.get_optional_params(
+            model=cost_map_only_series,
+            custom_llm_provider="openai",
+            reasoning_effort="none",
+            tools=[WEATHER_TOOL],
+            drop_params=True,
+        )
+        assert optional_params["reasoning_effort"] == "none"
+        assert optional_params["tools"] == [WEATHER_TOOL]
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            pytest.param({**COST_MAP_ONLY_SERIES_ROW, "supports_none_reasoning_effort": False}, id="no-level-true"),
+            pytest.param(
+                {k: v for k, v in COST_MAP_ONLY_SERIES_ROW.items() if k != "supports_none_reasoning_effort"},
+                id="supports-reasoning-only",
+            ),
+            pytest.param({**COST_MAP_ONLY_SERIES_ROW, "mode": "responses"}, id="responses-mode"),
+        ],
+    )
+    def test_row_without_a_supported_effort_level_stays_on_the_plain_config(
+        self, monkeypatch: pytest.MonkeyPatch, row: dict[str, object]
+    ):
+        monkeypatch.setitem(litellm.model_cost, "nova-chat", row)
+        monkeypatch.setitem(litellm.model_cost, "azure/nova-chat", {**row, "litellm_provider": "azure"})
+        assert not OpenAIGPT5Config.is_model_gpt_5_model("nova-chat")
+        assert not AzureOpenAIGPT5Config.is_model_gpt_5_model("nova-chat")
+
+    @pytest.mark.parametrize("model", ["gpt-5-chat", "gpt-5-chat-latest", "computer-use-preview", "o3", "o4-mini"])
+    def test_real_rows_with_supports_reasoning_alone_stay_off_the_reasoning_config(self, model: str):
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        assert litellm.model_cost[model]["supports_reasoning"] is True
+        assert not isinstance(
+            ProviderConfigManager.get_provider_chat_config(model, LlmProviders.OPENAI), OpenAIGPT5Config
+        )
