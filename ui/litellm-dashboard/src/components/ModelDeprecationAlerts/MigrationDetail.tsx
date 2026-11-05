@@ -25,6 +25,12 @@ import { affectedTeams } from "./migrationData";
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 50, filterColumns: [] };
 type KeyRow = components["schemas"]["KeySpendActivityRow"];
 
+function deprecationTimingLabel(days: number): string {
+  if (days < 0) return "Deprecated";
+  if (days === 0) return "Deprecation";
+  return "Deprecates in";
+}
+
 function migrationHeading(alert: DeprecationAlert, status: AlertStatus): string {
   if (status === AlertStatus.Resolved) return "Migration marked resolved";
   if (status === AlertStatus.Dismissed) return "Model deprecation dismissed";
@@ -266,9 +272,11 @@ export default function MigrationDetail({
           <p className="mt-1 text-xl font-semibold tabular-nums">{teamQuery.data?.length ?? "—"}</p>
         </div>
         <div className="p-3">
-          <p className="text-xs text-muted-foreground">Deprecation</p>
-          <p className="mt-1 text-lg font-semibold">
-            <DeprecationTiming alert={selected} />
+          <p className="text-xs text-muted-foreground">
+            {deprecationTimingLabel(selected.model.days_until_deprecation)}
+          </p>
+          <p className="mt-1 text-xl font-medium tabular-nums">
+            <DeprecationTiming alert={selected} format="duration" />
           </p>
         </div>
       </div>
