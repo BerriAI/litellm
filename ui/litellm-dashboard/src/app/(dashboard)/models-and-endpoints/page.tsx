@@ -206,7 +206,7 @@ export default function ModelsAndEndpointsPage() {
           </div>
         </div>
 
-        {!isViewOnly && <DecisionModelsBanner />}
+        {!isViewOnly && !activityModel && <DecisionModelsBanner />}
 
         {activityModel && (
           <div className="space-y-4">
@@ -214,7 +214,7 @@ export default function ModelsAndEndpointsPage() {
               <ArrowLeft className="h-4 w-4" />
               {t("modelInfoView.backToModels")}
             </Button>
-            <h2 className="text-lg font-semibold">{activityModel}</h2>
+            <h2 className="break-all text-lg font-semibold">{activityModel}</h2>
             <EntityActivity scope="model" id={activityModel} />
           </div>
         )}
