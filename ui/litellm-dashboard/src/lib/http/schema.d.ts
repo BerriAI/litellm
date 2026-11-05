@@ -39049,6 +39049,11 @@ export interface components {
              * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
+            /**
+             * Team Public Model Name
+             * @description The model name visible to the team, when configured.
+             */
+            team_public_model_name?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
