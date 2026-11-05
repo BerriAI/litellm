@@ -182,9 +182,13 @@ async def test_a_thread_continue_on_another_route_stays_with_the_key_that_create
     assert not await allows(ownership, INTRUDER, "msg_cross_route", call_type)
 
 
+@pytest.mark.parametrize("call_type", ("pass_through_endpoint", "acompletion", "aresponses"))
 @pytest.mark.asyncio
-async def test_a_pass_through_continue_of_a_message_the_proxy_never_bound_is_left_to_the_upstream_credential() -> None:
-    assert await allows(hook(), INTRUDER, "msg_unknown", "pass_through_endpoint")
+async def test_a_continue_outside_the_messages_route_of_a_message_the_proxy_never_bound_is_left_to_the_upstream(
+    call_type: CallTypesLiteral,
+) -> None:
+    assert await allows(hook(), OWNER, "msg_unknown", call_type)
+    assert await allows(hook(), INTRUDER, "msg_unknown", call_type)
 
 
 @pytest.mark.asyncio
@@ -248,9 +252,27 @@ async def test_the_create_turns_betas_reach_every_later_turn_of_the_thread() -> 
     assert third["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
 
 
-@pytest.mark.parametrize("call_type", ("acompletion", "pass_through_endpoint"))
+@pytest.mark.parametrize("call_type", ("acompletion", "aresponses"))
 @pytest.mark.asyncio
-async def test_a_continue_outside_the_messages_route_is_checked_but_left_unchanged(call_type: CallTypesLiteral) -> None:
+async def test_a_continue_on_chat_or_responses_resends_the_betas_its_create_turn_sent(
+    call_type: CallTypesLiteral,
+) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data=sent_with("advisor-tool-2026-03-01,message-threads-2026-08-12", thread=CREATE),
+        user_api_key_dict=OWNER,
+        response=anthropic_message("msg_other_route"),
+    )
+    continued: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_other_route"), call_type=call_type
+    )
+
+    assert continued is not None
+    assert continued["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_continue_is_checked_but_left_unchanged() -> None:
     ownership: Final = hook()
     await ownership.async_post_call_success_hook(
         data=sent_with("advisor-tool-2026-03-01", thread=CREATE),
@@ -260,7 +282,10 @@ async def test_a_continue_outside_the_messages_route_is_checked_but_left_unchang
 
     assert (
         await ownership.async_pre_call_hook(
-            user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_other_route"), call_type=call_type
+            user_api_key_dict=OWNER,
+            cache=DualCache(),
+            data=continue_from("msg_other_route"),
+            call_type="pass_through_endpoint",
         )
         is None
     )

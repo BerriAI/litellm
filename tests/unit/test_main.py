@@ -5384,6 +5384,41 @@ def test_anthropic_oauth_credential_does_not_persist_into_next_provider_hop():
     assert "anthropic-version" not in shared_headers
 
 
+def test_anthropic_chat_sends_the_client_betas_beside_the_extra_header_betas():
+    from litellm.types.utils import ProviderSpecificHeader
+
+    def echo_sent_betas(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_01EchoedBetas",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": request.headers.get("anthropic-beta", "")}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(echo_sent_betas))
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Say OK"}],
+        extra_headers={"anthropic-beta": "advisor-tool-2026-03-01"},
+        provider_specific_header=ProviderSpecificHeader(
+            custom_llm_provider="anthropic", extra_headers={"anthropic-beta": "message-threads-2026-08-12"}
+        ),
+        api_key="sk-fake-anthropic-key",
+        client=client,
+    )
+
+    sent_betas: Final = frozenset(beta.strip() for beta in response.choices[0].message.content.split(","))
+    assert {"advisor-tool-2026-03-01", "message-threads-2026-08-12"} <= sent_betas
+
+
 STREAM_COST_MODEL = "gpt-4o"
 STREAMED_USAGE = {"prompt_tokens": 137, "completion_tokens": 42, "total_tokens": 179}
 

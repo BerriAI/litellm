@@ -968,6 +968,23 @@ class TestMergeProviderSpecificHeaders:
             extra_headers=None, provider_specific_header=None, custom_llm_provider="chatgpt"
         ) is None
 
+    def test_client_anthropic_betas_join_the_extra_header_betas(self):
+        merged = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers={"anthropic-beta": "advisor-tool-2026-03-01", "x-tenant": "team-a"},
+            provider_specific_header={
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"anthropic-beta": "message-threads-2026-08-12"},
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        assert merged is not None
+        assert merged["x-tenant"] == "team-a"
+        assert set(str(merged["anthropic-beta"]).split(",")) == {
+            "advisor-tool-2026-03-01",
+            "message-threads-2026-08-12",
+        }
+
 
 def test_responses_object_bills_an_explicit_cache_hit_at_the_explicit_rate():
     model = "dashscope/qwen-responses-explicit-cache-test"
