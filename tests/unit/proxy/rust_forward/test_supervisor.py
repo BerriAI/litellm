@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
@@ -272,6 +272,8 @@ EVENTS: Final = st.lists(
 
 
 @given(EVENTS)
+@example([Caught(TERM), Caught(signal.SIGHUP), PythonListening()])
+@example([PythonListening(), Caught(TERM), Caught(signal.SIGWINCH), ChildExited(Child.RUST, 0)])
 def test_lifecycle_relays_every_signal_and_ends_with_pythons_status(events: list[Event]) -> None:
     state, actions = boot()
     world = World()

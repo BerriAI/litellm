@@ -16,6 +16,7 @@ import pytest
 
 from tests.integration._support.client import eventually
 from tests.integration._support.ports import allocate_port
+from tests.integration._support.process import kill_stray_process, send_signal
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="drives POSIX signals")
 
@@ -186,22 +187,22 @@ def _signal_after_ready(process: subprocess.Popen[bytes], port: int, scenario: S
     started: Final = time.monotonic()
     match scenario:
         case Scenario.TERM | Scenario.INT:
-            process.send_signal(signal.SIGTERM if scenario is Scenario.TERM else signal.SIGINT)
+            send_signal(process, signal.SIGTERM if scenario is Scenario.TERM else signal.SIGINT)
             return Run(Outcome(_exit_status(process, EXIT_SECONDS), False), time.monotonic() - started)
         case Scenario.INT_TWICE_WHILE_STREAMING:
             with _streaming(port):
-                process.send_signal(signal.SIGINT)
+                send_signal(process, signal.SIGINT)
                 time.sleep(0.5)
-                process.send_signal(signal.SIGINT)
+                send_signal(process, signal.SIGINT)
                 status: Final = _exit_status(process, EXIT_SECONDS)
             return Run(Outcome(status, False), time.monotonic() - started)
         case Scenario.HUP:
-            process.send_signal(signal.SIGHUP)
+            send_signal(process, signal.SIGHUP)
             after_hup: Final = _exit_status(process, 3)
             if after_hup is not None:
                 return Run(Outcome(after_hup, False), time.monotonic() - started)
             assert eventually(lambda: _serving(port), bool, seconds=30)
-            process.send_signal(signal.SIGTERM)
+            send_signal(process, signal.SIGTERM)
             return Run(Outcome(_exit_status(process, EXIT_SECONDS), True), time.monotonic() - started)
 
 
@@ -212,7 +213,7 @@ def _run(argv: tuple[str, ...], environment: dict[str, str], act: Callable[[subp
         finally:
             if process.poll() is None:
                 for leftover in (*psutil.Process(process.pid).children(recursive=True), psutil.Process(process.pid)):
-                    leftover.kill()
+                    kill_stray_process(leftover.pid)
 
 
 def _environment(markers: Path) -> dict[str, str]:
@@ -257,8 +258,7 @@ def test_children_exit_when_the_supervisor_is_killed(tmp_path: Path, workers: in
         rust: Final = int((tmp_path / "rust.pid").read_text())
         descendants: Final = (python, rust, *(child.pid for child in psutil.Process(python).children(recursive=True)))
         started: Final = time.monotonic()
-        process.kill()
-        process.wait()
+        kill_stray_process(process.pid)
         assert eventually(lambda: tuple(pid for pid in descendants if _alive(pid)), lambda alive: not alive) == ()
         return Run(Outcome(None, False), time.monotonic() - started)
 

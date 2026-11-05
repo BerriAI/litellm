@@ -4,7 +4,6 @@ import signal
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import partial
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -109,11 +108,11 @@ def _stop_when_closed(fd: int, stop: Callable[[], None]) -> None:
     stop()
 
 
-def stop_with_supervisor(
-    mode: RustForwardMode,
-    fd: int = 0,
-    stop: Callable[[], None] = partial(signal.raise_signal, signal.SIGTERM),
-) -> None:
+def _terminate_self() -> None:
+    signal.raise_signal(signal.SIGTERM)
+
+
+def stop_with_supervisor(mode: RustForwardMode, fd: int = 0, stop: Callable[[], None] = _terminate_self) -> None:
     """Shut the supervised server down gracefully once the supervisor's end of its stdin closes, so it never outlives
     a supervisor that was killed. Call it only in the process the supervisor started, not in its workers."""
     match mode:
