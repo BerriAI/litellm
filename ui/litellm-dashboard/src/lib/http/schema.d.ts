@@ -31345,8 +31345,8 @@ export interface components {
             use_google_kms?: boolean | null;
             /**
              * Use Spend Logs Ledger
-             * @description Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.
-             * @default false
+             * @description Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.
+             * @default true
              */
             use_spend_logs_ledger: boolean;
             /**
