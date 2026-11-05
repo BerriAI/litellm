@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -22,8 +23,8 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
 }
 
 function CommandDialog({
-  title = "Command Palette",
-  description = "Search for a command to run...",
+  title = i18n.t("ui.command.title"),
+  description = i18n.t("ui.command.description"),
   children,
   className,
   showCloseButton = false,
