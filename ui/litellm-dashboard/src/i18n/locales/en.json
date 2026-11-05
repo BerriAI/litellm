@@ -6971,6 +6971,48 @@
     }
   },
   "publicModelHub": {
+    "catalog": {
+      "modelHub": "Model Hub",
+      "skillsHub": "Skills Hub",
+      "eyebrow": "The LiteLLM catalog",
+      "modelsDescription": "Find pricing, context, and capabilities.",
+      "skillsDescription": "Discover reusable skills for your agents.",
+      "filters": "Filters",
+      "clearFilters": "Clear filters",
+      "provider": "Provider",
+      "capabilities": "Capabilities",
+      "mode": "Mode",
+      "model": "Model",
+      "inputLimit": "Input limit",
+      "inputPrice": "Input /1M",
+      "outputPrice": "Output /1M",
+      "searchModels": "Search models",
+      "loadingModels": "Loading models…",
+      "modelCount_one": "{{count}} model",
+      "modelCount_other": "{{count}} models",
+      "sort": {
+        "model_group": "Name",
+        "providers": "Provider",
+        "mode": "Mode",
+        "input_cost_per_token": "Input price",
+        "output_cost_per_token": "Output price",
+        "max_input_tokens": "Context",
+        "max_output_tokens": "Max output",
+        "rpm": "Rate limit"
+      },
+      "skill": "Skill",
+      "source": "Source",
+      "namespace": "Namespace",
+      "category": "Category",
+      "version": "Version",
+      "domain": "Domain",
+      "allDomains": "All domains",
+      "searchSkills": "Search skills",
+      "clearAll": "Clear all",
+      "loadingSkills": "Loading skills…",
+      "skillCount_one": "{{count}} skill",
+      "skillCount_other": "{{count}} skills"
+    },
     "modelHubPage": {
       "loading": "Loading..."
     },

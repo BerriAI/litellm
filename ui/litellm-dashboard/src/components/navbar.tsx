@@ -29,6 +29,7 @@ interface NavbarProps {
   onToggleSidebar?: () => void;
   deploymentHealth?: React.ReactNode;
   deploymentHealthLink?: React.ReactNode;
+  publicNavigation?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
@@ -40,6 +41,7 @@ const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
   deploymentHealth,
   deploymentHealthLink,
+  publicNavigation,
 }) => {
   const { t } = useTranslation();
   const baseUrl = getProxyBaseUrl();
@@ -131,6 +133,8 @@ const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
           </div>
+
+          {publicNavigation}
 
           {!isPublicPage && (
             <div className="ml-4 flex shrink-0 items-center border-l border-border pl-4">
