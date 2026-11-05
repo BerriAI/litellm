@@ -12,6 +12,7 @@ from litellm.types.proxy.usage_alerts import (
     UsageAlert,
     UsageAlertChannel,
     UsageAlertDirection,
+    UsageAlertEvaluationCounts,
     UsageAlertMetric,
     UsageAlertRule,
     UsageAlertStatus,
@@ -243,6 +244,7 @@ class IssueFamilySetting(BaseModel, frozen=True):
     total_rules: int
     enabled_rules: int
     policies: tuple[IssueFamilyPolicy, ...]
+    evaluation_status_counts: UsageAlertEvaluationCounts = Field(default_factory=UsageAlertEvaluationCounts)
 
 
 class IssueFamilyList(BaseModel, frozen=True):

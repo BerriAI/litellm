@@ -1,6 +1,7 @@
 """Bounded settings for the built-in performance policies."""
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from itertools import chain, product
 from typing import Final
@@ -21,7 +22,7 @@ from litellm.types.proxy.usage_alert_defaults import (
     PerformanceIssueFamily,
     default_usage_rule_id,
 )
-from litellm.types.proxy.usage_alerts import UsageAlertRule
+from litellm.types.proxy.usage_alerts import UsageAlertEvaluationCounts, UsageAlertRule
 
 
 class _RuleRow(BaseModel, frozen=True):
@@ -70,6 +71,9 @@ def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) 
         total_rules=len(family_rules),
         enabled_rules=sum(rule.enabled for rule in family_rules),
         policies=values,
+        evaluation_status_counts=UsageAlertEvaluationCounts.model_validate(
+            Counter(rule.evaluation_status for rule in family_rules if rule.enabled)
+        ),
     )
 
 
