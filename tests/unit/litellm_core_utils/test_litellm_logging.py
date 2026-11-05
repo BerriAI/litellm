@@ -12080,7 +12080,7 @@ def _prompt_failure_logging_obj(litellm_params: Mapping[str, object] | None = No
         litellm_call_id="failure-scrub",
         function_id="failure-scrub",
     )
-    logging_obj.model_call_details["messages"] = logging_obj.messages  # as update_environment_variables sets it
+    logging_obj.model_call_details["messages"] = logging_obj.messages
     if litellm_params is not None:
         logging_obj.model_call_details["litellm_params"] = dict(litellm_params)
     return logging_obj
