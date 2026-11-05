@@ -9,6 +9,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     ProviderCountFailure,
     TokenCountModel,
     TokenCountSettings,
+    UnknownLocalTokenizer,
     count_source_fields,
     resolve_token_count_settings,
 )
@@ -249,13 +250,40 @@ def test_only_a_tokenizer_litellm_ships_is_taken_from_the_cost_map(value: object
     assert settings.tokenizer == expected
 
 
-def _counted(source: str | None, model_used: str = "us.anthropic.claude-opus-5-5") -> TokenCountResponse:
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ({"token_count_tokenizer": "openai"}, "openai"),
+        ({"token_count_tokenizer": "deepseek"}, "deepseek"),
+        ({"token_count_tokenizer": "kimi_k3"}, "kimi_k3"),
+        ({"token_count_tokenizer": "local"}, UnknownLocalTokenizer(value="local")),
+        ({"token_count_tokenizer": "OpenAI"}, UnknownLocalTokenizer(value="OpenAI")),
+        ({"token_count_tokenizer": 5}, UnknownLocalTokenizer(value="5")),
+        ({"token_count_tokenizer": " "}, None),
+        ({"token_count_tokenizer": None}, None),
+        ({}, None),
+    ],
+)
+def test_only_the_deployment_names_the_tokenizer_that_counts_without_the_provider(
+    configured: dict[str, object], expected: object
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured=configured, default={"token_count_tokenizer": "kimi_k3"}, deployment_region=_in_us_west_2
+    )
+
+    assert (settings.local_tokenizer, settings.tokenizer) == (expected, "kimi_k3")
+
+
+def _counted(
+    source: str | None, model_used: str = "us.anthropic.claude-opus-5-5", count_tokenizer: str | None = None
+) -> TokenCountResponse:
     return TokenCountResponse(
         total_tokens=7,
         request_model="sonnet",
         model_used=model_used,
         tokenizer_type="bedrock_api",
         count_source=source,
+        count_tokenizer=count_tokenizer,
     )
 
 
@@ -275,6 +303,13 @@ def test_count_source_fields_name_the_counting_model_only_when_token_count_model
     source: str | None, expected: dict[str, str]
 ) -> None:
     assert count_source_fields(_counted(source)) == expected
+
+
+def test_count_source_fields_name_the_tokenizer_a_local_estimate_was_counted_with() -> None:
+    assert count_source_fields(_counted("local_estimate", count_tokenizer="llama3")) == {
+        "litellm_count_source": "local_estimate",
+        "litellm_count_tokenizer": "llama3",
+    }
 
 
 def test_every_shipped_token_count_model_resolves_to_a_mapped_aws_model() -> None:

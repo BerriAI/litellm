@@ -3,13 +3,13 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
-from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
+from litellm.types.token_count import LocalTokenizer, TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
@@ -52,10 +52,16 @@ class TokenCountModel:
 
 
 @dataclass(frozen=True, slots=True)
+class UnknownLocalTokenizer:
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
 class TokenCountSettings:
     framing: int | None
     count_model: TokenCountModel | None
     tokenizer: TokenCountTokenizer | None = None
+    local_tokenizer: LocalTokenizer | UnknownLocalTokenizer | None = None
     tool_framing: int | None = None
     responses_framing: int | None = None
     responses_tool_framing: int | None = None
@@ -197,6 +203,18 @@ def _tokenizer(value: object) -> TokenCountTokenizer | None:
             return None
 
 
+_LOCAL_TOKENIZER: Final[TypeAdapter[LocalTokenizer]] = TypeAdapter(LocalTokenizer)
+
+
+def _local_tokenizer(value: object) -> LocalTokenizer | UnknownLocalTokenizer | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        return _LOCAL_TOKENIZER.validate_python(value, strict=True)
+    except ValidationError:
+        return UnknownLocalTokenizer(value=str(value))
+
+
 def resolve_token_count_settings(
     configured: Mapping[str, object], default: Mapping[str, object], deployment_region: Callable[[], str]
 ) -> TokenCountSettings:
@@ -206,6 +224,7 @@ def resolve_token_count_settings(
             configured.get("token_count_model"), default.get("token_count_model"), deployment_region
         ),
         tokenizer=_tokenizer(default.get("token_count_tokenizer")),
+        local_tokenizer=_local_tokenizer(configured.get("token_count_tokenizer")),
         tool_framing=_configured_framing(configured, default, "token_count_tool_framing"),
         responses_framing=_configured_framing(configured, default, "token_count_responses_framing"),
         responses_tool_framing=_configured_framing(
@@ -224,5 +243,7 @@ def count_source_fields(response: TokenCountResponse) -> TokenCountSourceFields:
             return {}
         case "token_count_model":
             return {"litellm_count_source": "token_count_model", "litellm_count_model": response.model_used}
+        case "local_estimate" if response.count_tokenizer is not None:
+            return {"litellm_count_source": "local_estimate", "litellm_count_tokenizer": response.count_tokenizer}
         case source:
             return {"litellm_count_source": source}

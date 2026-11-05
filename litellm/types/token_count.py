@@ -4,6 +4,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate"]
 TokenCountTokenizer: TypeAlias = Literal["kimi_k3"]
+LocalTokenizer: TypeAlias = Literal["openai", "llama3", "deepseek", "cohere", "kimi_k3"]
 TokenCountProvider: TypeAlias = Literal["bedrock", "bedrock_mantle"]
 
 
@@ -16,3 +17,4 @@ class TokenCountModelInfo(TypedDict):
 class TokenCountSourceFields(TypedDict, total=False):
     litellm_count_source: ReadOnly[TokenCountSource]
     litellm_count_model: ReadOnly[str]
+    litellm_count_tokenizer: ReadOnly[LocalTokenizer]
