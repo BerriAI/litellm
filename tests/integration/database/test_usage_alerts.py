@@ -7,7 +7,7 @@ from integration._support.actors import ManagementDatabase
 from integration._support.client import Gateway, string_value
 
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRule, UsageAlertRuleInput
 
 
 def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway) -> None:
@@ -84,6 +84,72 @@ def test_team_admin_can_manage_team_alerts_but_member_can_only_read(gateway: Gat
             assert gateway.request("DELETE", path, key=member_key).status_code == 403
         finally:
             assert gateway.request("DELETE", path, key=admin_key).status_code == 204
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gateway, db: ManagementDatabase) -> None:
+    """Populate an explicit storage fixture, then exercise the real incident HTTP API."""
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        outsider: Final = scenario.user(user_role="internal_user")
+        viewer: Final = scenario.user(user_role="proxy_admin_viewer")
+        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
+        viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
+        created: Final = gateway.request(
+            "POST",
+            "/usage/alert-rules",
+            {
+                "name": "Incident API fixture",
+                "scope_type": "user",
+                "scope_id": owner,
+                "metric": "requests",
+                "direction": "increase",
+                "multiplier": 3,
+            },
+            key=owner_key,
+        )
+        assert created.status_code == 201
+        rule: Final = UsageAlertRule.model_validate(created.json())
+        try:
+            incident: Final = (
+                await repository.record_observations(
+                    rule,
+                    (
+                        UsageAlertObservation(
+                            entity_id=owner,
+                            day=date(2026, 11, 4),
+                            observed=420,
+                            baseline=120,
+                            baseline_sample_days=7,
+                            threshold=360,
+                            breached=True,
+                        ),
+                    ),
+                )
+            )[0]
+            path: Final = f"/usage/alerts/{incident.id}"
+            params: Final = {"scope_type": "user", "scope_id": owner, "limit": "1"}
+            page: Final = gateway.request("GET", "/usage/alerts", key=owner_key, params=params)
+            assert page.status_code == 200 and page.json()["data"][0]["id"] == incident.id
+            detail: Final = gateway.request("GET", path, key=owner_key)
+            assert detail.status_code == 200
+            assert detail.json()["observed_value"] == 420
+            assert detail.json()["baseline_value"] == 120
+            assert detail.json()["threshold"] == 360
+            assert detail.json()["baseline_sample_days"] == 7
+            assert "detail_tab=activity" in detail.json()["activity_path"]
+            assert gateway.request("GET", "/usage/alerts", key=outsider_key, params=params).status_code == 403
+            assert gateway.request("GET", path, key=outsider_key).status_code == 403
+            assert gateway.request("PATCH", path, {"status": "dismissed"}, key=outsider_key).status_code == 403
+            assert gateway.request("GET", path, key=viewer_key).status_code == 200
+            assert gateway.request("PATCH", path, {"status": "dismissed"}, key=viewer_key).status_code == 403
+            dismissed: Final = gateway.request("PATCH", path, {"status": "dismissed"}, key=owner_key)
+            assert dismissed.status_code == 200 and dismissed.json()["status"] == "dismissed"
+            assert gateway.request("GET", path, key=owner_key).json()["status"] == "dismissed"
+        finally:
+            assert gateway.request("DELETE", f"/usage/alert-rules/{rule.id}", key=owner_key).status_code == 204
 
 
 @pytest.mark.asyncio(loop_scope="session")
