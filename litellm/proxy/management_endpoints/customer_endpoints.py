@@ -106,6 +106,7 @@ if TYPE_CHECKING:
             self,
             where: Mapping[str, object],
             data: Mapping[str, Mapping[str, object]],
+            include: Mapping[str, bool] | None = None,
         ) -> _RowT_co: ...
 
         async def delete_many(self, where: Mapping[str, object]) -> int: ...
