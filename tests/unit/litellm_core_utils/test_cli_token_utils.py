@@ -895,7 +895,6 @@ class TestClearCliToken:
 
         assert load_cli_token(vault=vault) is None
         assert get_litellm_gateway_api_key(vault=vault) is None
-        assert load_cli_token_left_in_keychain(vault=vault) is None
         assert clear_cli_token(vault=vault) == SecretErased()
         assert vault.blob is None
 
@@ -931,6 +930,40 @@ class TestClearCliToken:
 
         assert left is not None
         assert (left.key, left.refresh_token) == ("sk-first", "rt-first")
+
+    def test_a_locked_login_over_a_keychain_login_keeps_the_keychain_login_revocable(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        vault.available = False
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-second", refresh_token="rt-second", timestamp=2000.0), vault=vault
+        )
+
+        vault.available = True
+        left = load_cli_token_left_in_keychain(vault=vault)
+
+        assert left is not None
+        assert (left.key, left.refresh_token) == ("sk-first", "rt-first")
+
+    def test_the_note_never_pairs_with_a_keychain_entry_a_later_login_wrote(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        vault.available = False
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        vault.available = True
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-second", refresh_token="rt-second", timestamp=2000.0), vault=vault
+        )
+
+        assert load_cli_token_left_in_keychain(vault=vault) is None
 
     @pytest.mark.parametrize("failure", [KeyringNotInstalled(), KeyringDisabled(), KeyringUnreachable()])
     def test_logging_out_of_a_machine_that_never_logged_in_invents_nothing_to_warn_about(

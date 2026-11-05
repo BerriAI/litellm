@@ -235,13 +235,26 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
     return None if record is None else record.model_dump(exclude_none=True)
 
 
-def _credential_to_revoke(vault: SecretVault) -> Mapping[str, object] | None:
-    """The stored login, or the one an earlier logout left in a keychain it could not reach"""
-    current: Final = load_token(vault=vault)
-    if current is not None:
-        return current
+def _login_left_in_keychain(vault: SecretVault) -> Mapping[str, object] | None:
+    """The login an earlier logout left in a keychain it could not reach.
+
+    Read it before `load_token`, which moves a secret a locked-keychain login kept on disk over
+    that keychain entry.
+    """
     left: Final = load_cli_token_left_in_keychain(vault=vault)
     return None if left is None else left.model_dump(exclude_none=True)
+
+
+def _same_refresh_token(left: Mapping[str, object] | None, current: Mapping[str, object] | None) -> bool:
+    return left is not None and current is not None and left.get("refresh_token") == current.get("refresh_token")
+
+
+def _credentials_to_revoke(vault: SecretVault) -> tuple[Mapping[str, object], ...]:
+    left: Final = _login_left_in_keychain(vault)
+    current: Final = load_token(vault=vault)
+    if current is None or _same_refresh_token(left, current):
+        return () if left is None else (left,)
+    return (current,) if left is None else (left, current)
 
 
 def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
@@ -863,17 +876,22 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
 
 
 def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
-    previous: Final = _credential_to_revoke(vault)
+    previous: Final = _credentials_to_revoke(vault)
     stored: Final = save_token(record, vault=vault)
-    if previous is None or isinstance(stored, CredentialNotSaved):
+    if isinstance(stored, CredentialNotSaved):
         return stored
-    revocation: Final = revoke_stored_credential(previous, http)
+    for login in previous:
+        _revoke_the_replaced_login(login, http)
+    return stored
+
+
+def _revoke_the_replaced_login(login: Mapping[str, object], http: Http) -> None:
+    revocation: Final = revoke_stored_credential(login, http)
     if revocation is not None:
         click.echo(
             f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
             "it expires on its own."
         )
-    return stored
 
 
 def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
@@ -997,13 +1015,8 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
         return
 
 
-@click.command(name="logout")
-@click.pass_context
-def logout(ctx: click.Context):
-    """Logout and clear stored authentication"""
-    vault: Final = context_secret_vault(ctx)
-    token_data: Final = _credential_to_revoke(vault)
-    revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
+def _revoke_before_logout(token_data: Mapping[str, object] | None, http: Http) -> None:
+    revocation: Final = None if token_data is None else revoke_stored_credential(token_data, http)
     match revocation:
         case RevocationUnavailable(reason=reason):
             raise click.ClickException(
@@ -1016,6 +1029,18 @@ def logout(ctx: click.Context):
             pass
         case _:
             assert_never(revocation)
+
+
+@click.command(name="logout")
+@click.pass_context
+def logout(ctx: click.Context):
+    """Logout and clear stored authentication"""
+    vault: Final = context_secret_vault(ctx)
+    http: Final = requests.Session()
+    left: Final = _login_left_in_keychain(vault)
+    _revoke_before_logout(left, http)
+    current: Final = load_token(vault=vault)
+    _revoke_before_logout(None if _same_refresh_token(left, current) else current, http)
 
     path: Final = get_cli_token_file_path()
     match clear_cli_token(vault=vault):

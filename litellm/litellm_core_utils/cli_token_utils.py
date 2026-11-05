@@ -162,6 +162,7 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     keychain has already taken the new secret, and it reports itself as such rather than claiming
     the previous login survived.
     """
+    replaced: Final = _read_token_file()
     stamped: Final = _stamped_past_every_stored_login(record, vault)
     staged: Final = _stage_token_file(_without_secret(stamped))
     if isinstance(staged, CredentialNotSaved):
@@ -170,7 +171,22 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     if isinstance(outcome, SecretStored):
         return outcome if _commit_token_file(staged) else CredentialNotRecorded()
     discard_staged_json(staged)
-    return _keep_the_secret_in_the_file(stamped, outcome)
+    kept: Final = _keep_the_secret_in_the_file(stamped, outcome)
+    if not isinstance(kept, CredentialNotSaved):
+        _note_the_login_left_in_the_keychain(replaced)
+    return kept
+
+
+def _note_the_login_left_in_the_keychain(replaced: CliTokenRecord | None) -> None:
+    """Keep the login a save could not take out of the keychain revocable once the keychain answers.
+
+    Its token file record is about to be overwritten by one that holds its own secret, so the note
+    is the only record left of the login whose refresh token the keychain still holds.
+    """
+    if replaced is None or _holds_a_secret(replaced):
+        return
+    with suppress(OSError):
+        _write_keychain_not_cleared_note(_keychain_not_cleared_note_path(), replaced)
 
 
 def _stamped_past_every_stored_login(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord:
