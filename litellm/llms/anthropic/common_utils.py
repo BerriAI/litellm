@@ -517,7 +517,7 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     return ",".join(sorted(betas))
 
 
-_HEADER_VALUE_LIST: Final = TypeAdapter(tuple[JsonValue, ...])
+_HEADER_VALUE_LIST: Final = TypeAdapter(tuple[object, ...])
 
 
 def _header_strings(value: object) -> tuple[str, ...]:
