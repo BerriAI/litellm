@@ -1,5 +1,6 @@
 "use client";
 
+import ModelDeprecationsPanel from "@/components/ModelDeprecationAlerts/ModelDeprecationsPanel";
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
@@ -30,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const MODEL_TAB_SLUGS = [
+  "model-deprecations",
   "add",
   "auto-routers",
   "llm-credentials",
@@ -50,6 +52,7 @@ const TAB_KEYS = [BASE_TAB_KEY, ...MODEL_TAB_SLUGS] as const;
 const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
+  "model-deprecations": "Model deprecations",
   add: "Add Model",
   "auto-routers": "Auto-Routers",
   "llm-credentials": "LLM Credentials",
@@ -63,6 +66,8 @@ const TAB_LABELS: Record<ModelTabSlug, string> = {
 
 const renderPanel = (key: string) => {
   switch (key) {
+    case "model-deprecations":
+      return <ModelDeprecationsPanel />;
     case BASE_TAB_KEY:
       return <AllModelsPanel />;
     case "auto-routers":
@@ -119,6 +124,7 @@ export default function ModelsAndEndpointsPage() {
   const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
+      ...(isAdmin ? (["model-deprecations"] as const) : []),
       ...(canCreate ? (["add"] as const) : []),
       ...(isAdmin || canViewAutoRouters ? (["auto-routers"] as const) : []),
       // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
@@ -184,23 +190,29 @@ export default function ModelsAndEndpointsPage() {
     );
   }
 
-  return (
-    <div className="mx-4">
-      <div className="mt-2 flex w-full flex-col gap-2 p-8">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Model Management</h2>
-            {isAdmin ? (
-              <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                View your models and manage routers for teams that allow it.
-              </p>
-            )}
-          </div>
-        </div>
+  const showingDeprecations = activeKey === "model-deprecations";
 
-        {!isViewOnly && <DecisionModelsBanner />}
+  return (
+    <div className={showingDeprecations ? "flex h-full min-h-0 flex-col p-6" : "mx-4"}>
+      <div
+        className={showingDeprecations ? "flex min-h-0 flex-1 flex-col gap-2" : "mt-2 flex w-full flex-col gap-2 p-8"}
+      >
+        {!showingDeprecations && (
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Model Management</h2>
+              {isAdmin ? (
+                <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  View your models and manage routers for teams that allow it.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!showingDeprecations && !isViewOnly && <DecisionModelsBanner />}
 
         {modelId ? (
           <ModelInfoView
@@ -214,7 +226,11 @@ export default function ModelsAndEndpointsPage() {
             modelAccessGroups={availableModelAccessGroups}
           />
         ) : (
-          <Tabs value={activeKey} onValueChange={handleTabChange}>
+          <Tabs
+            value={activeKey}
+            onValueChange={handleTabChange}
+            className={showingDeprecations ? "flex min-h-0 flex-1 flex-col" : undefined}
+          >
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">
@@ -240,7 +256,11 @@ export default function ModelsAndEndpointsPage() {
             {visibleSlugs.map((slug) => {
               const key = slug || BASE_TAB_KEY;
               return (
-                <TabsContent key={key} value={key} className="pt-4">
+                <TabsContent
+                  key={key}
+                  value={key}
+                  className={showingDeprecations ? "flex min-h-0 flex-1 flex-col pt-4" : "pt-4"}
+                >
                   {renderPanel(key)}
                 </TabsContent>
               );

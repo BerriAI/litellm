@@ -5,7 +5,7 @@ import React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./useDeprecationAlerts", () => ({
+vi.mock("@/components/ModelDeprecationAlerts/useDeprecationAlerts", () => ({
   useDeprecationAlerts: () => ({
     data: [],
     scope: "test",
@@ -187,79 +187,68 @@ const DEPRECATION = {
   usageModel: "anthropic/claude-sonnet-4-5",
   requests: 18432,
   lastUsedDate: "2026-11-04",
+  lastDayRequests: 123,
   model: {
     model_name: "support",
     litellm_model: "anthropic/claude-sonnet-4-5",
     deprecation_date: "2026-11-30",
     days_until_deprecation: 26,
     status: "imminent" as const,
+    successor_model: "recommended-model",
   },
 };
 
 describe("model deprecation notifications", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
-  it("should show an actionable deprecation alert with recent usage", async () => {
+  it("should show last seen and link to the migration workspace and open alerts inbox", async () => {
     const user = userEvent.setup();
     renderWithProviders(
-      <NotificationsBellView
-        currentVersion={null}
-        latestRelease={null}
-        deprecationAlerts={[DEPRECATION]}
-        scope="gateway-admin"
-      />,
+      <NotificationsBellView currentVersion={null} latestRelease={null} deprecationAlerts={[DEPRECATION]} />,
     );
-    await user.click(screen.getByRole("button", { name: "Notifications, 1 model deprecation alert needs attention" }));
-    expect(screen.getByRole("article", { name: "anthropic/claude-sonnet-4-5 retires in 26 days" })).toHaveTextContent(
-      "18,432 requests in the last 30 days",
-    );
-    expect(screen.getByText(/Last used 2026-11-04 UTC/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Resolve in model settings/ })).toHaveAttribute(
+    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
+    expect(screen.getByRole("article", { name: /retires in 26 days/ })).toHaveTextContent("Last seen 2026-11-04 UTC");
+    expect(screen.getByRole("link", { name: "Review migration" })).toHaveAttribute(
       "href",
-      "/ui/models-and-endpoints?model_group=support",
+      "/ui/models-and-endpoints?tab=model-deprecations&deprecation_model=anthropic%2Fclaude-sonnet-4-5",
     );
-    expect(screen.getByRole("button", { name: "Review affected keys" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute("href", "/ui/models-and-endpoints?tab=model-deprecations");
+    expect(screen.getByText("recommended-model")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss", exact: true })).not.toBeInTheDocument();
   });
-  it("should dismiss a warning without claiming the model usage is resolved", async () => {
-    const user = userEvent.setup();
+  it("should clear the warning when the alert has a shared resolved acknowledgement", () => {
+    const state = {
+      model: DEPRECATION.usageModel,
+      deprecation_date: "2026-11-30",
+      status: "resolved" as const,
+      last_seen_date: "2026-11-04",
+      last_seen_requests: 123,
+    };
     renderWithProviders(
       <NotificationsBellView
         currentVersion={null}
         latestRelease={null}
-        deprecationAlerts={[DEPRECATION]}
-        scope="gateway-admin"
+        deprecationAlerts={[{ ...DEPRECATION, state }]}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
-    await user.click(screen.getByRole("button", { name: "Dismiss", exact: true }));
     expect(bell(1)).toBeInTheDocument();
-    expect(screen.getByText("Dismissed")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Resolve in model settings/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /model deprecation alert/ })).not.toBeInTheDocument();
   });
-  it("should resurface a warning when a dismissed model becomes deprecated", async () => {
-    const user = userEvent.setup();
-    const props = { currentVersion: null, latestRelease: null, scope: "gateway-admin" };
-    const view = renderWithProviders(<NotificationsBellView {...props} deprecationAlerts={[DEPRECATION]} />);
-    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
-    await user.click(screen.getByRole("button", { name: "Dismiss", exact: true }));
-    view.rerender(
+  it("should reopen a resolved alert when more requests arrive on the last-seen day", () => {
+    const state = {
+      model: DEPRECATION.usageModel,
+      deprecation_date: "2026-11-30",
+      status: "resolved" as const,
+      last_seen_date: "2026-11-04",
+      last_seen_requests: 122,
+    };
+    renderWithProviders(
       <NotificationsBellView
-        {...props}
-        deprecationAlerts={[
-          { ...DEPRECATION, id: "sonnet:2026-11-30:deprecated", model: { ...DEPRECATION.model, status: "deprecated" } },
-        ]}
+        currentVersion={null}
+        latestRelease={null}
+        deprecationAlerts={[{ ...DEPRECATION, state }]}
       />,
     );
-    expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
-    expect(screen.getByRole("article", { name: "anthropic/claude-sonnet-4-5 is deprecated" })).toBeInTheDocument();
-  });
-  it("should keep dismissals separate for different gateway users", async () => {
-    const user = userEvent.setup();
-    const props = { currentVersion: null, latestRelease: null, deprecationAlerts: [DEPRECATION] };
-    const view = renderWithProviders(<NotificationsBellView {...props} scope="admin-a" />);
-    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
-    await user.click(screen.getByRole("button", { name: "Dismiss", exact: true }));
-    view.rerender(<NotificationsBellView {...props} scope="admin-b" />);
     expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
   });
 });

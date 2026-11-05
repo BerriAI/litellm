@@ -9,6 +9,8 @@ export interface DeprecationAlert {
   usageModel: string;
   requests: number;
   lastUsedDate: string;
+  lastDayRequests: number;
+  state?: components["schemas"]["DeprecationAlertState"];
 }
 
 export function deprecationUsageRange(today: Date) {
@@ -37,14 +39,20 @@ export function usedDeprecationAlerts(
       seen.add(id);
       let requests = 0;
       let lastUsedDate = "";
+      let lastDayRequests = 0;
       for (const day of days) {
         const metrics = day.breakdown?.models?.[usageModel]?.metrics;
         if (!metrics || metrics.api_requests <= 0) continue;
         requests += metrics.api_requests;
-        if (day.date > lastUsedDate) lastUsedDate = day.date;
+        if (day.date > lastUsedDate) {
+          lastUsedDate = day.date;
+          lastDayRequests = metrics.api_requests;
+        } else if (day.date === lastUsedDate) {
+          lastDayRequests += metrics.api_requests;
+        }
       }
       if (requests > 0) {
-        const alert = { id, model, usageModel, requests, lastUsedDate };
+        const alert = { id, model, usageModel, requests, lastUsedDate, lastDayRequests };
         alerts.push(alert);
       }
     }

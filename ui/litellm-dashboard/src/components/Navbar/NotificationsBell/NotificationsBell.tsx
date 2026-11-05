@@ -12,14 +12,17 @@ import {
 } from "@/app/(dashboard)/hooks/useAnnouncementRead";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DashboardResources } from "@/components/Navbar/DashboardResources";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { Bell, AlertTriangle } from "lucide-react";
-import DeprecationAlertItem from "./DeprecationAlertItem";
-import { deprecationUsageRange, type DeprecationAlert } from "./deprecationAlerts";
-import { useDeprecationAlerts } from "./useDeprecationAlerts";
+import { AlertTriangle, ArrowUpRight, Bell } from "lucide-react";
+import DeprecationAlertItem from "@/components/ModelDeprecationAlerts/DeprecationAlertItem";
+import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
+import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
+import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
+import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
 import React, { Fragment } from "react";
 
 export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
@@ -71,18 +74,27 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   return (
     <article aria-label={announcement.title} className="flex flex-col gap-2">
       <p className="text-sm font-medium">{announcement.title}</p>
-      <p className="text-sm leading-snug text-muted-foreground">{announcement.description}</p>
-      <div className="flex flex-wrap items-center gap-2">
+      <p className="text-xs leading-relaxed text-muted-foreground">{announcement.description}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <a
-          className={cn(buttonVariants({ size: "sm" }))}
+          className={cn(
+            buttonVariants({ variant: "link", size: "sm" }),
+            "h-auto gap-1 p-0 text-xs font-normal text-muted-foreground hover:text-foreground",
+          )}
           href={announcement.href}
           target="_blank"
           rel="noopener noreferrer"
         >
           {announcement.linkLabel}
+          <ArrowUpRight className="size-3" aria-hidden />
         </a>
         {read ? null : (
-          <Button variant="link" size="sm" className="px-1!" onClick={() => markAnnouncementRead(announcement.readKey)}>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto px-0! text-xs font-normal text-muted-foreground"
+            onClick={() => markAnnouncementRead(announcement.readKey)}
+          >
             Mark as read
           </Button>
         )}
@@ -91,52 +103,25 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   );
 };
 
-const deprecationReadKey = (scope: string, id: string) => JSON.stringify(["litellm:deprecationAlert", scope, id]);
-
-function DeprecationNotification({
-  alert,
-  scope,
-  range,
-}: {
-  alert: DeprecationAlert;
-  scope: string;
-  range: ReturnType<typeof deprecationUsageRange>;
-}) {
-  const readKey = deprecationReadKey(scope, alert.id);
-  const dismissed = useAnnouncementRead(readKey);
-  return (
-    <DeprecationAlertItem
-      alert={alert}
-      scope={scope}
-      range={range}
-      dismissed={dismissed}
-      onDismiss={() => markAnnouncementRead(readKey)}
-    />
-  );
-}
-
 interface NotificationsBellViewProps {
+  deprecationAlerts?: readonly DeprecationAlert[];
+  deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
-  deprecationAlerts?: readonly DeprecationAlert[];
-  scope?: string;
-  range?: ReturnType<typeof deprecationUsageRange>;
 }
 
 export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   currentVersion,
   latestRelease,
-  deprecationAlerts = [],
-  scope = "",
-  range = deprecationUsageRange(new Date()),
+  deploymentHealthLink,
+  deprecationAlerts,
 }) => {
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
-  const openDeprecations = useUnreadAnnouncementCount(
-    deprecationAlerts.map((alert) => deprecationReadKey(scope, alert.id)),
-  );
+  const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
+  const openDeprecations = openAlerts.length;
   let label = unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications";
   if (openDeprecations > 0) {
     label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
@@ -145,7 +130,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   return (
     <Popover>
       <PopoverTrigger
-        className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
+        render={<Button variant="ghost" size="icon" className="text-muted-foreground" />}
         aria-label={label}
       >
         <span className="relative inline-flex">
@@ -163,49 +148,65 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
       <PopoverContent
         align="end"
         aria-label="Notifications"
-        className="max-h-[min(75vh,640px)] w-[420px] max-w-[calc(100vw-2rem)] overflow-y-auto"
+        className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
       >
-        {deprecationAlerts.length > 0 && (
-          <>
-            <div>
-              <p className="text-sm font-semibold">Model deprecation alerts</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Recently used models that need migration. Dismissing hides the warning in this browser; it does not
-                resolve usage.
-              </p>
-            </div>
-            {deprecationAlerts.map((alert) => (
-              <Fragment key={alert.id}>
+        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">What&apos;s new</PopoverTitle>
+        <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
+          <div className="space-y-4 p-4">
+            {openAlerts.length > 0 && (
+              <>
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold">Model deprecations</p>
+                    <a className="text-xs text-primary hover:underline" href={migrationHref()}>
+                      View all {openDeprecations}
+                    </a>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">Model migrations across your keys and teams.</p>
+                </div>
+                {openAlerts.slice(0, 3).map((alert) => (
+                  <Fragment key={alert.id}>
+                    <Separator />
+                    <DeprecationAlertItem alert={alert} />
+                  </Fragment>
+                ))}
                 <Separator />
-                <DeprecationNotification alert={alert} scope={scope} range={range} />
+                <p className="text-xs font-medium text-muted-foreground">Announcements</p>
+              </>
+            )}
+            {deprecationAlerts && openAlerts.length === 0 && (
+              <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
+                View model deprecations
+              </a>
+            )}
+
+            {announcements.map((announcement, index) => (
+              <Fragment key={announcement.readKey}>
+                {index > 0 ? <Separator /> : null}
+                <AnnouncementItem announcement={announcement} />
               </Fragment>
             ))}
-            <Separator />
-            <p className="text-xs font-medium text-muted-foreground">Announcements</p>
-          </>
-        )}
-        {announcements.map((announcement, index) => (
-          <Fragment key={announcement.readKey}>
-            {index > 0 ? <Separator /> : null}
-            <AnnouncementItem announcement={announcement} />
-          </Fragment>
-        ))}
+          </div>
+          <DashboardResources>{deploymentHealthLink}</DashboardResources>
+        </div>
       </PopoverContent>
     </Popover>
   );
 };
 
-export const NotificationsBell: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
+export const NotificationsBell: React.FC<{ accessToken: string | null; deploymentHealthLink?: React.ReactNode }> = ({
+  accessToken,
+  deploymentHealthLink,
+}) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  const { data: deprecationAlerts, scope, range } = useDeprecationAlerts(accessToken);
+  const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
       deprecationAlerts={deprecationAlerts}
-      scope={scope}
-      range={range}
+      deploymentHealthLink={deploymentHealthLink}
     />
   );
 };

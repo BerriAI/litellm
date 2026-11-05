@@ -790,6 +790,9 @@ from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
 )
+from litellm.proxy.management_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401, RUF100  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _add_team_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2931,9 +2934,15 @@ def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
+_ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
+    {("POST", "/claude-code/plugins/upload"): 11}
+)
+
+
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
     get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -13913,7 +13922,7 @@ async def audio_transcriptions(
             api_base=api_base,
             version=version,
             response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            model_region=user_api_key_dict.allowed_model_region,
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
@@ -17003,9 +17012,6 @@ async def _apply_search_filter_to_models(
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
         if search_lower in team_public_model_name.lower():
             return True
-        # Also match the underlying LiteLLM model name (e.g.
-        # "openrouter/deepseek/deepseek-chat"), so users can find
-        # deployments by typing the provider or the upstream model id.
         litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
         litellm_model: Final = litellm_params.get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
@@ -22403,6 +22409,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(model_deprecation_alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
@@ -22420,6 +22427,7 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     AdmissionControlMiddleware,

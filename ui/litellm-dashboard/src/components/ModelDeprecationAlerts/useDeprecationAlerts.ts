@@ -29,7 +29,18 @@ export function useDeprecationAlerts(accessToken: string | null) {
         signal,
       });
       if (!activity) throw new Error("Model usage is unavailable");
-      return usedDeprecationAlerts(models, activity.results ?? []);
+      const alerts = usedDeprecationAlerts(models, activity.results ?? []);
+      return Promise.all(
+        alerts.map(async (alert) => {
+          const { data: state } = await backgroundFetchClient.GET("/model/deprecations/alerts/state", {
+            params: { query: { model: alert.usageModel, deprecation_date: alert.model.deprecation_date } },
+            signal,
+          });
+          if (!state) throw new Error("Alert acknowledgement state is unavailable");
+          alert.state = state;
+          return alert;
+        }),
+      );
     },
     staleTime: POLL_INTERVAL,
     refetchInterval: POLL_INTERVAL,

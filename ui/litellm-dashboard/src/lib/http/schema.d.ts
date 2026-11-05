@@ -2528,6 +2528,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Plugin
+         * @description Create a skill and its uploaded ZIP atomically. Duplicate names return 409.
+         */
+        post: operations["upload_plugin_claude_code_plugins_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}": {
         parameters: {
             query?: never;
@@ -2599,6 +2619,26 @@ export interface paths {
          *         - plugin_name: The name of the plugin to delete
          */
         delete: operations["delete_plugin_claude_code_plugins__plugin_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Plugin Archive
+         * @description Download an uploaded ZIP under the same visibility policy as its skill.
+         */
+        get: operations["download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -10089,6 +10129,44 @@ export interface paths {
          *     ```
          */
         get: operations["model_deprecations_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/deprecations/alerts/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deprecation Alert State */
+        get: operations["get_deprecation_alert_state_model_deprecations_alerts_state_get"];
+        /** Update Deprecation Alert State */
+        put: operations["update_deprecation_alert_state_model_deprecations_alerts_state_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/deprecations/alerts/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deprecation Usage Tags
+         * @description Distinct tags observed with this model for a page of affected reporting key IDs.
+         */
+        get: operations["get_deprecation_usage_tags_model_deprecations_alerts_tags_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -28082,6 +28160,19 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_upload_plugin_claude_code_plugins_upload_post */
+        Body_upload_plugin_claude_code_plugins_upload_post: {
+            /**
+             * File
+             * @description Skill ZIP containing SKILL.md and supporting files, up to 10 MiB
+             */
+            file: string;
+            /**
+             * Metadata
+             * @description JSON skill metadata without a source URL
+             */
+            metadata: string;
+        };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
@@ -32337,6 +32428,59 @@ export interface components {
             ignore_available: boolean;
             /** Warnings */
             warnings: components["schemas"]["DeploymentWarning"][];
+        };
+        /** DeprecationAlertState */
+        DeprecationAlertState: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /** Last Seen Date */
+            last_seen_date?: string | null;
+            /**
+             * Last Seen Requests
+             * @default 0
+             */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            /** @default open */
+            status: components["schemas"]["DeprecationAlertStatus"];
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        };
+        /**
+         * DeprecationAlertStatus
+         * @enum {string}
+         */
+        DeprecationAlertStatus: "open" | "resolved" | "dismissed";
+        /** DeprecationAlertUpdate */
+        DeprecationAlertUpdate: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /**
+             * Last Seen Date
+             * Format: date
+             */
+            last_seen_date: string;
+            /** Last Seen Requests */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            status: components["schemas"]["DeprecationAlertStatus"];
+        };
+        /** DeprecationTagUsage */
+        DeprecationTagUsage: {
+            /** Api Key */
+            api_key: string;
+            /** Tag */
+            tag: string;
         };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
@@ -49877,6 +50021,57 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** UploadPluginRequest */
+        UploadPluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Plugin category
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
+             */
+            domain?: string | null;
+            /**
+             * Homepage
+             * @description Plugin homepage URL
+             */
+            homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Skill name (kebab-case)
+             */
+            name: string;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version
+             * @default 1.0.0
+             */
+            version: string | null;
+        };
         /** UsageCaptureSettings */
         UsageCaptureSettings: {
             /**
@@ -55820,6 +56015,39 @@ export interface operations {
             };
         };
     };
+    upload_plugin_claude_code_plugins_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_plugin_claude_code_plugins_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_plugin_claude_code_plugins__plugin_name__get: {
         parameters: {
             query?: never;
@@ -55904,6 +56132,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */
@@ -66482,6 +66742,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deprecation_alert_state_model_deprecations_alerts_state_get: {
+        parameters: {
+            query: {
+                model: string;
+                deprecation_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_deprecation_alert_state_model_deprecations_alerts_state_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeprecationAlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deprecation_usage_tags_model_deprecations_alerts_tags_get: {
+        parameters: {
+            query: {
+                model: string;
+                api_keys: string[];
+                start_date: string;
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationTagUsage"][];
                 };
             };
             /** @description Validation Error */

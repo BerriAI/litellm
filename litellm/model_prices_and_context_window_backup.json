@@ -49621,6 +49621,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.04e-06,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/meta-models/Muse-Glimmer-30B",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -49688,6 +49689,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/MiniMaxAI/MiniMax-M3.1-Flash",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -49772,6 +49774,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-06,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/Qwen/Qwen3.7-Max",
         "supports_prompt_caching": true
     },
     "together_ai/arize-ai/qwen-2-1.5b-instruct": {
@@ -49794,6 +49797,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -49886,6 +49890,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.05e-06,
         "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/meta-models/Muse-Spark-Open-816B-A42B",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -70996,7 +71001,8 @@
         "max_output_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 9.7e-07,
-        "source": "https://api.together.ai/v1/models"
+        "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/zai-org/GLM-5.3-Flash"
     },
     "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
         "deprecation_date": "2026-02-06",
@@ -71098,7 +71104,8 @@
         "max_output_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
-        "source": "https://api.together.ai/v1/models"
+        "source": "https://api.together.ai/v1/models",
+        "successor_model": "together_ai/Qwen/Qwen3.5-9B"
     },
     "together_ai/zai-org/GLM-4.5-Air-FP8": {
         "deprecation_date": "2026-04-02",
