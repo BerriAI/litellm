@@ -34,12 +34,14 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_supports_native_structured_output,
     bedrock_supports_tool_search,
     deployment_model_info,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    requests_native_output,
     requests_opt_in_native_output,
     strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
@@ -160,6 +162,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> bool:
         return requests_opt_in_native_output(model, optional_params, deployment_model_info(litellm_params))
+
+    def uses_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        return requests_native_output(optional_params) and bedrock_supports_native_structured_output(
+            model, model_info=deployment_model_info(litellm_params)
+        )
 
     def map_openai_params(
         self,

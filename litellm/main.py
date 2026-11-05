@@ -4500,7 +4500,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             converse_attempt,
             (
                 partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
-                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                if AmazonConverseConfig().uses_native_output(converse_model, converse_params, litellm_params)
                 else None
             ),
             converse_model,
@@ -4556,7 +4556,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             (
                 partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
                 if isinstance(provider_config, AmazonAnthropicClaudeConfig)
-                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+                and provider_config.uses_native_output(model, invoke_params, litellm_params)
                 else None
             ),
             model,
