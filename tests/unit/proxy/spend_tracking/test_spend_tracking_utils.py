@@ -47,7 +47,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
     is_master_key,
-    _redact_logged_api_key,
+    redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
     sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
@@ -4038,7 +4038,7 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
 
 
-# ── _redact_logged_api_key unit tests ──────────────────────────────────────
+# ── redact_logged_api_key unit tests ──────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -4067,16 +4067,16 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 
 
 def test_redact_logged_api_key_none_returns_none():
-    assert _redact_logged_api_key(None) is None
+    assert redact_logged_api_key(None) is None
 
 
 def test_redact_logged_api_key_empty_string_returns_none():
-    assert _redact_logged_api_key("") is None
+    assert redact_logged_api_key("") is None
 
 
 def test_redact_logged_api_key_sk_key_is_hashed():
     raw = "sk-9876secret"
-    result = _redact_logged_api_key(raw)
+    result = redact_logged_api_key(raw)
     assert result == hash_token(raw)
     assert result is not None
     assert not result.startswith("sk-")
@@ -4085,15 +4085,15 @@ def test_redact_logged_api_key_sk_key_is_hashed():
 
 def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
     raw = "sk-9876secret"
-    result_plain = _redact_logged_api_key(raw)
-    result_bearer = _redact_logged_api_key(f"Bearer {raw}")
+    result_plain = redact_logged_api_key(raw)
+    result_bearer = redact_logged_api_key(f"Bearer {raw}")
     assert result_bearer == result_plain
 
 
 def test_redact_logged_api_key_bearer_case_insensitive():
     raw = "sk-9876secret"
-    result_lower = _redact_logged_api_key(f"bearer {raw}")
-    result_upper = _redact_logged_api_key(f"BEARER {raw}")
+    result_lower = redact_logged_api_key(f"bearer {raw}")
+    result_upper = redact_logged_api_key(f"BEARER {raw}")
     expected = hash_token(raw)
     assert result_lower == expected
     assert result_upper == expected
@@ -4101,7 +4101,7 @@ def test_redact_logged_api_key_bearer_case_insensitive():
 
 def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
     raw = "anthropic-raw-key-xyz"
-    result = _redact_logged_api_key(raw)
+    result = redact_logged_api_key(raw)
     assert result is not None
     assert result != raw
     assert len(result) == 64
@@ -4111,7 +4111,7 @@ def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
 def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(already_hashed, already_redacted=True)
+    result = redact_logged_api_key(already_hashed, already_redacted=True)
     assert result == already_hashed
     assert hash_token(already_hashed) != result  # no double-hash
 
@@ -4119,7 +4119,7 @@ def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
 def test_redact_logged_api_key_sha256_without_flag_is_hashed():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(already_hashed)
+    result = redact_logged_api_key(already_hashed)
     assert result is not None
     assert result != already_hashed
     assert len(result) == 64
@@ -4129,7 +4129,7 @@ def test_redact_logged_api_key_sha256_without_flag_is_hashed():
 def test_redact_logged_api_key_long_opaque_token_is_hashed():
     raw = "x1" * 450
     assert len(raw) == 900
-    result = _redact_logged_api_key(raw)
+    result = redact_logged_api_key(raw)
     assert result is not None
     assert result != raw
     assert raw not in result
@@ -4139,27 +4139,27 @@ def test_redact_logged_api_key_long_opaque_token_is_hashed():
 
 def test_redact_logged_api_key_hashed_jwt_passes_through():
     jwt_hash = "hashed-jwt-" + "a" * 64
-    result = _redact_logged_api_key(jwt_hash, already_redacted=True)
+    result = redact_logged_api_key(jwt_hash, already_redacted=True)
     assert result == jwt_hash
 
 
 def test_redact_logged_api_key_hashed_jwt_shape_without_provenance_is_hashed():
     lookalike = "hashed-jwt-" + "a" * 64
-    result = _redact_logged_api_key(lookalike)
+    result = redact_logged_api_key(lookalike)
     assert result == hash_token(lookalike)
     assert result != lookalike
 
 
 def test_redact_logged_api_key_hashed_jwt_trailing_newline_is_hashed():
     trailing = "hashed-jwt-" + "a" * 64 + "\n"
-    result = _redact_logged_api_key(trailing, already_redacted=True)
+    result = redact_logged_api_key(trailing, already_redacted=True)
     assert result == hash_token(trailing)
     assert result != trailing
 
 
 def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
     short_jwt = "hashed-jwt-tooshort"
-    result = _redact_logged_api_key(short_jwt)
+    result = redact_logged_api_key(short_jwt)
     assert result is not None
     assert result != short_jwt
     assert len(result) == 64
@@ -4169,14 +4169,14 @@ def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
 def test_redact_logged_api_key_master_key_alias_passes_through():
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 
-    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS, already_redacted=True)
+    result = redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS, already_redacted=True)
     assert result == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 def test_redact_logged_api_key_master_key_alias_without_provenance_is_hashed():
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 
-    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS)
+    result = redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS)
     assert result == hash_token(LITELLM_PROXY_MASTER_KEY_ALIAS)
     assert result != LITELLM_PROXY_MASTER_KEY_ALIAS
 
@@ -4282,9 +4282,9 @@ def test_get_logging_payload_reads_used_client_oauth_token_from_the_bucket_the_p
 
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
-    assert _redact_logged_api_key("bearer ") is None
-    assert _redact_logged_api_key("Bearer ") is None
-    assert _redact_logged_api_key("BEARER ") is None
+    assert redact_logged_api_key("bearer ") is None
+    assert redact_logged_api_key("Bearer ") is None
+    assert redact_logged_api_key("BEARER ") is None
 
 
 # ── _get_spend_logs_metadata key-hash invariant tests ─────────────────────
@@ -4416,6 +4416,81 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["prompt_tokens"] == 30
     assert payload["completion_tokens"] == 1
     assert payload["total_tokens"] == 31
+
+
+def _fallback_after_a_failed_follow_up(
+    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
+):
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ModelResponse, Usage
+
+    now: Final = datetime.datetime.now(timezone.utc)
+    logger: Final = Logging(
+        model="fallback-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="caller",
+        function_id="function",
+    )
+    logger.update_environment_variables(
+        model="fallback-model",
+        custom_llm_provider="openai",
+        litellm_params={"metadata": {"user_api_key": "sk-test"}},
+        optional_params=dict(request_params),
+    )
+    fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
+    set_hidden_param(fallback, "response_cost", 0.1)
+    logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
+    logger.carry_failed_attempt_usage()
+    logger.model_call_details["cache_hit"] = cache_hit
+    prepared: Final = logger.prepare_response_cost(fallback, now)
+    assert prepared is not None
+    return logger, fallback, prepared, now
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, own_cost: float):
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(cache_hit)
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
+@pytest.mark.parametrize(("cache_hit", "own_cost"), [(False, 0.1), (True, 0.0)], ids=["fresh", "cached"])
+def test_request_params_cannot_change_what_a_failed_follow_up_bills(cache_hit: bool, own_cost: float):
+    forged_attempt: Final = [{"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000}, -100.0]
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(
+        cache_hit,
+        {
+            "stash_billed_by_continuation": True,
+            "failed_attempts_owed_on_success": [forged_attempt],
+            "failed_attempts_billed_on_success": [forged_attempt],
+        },
+    )
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (8, 3, 11)
+
+
+def test_cached_fallback_cost_breakdown_adds_up_to_the_billed_failed_follow_up():
+    _, _, prepared, _ = _fallback_after_a_failed_follow_up(cache_hit=True)
+
+    breakdown: Final = prepared.payload["cost_breakdown"]
+
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(prepared.payload["response_cost"]) == pytest.approx(0.4)
+    assert breakdown["additional_costs"]["failed_attempts_cost"] == pytest.approx(0.4)
 
 
 def test_get_logging_payload_failure_without_recovered_usage_is_zero():
@@ -4570,7 +4645,7 @@ class TestSpendLogKeyRedaction:
 
     def test_bearer_prefixed_sk_key_is_hashed(self):
         raw = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result is not None
         assert not result.startswith("Bearer")
         assert not result.startswith("sk-")
@@ -4578,14 +4653,14 @@ class TestSpendLogKeyRedaction:
 
     def test_bare_sk_key_is_hashed(self):
         raw = "sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result is not None
         assert not result.startswith("sk-")
         assert len(result) == 64
 
     def test_bearer_lowercase_is_handled(self):
         raw = "bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result is not None
         assert not result.startswith("bearer")
         assert not result.startswith("sk-")
@@ -4593,11 +4668,11 @@ class TestSpendLogKeyRedaction:
 
     def test_already_hashed_key_unchanged(self):
         hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
-        assert _redact_logged_api_key(hashed, already_redacted=True) == hashed
+        assert redact_logged_api_key(hashed, already_redacted=True) == hashed
 
     def test_bearer_prefixed_non_sk_key_is_hashed(self):
         raw = "Bearer some-other-token-format"
-        result = _redact_logged_api_key(raw)
+        result = redact_logged_api_key(raw)
         assert result == hash_token("some-other-token-format")
         assert result is not None
         assert not result.startswith("Bearer")
@@ -4605,7 +4680,7 @@ class TestSpendLogKeyRedaction:
     def test_bearer_and_bare_produce_same_hash(self):
         bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
         bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        assert _redact_logged_api_key(bare) == _redact_logged_api_key(bearer)
+        assert redact_logged_api_key(bare) == redact_logged_api_key(bearer)
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -4702,7 +4777,7 @@ def test_get_logging_payload_keeps_internal_service_account_key_readable(service
 
 
 def test_redact_logged_api_key_service_account_name_without_provenance_is_hashed():
-    result = _redact_logged_api_key(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
+    result = redact_logged_api_key(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
     assert result == hash_token(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
 
 
@@ -5053,6 +5128,105 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     keys off that rather than the per-call id."""
     expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
     assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
+
+
+@pytest.mark.parametrize("status_call_type", ["avideo_status", "video_status"])
+@pytest.mark.parametrize(
+    ("response_cost", "status_id"),
+    [
+        (0.42, "video_abc_video_cost"),
+        (0.0, "video_abc"),
+        (None, "video_abc"),
+        (float("nan"), "video_abc"),
+    ],
+    ids=["charged", "free", "unpriced", "non_finite"],
+)
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+    """A custom provider charges the video on the poll that sees it completed, so that poll needs
+    a row apart from the create row, which answers with the same video id and would drop it on the
+    skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
+    create row and adds no row of its own."""
+    from litellm.types.videos.main import VideoObject
+
+    video = VideoObject(id="video_abc", object="video", status="completed")
+    create, status = (
+        get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "litellm_call_id": call_id,
+                "response_cost": cost,
+                "polled_video_status": "completed",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=video,
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+    )
+
+    assert create["request_id"] == "video_abc"
+    assert status["request_id"] == status_id
+
+
+@pytest.mark.parametrize(("response_cost", "pays_the_job"), [(0.01, False), (0.43, True)])
+def test_a_video_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(response_cost, pays_the_job):
+    """A guardrail charges every poll, so a poll paying only that must neither land on the create row
+    nor take the row the video's own charge goes on, either of which the skip_duplicates insert drops."""
+    kwargs = {
+        "litellm_call_id": "poll-call-id",
+        "response_cost": response_cost,
+        "polled_video_status": "completed",
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
+        },
+    }
+
+    assert get_spend_logs_id("avideo_status", {"id": "video_abc", "status": "completed"}, kwargs) == (
+        "video_abc_video_cost" if pays_the_job else "poll-call-id_guardrail_cost"
+    )
+
+
+@pytest.mark.parametrize("status", ["failed", "completed"])
+def test_a_finished_batch_retrieve_paying_only_its_guardrail_charges_under_the_batch_row(status):
+    """The retrieve that settles a batch charges its whole cost once, guardrails included, so a batch whose own
+    cost is $0 must still land on the row that makes its repeat retrieves free."""
+    from litellm.types.utils import LiteLLMBatch
+
+    kwargs = {
+        "litellm_call_id": "poll-call-id",
+        "response_cost": 0.01,
+        "standard_logging_object": {
+            "response_cost": 0.01,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
+        },
+    }
+    polled_batch = LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status=status,
+        output_file_id="file-out",
+    )
+
+    assert get_spend_logs_id("aretrieve_batch", polled_batch.model_dump(), kwargs) == "batch_abc_batch_cost"
+
+
+def test_a_video_polled_with_or_without_its_base64_padding_charges_one_row():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    padded = encode_video_id_with_provider("job-1", "custom_video", "deployment-a")
+    assert padded.endswith("=")
+
+    def row_id(polled_id: str) -> str | None:
+        kwargs = {"response_cost": 0.42, "polled_video_status": "completed", "litellm_params": {"video_id": polled_id}}
+        return get_spend_logs_id("avideo_status", {"id": "job-1", "status": "completed"}, kwargs)
+
+    assert row_id(padded.rstrip("=")) == row_id(padded) == f"{padded}_video_cost"
 
 
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
@@ -5715,7 +5889,7 @@ def test_get_logging_payload_empty_key_slp_none_is_empty_string_not_none_literal
 
     assert payload["api_key"] == "", (
         f"Expected empty string but got {payload['api_key']!r}; "
-        "dropping _redact_logged_api_key's 'or \"\"' guard would yield 'None' here"
+        "dropping redact_logged_api_key's 'or \"\"' guard would yield 'None' here"
     )
 
 
@@ -5766,7 +5940,7 @@ def test_get_logging_payload_stores_user_email_in_spend_log_metadata(user_email,
 
 def test_redact_logged_api_key_partial_sha256_is_hashed():
     partial_hex = "a" * 63
-    result = _redact_logged_api_key(partial_hex)
+    result = redact_logged_api_key(partial_hex)
     assert result is not None
     assert result != partial_hex
     assert len(result) == 64
@@ -5776,7 +5950,7 @@ def test_redact_logged_api_key_partial_sha256_is_hashed():
 def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(f"Bearer {already_hashed}", already_redacted=True)
+    result = redact_logged_api_key(f"Bearer {already_hashed}", already_redacted=True)
     assert result == already_hashed
     assert hash_token(already_hashed) != result
 
@@ -5784,7 +5958,7 @@ def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
 def test_redact_logged_api_key_bearer_sha256_without_flag_is_hashed():
     already_hashed = hash_token("sk-some-key")
     assert len(already_hashed) == 64
-    result = _redact_logged_api_key(f"Bearer {already_hashed}")
+    result = redact_logged_api_key(f"Bearer {already_hashed}")
     assert result is not None
     assert result != already_hashed
     assert result == hash_token(already_hashed)
@@ -6396,12 +6570,12 @@ def test_get_logging_payload_never_lands_a_raw_cli_session_token(call_type: str)
 
 
 def test_redact_logged_api_key_cli_session_alias_needs_alias_provenance():
-    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True, key_alias=_CLI_SESSION_ALIAS) == (
+    assert redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True, key_alias=_CLI_SESSION_ALIAS) == (
         _CLI_SESSION_ALIAS
     )
-    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True) == hash_token(_CLI_SESSION_ALIAS)
-    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, key_alias=_CLI_SESSION_ALIAS) == hash_token(_CLI_SESSION_ALIAS)
-    assert _redact_logged_api_key("alice", already_redacted=True, key_alias="alice") == hash_token("alice")
+    assert redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True) == hash_token(_CLI_SESSION_ALIAS)
+    assert redact_logged_api_key(_CLI_SESSION_ALIAS, key_alias=_CLI_SESSION_ALIAS) == hash_token(_CLI_SESSION_ALIAS)
+    assert redact_logged_api_key("alice", already_redacted=True, key_alias="alice") == hash_token("alice")
 
 
 def test_azure_spillover_stamped_from_response_headers():
@@ -7620,13 +7794,11 @@ def test_optional_mcp_metadata_does_not_change_legacy_spend_payload(tool_metadat
     assert actual == expected
 
 
-@pytest.mark.parametrize("capture_enabled", [False, True])
 @pytest.mark.parametrize("completion_start", [None, "absent", "reported"])
-def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool, completion_start: str | None) -> None:
+def test_spend_payload_preserves_unknown_completion_start(completion_start: str | None) -> None:
     start: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
     end: Final = start + datetime.timedelta(seconds=2)
     reported: Final = start + datetime.timedelta(seconds=1)
-    observations: Final[list[object]] = []
     kwargs: Final = {
         "call_type": "acompletion",
         "litellm_call_id": "timestamp-call",
@@ -7638,9 +7810,49 @@ def test_spend_payload_preserves_unknown_completion_start(capture_enabled: bool,
         {"id": "timestamp-response"},
         start,
         end,
-        capture_usage=(lambda row, usage: observations.append(row)) if capture_enabled else None,
     )
     assert payload["completionStartTime"] == (
         end if completion_start == "absent" else reported if completion_start else None
     )
-    assert observations == ([payload] if capture_enabled else [])
+
+
+def test_spend_log_metadata_retention_drops_accounting_inputs_it_was_not_told_to_keep() -> None:
+    metadata: Final = {
+        "status": "success",
+        "accounting_savings": {
+            "compression": 0.4,
+            "prompt_caching": 0.1,
+            "gateway_injected_caching": 0.2,
+            "autorouter": 0.3,
+        },
+        "accounting_windows": [
+            {"entity_type": "key", "entity_id": "key", "window_duration": "1d", "window_start": "2026-11-02T00:00:00"}
+        ],
+        "accounting_model_access_groups": ["group"],
+        "user_api_key_project_id": "project",
+        "usage_object": {"prompt_tokens_details": {"cached_tokens": 2}},
+        "compression_savings": {"tokens_saved": 3},
+        "guardrail_information": [{"guardrail_id": "guard", "guardrail_usage": {"text": 2}}],
+        "internal_call_origin": "classifier",
+        "billed_retry_attempt": True,
+        "user_api_key_alias": "discard",
+    }
+    row: Final = {
+        "request_id": "retained-accounting",
+        "spend": 0.5,
+        "startTime": "2026-11-02T12:00:00",
+        "endTime": "2026-11-02T12:00:01",
+        "model": "model",
+        "model_group": "group",
+        "api_key": "key",
+        "custom_llm_provider": "openai",
+        "user": "user",
+        "team_id": "team",
+        "agent_id": "agent",
+        "request_tags": '["tag"]',
+        "metadata": json.dumps(metadata),
+    }
+    stored: Final = spend_log_row_with_retained_metadata(row, SpendLogsMetadataFields(include=("usage_object",)))
+    parsed: Final = json.loads(str(stored["metadata"]))
+    assert "user_api_key_alias" not in parsed
+    assert parsed == {"usage_object": metadata["usage_object"], "status": metadata["status"]}

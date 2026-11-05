@@ -399,6 +399,74 @@ def split_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, objec
     return projection.content, projection.media
 
 
+_TPM_EMBEDDING_FILE_MIME_PREFIXES: Final = ("application/pdf", "video/")
+
+
+def _tpm_embedding_file(data_uri: str) -> tuple[Mapping[str, object], ...]:
+    from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
+
+    mime: Final = (parse_mime_type(data_uri[:256]) or "").strip().lower()
+    if not mime.startswith(_TPM_EMBEDDING_FILE_MIME_PREFIXES):
+        return ()
+    return ({"type": "file", "file": {"file_data": data_uri, "format": mime}},)
+
+
+_BASE64_PAYLOAD: Final = re.compile(r"[A-Za-z0-9+/]*={0,2}")
+
+
+def _is_base64_data_uri(value: str) -> bool:
+    header_end: Final = value.find(",", 0, 256)
+    if header_end < 0 or not value[:header_end].endswith(";base64"):
+        return False
+    payload_start: Final = header_end + 1
+    if (len(value) - payload_start) % 4 or _BASE64_PAYLOAD.fullmatch(value, payload_start) is None:
+        return False
+    last_quantum: Final = value[max(payload_start, len(value) - 4) :]
+    return base64.b64encode(base64.b64decode(last_quantum)).decode("ascii") == last_quantum
+
+
+def _tpm_embedding_file_block(part: Mapping[str, object]) -> _TPMMediaProjection:
+    projection: Final = _tpm_file_media(part)
+    fields: Final = as_str_mapping(part.get("file"))
+    data: Final = fields.get("file_data") if fields is not None else None
+    if projection.media or fields is None or not isinstance(data, str) or not _is_base64_data_uri(data):
+        return projection
+    media: Final = _tpm_embedding_file(data)
+    return _TPMMediaProjection({**part, "file": _tpm_blank_fields(fields, ("file_data",))} if media else part, media)
+
+
+def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
+    part: Final = as_str_mapping(value)
+    if part is not None and part.get("type") == "file":
+        return _tpm_embedding_file_block(part)
+    if not isinstance(value, str) or not value.startswith("data:"):
+        return _tpm_media_leaf(value)
+    if not _is_base64_data_uri(value):
+        return _TPMMediaProjection(value)
+    media: Final = _tpm_file_media({"file_data": value}).media or _tpm_embedding_file(value)
+    return _TPMMediaProjection("" if media else value, media)
+
+
+def _is_json_array(value: object) -> bool:
+    return isinstance(value, (list, tuple))
+
+
+def _tpm_embedding_item(value: object) -> _TPMMediaProjection:
+    return _tpm_media_list(value, _tpm_embedding_leaf) if _is_json_array(value) else _tpm_embedding_leaf(value)
+
+
+def split_embedding_media_for_tpm(value: object) -> tuple[object, tuple[Mapping[str, object], ...]]:
+    projection: Final = (
+        _tpm_media_list(value, _tpm_embedding_item) if _is_json_array(value) else _tpm_embedding_leaf(value)
+    )
+    return projection.content, projection.media
+
+
+def embedding_input_is_all_media(value: object) -> bool:
+    items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON input array
+    return all(_tpm_embedding_leaf(item).media for item in items)
+
+
 def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     """Depth-bounded frontier walk over nested content lists, iterative because the repo bans
     recursion; an Anthropic tool_result nests its image parts exactly one level down."""
