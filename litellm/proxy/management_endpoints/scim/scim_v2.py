@@ -6,7 +6,6 @@ This is an enterprise feature and requires a premium license.
 
 import re
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain, groupby
@@ -90,6 +89,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterSyncOutcome,
     RosterTarget,
     TeamGone,
+    new_team_request_with_defaults,
     sync_team_roster,
     team_tx_db,
     user_tx_db,
@@ -2945,27 +2945,8 @@ def _new_team_request_with_defaults(
 ) -> NewTeamRequest:
     """Build the SCIM group's team request, applying litellm.default_team_params
     (including models) the same way SSO auto-created teams do."""
-    default_params: Final = litellm.default_team_params
-    defaults: Final[Mapping[str, object]] = (
-        deepcopy(default_params)
-        if isinstance(default_params, dict)
-        else default_params.model_dump(exclude_none=True)
-        if default_params is not None
-        else {}
-    )
-    default_metadata: Final = defaults.get("metadata")
-    metadata: Final = {
-        **(default_metadata if isinstance(default_metadata, dict) else {}),
-        SCIM_MANAGED_TEAM_METADATA_KEY: True,
-    }
-    return NewTeamRequest.model_validate(
-        {
-            **defaults,
-            "team_id": team_id,
-            "team_alias": team_alias,
-            "members_with_roles": members_with_roles,
-            "metadata": metadata,
-        }
+    return new_team_request_with_defaults(
+        team_id, team_alias, members_with_roles, metadata={SCIM_MANAGED_TEAM_METADATA_KEY: True}
     )
 
 

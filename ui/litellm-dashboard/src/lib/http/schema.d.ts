@@ -31023,6 +31023,8 @@ export interface components {
             infer_model_from_keys?: boolean | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
+            /** @description Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis. */
+            ldap_sync?: components["schemas"]["LDAPSyncSettings"] | null;
             /**
              * Master Key
              * @description require a key for all calls to proxy
@@ -35122,6 +35124,91 @@ export interface components {
             port: number | null;
             /** Service Host */
             service_host: string;
+        };
+        /** LDAPSyncSettings */
+        LDAPSyncSettings: {
+            /** Bind Dn */
+            bind_dn?: string | null;
+            /** Bind Password */
+            bind_password?: string | null;
+            /** Ca Cert Path */
+            ca_cert_path?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Group Filter
+             * @default
+             */
+            group_filter: string;
+            /**
+             * Group Id Attribute
+             * @default cn
+             */
+            group_id_attribute: string;
+            /**
+             * Group Name Attribute
+             * @default cn
+             */
+            group_name_attribute: string;
+            /**
+             * Group Search Base
+             * @default
+             */
+            group_search_base: string;
+            /**
+             * Interval Minutes
+             * @default 30
+             */
+            interval_minutes: number;
+            /**
+             * Litellm Match Field
+             * @default user_email
+             * @enum {string}
+             */
+            litellm_match_field: "user_email" | "user_id" | "sso_user_id";
+            /**
+             * Member Attribute
+             * @default member
+             */
+            member_attribute: string;
+            /**
+             * Member Lookup Attribute
+             * @default uid
+             */
+            member_lookup_attribute: string;
+            /**
+             * Server Url
+             * @default
+             */
+            server_url: string;
+            /**
+             * Start Tls
+             * @default false
+             */
+            start_tls: boolean;
+            /**
+             * Timeout Seconds
+             * @default 30
+             */
+            timeout_seconds: number;
+            /**
+             * User Match Attribute
+             * @default mail
+             */
+            user_match_attribute: string;
+            /**
+             * User Search Base
+             * @default
+             */
+            user_search_base: string;
         };
         /** LLMV2Calibration */
         LLMV2Calibration: {

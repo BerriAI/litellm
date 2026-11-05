@@ -28,6 +28,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
     sync_team_roster,
+    new_team_request_with_defaults,
 )
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
@@ -75,6 +76,10 @@ def _clause_matches(row: Mapping[str, object], field: str, clause: object) -> bo
         return row.get(field) == clause
     operator = _FILTER.validate_python(clause)
     if "in" in operator:
+        if operator.get("mode") == "insensitive":
+            return str(row.get(field)).casefold() in {
+                value.casefold() for value in _STRINGS.validate_python(operator["in"])
+            }
         return row.get(field) in set(_STRINGS.validate_python(operator["in"]))
     if "has" in operator:
         return operator["has"] in _STRINGS.validate_python(row.get(field) or [])
@@ -123,7 +128,14 @@ class _UserTable:
         self.ledger = ledger
         self.rows: dict[str, _UserRow] = {u.user_id: u for u in users}
 
-    async def find_many(self, where: Mapping[str, object]) -> list[_UserRow]:
+    async def find_many(
+        self,
+        where: Mapping[str, object],
+        *,
+        take: int | None = None,
+        skip: int | None = None,
+        order: Mapping[str, str] | None = None,
+    ) -> list[_UserRow]:
         self.ledger.statements.append("usertable.find_many")
         return [u for u in self.rows.values() if _matches(u.model_dump(), where)]
 
@@ -150,13 +162,22 @@ class _TeamTable:
         self.ledger.statements.append("teamtable.find_unique")
         return self.rows.get(where["team_id"])
 
+    async def count(self) -> int:
+        return len(self.rows)
+
+    async def create(self, data: Mapping[str, object], include: object = None) -> LiteLLM_TeamTable:
+        self.ledger.statements.append("teamtable.create")
+        team: Final = LiteLLM_TeamTable.model_validate(data)
+        self.rows[team.team_id] = team
+        return team
+
     async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> LiteLLM_TeamTable | None:
         self.ledger.statements.append("teamtable.update")
         if self.deleted_before_update:
             return None
         roster = _MEMBERS.validate_json(data["members_with_roles"])
         updated = self.rows[where["team_id"]].model_copy(
-            update={"members_with_roles": roster, "updated_at": datetime.now(UTC)}
+            update={"members_with_roles": roster, "updated_at": datetime(2026, 1, 1, tzinfo=UTC)}
         )
         self.rows[where["team_id"]] = updated
         return updated
@@ -184,6 +205,15 @@ class _Db:
         self.litellm_budgettable = _Rows("budgettable", ledger, budgets)
         self.litellm_jwtkeymapping = _Rows("jwtkeymapping", ledger, jwt_mappings)
 
+    @asynccontextmanager
+    async def tx(self):
+        snapshot: Final = copy.deepcopy(self)
+        try:
+            yield _Tx(self, self.litellm_teamtable.ledger)
+        except BaseException:
+            self.__dict__.update(snapshot.__dict__)
+            raise
+
 
 class _Tx:
     def __init__(self, db: _Db, ledger: _Ledger) -> None:
@@ -197,6 +227,11 @@ class _Tx:
 
     async def query_raw(self, sql: str, *args: object) -> list[dict[str, object]]:
         self.ledger.statements.append("query_raw")
+        if "LiteLLM_AccessGroupTable" in sql or "SELECT access_group_ids" in sql:
+            return []
+        if "SELECT members_with_roles" in sql:
+            team: Final = self.litellm_teamtable.rows.get(str(args[0]))
+            return [{"members_with_roles": [member.model_dump() for member in team.members_with_roles]}] if team else []
         if "pg_advisory_xact_lock" in sql:
             assert args == (TEAM,)
             return [{"locked": False}]
@@ -238,6 +273,13 @@ class _FakePrisma:
         )
         self._fail_commit = fail_commit
         self.transactions = 0
+
+    async def get_data(self, *, team_id: str, table_name: str, query_type: str) -> LiteLLM_TeamTable | None:
+        assert (table_name, query_type) == ("team", "find_unique")
+        return self.writer_db.litellm_teamtable.rows.get(team_id)
+
+    def jsonify_team_object(self, db_data: Mapping[str, object]) -> Mapping[str, object]:
+        return db_data
 
     @asynccontextmanager
     async def tx(self, *, timeout: object = None):
@@ -557,15 +599,13 @@ class _Pipeline:
         await self._send(tuple(self._messages))
 
 
-class _SlowPublishRedisClient:
-    def __init__(self, round_trip_seconds: float = 0.001) -> None:
+class _RecordingPublishRedisClient:
+    def __init__(self) -> None:
         self.published: list[str] = []
         self.round_trips = 0
-        self._round_trip_seconds = round_trip_seconds
 
     async def _send(self, messages: Sequence[str]) -> None:
         self.round_trips += 1
-        await asyncio.sleep(self._round_trip_seconds)
         self.published.extend(messages)
 
     async def publish(self, channel: str, message: str) -> int:
@@ -579,10 +619,10 @@ class _SlowPublishRedisClient:
 class _PubSubRedisCache:
     namespace = None
 
-    def __init__(self, client: "_SlowPublishRedisClient | _WedgedPublishRedisClient") -> None:
+    def __init__(self, client: "_RecordingPublishRedisClient | _WedgedPublishRedisClient") -> None:
         self._client = client
 
-    def init_pubsub_client(self) -> "_SlowPublishRedisClient | _WedgedPublishRedisClient":
+    def init_pubsub_client(self) -> "_RecordingPublishRedisClient | _WedgedPublishRedisClient":
         return self._client
 
 
@@ -590,6 +630,10 @@ async def _until_reached_or_done(signal: asyncio.Event, sync: "asyncio.Task[obje
     reached: Final = asyncio.create_task(signal.wait())
     _ = await asyncio.wait((reached, sync), return_when=asyncio.FIRST_COMPLETED)
     _ = reached.cancel()
+    _ = await asyncio.gather(reached, return_exceptions=True)
+    if not signal.is_set():
+        await sync
+        pytest.fail("Operation ended before reaching the expected boundary")
 
 
 async def _drain_publishes() -> None:
@@ -602,7 +646,7 @@ async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_mem
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _SlowPublishRedisClient()
+    client = _RecordingPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(500)]
     prisma = _FakePrisma(
         users=[_user(u, TEAM) for u in removed],
@@ -626,12 +670,14 @@ async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_mem
 
 class _WedgedPublishRedisClient:
     def __init__(self) -> None:
+        self.published: list[str] = []  # mutable-ok: capture messages accepted by fake Redis
         self.release = asyncio.Event()
         self.reached = asyncio.Event()
 
     async def _send(self, messages: Sequence[str]) -> None:
         self.reached.set()
         await self.release.wait()
+        self.published.extend(messages)
 
     async def publish(self, channel: str, message: str) -> int:
         await self._send((message,))
@@ -647,7 +693,7 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", None)
     client = _WedgedPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(300)]
     token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
@@ -726,7 +772,7 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", None)
     client = _WedgedPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(300)]
     token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
@@ -787,7 +833,7 @@ class _SlowToAcknowledgeRedisCache(_AuthRedisCache):
 async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_eviction_waits_on_redis(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", None)
     token = hashlib.sha256(b"key-bob").hexdigest()
     redis = _SlowToAcknowledgeRedisCache({token: {"token": token}})
     cache = UserApiKeyCache()
@@ -838,8 +884,8 @@ async def test_removing_hundreds_of_members_through_a_slow_redis_broadcasts_ever
 ):
     monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.05)
-    client = _SlowPublishRedisClient(round_trip_seconds=0.05)
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0)
+    client = _WedgedPublishRedisClient()
     removed = [f"u{index:03d}" for index in range(600)]
     prisma, evicted = _removal_of(removed)
 
@@ -848,6 +894,9 @@ async def test_removing_hundreds_of_members_through_a_slow_redis_broadcasts_ever
         return_value=_PubSubRedisCache(client),
     ):
         outcome = await _sync(prisma, RosterTarget(member_ids=frozenset()))
+        await client.reached.wait()
+        assert client.published == []
+        client.release.set()
         await _drain_publishes()
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
@@ -866,7 +915,7 @@ async def test_the_redis_round_trips_do_not_grow_with_the_member_count(monkeypat
         redis = _AuthRedisCache({})
         cache = UserApiKeyCache()
         cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
-        client = _SlowPublishRedisClient()
+        client = _RecordingPublishRedisClient()
 
         with patch(
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -941,3 +990,69 @@ async def test_the_statement_count_does_not_grow_with_the_member_count(
         assert _tokens(prisma) == ({f"key-{u}" for u in old} if keeps_old else set())
         counts[size] = len(prisma.ledger.statements)
     assert counts[500] == counts[5]
+
+
+class _PausedDeleteRedisCache(_AuthRedisCache):
+    def __init__(self, entries: dict[str, object]) -> None:
+        super().__init__(entries)
+        self.reached = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        self.reached.set()
+        await self.release.wait()
+        await super().delete_cache_keys(keys)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_twice", [False, True])
+async def test_cancellation_after_commit_finishes_revoking_cached_team_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_twice: bool,
+):
+    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", None)
+    token: Final = hashlib.sha256(b"key-bob").hexdigest()
+    redis: Final = _PausedDeleteRedisCache({token: {"token": token}})
+    cache: Final = UserApiKeyCache()
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # dict-backed Redis boundary
+    cache.in_memory_cache_for(token).set_cache(key=token, value={"token": token})
+    prisma: Final = _FakePrisma(
+        users=[_user("bob", TEAM)],
+        teams=[_team(_member("bob"))],
+        memberships=[(TEAM, "bob")],
+        tokens=[{"token": token, "user_id": "bob", "team_id": TEAM}],
+    )
+    sync: Final = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
+    await _until_reached_or_done(redis.reached, sync)
+    assert _tokens(prisma) == set()
+    assert _memberships(prisma) == []
+    assert token in redis.entries
+    _ = sync.cancel()
+    if cancel_twice:
+        asyncio.get_running_loop().call_soon(sync.cancel)
+    asyncio.get_running_loop().call_soon(redis.release.set)
+    with pytest.raises(asyncio.CancelledError):
+        await sync
+    assert token not in redis.entries
+    assert await cache.async_get_cache(key=token) is None
+
+
+def test_team_defaults_preserve_fields_outside_sso_model_without_mutating_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import litellm
+
+    defaults: Final = {
+        "models": ["allowed-model"],
+        "max_budget": 12.0,
+        "default_team_member_models": ["member-model"],
+        "metadata": {"environment": "production"},
+    }
+    original: Final = copy.deepcopy(defaults)
+    monkeypatch.setattr(litellm, "default_team_params", defaults)
+    request: Final = new_team_request_with_defaults("new-team", "New team", (), {"managed_by": "scim"})
+    assert request.models == ["allowed-model"]
+    assert request.max_budget == 12.0
+    assert request.default_team_member_models == ["member-model"]
+    assert request.metadata == {"environment": "production", "managed_by": "scim"}
+    assert defaults == original

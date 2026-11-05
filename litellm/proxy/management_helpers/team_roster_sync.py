@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -9,8 +10,9 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
+import litellm
 from litellm._uuid import uuid
-from litellm.proxy._types import LiteLLM_TeamTable, Member, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_TeamTable, Member, NewTeamRequest, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     await_inflight_team_membership_load,
     delete_cache_team_object,
@@ -41,6 +43,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -50,6 +53,43 @@ if TYPE_CHECKING:
 
 ROSTER_TX_TIMEOUT: Final = timedelta(seconds=60)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_TEAM_DEFAULTS: Final[TypeAdapter[DefaultTeamSSOParams | Mapping[str, object] | None]] = TypeAdapter(
+    DefaultTeamSSOParams | dict[str, object] | None
+)
+
+
+def new_team_request_with_defaults(
+    team_id: str,
+    team_alias: str | None,
+    members_with_roles: Sequence[Member],
+    metadata: Mapping[str, object] | None = None,
+) -> NewTeamRequest:
+    configured: Final = litellm.default_team_params
+    default_params: Final = (
+        _JSON_OBJECT.validate_python(configured)
+        if isinstance(configured, dict)
+        else _TEAM_DEFAULTS.validate_python(configured)
+    )
+    defaults: Final = _JSON_OBJECT.validate_python(
+        default_params.model_dump(exclude_none=True)
+        if isinstance(default_params, DefaultTeamSSOParams)
+        else deepcopy(default_params)
+        if default_params is not None
+        else {}
+    )
+    default_metadata: Final = defaults.get("metadata")
+    return NewTeamRequest.model_validate(
+        {
+            **defaults,
+            "team_id": team_id,
+            "team_alias": team_alias,
+            "members_with_roles": members_with_roles,
+            "metadata": {
+                **(_JSON_OBJECT.validate_python(default_metadata) if isinstance(default_metadata, dict) else {}),
+                **(metadata or {}),
+            },
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,7 +389,22 @@ async def sync_team_roster(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=None,
         )
-    await _settle_caches(synced, sorted(to_add | to_remove), removal, user_api_key_cache, proxy_logging_obj)
+    cleanup: Final = asyncio.create_task(
+        _settle_caches(synced, sorted(to_add | to_remove), removal, user_api_key_cache, proxy_logging_obj)
+    )
+    try:
+        await asyncio.shield(cleanup)
+    except asyncio.CancelledError as cancellation:
+        # The transaction committed. Finish revocation before propagating cancellation.
+        try:
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+        finally:
+            raise cancellation
     _emit_team_members_metric(synced)
     _schedule_team_membership_audit_log(
         team_id=team_id,

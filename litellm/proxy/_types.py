@@ -87,6 +87,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
@@ -2505,6 +2506,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
     """
+
+    ldap_sync: LDAPSyncSettings | None = Field(
+        None,
+        description="Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis.",
+    )
 
     use_spend_logs_ledger: bool = Field(
         True,
