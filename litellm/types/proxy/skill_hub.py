@@ -23,6 +23,9 @@ class SkillHubSkill(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     keywords: tuple[str, ...] | None = None
+    download_count: int | None = Field(
+        None, description="Gateway ZIP downloads, included in proxy-admin catalog listings"
+    )
 
 
 class SkillHubList(LiteLLMBaseModel):

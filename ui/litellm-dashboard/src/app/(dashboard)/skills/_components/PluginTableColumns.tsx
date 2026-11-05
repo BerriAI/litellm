@@ -153,6 +153,21 @@ export const getPluginTableColumns = ({
     enableSorting: true,
     cell: ({ row }) => <DateCell value={row.original.updated_at} />,
   },
+  ...(isAdmin
+    ? ([
+        {
+          id: "download_count",
+          accessorKey: "download_count",
+          meta: { title: i18n.t("skills.table.columns.downloads") },
+          header: i18n.t("skills.table.columns.downloads"),
+          size: 120,
+          enableSorting: false,
+          cell: ({ row }) => (
+            <span className="tabular-nums">{row.original.download_count?.toLocaleString(i18n.language) ?? "—"}</span>
+          ),
+        },
+      ] satisfies ColumnDef<SkillHubSkill>[])
+    : []),
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },
