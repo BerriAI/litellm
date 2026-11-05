@@ -1,10 +1,51 @@
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Any, Final, Literal
 from urllib.parse import quote
 
 import requests
+from pydantic import BaseModel, ConfigDict, Field
 
 from .exceptions import UnauthorizedError
+
+
+class UserConnectionStart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_code: str
+    verification_uri: str
+    expires_in: int
+    interval: int
+    flow_handle: str = Field(repr=False)
+
+
+class UserConnectionPoll(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["pending", "slow_down", "expired", "denied", "connected", "no_copilot_seat"]
+    interval: int | None = None
+    github_login: str | None = None
+
+
+class UserConnection(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    credential_name: str
+    provider: str
+    connected: bool
+    github_login: str | None
+    connected_at: str | None
+
+
+class UserConnections(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    connections: tuple[UserConnection, ...]
+
+
+class UserConnectionDelete(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["disconnected"]
 
 
 class CredentialsManagementClient:
@@ -214,3 +255,43 @@ class CredentialsManagementClient:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
             raise
+
+    def _send_user_connection_request(self, request: requests.Request) -> requests.Response:
+        with requests.Session() as session:
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as error:
+                if error.response is not None and error.response.status_code == 401:
+                    raise UnauthorizedError(error) from error
+                raise
+            return response
+
+    def start_user_connection(self, credential_name: str) -> UserConnectionStart:
+        url: Final = f"{self._base_url}/credentials/{quote(credential_name, safe='')}/user_connection/start"
+        request: Final = requests.Request("POST", url, headers=self._get_headers())
+        response: Final = self._send_user_connection_request(request)
+        return UserConnectionStart.model_validate(response.json())
+
+    def poll_user_connection(self, credential_name: str, flow_handle: str) -> UserConnectionPoll:
+        url: Final = f"{self._base_url}/credentials/{quote(credential_name, safe='')}/user_connection/poll"
+        request: Final = requests.Request(
+            "POST",
+            url,
+            headers=self._get_headers(),
+            json={"flow_handle": flow_handle},
+        )
+        response: Final = self._send_user_connection_request(request)
+        return UserConnectionPoll.model_validate(response.json())
+
+    def list_user_connections(self) -> UserConnections:
+        url: Final = f"{self._base_url}/credentials/user_connections"
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
+        response: Final = self._send_user_connection_request(request)
+        return UserConnections.model_validate(response.json())
+
+    def delete_user_connection(self, credential_name: str) -> UserConnectionDelete:
+        url: Final = f"{self._base_url}/credentials/{quote(credential_name, safe='')}/user_connection"
+        request: Final = requests.Request("DELETE", url, headers=self._get_headers())
+        response: Final = self._send_user_connection_request(request)
+        return UserConnectionDelete.model_validate(response.json())
