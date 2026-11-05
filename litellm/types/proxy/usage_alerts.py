@@ -17,7 +17,7 @@ UsageAlertRuleKind: TypeAlias = Literal["all", "default", "custom"]
 class UsageAlertRuleInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    name: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[^\x00-\x1f\x7f]+$")
     scope_type: UsageAlertScope
     scope_id: str | None = Field(default=None, min_length=1, max_length=1024)
     metric: UsageAlertMetric
@@ -55,6 +55,7 @@ class UsageAlertRuleInput(BaseModel):
 
 
 class UsageAlertRule(UsageAlertRuleInput):
+    overrides_defaults: bool = Field(default=False, exclude=True)
     id: str
     created_at: datetime
     updated_at: datetime

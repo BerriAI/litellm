@@ -4,9 +4,11 @@ from datetime import date
 from typing import Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import TypeAdapter
 
 from litellm.models.usage_alerts import UsageAlertStore
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.repositories import UsageAlertsRepositoryDep
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -42,6 +44,36 @@ Repository: TypeAlias = UsageAlertsRepositoryDep
 Limit: TypeAlias = Annotated[int, Query(ge=1, le=100)]
 Offset: TypeAlias = Annotated[int, Query(ge=0, le=100000)]
 ScopeId: TypeAlias = Annotated[str | None, Query(min_length=1, max_length=1024)]
+
+
+def _allows_write(grant: str, route: str) -> bool:
+    if grant == "info_routes":
+        return False
+    paths: Final = (
+        TypeAdapter(tuple[str, ...]).validate_python(LiteLLMRoutes[grant].value)
+        if grant in LiteLLMRoutes.__members__
+        else (grant,)
+    )
+    return RouteChecks.check_route_access(route, paths)
+
+
+def require_write_access(user: UserAPIKeyAuth, route: str) -> None:
+    if not user.allowed_routes:
+        return
+    grants: Final = TypeAdapter(tuple[str, ...]).validate_python(user.allowed_routes)
+    if not any(_allows_write(grant, route) for grant in grants):
+        raise HTTPException(status_code=403, detail="This credential does not grant alert write access")
+
+
+def require_notification_access(
+    user: UserAPIKeyAuth, data: UsageAlertRuleInput, existing: UsageAlertRule | None = None
+) -> None:
+    if user.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if data.notification_channels or data.email_recipients:
+        raise HTTPException(status_code=403, detail="Only proxy admins can configure notification delivery")
+    if existing is not None and (existing.notification_channels or existing.overrides_defaults):
+        raise HTTPException(status_code=403, detail="Only proxy admins can change operator-managed alert rules")
 
 
 async def require_scope(
@@ -129,6 +161,7 @@ async def update_usage_alert_group(
     data: UsageAlertGroupUpdate, user: User, repository: Repository
 ) -> UsageAlertGroupUpdateResult:
     store: Final = require_repository(repository)
+    require_write_access(user, "/usage/alert-groups")
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
     return await store.set_group_status(data)
 
@@ -150,8 +183,12 @@ async def list_usage_alert_models(
 async def create_usage_alert_rule(data: UsageAlertRuleInput, user: User, repository: Repository) -> UsageAlertRule:
     """Create a daily usage alert rule for a scope the caller can manage."""
     store: Final = require_repository(repository)
+    require_write_access(user, "/usage/alert-rules")
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
-    saved: Final = await store.save_rule(data, user.user_id)
+    require_notification_access(user, data)
+    saved: Final = await store.save_rule(
+        data, user.user_id, overrides_defaults=user.user_role == LitellmUserRoles.PROXY_ADMIN
+    )
     if saved is None:
         raise HTTPException(status_code=409, detail="Alert rule could not be saved")
     return saved
@@ -172,6 +209,7 @@ async def update_usage_alert_rule(
     rule_id: str, data: UsageAlertRuleInput, user: User, repository: Repository
 ) -> UsageAlertRule:
     store: Final = require_repository(repository)
+    require_write_access(user, f"/usage/alert-rules/{rule_id}")
     rule: Final = await store.get_rule(rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
@@ -186,7 +224,10 @@ async def update_usage_alert_rule(
             status_code=422, detail="Create a custom rule to change a built-in rule's scope, metric, or direction"
         )
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
-    saved: Final = await store.save_rule(data, user.user_id, existing=rule)
+    require_notification_access(user, data, rule)
+    saved: Final = await store.save_rule(
+        data, user.user_id, existing=rule, overrides_defaults=user.user_role == LitellmUserRoles.PROXY_ADMIN
+    )
     if saved is None:
         raise HTTPException(status_code=409, detail="Alert rule changed while being updated. Refresh and try again")
     return saved
@@ -195,10 +236,12 @@ async def update_usage_alert_rule(
 @router.delete("/alert-rules/{rule_id}", status_code=204)
 async def delete_usage_alert_rule(rule_id: str, user: User, repository: Repository) -> Response:
     store: Final = require_repository(repository)
+    require_write_access(user, f"/usage/alert-rules/{rule_id}")
     rule: Final = await store.get_rule(rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
     await require_scope(user, store, rule.scope_type, rule.scope_id, write=True)
+    require_notification_access(user, rule, rule)
     if not await store.delete_rule(rule_id, existing=rule):
         raise HTTPException(status_code=409, detail="Alert rule changed while being deleted. Refresh and try again")
     return Response(status_code=204)
@@ -237,6 +280,7 @@ async def get_usage_alert(alert_id: str, user: User, repository: Repository) -> 
 @router.patch("/alerts/{alert_id}", response_model=UsageAlert)
 async def update_usage_alert(alert_id: str, data: UsageAlertUpdate, user: User, repository: Repository) -> UsageAlert:
     store: Final = require_repository(repository)
+    require_write_access(user, f"/usage/alerts/{alert_id}")
     alert: Final = await store.get_alert(alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Usage alert not found")

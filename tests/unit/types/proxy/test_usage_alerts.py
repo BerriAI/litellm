@@ -27,6 +27,9 @@ RULE: Final = {
         {"notification_channels": ["email"]},
         {"notification_channels": ["slack", "slack"]},
         {"email_recipients": ["ops@example.com\r\nBcc: other@example.com"]},
+        {"name": "Spend\r\nBcc: other@example.com"},
+        {"name": "Spend\x00notification"},
+        {"overrides_defaults": True},
     ],
 )
 def test_invalid_rules_cannot_be_stored(changes: dict[str, object]) -> None:
