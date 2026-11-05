@@ -105,6 +105,7 @@ describe("usage alerts API integration", () => {
     expect(await screen.findByText(/Spend was \$120.00 on 2026-11-04 UTC/)).toHaveTextContent(
       "baseline was $30.00 across 5 recorded days",
     );
+    expect(screen.getByText(/Spend was/)).toHaveTextContent("The alert condition was at least $90.00");
     expect(calls.some((call) => call.path.includes("alert-rules"))).toBe(false);
   });
 
