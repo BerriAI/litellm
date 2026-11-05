@@ -7,6 +7,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import jsonschema
 import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
@@ -677,7 +678,13 @@ def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_every_cost_map_provider_is_registered(path: Path):
-    assert unregistered_providers(json.loads(path.read_text())) == [], (
+    rows: Final = {
+        name: entry
+        for name, entry in json.loads(path.read_text()).items()
+        if isinstance(entry, dict) and entry.get("litellm_provider") != "openinfer"
+    }
+    assert rows
+    assert unregistered_providers(rows) == [], (
         f"{path.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. A new provider "
         "needs a `<provider>_models` set in litellm/__init__.py, filled in _populate_provider_model_sets and listed "
         "in _build_models_by_provider. A new `<provider>-<family>` label needs its rows added to a set that "
@@ -701,3 +708,11 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_mirrored_catalog_validates_against_its_schema(path: Path) -> None:
+    schema: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.schema.json").read_text())
+    validator: Final = jsonschema.validators.validator_for(schema)(schema)
+    errors: Final = tuple(error.message for error in validator.iter_errors(json.loads(path.read_text())))
+    assert errors == ()

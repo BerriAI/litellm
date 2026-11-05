@@ -656,16 +656,18 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
-def test_azure_responses_gpt6_astra_reasoning_effort_none_unlocks_temperature(local_model_cost_map: None):
-    """Foundry's gpt-6-astra accepts reasoning.effort='none' with a non-default temperature
-    while OpenAI's gpt-6-astra does not, so the gate must read the azure/ cost-map entry
-    for the bare deployment name rather than OpenAI's."""
+def test_azure_responses_reasoning_effort_none_unlocks_temperature_off_the_azure_row(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(
+        litellm.model_cost, "gpt-6-sol", {**litellm.model_cost["gpt-6-sol"], "supports_none_reasoning_effort": False}
+    )
     params = AzureOpenAIResponsesAPIConfig().map_openai_params(
         response_api_optional_params=ResponsesAPIOptionalRequestParams(
             temperature=0.2,
             reasoning={"effort": "none"},
         ),
-        model="gpt-6-astra",
+        model="gpt-6-sol",
         drop_params=False,
     )
     assert params["temperature"] == 0.2

@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 import time
@@ -24,7 +25,18 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    is_object_schema,
     sanitize_input_schema_for_anthropic,
+    schema_fragment_ref,
+    schema_grammar_branch_count,
+    schema_has_lookaround_pattern,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_optional_property_count,
+    schema_string_formats,
+    schema_union_property_count,
+    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -43,7 +55,7 @@ from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,
     unwrap_response_format_envelope,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -150,6 +162,12 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
+    ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
+)
+NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
+NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
+NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
 
 
 def _tool_type(tool: object) -> str | None:
@@ -753,7 +771,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         grammar Anthropic compiles the schema into, so the API rejects them with a
         400 ``invalid_request_error`` (e.g. "output_format.schema: For 'array' type,
         property 'uniqueItems' is not supported"):
-        - maxItems/minItems/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
+        - maxItems/minItems above 1/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
         - minimum/maximum/exclusiveMinimum/exclusiveMaximum/multipleOf: numeric constraints
         - minLength/maxLength: string constraints
         - minProperties/maxProperties/patternProperties/propertyNames: object constraints
@@ -810,7 +828,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
-        unsupported_fields: Final = set(constraint_labels)
+        min_items: Final = schema.get("minItems")
+        enforced_min_items: Final = (
+            isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
+        )
+        unsupported_fields: Final = set(constraint_labels) - ({"minItems"} if enforced_min_items else set())
 
         # Build description additions from removed constraints. Iterating
         # constraint_labels (not the set) keeps the note order deterministic across
@@ -818,7 +840,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # PYTHONHASHSEED and stay cache-friendly.
         constraint_descriptions: Final[list] = []
         for field, label in constraint_labels.items():
-            if field not in schema:
+            if field not in schema or field not in unsupported_fields:
                 continue
             value = schema[field]
             # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
@@ -853,7 +875,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key in ("properties", "$defs") and isinstance(value, dict):
+            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
                 nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
                 result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
             elif key == "items" and isinstance(value, dict):
@@ -865,6 +887,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            elif key == "$ref" and isinstance(value, str):
+                result[key] = schema_fragment_ref(value)
             elif key == "oneOf" and isinstance(value, list):
                 # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
                 # the Anthropic SDK rewrites it to anyOf, so do the same.
@@ -876,7 +900,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if result.get("type") == "object":
+        if is_object_schema(result):
             result["additionalProperties"] = False
 
         return result
@@ -1628,32 +1652,55 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return json_schema
 
+    @staticmethod
+    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+        unpacked: Final = copy.deepcopy(dict(json_schema))
+        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
+        if isinstance(defs, dict) and defs:
+            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        return unpacked
+
+    @staticmethod
+    def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        if (
+            schema_has_unresolvable_ref(json_schema)
+            or schema_has_open_object(json_schema)
+            or schema_has_lookaround_pattern(json_schema)
+            or not schema_string_formats(json_schema) <= _NATIVE_OUTPUT_STRING_FORMATS
+            or schema_union_property_count(json_schema) > NATIVE_OUTPUT_MAX_UNION_PARAMETERS
+            or schema_optional_property_count(json_schema) > NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS
+            or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES
+        ):
+            return None
+        return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
+
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        open_object_takes_forced_json_tool: Final = (
+            json_schema is not None
+            and schema_has_open_object(json_schema)
+            and not self.is_thinking_requested(request_params)
+            and not self.is_thinking_enabled(dict(request_params))
+            and not request_params.get("tools")
+            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
+        )
+        return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
+
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
-        json_schema: dict | None = self._extract_json_schema_from_response_format(value)
+        json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-
-        # Resolve $ref/$defs before filtering — Anthropic doesn't support
-        # external schema references (e.g., /$defs/CalendarEvent).
-        import copy
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            DEFS_MAX_INLINED_BYTES,
-            unpack_defs,
-        )
-
-        json_schema = copy.deepcopy(json_schema)
-        defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
-        if defs:
-            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-
-        # Filter out unsupported fields for Anthropic's output_format API
-        filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)
-
-        return AnthropicOutputSchema(
-            type="json_schema",
-            schema=filtered_schema,
-        )
+        native_schema: Final = self.native_output_format_schema(json_schema)
+        if native_schema is None:
+            return None
+        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool
@@ -1820,7 +1867,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if self.uses_native_structured_output(model):
+                if self.uses_native_structured_output_for_schema(
+                    model,
+                    self._extract_json_schema_from_response_format(value),
+                    REQUEST_PARAMS.validate_python(non_default_params),
+                ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
@@ -2979,6 +3030,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             completion_response["stop_reason"] = "stop"
             if refusal_fields:
                 json_mode_message.provider_specific_fields = dict(refusal_fields)
+            if thinking_blocks:
+                json_mode_message.thinking_blocks = thinking_blocks
+                json_mode_message.reasoning_content = reasoning_content
             _message = json_mode_message
 
         model_response.choices[0].message = _message
