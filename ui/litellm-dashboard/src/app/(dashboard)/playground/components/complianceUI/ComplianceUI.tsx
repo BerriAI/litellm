@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  COMPLIANCE_CATEGORY_LABEL_KEYS,
+  COMPLIANCE_FRAMEWORK_LABEL_KEYS,
   getFrameworks,
   type ComplianceCategory,
   type ComplianceFramework,
@@ -46,6 +48,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import type { ParseKeys, TFunction } from "i18next";
 import Papa from "papaparse";
 import { Trans, useTranslation } from "react-i18next";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -66,6 +69,21 @@ const CATEGORY_ICON_MAP: Record<string, React.ComponentType<{ className?: string
   shield: Shield,
   "file-text": FileText,
 };
+
+const FRAMEWORK_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  ...COMPLIANCE_FRAMEWORK_LABEL_KEYS,
+  Custom: "playground.compliance.library.customFramework",
+  "CSV Upload": "playground.compliance.library.csvFramework",
+};
+
+const CATEGORY_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  ...COMPLIANCE_CATEGORY_LABEL_KEYS,
+  "Custom Prompts": "playground.compliance.library.customCategory",
+  "Uploaded Prompts": "playground.compliance.library.csvCategory",
+};
+
+const labelFor = (labelKeys: Readonly<Record<string, ParseKeys>>, id: string, t: TFunction): string =>
+  Object.hasOwn(labelKeys, id) ? t(labelKeys[id]) : id;
 
 function CategoryIcon({
   iconKey,
@@ -1085,7 +1103,9 @@ export default function ComplianceUI({
                         )}
                         <CategoryIcon iconKey={fw.icon} className="w-4 h-4 text-muted-foreground shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <span className="text-xs font-semibold text-foreground">{fw.name}</span>
+                          <span className="text-xs font-semibold text-foreground">
+                            {labelFor(FRAMEWORK_LABEL_KEYS, fw.name, t)}
+                          </span>
                           <span className="text-[10px] text-muted-foreground ml-1.5">
                             {t("playground.compliance.library.promptCount", { total: fwPromptCount })}
                           </span>
@@ -1137,7 +1157,7 @@ export default function ComplianceUI({
                                     />
                                   </span>
                                   <span className="text-[11px] font-medium text-foreground flex-1 min-w-0 truncate">
-                                    {category.name}
+                                    {labelFor(CATEGORY_LABEL_KEYS, category.name, t)}
                                   </span>
                                   <span className="text-[10px] text-muted-foreground shrink-0">
                                     {category.prompts.length}
@@ -1153,7 +1173,9 @@ export default function ComplianceUI({
                                   <div>
                                     <div className="px-2.5 py-1 flex items-center justify-between">
                                       <p className="text-[10px] text-muted-foreground leading-relaxed flex-1 mr-2 line-clamp-2">
-                                        {category.description}
+                                        {category.descriptionKey
+                                          ? term(t(category.descriptionKey))
+                                          : category.description}
                                       </p>
                                       <button
                                         type="button"
@@ -1524,7 +1546,7 @@ export default function ComplianceUI({
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-[9px] text-muted-foreground inline-flex items-center gap-0.5">
                                       <CategoryIcon iconKey={result.categoryIcon} className="w-3 h-3" />
-                                      {result.category}
+                                      {labelFor(CATEGORY_LABEL_KEYS, result.category, t)}
                                     </span>
                                     <span
                                       className={`text-[9px] font-semibold px-1 py-0.5 rounded-sm ${result.expectedResult === "fail" ? "bg-destructive/10 text-destructive" : "bg-success/10 text-success"}`}
