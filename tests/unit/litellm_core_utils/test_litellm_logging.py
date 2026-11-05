@@ -13662,10 +13662,14 @@ class _FailureCapture(CustomLogger):
         self.sync_kwargs: dict | None = None
         self.async_kwargs: dict | None = None
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(
+        self, kwargs: dict, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self.sync_kwargs = kwargs
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: dict, response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
+    ) -> None:
         self.async_kwargs = kwargs
 
 
@@ -13705,7 +13709,9 @@ async def _async_failure_payload(
 
 
 @pytest.mark.asyncio
-async def test_failure_with_redaction_on_scrubs_the_prompt_out_of_the_error_and_keeps_the_rest(monkeypatch):
+async def test_failure_with_redaction_on_scrubs_the_prompt_out_of_the_error_and_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     kwargs: Final = await _async_failure_payload(monkeypatch, redact=True, error=_prompt_echo_error())
 
     payload: Final = kwargs["standard_logging_object"]
@@ -13718,7 +13724,9 @@ async def test_failure_with_redaction_on_scrubs_the_prompt_out_of_the_error_and_
 
 
 @pytest.mark.asyncio
-async def test_failure_with_redaction_on_keeps_error_text_that_does_not_quote_the_prompt(monkeypatch):
+async def test_failure_with_redaction_on_keeps_error_text_that_does_not_quote_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     error: Final = litellm.AuthenticationError(
         message="Incorrect API key provided", model="gpt-4o", llm_provider="openai"
     )
@@ -13731,7 +13739,7 @@ async def test_failure_with_redaction_on_keeps_error_text_that_does_not_quote_th
 
 
 @pytest.mark.asyncio
-async def test_failure_with_redaction_off_logs_the_error_as_raised(monkeypatch):
+async def test_failure_with_redaction_off_logs_the_error_as_raised(monkeypatch: pytest.MonkeyPatch) -> None:
     kwargs: Final = await _async_failure_payload(monkeypatch, redact=False, error=_prompt_echo_error())
 
     assert SCRUB_PROMPT in kwargs["standard_logging_object"]["error_information"]["error_message"]
@@ -13741,7 +13749,9 @@ async def test_failure_with_redaction_off_logs_the_error_as_raised(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("headers", [None, "x", ["a"]], ids=["none", "str", "list"])
 @pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
-async def test_failure_with_non_mapping_headers_is_still_logged(monkeypatch, headers, redact):
+async def test_failure_with_non_mapping_headers_is_still_logged(
+    monkeypatch: pytest.MonkeyPatch, headers: str | list[str] | None, redact: bool
+) -> None:
     capture: Final = _FailureCapture()
     monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
     monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
@@ -13753,7 +13763,7 @@ async def test_failure_with_non_mapping_headers_is_still_logged(monkeypatch, hea
     assert (SCRUB_PROMPT in capture.async_kwargs["traceback_exception"]) is not redact
 
 
-def test_sync_failure_hands_callbacks_the_scrubbed_error(monkeypatch):
+def test_sync_failure_hands_callbacks_the_scrubbed_error(monkeypatch: pytest.MonkeyPatch) -> None:
     capture: Final = _FailureCapture()
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
     monkeypatch.setattr(litellm, "failure_callback", [capture])
@@ -13764,7 +13774,9 @@ def test_sync_failure_hands_callbacks_the_scrubbed_error(monkeypatch):
     assert SCRUB_PROMPT not in json.dumps(capture.sync_kwargs["standard_logging_object"], default=str)
 
 
-def test_sync_failure_hands_lunary_the_scrubbed_traceback_when_only_the_traceback_quotes_the_prompt(monkeypatch):
+def test_sync_failure_hands_lunary_the_scrubbed_traceback_when_only_the_traceback_quotes_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tracked_events: Final[list[dict[str, object]]] = []
     lunary_logger: Final = LunaryLogger()
     monkeypatch.setattr(lunary_logger.lunary_client, "track_event", lambda *_, **event: tracked_events.append(event))

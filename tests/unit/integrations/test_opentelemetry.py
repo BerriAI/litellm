@@ -8444,18 +8444,18 @@ def test_successful_span_reports_provider_usage_without_failure_usage_flags(
     assert not any(ESTIMATED_INPUT_TOKENS_ATTRIBUTE in attrs for attrs in span_attributes)
 
 
-def test_record_exception_on_span_records_the_scrubbed_error_text_with_the_same_event_shape():
+def test_record_exception_on_span_records_the_scrubbed_error_text_with_the_same_event_shape() -> None:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    secret = "my ssn is 123-45-6789"
-    exception = ValueError(f"bad input: {secret}")
+    secret: Final = "my ssn is 123-45-6789"
+    exception: Final = ValueError(f"bad input: {secret}")
 
     with provider.get_tracer(__name__).start_as_current_span("failure") as span:
         OpenTelemetry()._record_exception_on_span(

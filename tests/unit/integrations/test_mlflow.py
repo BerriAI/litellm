@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -272,12 +273,12 @@ def test_mlflow_end_span_or_trace_works_with_mlflow_2x_client():
 
 
 class _ExceptionSpanEvent:
-    def __init__(self, name, attributes):
-        self.name = name
-        self.attributes = attributes
+    def __init__(self, name: str, attributes: Mapping[str, str]) -> None:
+        self.name: Final = name
+        self.attributes: Final = attributes
 
     @classmethod
-    def from_exception(cls, exception):
+    def from_exception(cls, exception: BaseException) -> "_ExceptionSpanEvent":
         return cls(
             "exception",
             {
@@ -289,18 +290,18 @@ class _ExceptionSpanEvent:
 
 
 @pytest.mark.parametrize("scrubbed", [True, False], ids=["scrubbed", "not_scrubbed"])
-def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed):
-    secret = "my ssn is 123-45-6789"
-    modules = _mock_mlflow_modules()
+def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed: bool) -> None:
+    secret: Final = "my ssn is 123-45-6789"
+    modules: Final = _mock_mlflow_modules()
     modules["mlflow"].get_current_active_span.return_value = None
     modules["mlflow.entities"].SpanEvent = _ExceptionSpanEvent
     with patch.dict("sys.modules", modules):
         from litellm.integrations.mlflow import MlflowLogger
 
-        mlflow_logger = MlflowLogger()
-        span = MagicMock(parent_id=None, request_id="req-1")
+        mlflow_logger: Final = MlflowLogger()
+        span: Final = MagicMock(parent_id=None, request_id="req-1")
         mlflow_logger._client = MagicMock(**{"start_trace.return_value": span})
-        error_message = "bad input: redacted-by-litellm" if scrubbed else f"bad input: {secret}"
+        error_message: Final = "bad input: redacted-by-litellm" if scrubbed else f"bad input: {secret}"
 
         mlflow_logger._handle_failure(
             kwargs={
@@ -317,7 +318,7 @@ def test_mlflow_failure_event_records_the_error_text_the_payload_logged(scrubbed
             end_time=datetime(2025, 1, 1),
         )
 
-        event = span.add_event.call_args.args[0]
+        event: Final = span.add_event.call_args.args[0]
         mlflow_logger._client.end_trace.assert_called_once()
         assert event.attributes["exception.type"] == "ValueError"
         assert event.attributes["exception.message"] == error_message
