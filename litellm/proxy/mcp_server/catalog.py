@@ -946,7 +946,11 @@ async def get_filtered_server_tools(
         return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
     except MCPUpstreamAuthError as e:
         scope_response: Final = get_scope_response()
-        if scope_response is not None and len(allowed_mcp_servers) == 1:
+        if (
+            scope_response is not None
+            and scope_response.is_scoped_endpoint
+            and len(allowed_mcp_servers) == 1
+        ):
             scope_response.deny(e)
         verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
         return ListToolsResult(tools=[]), classify_list_exception(e)
@@ -1200,7 +1204,11 @@ async def list_gateway_catalog(
             except Exception as error:
                 if isinstance(error, MCPUpstreamAuthError):
                     scope_response: Final = get_scope_response()
-                    if scope_response is not None and len(allowed) == 1:
+                    if (
+                        scope_response is not None
+                        and scope_response.is_scoped_endpoint
+                        and len(allowed) == 1
+                    ):
                         scope_response.deny(error)
                 if cursor is not None:
                     raise MCPError(

@@ -866,7 +866,10 @@ async def test_get_filtered_server_tools_denies_scope_response_on_single_server_
     from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
     from litellm.proxy.mcp_server.contracts import OperationContext
     from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
-    from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+    from litellm.proxy.mcp_server.scope_challenge import (
+        SCOPE_RESPONSE_KEY,
+        OAuthScopeResponse,
+    )
 
     mock_send = AsyncMock()
     scope_response = OAuthScopeResponse(mock_send, "https://gateway.example", "/mcp/docs")
@@ -905,7 +908,10 @@ async def test_get_filtered_server_tools_does_not_deny_scope_response_on_multi_s
     from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
     from litellm.proxy.mcp_server.contracts import OperationContext
     from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
-    from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+    from litellm.proxy.mcp_server.scope_challenge import (
+        SCOPE_RESPONSE_KEY,
+        OAuthScopeResponse,
+    )
 
     mock_send = AsyncMock()
     scope_response = OAuthScopeResponse(mock_send, "https://gateway.example", "/mcp")
@@ -924,6 +930,49 @@ async def test_get_filtered_server_tools_does_not_deny_scope_response_on_multi_s
                 server1,
                 context=op_ctx,
                 allowed_mcp_servers=[server1, server2],
+                prefetched_oauth_creds={},
+            )
+            assert tools_result.tools == []
+            assert outcome.tag == "auth_required"
+            assert scope_response.pending
+            assert scope_response._challenge is None
+    finally:
+        active_mcp_request_ctx_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_get_filtered_server_tools_does_not_deny_scope_response_on_aggregate_with_single_server_401():
+    """An aggregate request (/mcp) with only one accessible server must retain aggregate absorb behavior
+    and not deny scope_response when upstream returns 401."""
+    from unittest.mock import MagicMock, patch
+
+    from mcp.server.context import ServerRequestContext
+    from starlette.requests import Request
+
+    from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
+    from litellm.proxy.mcp_server.contracts import OperationContext
+    from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy.mcp_server.scope_challenge import (
+        SCOPE_RESPONSE_KEY,
+        OAuthScopeResponse,
+    )
+
+    mock_send = AsyncMock()
+    scope_response = OAuthScopeResponse(mock_send, "https://gateway.example", "/mcp")
+    request = Request({"type": "http", SCOPE_RESPONSE_KEY: scope_response})
+    context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/list", request=request)
+    token = active_mcp_request_ctx_var.set(context)
+
+    server = _http_server("s1", "docs", auth_type=MCPAuth.none, extra_headers=["Authorization"], oauth_passthrough=True)
+    op_ctx = OperationContext(_caller=None, mcp_servers=None)
+
+    try:
+        with patch("litellm.proxy.mcp_server.operations.global_mcp_server_manager.get_tools_from_server",
+                   AsyncMock(side_effect=MCPUpstreamAuthError(401, None, "docs"))):
+            tools_result, outcome = await get_filtered_server_tools(
+                server,
+                context=op_ctx,
+                allowed_mcp_servers=[server],
                 prefetched_oauth_creds={},
             )
             assert tools_result.tools == []

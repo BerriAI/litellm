@@ -2585,6 +2585,7 @@ if MCP_AVAILABLE:
                     send,
                     get_request_base_url(StarletteRequest(scope)),
                     get_route_relative_request_path(scope),
+                    is_scoped_endpoint=scoped_server_endpoint,
                 )
                 if scoped_server_endpoint
                 or (mcp_servers is not None and len(mcp_servers) == 1)
