@@ -6,6 +6,7 @@ and version parameter injection.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -557,8 +558,10 @@ async def test_watsonx_route_falls_back_to_env_when_no_deployment_is_flagged(mon
 
 
 @pytest.mark.asyncio
-async def test_watsonx_route_falls_back_to_env_when_the_only_flagged_deployment_belongs_to_a_team(monkeypatch):
-    llm_router = litellm.Router(
+async def test_watsonx_route_falls_back_to_env_when_the_only_flagged_deployment_belongs_to_a_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm_router: Final = litellm.Router(
         model_list=[
             {
                 **_watsonx_deployment("wx-team-a-key", "https://team-a.ml.cloud.ibm.com", use_in_pass_through=True),
