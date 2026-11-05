@@ -67,7 +67,8 @@ def default_usage_rules(
             min_history_days=policy.min_history_days,
             notification_channels=(
                 ()
-                if legacy_user_spend_alerts and (scope, policy.metric, policy.direction) == ("user", "spend", "increase")
+                if legacy_user_spend_alerts
+                and (scope, policy.metric, policy.direction) == ("user", "spend", "increase")
                 else channels
             ),
         )
