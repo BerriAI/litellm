@@ -1075,9 +1075,13 @@ class CustomStreamWrapper:
                     return model_response
 
                 # Don't raise StopIteration here - some providers (like OpenRouter)
-                # send usage/cost data in chunks after the finish_reason chunk
-                if hasattr(model_response, "usage") and model_response.usage is not None:
-                    return model_response
+                # send usage/cost data in chunks after the finish_reason chunk.
+                # Drop choice payload from those trailers: OpenRouter repeats an empty
+                # assistant delta (often with role + finish_reason) alongside usage, and
+                # stripping usage left a no-op choice that clients saw between the
+                # terminal finish and the final usage chunk (#50156).
+                if getattr(model_response, "usage", None) is not None:
+                    return model_response.model_copy(update={"choices": []})
                 return
             # flush any remaining holding chunk
             if len(self.holding_chunk) > 0:
