@@ -78,9 +78,11 @@ def compare_daily_usage(
     if baseline == 0:
         if rule.direction == "decrease":
             return None
-        return DailyComparison(sample_days, observed, 0, rule.min_value, observed > rule.min_value)
-    threshold: Final = baseline * rule.multiplier if rule.direction == "increase" else baseline / rule.multiplier
-    crossed: Final = observed >= threshold if rule.direction == "increase" else observed <= threshold
-    return DailyComparison(
-        sample_days, observed, baseline, threshold, crossed and abs(observed - baseline) >= rule.min_value
+        return DailyComparison(sample_days, observed, 0, rule.min_value, observed > 0 and observed >= rule.min_value)
+    threshold: Final = (
+        max(baseline * rule.multiplier, baseline + rule.min_value)
+        if rule.direction == "increase"
+        else min(baseline / rule.multiplier, baseline - rule.min_value)
     )
+    crossed: Final = observed >= threshold if rule.direction == "increase" else observed <= threshold
+    return DailyComparison(sample_days, observed, baseline, threshold, crossed)

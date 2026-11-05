@@ -680,6 +680,9 @@ class UsageAlertsRepository:
             await self.database.query_raw(
                 """SELECT i.record,r.record AS rule,i.notified_channels FROM "LiteLLM_UsageAlertIncident" i JOIN "LiteLLM_UsageAlertRule" r ON r.id=i.rule_id
             WHERE i.status='open' AND r.enabled AND NOT r.deleted
+              AND i.scope_type=r.scope_type AND i.metric=r.record->>'metric'
+              AND i.record->>'direction'=r.record->>'direction'
+              AND (r.scope_id IS NULL OR i.scope_id=r.scope_id)
               AND COALESCE((i.record->>'next_notification_attempt')::timestamptz,'-infinity'::timestamptz)<=CURRENT_TIMESTAMP
               AND EXISTS (
                 SELECT 1 FROM jsonb_array_elements_text(r.record->'notification_channels') channel WHERE NOT (channel=ANY(i.notified_channels)))
@@ -742,8 +745,12 @@ class UsageAlertsRepository:
     ) -> Mapping[str, frozenset[str | None]]:
         rows: Final = TypeAdapter(tuple[_BreachedEntity, ...]).validate_python(
             await self.database.query_raw(
-                'SELECT DISTINCT rule_id,scope_id FROM "LiteLLM_UsageAlertIncident" '
-                "WHERE rule_id=ANY($1::text[]) AND scope_key=ANY($2::text[]) AND breached ORDER BY rule_id",
+                'SELECT DISTINCT i.rule_id,i.scope_id FROM "LiteLLM_UsageAlertIncident" i '
+                'JOIN "LiteLLM_UsageAlertRule" r ON r.id=i.rule_id '
+                "WHERE i.rule_id=ANY($1::text[]) AND i.scope_key=ANY($2::text[]) AND i.breached "
+                "AND i.scope_type=r.scope_type AND i.metric=r.record->>'metric' "
+                "AND i.record->>'direction'=r.record->>'direction' "
+                "AND (r.scope_id IS NULL OR i.scope_id=r.scope_id) ORDER BY i.rule_id",
                 rule_ids,
                 tuple(entity or "" for entity in entity_ids),
             )

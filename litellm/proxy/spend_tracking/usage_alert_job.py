@@ -69,7 +69,7 @@ def _has_activity_page(scope: UsageAlertScope, entity: str) -> bool:
     if not entity.strip():
         return False
     if scope == "key":
-        return entity != "unattributed" and not entity.startswith("sk-")
+        return entity != "unattributed" and not entity.removeprefix("raw:").startswith("sk-")
     if scope == "user":
         return entity != "default_user_id"
     if scope == "team":
@@ -275,6 +275,9 @@ class UsageAlertJob:
                 await self._notify_incident(pending)
 
     async def _notify_incident(self, pending: UsageAlertNotification) -> None:
+        current: Final = await self._store.get_rule(pending.rule.id)
+        if current is None or not current.enabled or current.updated_at != pending.rule.updated_at:
+            return
         failures: Final = tuple(
             [
                 await self._deliver_channel(pending.incident, pending.rule, channel)

@@ -48,7 +48,7 @@ def test_low_volume_is_insufficient_and_recorded_zero_baseline_uses_absolute_flo
     )
     floor: Final = rule.model_copy(update={"min_value": 100})
     assert compare_daily_usage(floor, (*enough_requests, _row(_DAY, spend=100)), _DAY) == DailyComparison(
-        3, 100, 0, 100, False
+        3, 100, 0, 100, True
     )
 
 
@@ -57,8 +57,8 @@ def test_absolute_floor_suppresses_small_changes() -> None:
     rule: Final = UsageAlertRuleInput(
         name="spike", scope_type="key", metric="spend", direction="increase", min_value=100
     )
-    assert compare_daily_usage(rule, (*history, _row(_DAY, spend=100)), _DAY) == DailyComparison(3, 100, 20, 60, False)
-    assert compare_daily_usage(rule, (*history, _row(_DAY, spend=60)), _DAY) == DailyComparison(3, 60, 20, 60, False)
+    assert compare_daily_usage(rule, (*history, _row(_DAY, spend=100)), _DAY) == DailyComparison(3, 100, 20, 120, False)
+    assert compare_daily_usage(rule, (*history, _row(_DAY, spend=60)), _DAY) == DailyComparison(3, 60, 20, 120, False)
 
 
 def test_day_is_eligible_only_after_one_hour_utc_grace() -> None:
