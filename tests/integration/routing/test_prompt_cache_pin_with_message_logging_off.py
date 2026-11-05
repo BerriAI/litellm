@@ -39,7 +39,7 @@ _LOGGED_EVENT: Final = TypeAdapter(dict[str, JsonValue])
 @dataclass(frozen=True, slots=True)
 class _Rig:
     owned: OwnedProxy
-    redis: Redis[bytes]
+    redis: "Redis[bytes]"
     logger_sink: Wire
 
 
