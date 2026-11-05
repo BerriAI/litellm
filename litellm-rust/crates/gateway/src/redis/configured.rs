@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 
 use litellm_config::{RedisSettings, Value};
 use litellm_core_utils::settings::Lookup;
-use litellm_redis_resolve::{Expected, Kwargs, RedisError};
+use litellm_redis_resolve::{Expected, Kwargs};
 use litellm_redis_types::{Auth, AzureAdAuth, ProviderHandle, Resolution};
 use veil::Redact;
 
 use super::{layers, secrets::SecretSnapshot};
+use crate::Error;
 
 const CACHE_ONLY: &[&str] = &[
     "type",
@@ -44,12 +45,14 @@ pub(super) enum Nulls {
 impl ConfiguredRedis {
     /// `general_settings.coordination_redis`, which the proxy validates as a pydantic model first.
     /// An `os.environ/` port is only known after merging, where it is read like any other port.
-    pub(crate) fn coordination(settings: &RedisSettings) -> Result<Self, RedisError> {
+    pub(crate) fn coordination(
+        settings: &RedisSettings,
+    ) -> Result<Self, litellm_redis_resolve::Error> {
         if let Some(port) = settings.fields().get("port").and_then(text)
             && !port.starts_with("os.environ/")
             && port.parse::<u16>().is_err()
         {
-            return Err(RedisError::Invalid {
+            return Err(litellm_redis_resolve::Error::Invalid {
                 setting: "port".to_owned(),
                 expected: Expected::Integer,
             });
@@ -113,7 +116,7 @@ impl ConfiguredRedis {
 
     /// `_merge_redis_kwargs` in `litellm/_redis.py`: the kwargs over their `REDIS_*` values with every
     /// `get_secret` fallback filled.
-    pub(crate) fn merged(&self, secrets: &SecretSnapshot) -> Result<Kwargs, RedisError> {
+    pub(crate) fn merged(&self, secrets: &SecretSnapshot) -> Result<Kwargs, Error> {
         layers::merged(self, secrets)
     }
 
@@ -122,7 +125,7 @@ impl ConfiguredRedis {
         &self,
         secrets: &SecretSnapshot,
         environment: &dyn Lookup,
-    ) -> Result<Resolution, RedisError> {
+    ) -> Result<Resolution, Error> {
         let resolution =
             litellm_redis_resolve::interpret(&self.merged(secrets)?, self.credential_provider)?;
         Ok(match resolution.auth {

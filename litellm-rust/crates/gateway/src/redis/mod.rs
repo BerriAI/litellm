@@ -4,7 +4,7 @@ use litellm_circuit_breaker::{Breaker, Config as BreakerConfig, State};
 use litellm_config::{CacheSettings, Config, RedisSettings, Value};
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::RedisClient;
-use litellm_redis_resolve::{Expected, RedisError};
+use litellm_redis_resolve::Expected;
 use litellm_redis_types::Resolution;
 
 use crate::Error;
@@ -113,7 +113,7 @@ fn redis_cache_params(config: &Config) -> Option<&RedisSettings> {
     }
 }
 
-fn resolve(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Params, RedisError> {
+fn resolve(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Params, Error> {
     let secrets = SecretSnapshot::read(configured.secret_names(), lookup);
     let resolution = configured.resolve(&secrets, lookup)?;
     for ignored in &resolution.ignored {
@@ -246,11 +246,11 @@ fn environment_value<T>(
     name: &str,
     expected: Expected,
     parse: impl Fn(&str) -> Option<T>,
-) -> Result<Option<T>, RedisError> {
+) -> Result<Option<T>, litellm_redis_resolve::Error> {
     lookup
         .get(name)
         .map(|value| {
-            parse(&value).ok_or_else(|| RedisError::Invalid {
+            parse(&value).ok_or_else(|| litellm_redis_resolve::Error::Invalid {
                 setting: name.to_owned(),
                 expected,
             })
@@ -264,7 +264,6 @@ mod tests {
 
     use litellm_config::Config;
     use litellm_redis_client::{Standalone, StaticAuth};
-    use litellm_redis_resolve::RedisError;
     use litellm_redis_testing::RedisServer;
     use litellm_redis_types::{Auth, HealthCheck, Passthrough};
     use rstest::rstest;
@@ -472,7 +471,7 @@ mod tests {
         .unwrap_err();
 
         assert!(
-            matches!(error, Error::Redis(RedisError::Invalid { setting, .. }) if setting == expected)
+            matches!(error, Error::Redis(litellm_redis_resolve::Error::Invalid { setting, .. }) if setting == expected)
         );
     }
 

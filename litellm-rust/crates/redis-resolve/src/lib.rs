@@ -10,7 +10,7 @@ mod keys;
 mod options;
 mod tls;
 
-pub use error::{Expected, RedisError};
+pub use error::{Error, Expected};
 pub use keys::{FromUrl, Handling, SETTINGS, Setting, Shape, setting};
 pub use options::is_present;
 
@@ -41,10 +41,7 @@ pub fn kwargs(fields: impl IntoIterator<Item = (String, Value)>) -> Kwargs {
 
 /// What redis-py's constructors make of kwargs a host already merged the way `_get_redis_client_logic` does. A
 /// host passes its `credential_provider` object as `provider`.
-pub fn interpret(
-    kwargs: &Kwargs,
-    provider: Option<ProviderHandle>,
-) -> Result<Resolution, RedisError> {
+pub fn interpret(kwargs: &Kwargs, provider: Option<ProviderHandle>) -> Result<Resolution, Error> {
     let (options, unmodeled) = Options::read(kwargs)?;
     let auth = auth::redis_auth(&options, provider)?;
     let (target, url_ignored) = endpoint::target(&options, &auth)?;
@@ -70,7 +67,7 @@ pub fn interpret(
 
 // redis-py checks health only when the interval is truthy, so zero turns it off and a negative interval checks
 // before every command
-fn health_check(entry: Option<&Entry>) -> Result<HealthCheck, RedisError> {
+fn health_check(entry: Option<&Entry>) -> Result<HealthCheck, Error> {
     Ok(match options::integer::<i64>(entry)? {
         None => HealthCheck::Unset,
         Some(0) => HealthCheck::Disabled,

@@ -13,7 +13,7 @@ pub enum Handling {
         met: Option<fn(&Value) -> bool>,
     },
     /// A security check the Rust client cannot perform, so setting it to true fails instead of connecting without it.
-    Reject,
+    Reject { check: &'static str },
 }
 
 /// What the value is, which decides where an unread setting lands in a `Resolution`.
@@ -127,8 +127,8 @@ const fn warn_unless(
     )
 }
 
-const fn reject(kwarg: &'static str) -> Setting {
-    Setting::new(kwarg, Handling::Reject)
+const fn reject(kwarg: &'static str, check: &'static str) -> Setting {
+    Setting::new(kwarg, Handling::Reject { check })
 }
 
 const NO_EQUIVALENT: &str = "the Rust client has no equivalent";
@@ -137,6 +137,7 @@ const OWN_CONNECTION: &str = "it tunes redis-py's own connection, and the Rust c
 const OWN_CLUSTER: &str = "the Rust cluster client discovers, routes and retries on its own";
 const MAINTENANCE: &str = "the Rust client does not follow server maintenance notifications";
 const RUSTLS: &str = "rustls negotiates TLS 1.2+ with its own ECDHE AEAD suites";
+const REVOCATION: &str = "OCSP revocation checks";
 const OCSP: &str = "it only configures ssl_validate_ocsp, which the Rust client refuses when set";
 const VERIFY_FLAGS: &str = "rustls verifies certificates with its own fixed rules, so no extra X.509 flag such as CRL checking applies";
 
@@ -249,8 +250,8 @@ pub const SETTINGS: &[Setting] = &[
     warn("ssl_ocsp_context", OCSP).env().object(),
     warn("ssl_ocsp_expected_cert", OCSP).env(),
     read("ssl_password").env().in_url(FromUrl::Rediss),
-    reject("ssl_validate_ocsp").env(),
-    reject("ssl_validate_ocsp_stapled").env(),
+    reject("ssl_validate_ocsp", REVOCATION).env(),
+    reject("ssl_validate_ocsp_stapled", REVOCATION).env(),
     read("startup_nodes").or_secrets(&["REDIS_CLUSTER_NODES"]),
     read("unix_socket_path").env(),
     read("url").env(),
@@ -277,8 +278,12 @@ pub fn setting(kwarg: &str) -> Option<&'static Setting> {
     SETTINGS.iter().find(|setting| setting.kwarg == kwarg)
 }
 
-pub(crate) fn is_refused_when_set(kwarg: &str) -> bool {
-    setting(kwarg).is_some_and(|setting| matches!(setting.handling, Handling::Reject))
+/// The check a `Reject` row asks for when it is set to true.
+pub(crate) fn refused_check(kwarg: &str) -> Option<&'static str> {
+    match setting(kwarg)?.handling {
+        Handling::Reject { check } => Some(check),
+        Handling::Read | Handling::Warn { .. } => None,
+    }
 }
 
 /// A warned setting the kwargs set, with what dropping it means. A kwarg with no row is not a Redis setting, so it

@@ -1,8 +1,9 @@
 use litellm_config::Value;
 use litellm_core_utils::settings::Lookup;
-use litellm_redis_resolve::{Entry, Kwargs, RedisError, SETTINGS, is_present, setting};
+use litellm_redis_resolve::{Entry, Kwargs, SETTINGS, is_present, setting};
 
 use super::configured::{ConfiguredRedis, Nulls};
+use crate::Error;
 
 const NAMED_BY_CACHE: &[&str] = &[
     "host",
@@ -47,17 +48,14 @@ const AWS: &[(&str, Read)] = &[("aws_iam_region", Read::SecretStr)];
 /// The configured settings over their `REDIS_*` values, `{**environment_kwargs, **env_overrides}`
 /// in `_merge_redis_kwargs`, with the `get_secret` fallbacks it reads filled in. A null left in the result is
 /// an explicit `None` that hid its environment value.
-pub(super) fn merged(
-    configured: &ConfiguredRedis,
-    lookup: &dyn Lookup,
-) -> Result<Kwargs, RedisError> {
+pub(super) fn merged(configured: &ConfiguredRedis, lookup: &dyn Lookup) -> Result<Kwargs, Error> {
     let block: Kwargs = configured
         .fields
         .iter()
         .map(|(key, value)| (key, environment_reference(value, lookup)))
         .filter(|(key, value)| !value.is_null() || keeps_null(configured.nulls, key))
         .map(|(key, value)| {
-            let value = serde_json::to_value(&value).map_err(|_| RedisError::NotPlainData {
+            let value = serde_json::to_value(&value).map_err(|_| Error::RedisNotPlainData {
                 setting: key.clone(),
             })?;
             let entry = Entry {
@@ -66,7 +64,7 @@ pub(super) fn merged(
             };
             Ok((key.clone(), entry))
         })
-        .collect::<Result<_, RedisError>>()?;
+        .collect::<Result<_, Error>>()?;
     let names_a_target = ["host", "startup_nodes", "sentinel_nodes"]
         .iter()
         .any(|key| is_set(&block, key));

@@ -1,5 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub enum RedisError {
+pub enum Error {
     #[error("invalid Redis setting {setting}: expected {expected}")]
     Invalid { setting: String, expected: Expected },
     #[error("either host or url must be specified for redis")]
@@ -13,11 +13,12 @@ pub enum RedisError {
     #[error("credential_provider is a host object, and the host passed no handle for it")]
     ProviderWithoutHandle,
     #[error(
-        "{setting} asks for OCSP revocation checks, which rustls cannot perform, so Redis is not connected without them"
+        "{setting} asks for {check}, which rustls cannot perform, so Redis is not connected without them"
     )]
-    Unenforceable { setting: String },
-    #[error("Redis setting {setting} is not plain data")]
-    NotPlainData { setting: String },
+    Unenforceable {
+        setting: String,
+        check: &'static str,
+    },
     #[error("AWS ElastiCache IAM Redis authentication requires TLS")]
     AwsIamWithoutTls,
     #[error("AWS ElastiCache IAM Redis authentication requires: {}", missing.join(", "))]

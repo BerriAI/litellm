@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use litellm_redis_resolve::{Handling, RedisError, SETTINGS, Shape, interpret, kwargs};
+use litellm_redis_resolve::{Error, Handling, SETTINGS, Shape, interpret, kwargs};
 use rstest::rstest;
 use serde::Deserialize;
 use serde_json::json;
@@ -81,13 +81,13 @@ fn every_warned_setting_is_reported_and_still_reaches_the_host() {
 fn every_rejected_setting_fails_when_asked_for() {
     let rejected = SETTINGS
         .iter()
-        .filter(|setting| matches!(setting.handling, Handling::Reject));
+        .filter(|setting| matches!(setting.handling, Handling::Reject { .. }));
 
     for setting in rejected {
         let error = interpret(&host_with(setting.kwarg, json!(true)), None).unwrap_err();
 
         assert!(
-            matches!(&error, RedisError::Unenforceable { setting: source } if source == setting.kwarg),
+            matches!(&error, Error::Unenforceable { setting: source, .. } if source == setting.kwarg),
             "{error:?}"
         );
     }

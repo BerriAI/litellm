@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use litellm_config::{CacheSettings, Config, Value};
-use litellm_redis_resolve::{Expected, RedisError};
+use litellm_redis_resolve::Expected;
 use litellm_redis_types::{
     Auth, AwsIamAuth, AzureAdAuth, Node, ProviderHandle, Resolution, StaticAuth, Target, TlsOptions,
 };
@@ -10,11 +10,12 @@ use rstest::rstest;
 use serde_json::json;
 
 use super::{configured::ConfiguredRedis, secrets::SecretSnapshot};
+use crate::Error;
 
 fn resolution(
     configured: &ConfiguredRedis,
     environment: &HashMap<String, String>,
-) -> Result<Resolution, RedisError> {
+) -> Result<Resolution, Error> {
     let lookup = |name: &str| environment.get(name).cloned();
     configured.resolve(
         &SecretSnapshot::read(configured.secret_names(), &lookup),
@@ -40,14 +41,11 @@ fn redis_cache_kwargs(kwargs: serde_json::Value) -> ConfiguredRedis {
 fn resolve_kwargs(
     kwargs: serde_json::Value,
     environment: &HashMap<String, String>,
-) -> Result<Resolution, RedisError> {
+) -> Result<Resolution, Error> {
     resolution(&redis_cache_kwargs(kwargs), environment)
 }
 
-fn coordination_resolution(
-    yaml: &str,
-    environment: &[(&str, &str)],
-) -> Result<Resolution, RedisError> {
+fn coordination_resolution(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, Error> {
     let environment: HashMap<String, String> = environment
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
@@ -61,15 +59,15 @@ fn coordination_resolution(
     resolution(&configured, &environment)
 }
 
-fn resolve(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, RedisError> {
+fn resolve(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, Error> {
     coordination_resolution(yaml, environment)
 }
 
-fn resolve_cache(yaml: &str) -> Result<Resolution, RedisError> {
+fn resolve_cache(yaml: &str) -> Result<Resolution, Error> {
     resolve_cache_in(yaml, &[])
 }
 
-fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, RedisError> {
+fn resolve_cache_in(yaml: &str, environment: &[(&str, &str)]) -> Result<Resolution, Error> {
     let lookup = |name: &str| {
         environment
             .iter()
@@ -209,7 +207,7 @@ fn an_ocsp_check_fails_instead_of_connecting_without_it(
     let error = coordination_resolution(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, RedisError::Unenforceable { setting: named } if named == setting),
+        matches!(&error, Error::Redis(litellm_redis_resolve::Error::Unenforceable { setting: named, .. }) if named == setting),
         "{error:?}"
     );
 }
@@ -325,7 +323,10 @@ fn a_credential_provider_without_a_host_handle_fails(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(error, RedisError::ProviderWithoutHandle),
+        matches!(
+            error,
+            Error::Redis(litellm_redis_resolve::Error::ProviderWithoutHandle)
+        ),
         "{error}"
     );
 }
@@ -393,7 +394,7 @@ fn an_unknown_cert_requirement_fails() {
 
     assert!(matches!(
         error,
-        RedisError::Invalid { setting, expected: Expected::CertRequirement } if setting == "ssl_cert_reqs"
+        Error::Redis(litellm_redis_resolve::Error::Invalid { setting, expected: Expected::CertRequirement }) if setting == "ssl_cert_reqs"
     ));
 }
 
@@ -467,7 +468,13 @@ fn sentinels_without_a_service_name_fail() {
     )
     .unwrap_err();
 
-    assert!(matches!(error, RedisError::NoSentinelService), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            Error::Redis(litellm_redis_resolve::Error::NoSentinelService)
+        ),
+        "{error:?}"
+    );
 }
 
 #[rstest]
@@ -489,7 +496,7 @@ fn a_host_or_port_cannot_reach_sentinel(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, RedisError::SentinelWithHost { setting } if setting == source),
+        matches!(&error, Error::Redis(litellm_redis_resolve::Error::SentinelWithHost { setting }) if setting == source),
         "{error:?}"
     );
 }
@@ -513,7 +520,7 @@ fn invalid_sentinel_nodes_name_their_source(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, RedisError::Invalid { setting, expected: Expected::SentinelNodes } if setting == source),
+        matches!(&error, Error::Redis(litellm_redis_resolve::Error::Invalid { setting, expected: Expected::SentinelNodes }) if setting == source),
         "{error:?}"
     );
 }
@@ -530,7 +537,7 @@ fn invalid_values_name_their_source(
     let error = resolve(yaml, environment).unwrap_err();
 
     assert!(
-        matches!(&error, RedisError::Invalid { setting, .. } if setting == source),
+        matches!(&error, Error::Redis(litellm_redis_resolve::Error::Invalid { setting, .. }) if setting == source),
         "{error:?}"
     );
 }
@@ -572,7 +579,10 @@ fn connect_timeout_is_resolved_separately(
 fn a_block_without_a_usable_target_fails(#[case] yaml: &str, #[case] environment: &[(&str, &str)]) {
     let error = resolve(yaml, environment).unwrap_err();
 
-    assert!(matches!(error, RedisError::NoTarget), "{error:?}");
+    assert!(
+        matches!(error, Error::Redis(litellm_redis_resolve::Error::NoTarget)),
+        "{error:?}"
+    );
 }
 
 #[rstest]
@@ -642,7 +652,7 @@ fn rejects_bad_socket_timeout(#[case] timeout: &str) {
 
     assert!(matches!(
         error,
-        RedisError::Invalid { setting, expected: Expected::Seconds } if setting == "socket_timeout"
+        Error::Redis(litellm_redis_resolve::Error::Invalid { setting, expected: Expected::Seconds }) if setting == "socket_timeout"
     ));
 }
 

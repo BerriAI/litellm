@@ -5,7 +5,7 @@ use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use crate::{
-    Entry, Expected, RedisError,
+    Entry, Error, Expected,
     keys::{self, FromUrl},
     options::{self, TlsInput, flag, parsed, secret, text},
 };
@@ -14,7 +14,7 @@ use crate::{
 pub(super) fn tls_options(
     input: &TlsInput,
     gcp_ca_certs: Option<&Entry>,
-) -> Result<TlsOptions, RedisError> {
+) -> Result<TlsOptions, Error> {
     Ok(TlsOptions {
         ca_certs: text(gcp_ca_certs.or(input.ca_certs.as_ref())).map(Into::into),
         ca_data: text(input.ca_data.as_ref()),
@@ -27,7 +27,7 @@ pub(super) fn tls_options(
     })
 }
 
-fn verify_certificate(cert_reqs: Option<&Entry>) -> Result<bool, RedisError> {
+fn verify_certificate(cert_reqs: Option<&Entry>) -> Result<bool, Error> {
     parsed(cert_reqs, Expected::CertRequirement, |text| match text {
         "required" | "optional" => Some(true),
         "none" => Some(false),
@@ -45,7 +45,7 @@ pub(super) struct UrlQuery {
     pub(super) ignored: Vec<Ignored>,
 }
 
-pub(super) fn url_query(url: &str) -> Result<UrlQuery, RedisError> {
+pub(super) fn url_query(url: &str) -> Result<UrlQuery, Error> {
     let Ok(url) = url::Url::parse(url) else {
         return Ok(UrlQuery {
             tls: None,

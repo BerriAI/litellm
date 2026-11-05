@@ -6,7 +6,7 @@ use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use crate::{
-    Entry, Expected, Kwargs, RedisError,
+    Entry, Error, Expected, Kwargs,
     keys::{self, Shape},
 };
 
@@ -79,7 +79,7 @@ pub(super) struct Unmodeled {
 }
 
 impl Unmodeled {
-    fn read(kwargs: &Kwargs) -> Result<Self, RedisError> {
+    fn read(kwargs: &Kwargs) -> Result<Self, Error> {
         refuse_unenforceable(kwargs.iter())?;
         let unmodeled = || {
             kwargs
@@ -105,7 +105,7 @@ impl Unmodeled {
 
 impl Options {
     /// The typed settings and the ones the resolver leaves to the host.
-    pub(super) fn read(kwargs: &Kwargs) -> Result<(Self, Unmodeled), RedisError> {
+    pub(super) fn read(kwargs: &Kwargs) -> Result<(Self, Unmodeled), Error> {
         let unmodeled = Unmodeled::read(kwargs)?;
         let options = Self::from_lookup(|key| {
             kwargs
@@ -171,13 +171,14 @@ impl Options {
 /// A `Reject` row that is set to true asks for a check Rust cannot perform. One set to false asks for nothing.
 pub(super) fn refuse_unenforceable<'a>(
     entries: impl IntoIterator<Item = (&'a String, &'a Entry)>,
-) -> Result<(), RedisError> {
+) -> Result<(), Error> {
     entries
         .into_iter()
-        .filter(|(key, _)| keys::is_refused_when_set(key))
-        .try_for_each(|(_, entry)| match flag(Some(entry))? {
-            true => Err(RedisError::Unenforceable {
+        .filter_map(|(key, entry)| Some((keys::refused_check(key)?, entry)))
+        .try_for_each(|(check, entry)| match flag(Some(entry))? {
+            true => Err(Error::Unenforceable {
                 setting: entry.source.clone(),
+                check,
             }),
             false => Ok(()),
         })
@@ -194,8 +195,8 @@ pub fn is_present(value: &Value) -> bool {
     }
 }
 
-pub(super) fn invalid(setting: &str, expected: Expected) -> RedisError {
-    RedisError::Invalid {
+pub(super) fn invalid(setting: &str, expected: Expected) -> Error {
+    Error::Invalid {
         setting: setting.to_owned(),
         expected,
     }
@@ -221,7 +222,7 @@ pub(super) fn secret(entry: Option<&Entry>) -> Option<SecretValue> {
 /// A flag every Python surface reads the same way. `_str_to_bool` takes only `true`, `1` and `yes`
 /// as true while the proxy's pydantic models also take `on`, `t` and `y`, so text they disagree on,
 /// or text neither accepts, is an error instead of a guess.
-pub(super) fn flag(entry: Option<&Entry>) -> Result<bool, RedisError> {
+pub(super) fn flag(entry: Option<&Entry>) -> Result<bool, Error> {
     let Some(entry) = entry else {
         return Ok(false);
     };
@@ -241,20 +242,20 @@ pub(super) fn parsed<T>(
     entry: Option<&Entry>,
     expected: Expected,
     parse: impl Fn(&str) -> Option<T>,
-) -> Result<Option<T>, RedisError> {
+) -> Result<Option<T>, Error> {
     entry
         .and_then(|entry| Some((as_text(&entry.value)?, &entry.source)))
         .map(|(text, source)| parse(&text).ok_or_else(|| invalid(source, expected)))
         .transpose()
 }
 
-pub(super) fn integer<T: TryFrom<BigInt>>(entry: Option<&Entry>) -> Result<Option<T>, RedisError> {
+pub(super) fn integer<T: TryFrom<BigInt>>(entry: Option<&Entry>) -> Result<Option<T>, Error> {
     coerced(entry, Expected::Integer, number::int, |number| {
         T::try_from(number).ok()
     })
 }
 
-pub(super) fn seconds(entry: Option<&Entry>) -> Result<Option<Duration>, RedisError> {
+pub(super) fn seconds(entry: Option<&Entry>) -> Result<Option<Duration>, Error> {
     coerced(entry, Expected::Seconds, number::float, |seconds| {
         Duration::try_from_secs_f64(seconds).ok()
     })
@@ -265,7 +266,7 @@ fn coerced<N, T>(
     expected: Expected,
     parse: impl Fn(&str) -> Option<N>,
     convert: impl Fn(N) -> Option<T>,
-) -> Result<Option<T>, RedisError> {
+) -> Result<Option<T>, Error> {
     let Some((entry, text)) = entry.and_then(|entry| Some((entry, as_text(&entry.value)?))) else {
         return Ok(None);
     };

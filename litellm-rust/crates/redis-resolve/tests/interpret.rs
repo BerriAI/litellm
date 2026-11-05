@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_redis_resolve::{Entry, Expected, Kwargs, RedisError, interpret, kwargs};
+use litellm_redis_resolve::{Entry, Error, Expected, Kwargs, interpret, kwargs};
 use litellm_redis_types::{
     Auth, HealthCheck, Node, ProviderHandle, Resolution, StaticAuth, Target, TlsOptions,
 };
@@ -27,14 +27,14 @@ fn merged(fields: serde_json::Value, sources: &[(&str, &str)]) -> Kwargs {
 fn interpret_merged(
     fields: serde_json::Value,
     sources: &[(&str, &str)],
-) -> Result<Resolution, RedisError> {
+) -> Result<Resolution, Error> {
     let has_provider = fields
         .get("credential_provider")
         .is_some_and(|provider| !provider.is_null());
     interpret(&merged(fields, sources), has_provider.then_some(PROVIDER))
 }
 
-fn interpret_kwargs(fields: serde_json::Value) -> Result<Resolution, RedisError> {
+fn interpret_kwargs(fields: serde_json::Value) -> Result<Resolution, Error> {
     interpret_merged(fields, &[])
 }
 
@@ -93,7 +93,7 @@ fn a_url_query_db_that_is_not_an_integer_fails_like_parse_url() {
     let error = interpret_kwargs(json!({"url": "redis://cache:6379?db=first"})).unwrap_err();
 
     assert!(
-        matches!(error, RedisError::Invalid { setting, expected: Expected::Integer } if setting == "url ?db")
+        matches!(error, Error::Invalid { setting, expected: Expected::Integer } if setting == "url ?db")
     );
 }
 

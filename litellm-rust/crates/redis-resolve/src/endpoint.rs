@@ -7,14 +7,14 @@ use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use crate::{
-    Entry, Expected, RedisError,
+    Entry, Error, Expected,
     options::{Options, as_text, flag, integer, invalid, secret, text},
     tls,
 };
 
 /// The target, first match wins like `get_redis_client`: cluster, url, Sentinel, then host. A
 /// url also returns the query parameters it ignores.
-pub(super) fn target(options: &Options, auth: &Auth) -> Result<(Target, Vec<Ignored>), RedisError> {
+pub(super) fn target(options: &Options, auth: &Auth) -> Result<(Target, Vec<Ignored>), Error> {
     if let Some(nodes) = cluster_nodes(options.startup_nodes.as_ref())? {
         reject_cluster_db(options.db.as_ref())?;
         let cluster = Cluster {
@@ -41,7 +41,7 @@ pub(super) fn target(options: &Options, auth: &Auth) -> Result<(Target, Vec<Igno
         let sentinel = sentinel(options, auth, sentinels)?;
         return Ok((Target::Sentinel(sentinel), Vec::new()));
     }
-    let host = text(options.host.as_ref()).ok_or(RedisError::NoTarget)?;
+    let host = text(options.host.as_ref()).ok_or(Error::NoTarget)?;
     let target = match text(options.unix_socket_path.as_ref()) {
         Some(path) => Target::Unix(UnixSocket {
             path: path.into(),
@@ -57,7 +57,7 @@ pub(super) fn target(options: &Options, auth: &Auth) -> Result<(Target, Vec<Igno
     Ok((target, Vec::new()))
 }
 
-fn tls_for(options: &Options, auth: &Auth) -> Result<Option<TlsOptions>, RedisError> {
+fn tls_for(options: &Options, auth: &Auth) -> Result<Option<TlsOptions>, Error> {
     if !flag(options.ssl.as_ref())? {
         return Ok(None);
     }
@@ -68,19 +68,19 @@ fn tls_for(options: &Options, auth: &Auth) -> Result<Option<TlsOptions>, RedisEr
     tls::tls_options(&options.tls, gcp_ca_certs).map(Some)
 }
 
-fn db(options: &Options) -> Result<i64, RedisError> {
+fn db(options: &Options) -> Result<i64, Error> {
     integer(options.db.as_ref()).map(|db| db.unwrap_or(0))
 }
 
-fn sentinel(options: &Options, auth: &Auth, sentinels: &Entry) -> Result<Sentinel, RedisError> {
+fn sentinel(options: &Options, auth: &Auth, sentinels: &Entry) -> Result<Sentinel, Error> {
     let monitors = sentinel_nodes(&sentinels.value)
         .ok_or_else(|| invalid(&sentinels.source, Expected::SentinelNodes))?;
     let service_name =
-        text(options.sentinel.service_name.as_ref()).ok_or(RedisError::NoSentinelService)?;
+        text(options.sentinel.service_name.as_ref()).ok_or(Error::NoSentinelService)?;
     // redis.asyncio.Sentinel passes the connection kwargs to each monitor's Redis(host=..., port=...), so a
     // host or port setting raises TypeError when litellm builds the client
     if let Some(entry) = options.host.as_ref().or(options.port.as_ref()) {
-        return Err(RedisError::SentinelWithHost {
+        return Err(Error::SentinelWithHost {
             setting: entry.source.clone(),
         });
     }
@@ -107,7 +107,7 @@ fn monitor_auth(options: &Options, auth: &Auth) -> Option<StaticAuth> {
     })
 }
 
-fn cluster_nodes(entry: Option<&Entry>) -> Result<Option<Vec<Node>>, RedisError> {
+fn cluster_nodes(entry: Option<&Entry>) -> Result<Option<Vec<Node>>, Error> {
     let Some(entry) = entry else {
         return Ok(None);
     };
@@ -149,7 +149,7 @@ fn node_address(host: Option<String>, port: Option<String>) -> Option<Node> {
 }
 
 // redis-py's RedisCluster raises unless db is 0 or None
-fn reject_cluster_db(db: Option<&Entry>) -> Result<(), RedisError> {
+fn reject_cluster_db(db: Option<&Entry>) -> Result<(), Error> {
     let Some(entry) = db else {
         return Ok(());
     };
@@ -161,7 +161,7 @@ fn reject_cluster_db(db: Option<&Entry>) -> Result<(), RedisError> {
     };
     match is_zero {
         true => Ok(()),
-        false => Err(RedisError::DbInCluster {
+        false => Err(Error::DbInCluster {
             setting: entry.source.clone(),
         }),
     }

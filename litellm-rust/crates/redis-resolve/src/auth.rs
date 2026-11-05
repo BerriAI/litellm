@@ -1,17 +1,17 @@
 use litellm_redis_types::{Auth, AwsIamAuth, AzureAdAuth, ProviderHandle, StaticAuth};
 
 use crate::{
-    RedisError,
+    Error,
     options::{self, AwsOptions, Options, flag, secret, text},
 };
 
 pub(super) fn redis_auth(
     options: &Options,
     provider: Option<ProviderHandle>,
-) -> Result<Auth, RedisError> {
+) -> Result<Auth, Error> {
     match (provider, &options.credential_provider) {
         (Some(handle), _) => return Ok(Auth::Provider(handle)),
-        (None, Some(_)) => return Err(RedisError::ProviderWithoutHandle),
+        (None, Some(_)) => return Err(Error::ProviderWithoutHandle),
         (None, None) => {}
     }
     let gcp = text(options.gcp.service_account.as_ref());
@@ -54,7 +54,7 @@ pub(super) fn redis_auth(
 }
 
 // _uses_tls: a url's scheme decides unless cluster nodes are set, otherwise the ssl kwarg does
-fn uses_tls(options: &Options) -> Result<bool, RedisError> {
+fn uses_tls(options: &Options) -> Result<bool, Error> {
     match (&options.startup_nodes, text(options.url.as_ref())) {
         (None, Some(url)) => Ok(url
             .split_once("://")
@@ -63,9 +63,9 @@ fn uses_tls(options: &Options) -> Result<bool, RedisError> {
     }
 }
 
-fn aws_iam(aws: &AwsOptions, uses_tls: bool) -> Result<AwsIamAuth, RedisError> {
+fn aws_iam(aws: &AwsOptions, uses_tls: bool) -> Result<AwsIamAuth, Error> {
     if !uses_tls {
-        return Err(RedisError::AwsIamWithoutTls);
+        return Err(Error::AwsIamWithoutTls);
     }
     match (
         text(aws.user_name.as_ref()),
@@ -78,7 +78,7 @@ fn aws_iam(aws: &AwsOptions, uses_tls: bool) -> Result<AwsIamAuth, RedisError> {
             region,
             serverless: options::flag(aws.serverless.as_ref())?,
         }),
-        (user_name, cache_name, region) => Err(RedisError::AwsIamIncomplete {
+        (user_name, cache_name, region) => Err(Error::AwsIamIncomplete {
             missing: [
                 ("aws_iam_user_name", user_name.is_none()),
                 ("aws_iam_cache_name", cache_name.is_none()),
