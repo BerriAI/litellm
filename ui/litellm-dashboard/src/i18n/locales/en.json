@@ -1597,6 +1597,28 @@
     }
   },
   "skills": {
+    "install": {
+      "action": "Install / Share",
+      "title": "Install {{name}}",
+      "description": "Choose your coding agent and copy the command to your terminal",
+      "agent": "Coding agent",
+      "scope": "Install location",
+      "project": "Current project",
+      "global": "All projects",
+      "method": "Install method",
+      "authenticated": "Authenticated",
+      "public": "Public command",
+      "authenticatedHint": "Enter your own LiteLLM key at the terminal prompt. The gateway checks your access before downloading the skill",
+      "publicHint": "This skill is listed in the gateway's public index and can be installed without a key",
+      "command": "Install command",
+      "authenticatedRequirements": "Requires macOS or Linux with Bash, curl, unzip, Node.js 22.20 or later, and npm. Run from your project directory for a project install",
+      "publicRequirements": "Requires macOS or Linux with Node.js 22.20 or later and npm. Run from your project directory for a project install",
+      "shareHint": "Share this command with teammates. It contains no key",
+      "copy": "Copy install command",
+      "copied": "Copied",
+      "copyFailed": "Could not copy the command. Select and copy it manually",
+      "unavailable": "An install command is unavailable for this gateway URL. Authenticated installs require HTTPS or a localhost gateway"
+    },
     "panel": {
       "title": "Skills",
       "intro": "Upload or import portable skills. Review proposed changes before publishing them to the Skills Hub.",
