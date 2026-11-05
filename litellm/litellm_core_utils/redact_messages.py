@@ -8,13 +8,19 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+import contextlib
 import copy
+import functools
 import inspect
-from collections.abc import Iterable, Mapping, Sequence
+import itertools
+import json
+import re
+import traceback
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -22,6 +28,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
+)
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    initialize_standard_callback_dynamic_params,
+    iter_client_callback_metadata_dicts,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -31,7 +41,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayloadErrorInformation
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -239,6 +249,10 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
 
 
+def _as_items(value: object) -> tuple[object, ...] | None:
+    return tuple(value) if isinstance(value, (list, tuple)) else None  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # items are walked one by one
+
+
 def _redact_provider_specific_fields(message: object) -> None:
     if (fields := _as_mapping(getattr(message, "provider_specific_fields", None))) is not None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
@@ -411,6 +425,329 @@ def _redacted_responses_api_response(
         else output,
     }
     return _with_redacted_instructions(redacted) if redact_instructions else redacted
+
+
+_REQUEST_TEXT_KEYS: Final = ("messages", "input", "prompt", "system", "instructions")
+_STRUCTURAL_KEYS: Final = frozenset({"role", "type", "id", "tool_call_id", "name"})
+_MIN_UNQUOTED_TEXT_LENGTH: Final = 4
+_ESCAPED_CHARACTERS: Final = ('"', "\\")
+_INPUT_VALUE_LABEL: Final = "input_value="
+_INPUT_TYPE_LABEL: Final = ", input_type="
+_MAX_SCRUB_COMPARISONS: Final = 10_000_000
+_MAX_ECHO_OCCURRENCES: Final = 10_000
+_QUOTES: Final = ("'", '"')
+_ESCAPE_TAIL: Final = re.compile(r"\\(?:[abfnrtv]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})\Z")
+_DIRECT_CAUSE_LINE: Final = "\nThe above exception was the direct cause of the following exception:\n\n"
+_CONTEXT_LINE: Final = "\nDuring handling of the above exception, another exception occurred:\n\n"
+
+
+def _child_values(value: object) -> tuple[object, ...]:
+    if (mapping := _as_mapping(value)) is not None:
+        return tuple(item for key, item in mapping.items() if key not in _STRUCTURAL_KEYS)
+    if (items := _as_items(value)) is not None:
+        return items
+    if isinstance(value, BaseModel):
+        return (value.model_dump(),)
+    return ()
+
+
+def _next_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(_child_values, level)))
+
+
+def request_texts(*values: object) -> frozenset[str]:
+    """
+    The non-empty strings a request carries under ``values``, skipping structural fields such as ``role``
+    and ``type``. A value passed more than once is walked once.
+    """
+    distinct_values: Final = tuple({id(value): value for value in values}.values())
+    levels: Final = itertools.takewhile(
+        bool, itertools.accumulate(itertools.repeat(None), _next_level, initial=distinct_values)
+    )
+    return frozenset(value for value in itertools.chain.from_iterable(levels) if isinstance(value, str) and value)
+
+
+def failure_request_texts(model_call_details: Mapping[str, object], *originals: object) -> frozenset[str]:
+    """The request text a failure on this call can quote: its messages, input, prompt, system prompt and instructions."""
+    optional_params: Final = _as_mapping(model_call_details.get("optional_params")) or {}
+    return request_texts(
+        *originals,
+        *(model_call_details.get(key) for key in _REQUEST_TEXT_KEYS),
+        *(optional_params.get(key) for key in ("system", "instructions")),
+    )
+
+
+def _echo_forms(text: str) -> frozenset[str]:
+    """How an error can quote ``text``: verbatim, or JSON or repr escaped. Printable ASCII without a double quote
+    or a backslash escapes to itself."""
+    if text.isascii() and text.isprintable() and not any(character in text for character in _ESCAPED_CHARACTERS):
+        return frozenset((text,))
+    return frozenset({text, json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1], repr(text)[1:-1]})
+
+
+def scrub_request_text(text: str, texts: Collection[str]) -> str:
+    """
+    ``text`` with every quote of the request's own ``texts`` and every pydantic ``input_value`` replaced by
+    ``REDACTED_BY_LITELLM``, so an error that holds neither keeps its wording. A search too large for a
+    failure path replaces the whole text.
+    """
+    if not text or not texts:
+        return text
+    if len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
+        return REDACTED_BY_LITELLM
+    echoes: Final = sorted(
+        frozenset(itertools.chain.from_iterable(_quotes_in(text, each) for each in texts)), key=len, reverse=True
+    )
+    label_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL in form)
+    other_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL not in form)
+    with_label_quotes_replaced: Final = _with_echoes_replaced(text, label_quotes)
+    scrubbed: Final = (
+        None
+        if with_label_quotes_replaced is None
+        else _with_echoes_replaced(_with_input_values_replaced(with_label_quotes_replaced), other_quotes)
+    )
+    return REDACTED_BY_LITELLM if scrubbed is None else scrubbed
+
+
+def quoted_request_texts(text: str, texts: Collection[str]) -> frozenset[str]:
+    """
+    The request ``texts`` that ``scrub_request_text`` needs to scrub ``text`` as it would with all of them: those
+    quoted anywhere in it, even inside a word, or all of them when ``text`` holds a pydantic ``input_value`` or is
+    too large to search.
+    """
+    if _INPUT_VALUE_LABEL in text or len(text) * len(texts) > _MAX_SCRUB_COMPARISONS:
+        return frozenset(texts)
+    return frozenset(each for each in texts if _quotes_in(text, each))
+
+
+def _quotes_in(text: str, quoted: str) -> tuple[str, ...]:
+    """The forms of ``quoted`` that turn up in ``text``, each without a trailing ``input_value=``."""
+    if len(quoted) > len(text):
+        return ()
+    return tuple(
+        form
+        for form in (each.removesuffix(_INPUT_VALUE_LABEL) for each in _echo_forms(quoted))
+        if form and form in text
+    )
+
+
+def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
+    """
+    ``text`` with each quote of ``echoes`` replaced by ``REDACTED_BY_LITELLM`` in one left-to-right pass, the
+    longest where several start at one place. An echo that is a single word only counts where it stands as its own
+    word, so a prompt such as ``Error`` leaves ``RateLimitError`` alone. ``None`` when ``echoes`` turn up more often
+    than a failure path should look through.
+    """
+    found: Final = tuple(
+        itertools.islice(
+            itertools.chain.from_iterable(_quote_spans(text, form) for form in echoes), _MAX_ECHO_OCCURRENCES + 1
+        )
+    )
+    if len(found) > _MAX_ECHO_OCCURRENCES:
+        return None
+    echo_starts: Final = frozenset(start for start, _, _ in found)
+    echo_ends: Final = frozenset(end for _, end, _ in found)
+    counted: Final = (
+        (start, end)
+        for start, end, single_word in found
+        if not single_word
+        or (
+            (start in echo_ends or _is_break_before(text, start)) and (end in echo_starts or _is_break_after(text, end))
+        )
+    )
+    ends: Final = dict(sorted(counted, key=lambda span: span[1]))
+    starts: Final = sorted(ends)
+    frontiers: Final = itertools.accumulate(starts, functools.partial(_frontier_after, ends), initial=0)
+    chosen: Final = tuple(start for start, frontier in zip(starts, frontiers) if start >= frontier)
+    resumes: Final = (0, *(ends[start] for start in chosen))
+    kept_and_replaced: Final = itertools.chain.from_iterable(
+        (text[resume:start], REDACTED_BY_LITELLM) for resume, start in zip(resumes, chosen)
+    )
+    return "".join((*kept_and_replaced, text[resumes[-1] :]))
+
+
+def _frontier_after(ends: Mapping[int, int], frontier: int, start: int) -> int:
+    """Where the next replacement may start once the quote at ``start`` is passed, replacing it if it starts at or
+    past ``frontier``."""
+    return ends[start] if start >= frontier else frontier
+
+
+def _quote_spans(text: str, form: str) -> Iterator[tuple[int, int, bool]]:
+    """Where each quote of ``form`` in ``text`` starts and ends, overlaps included, and whether ``form`` is a single
+    word. A form short enough to occur in ordinary wording only counts between quotes."""
+    if len(form) >= _MIN_UNQUOTED_TEXT_LENGTH:
+        single_word: Final = form.isascii() and form.replace("_", "").isalnum()
+        return ((start, start + len(form), single_word) for start in _found(text, form))
+    quoted_starts: Final = itertools.chain.from_iterable(
+        _found(text, f"{opening}{form}{closing}") for opening, closing in itertools.product(_QUOTES, repeat=2)
+    )
+    return ((start + 1, start + 1 + len(form), False) for start in quoted_starts)
+
+
+def _found(text: str, piece: str) -> Iterator[int]:
+    """Every index ``piece`` starts at in ``text``, overlaps included."""
+    return itertools.takewhile(
+        lambda start: start >= 0,
+        itertools.accumulate(
+            itertools.repeat(None), lambda start, _: text.find(piece, start + 1), initial=text.find(piece)
+        ),
+    )
+
+
+def _is_break_before(text: str, index: int) -> bool:
+    """
+    Whether a word starts at ``index`` of ``text``. An escape such as ``\\n`` before it and a ``REDACTED_BY_LITELLM``
+    an earlier pass put there count as breaks.
+    """
+    return (
+        index == 0
+        or not _is_word_character(text[index - 1])
+        or text.endswith(REDACTED_BY_LITELLM, 0, index)
+        or _ESCAPE_TAIL.search(text, max(0, index - 10), index) is not None
+    )
+
+
+def _is_break_after(text: str, index: int) -> bool:
+    """Whether a word ends at ``index`` of ``text``. A pydantic ``input_value=`` or a ``REDACTED_BY_LITELLM`` right
+    after it counts as a break."""
+    return (
+        index == len(text)
+        or not _is_word_character(text[index])
+        or text.startswith((_INPUT_VALUE_LABEL, REDACTED_BY_LITELLM), index)
+    )
+
+
+def _is_word_character(character: str) -> bool:
+    return character.isascii() and (character.isalnum() or character == "_")
+
+
+def _with_input_values_replaced(text: str) -> str:
+    """``text`` with the pydantic ``input_value`` on each of its lines replaced by ``REDACTED_BY_LITELLM``."""
+    if _INPUT_VALUE_LABEL not in text:
+        return text
+    return "\n".join(_line_with_input_value_replaced(line) for line in text.split("\n"))
+
+
+def _line_with_input_value_replaced(line: str) -> str:
+    """``line`` from its first ``input_value=`` up to its last ``, input_type=``, or to its end without one, replaced."""
+    start: Final = line.find(_INPUT_VALUE_LABEL)
+    if start < 0:
+        return line
+    value_start: Final = start + len(_INPUT_VALUE_LABEL)
+    type_start: Final = line.rfind(_INPUT_TYPE_LABEL, value_start)
+    return f"{line[:value_start]}{REDACTED_BY_LITELLM}{line[type_start:] if type_start >= 0 else ''}"
+
+
+def scrubbed_error_information(
+    error_information: StandardLoggingPayloadErrorInformation, texts: Collection[str]
+) -> StandardLoggingPayloadErrorInformation:
+    """``error_information`` with the request's ``texts`` scrubbed out of its message and traceback. The type,
+    status code and every other field carry no prompt and are left as they are."""
+    error_message: Final = error_information.get("error_message")
+    traceback_text: Final = error_information.get("traceback")
+    return {
+        **error_information,
+        "error_message": error_message if error_message is None else scrub_request_text(error_message, texts),
+        "traceback": traceback_text if traceback_text is None else scrub_request_text(traceback_text, texts),
+    }
+
+
+def _with_scrubbed_text(
+    mapping: Mapping[str, object], fields: tuple[str, ...], texts: Collection[str]
+) -> Mapping[str, object]:
+    return {
+        key: scrub_request_text(value, texts) if key in fields and isinstance(value, str) else value
+        for key, value in mapping.items()
+    }
+
+
+def scrubbed_error_fields(payload: Mapping[str, object], texts: Collection[str]) -> Mapping[str, object]:
+    """The ``error_str`` and ``error_information`` entries of a ``StandardLoggingPayload`` with the request's
+    ``texts`` scrubbed out, to merge over a copy of the payload. Absent entries are left out."""
+    error_str: Final = payload.get("error_str")
+    error_information: Final = _as_mapping(payload.get("error_information"))
+    return {
+        **({"error_str": scrub_request_text(error_str, texts)} if isinstance(error_str, str) else {}),
+        **(
+            {"error_information": _with_scrubbed_text(error_information, ("error_message", "traceback"), texts)}
+            if error_information is not None
+            else {}
+        ),
+    }
+
+
+def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
+    """
+    The error message and traceback a failure logged when redaction scrubbed the request's text out of
+    either, for callbacks that would otherwise record the raw exception. ``None`` when nothing was scrubbed.
+    Without a logged error message, the message is the exception text that ends the traceback.
+    """
+    payload: Final = _as_mapping(model_call_details.get("standard_logging_object")) or {}
+    error_information: Final = _as_mapping(payload.get("error_information")) or {}
+    message: Final = error_information.get("error_message")
+    logged_traceback: Final = model_call_details.get("traceback_exception")
+    traceback_text: Final = (
+        logged_traceback if isinstance(logged_traceback, str) else error_information.get("traceback")
+    )
+    if not any(isinstance(text, str) and REDACTED_BY_LITELLM in text for text in (message, traceback_text)):
+        return None
+    logged_traceback_text: Final = traceback_text if isinstance(traceback_text, str) else ""
+    return (message if isinstance(message, str) else _exception_text(logged_traceback_text), logged_traceback_text)
+
+
+def scrubbed_exception_record(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
+    """
+    The message and stack trace to record for the failure's exception when redaction scrubbed the request's text
+    out of the logged error, as ``scrubbed_exception_text`` reads them. A failure that logged no traceback gets the
+    exception's own frames, with ``REDACTED_BY_LITELLM`` for the text of each exception it chains.
+    """
+    scrubbed: Final = scrubbed_exception_text(model_call_details)
+    exception: Final = model_call_details.get("exception")
+    if scrubbed is None or scrubbed[1] or not isinstance(exception, BaseException):
+        return scrubbed
+    chain: Final = _exception_chain(exception)
+    earlier: Final = "".join(
+        _exception_frames(older, REDACTED_BY_LITELLM)
+        + (_DIRECT_CAUSE_LINE if newer.__cause__ is not None else _CONTEXT_LINE)
+        for newer, older in reversed(tuple(itertools.pairwise(chain)))
+    )
+    return scrubbed[0], earlier + _exception_frames(exception, scrubbed[0])
+
+
+def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
+    """``exception`` and each exception it chains as Python prints them, newest first, up to one already in it."""
+    walk: Final = itertools.accumulate(itertools.repeat(None), _with_older_exception, initial=(exception,))
+    return next(chain for chain, longer in itertools.pairwise(walk) if longer is chain)
+
+
+def _with_older_exception(chain: tuple[BaseException, ...], _: None) -> tuple[BaseException, ...]:
+    """``chain`` with the exception its oldest one chains added, unless there is none or ``chain`` holds it."""
+    oldest: Final = chain[-1]
+    older: Final = (
+        oldest.__cause__
+        if oldest.__cause__ is not None
+        else None
+        if oldest.__suppress_context__
+        else oldest.__context__
+    )
+    return chain if older is None or any(older is each for each in chain) else (*chain, older)
+
+
+def _exception_frames(exception: BaseException, message: str) -> str:
+    """``exception``'s own frames and last line as Python prints them, with ``message`` for its text."""
+    frames: Final = "".join(traceback.format_tb(exception.__traceback__))
+    header: Final = "Traceback (most recent call last):\n" if frames else ""
+    kind: Final = type(exception)
+    name: Final = (
+        kind.__qualname__ if kind.__module__ in ("__main__", "builtins") else f"{kind.__module__}.{kind.__qualname__}"
+    )
+    return f"{header}{frames}{name}: {message}\n" if message else f"{header}{frames}{name}\n"
+
+
+def _exception_text(traceback_text: str) -> str:
+    """The lines after the last indented frame line of ``traceback_text``."""
+    lines: Final = reversed(traceback_text.rstrip().splitlines())
+    return "\n".join(reversed(tuple(itertools.takewhile(lambda line: not line.startswith(" "), lines))))
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
@@ -686,6 +1023,69 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
 
     # Priority 3: Fall back to global setting
     return litellm.turn_off_message_logging is True
+
+
+def should_redact_failure_logging(model_call_details: Mapping[str, object]) -> bool:
+    """
+    ``should_redact_message_logging`` for the failure path, which must log the failure whatever the
+    request carried. Headers that are not a mapping carry no redaction header, so the request's own
+    setting or the global one decides.
+    """
+    try:
+        return should_redact_message_logging(dict(model_call_details))
+    except AttributeError:
+        dynamic_turn_off: Final = _get_turn_off_message_logging_from_dynamic_params(dict(model_call_details))
+        return dynamic_turn_off if dynamic_turn_off is not None else litellm.turn_off_message_logging is True
+
+
+def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
+    """
+    The redaction decision for proxy failure hooks, which get the request body but not its logging
+    object: the same metadata, headers and dynamic params the logging object would read. When the
+    logging object would reject another of the request's callback params, the request's own
+    ``turn_off_message_logging`` still counts, and when it would reject that too the global setting decides.
+    """
+    body: Final = dict(request_data)
+    dynamic_params: Final = _request_callback_params(body)
+    if dynamic_params is None:
+        return litellm.turn_off_message_logging is True
+    return should_redact_failure_logging(
+        {
+            "litellm_params": {key: body[key] for key in ("metadata", "litellm_metadata") if key in body},
+            "standard_callback_dynamic_params": dynamic_params,
+        }
+    )
+
+
+def _request_callback_params(body: Mapping[str, object]) -> StandardCallbackDynamicParams | None:
+    """
+    The callback params the logging object reads from ``body``. When it would reject one of them, only the
+    request's own ``turn_off_message_logging``, and ``None`` when it would reject that too.
+    """
+    with contextlib.suppress(ValueError):
+        return initialize_standard_callback_dynamic_params(dict(body))
+    sources: Final[tuple[Mapping[str, object], ...]] = (
+        body,
+        *(metadata for _, metadata in iter_client_callback_metadata_dicts(body)),
+    )
+    redaction_choice: Final = next(
+        (source["turn_off_message_logging"] for source in sources if "turn_off_message_logging" in source), None
+    )
+    with contextlib.suppress(ValueError):
+        return initialize_standard_callback_dynamic_params(
+            {} if redaction_choice is None else {"turn_off_message_logging": redaction_choice}
+        )
+    return None
+
+
+def scrubbed_error_information_for_request(
+    error_information: StandardLoggingPayloadErrorInformation, request_data: Mapping[str, object]
+) -> StandardLoggingPayloadErrorInformation:
+    """``error_information`` built from a proxy failure hook's exception, with the request's own text
+    scrubbed out when the request's message logging is redacted."""
+    if not should_redact_failed_request(request_data):
+        return error_information
+    return scrubbed_error_information(error_information, failure_request_texts(request_data))
 
 
 def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> Any:
