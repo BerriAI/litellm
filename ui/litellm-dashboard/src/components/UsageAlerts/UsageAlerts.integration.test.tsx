@@ -96,6 +96,18 @@ function ruleResponse(body: RuleInput) {
   return json({ id: "new-rule", ...body });
 }
 
+function modelsResponse(query: URLSearchParams) {
+  if (query.get("search") === "") return json({ detail: "Search must not be empty" }, 422);
+  const page = {
+    data: [{ scope_id: "provider/recorded-model", label: "Recorded model" }],
+    limit: 20,
+    next_cursor: null,
+    start_date: "2026-10-07",
+    end_date: "2026-11-05",
+  };
+  return json(page);
+}
+
 describe("usage alerts API integration", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -161,14 +173,7 @@ describe("usage alerts API integration", () => {
         return json(page);
       }
       if (url.pathname === "/usage/alert-models") {
-        const page = {
-          data: [{ scope_id: "provider/recorded-model", label: "Recorded model" }],
-          limit: 20,
-          next_cursor: null,
-          start_date: "2026-10-07",
-          end_date: "2026-11-05",
-        };
-        return json(page);
+        return modelsResponse(url.searchParams);
       }
       return json({ detail: "Unexpected request" }, 404);
     });

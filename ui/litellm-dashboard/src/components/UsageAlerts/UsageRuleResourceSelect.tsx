@@ -139,7 +139,7 @@ function ModelResource(props: ResourceProps) {
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }: { pageParam: string; signal: AbortSignal }) => {
       const { data } = await backgroundFetchClient.GET("/usage/alert-models", {
-        params: { query: { search, cursor: pageParam || undefined, limit: PAGE_SIZE } },
+        params: { query: { search: search || undefined, cursor: pageParam || undefined, limit: PAGE_SIZE } },
         signal,
       });
       if (!data) throw new Error("Could not load models");

@@ -110,7 +110,7 @@ export default function UsageAlertsPanel() {
       id: "actions",
       header: "",
       size: 40,
-      meta: { className: "w-10 align-top pt-3" },
+      meta: { className: "w-10 text-right align-top pt-3" },
       cell: ({ row }) =>
         isViewOnly ? null : (
           <AlertActions

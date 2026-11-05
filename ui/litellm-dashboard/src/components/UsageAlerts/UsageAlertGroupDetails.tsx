@@ -73,8 +73,8 @@ function IncidentEvidence({ alert }: { alert: UsageAlert }) {
       ]),
   });
   return (
-    <div className="space-y-2 py-3">
-      <div className="flex items-start justify-between gap-3">
+    <div className="space-y-2 py-2.5">
+      <div className="grid grid-cols-[minmax(0,1fr)_2rem] items-start gap-x-6 gap-y-2 sm:grid-cols-[minmax(12rem,2fr)_repeat(3,minmax(0,1fr))_2rem]">
         <div className="min-w-0 space-y-1">
           <a href={usageAlertHref(alert)} className="text-sm font-medium text-primary hover:underline">
             {METRIC_LABELS[alert.metric]}
@@ -83,31 +83,34 @@ function IncidentEvidence({ alert }: { alert: UsageAlert }) {
             {alert.rule_name} · <span className="capitalize">{alert.status}</span>
           </p>
         </div>
+        <dl className="col-span-2 grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:contents">
+          <div>
+            <dt className="text-muted-foreground sm:sr-only">Observed</dt>
+            <dd className="mt-1 tabular-nums sm:mt-0">{formatAlertValue(alert.metric, alert.observed_value)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground sm:sr-only">Baseline</dt>
+            <dd className="mt-1 tabular-nums sm:mt-0">{formatAlertValue(alert.metric, alert.baseline_value)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground sm:sr-only">Alert condition</dt>
+            <dd className="mt-1 tabular-nums sm:mt-0">
+              {alert.direction === "increase" ? "At least" : "At most"}{" "}
+              {formatAlertValue(alert.metric, alert.threshold)}
+            </dd>
+          </div>
+        </dl>
         {!isViewOnly && (
-          <AlertActions
-            label={`${METRIC_LABELS[alert.metric]} alert`}
-            status={alert.status}
-            pending={mutation.isPending}
-            onChange={(status) => mutation.mutate(status)}
-          />
+          <div className="col-start-2 row-start-1 sm:col-start-5">
+            <AlertActions
+              label={`${METRIC_LABELS[alert.metric]} alert`}
+              status={alert.status}
+              pending={mutation.isPending}
+              onChange={(status) => mutation.mutate(status)}
+            />
+          </div>
         )}
       </div>
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-3">
-        <div>
-          <dt className="text-muted-foreground">Observed</dt>
-          <dd className="mt-1 tabular-nums">{formatAlertValue(alert.metric, alert.observed_value)}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Baseline</dt>
-          <dd className="mt-1 tabular-nums">{formatAlertValue(alert.metric, alert.baseline_value)}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">Alert condition</dt>
-          <dd className="mt-1 tabular-nums">
-            {alert.direction === "increase" ? "At least" : "At most"} {formatAlertValue(alert.metric, alert.threshold)}
-          </dd>
-        </div>
-      </dl>
       <p className="text-xs text-muted-foreground">
         Baseline window {alert.baseline_start}–{alert.baseline_end} UTC
         {alert.baseline_sample_days ? ` · ${alert.baseline_sample_days} recorded days` : ""}
@@ -234,6 +237,15 @@ export default function UsageAlertGroupDetails({ group, status }: { group: Alert
       <p className="text-xs leading-relaxed text-muted-foreground">
         Saved comparisons for {group.day} UTC. Each rule uses its own baseline. Errors are failed-request counts.
       </p>
+      <div
+        aria-hidden
+        className="hidden grid-cols-[minmax(12rem,2fr)_repeat(3,minmax(0,1fr))_2rem] gap-x-6 border-b pb-2 pt-4 text-xs text-muted-foreground sm:grid"
+      >
+        <span>Metric</span>
+        <span>Observed</span>
+        <span>Baseline</span>
+        <span>Alert condition</span>
+      </div>
       <div className="divide-y">
         {group.metrics.map((metric) => (
           <MetricEvidence key={metric.metric} group={group} metric={metric} status={status} />
