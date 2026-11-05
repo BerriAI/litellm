@@ -3973,7 +3973,6 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 
 class ProxyErrorTypes(str, enum.Enum):
-    license_limit_exceeded = "license_limit_exceeded"
     budget_exceeded = "budget_exceeded"
     """
     Object was over budget

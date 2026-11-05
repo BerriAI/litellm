@@ -1,7 +1,6 @@
 import base64
 import contextlib
 import json
-import os
 import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -16,8 +15,7 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from litellm.proxy.auth.litellm_license import LicenseCheck
-from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, string_value
+from tests.integration._support.client import Gateway, gateway_from_environment
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import OWNED_STATE_VARIABLE, OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
@@ -130,27 +128,14 @@ def _store_sso_settings(gateway: Gateway, settings: Mapping[str, JsonValue]) -> 
     return gateway.request("PATCH", "/update/sso_settings", settings)
 
 
-def _sign_in(gateway: Gateway, subject: str, *, cli: bool = False) -> httpx.Response:
+def _sign_in(gateway: Gateway, subject: str) -> httpx.Response:
     proxy_url: Final = str(gateway.client.base_url).rstrip("/")
     with httpx.Client(follow_redirects=False, trust_env=False, timeout=30) as browser:
-        session: Final = browser.post(f"{proxy_url}/sso/cli/start") if cli else None
-        if session is not None:
-            assert session.status_code == 200, session.text
-        flow: Final = {} if session is None else JSON_OBJECT.validate_json(session.content)
-        params: Final = {"source": "litellm-cli", "key": string_value(flow["login_id"])} if cli else {}
-        start: Final = browser.get(f"{proxy_url}/sso/key/generate", params=params)
+        start: Final = browser.get(f"{proxy_url}/sso/key/generate")
         assert start.is_redirect, f"{start.status_code} {start.text}"
         at_idp: Final = browser.get(f"{start.headers['location']}&{urlencode({'login_hint': subject})}")
         assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
-        callback: Final = browser.get(at_idp.headers["location"])
-        if cli:
-            pending: Final = browser.get(
-                f"{proxy_url}/sso/cli/poll/{string_value(flow['login_id'])}",
-                headers={"x-litellm-cli-poll-secret": string_value(flow["poll_secret"])},
-            )
-            assert pending.status_code == 200, pending.text
-            assert JSON_OBJECT.validate_json(pending.content) == {"status": "pending"}
-        return callback
+        return browser.get(at_idp.headers["location"])
 
 
 def _delete_user(gateway: Gateway, subject: str) -> None:
@@ -187,59 +172,6 @@ def test_a_first_sso_sign_in_creates_the_user_with_the_default_role(
                 "metadata": {"auth_provider": IDP_PROVIDER},
             }
         ]
-
-
-@pytest.mark.parametrize("cli", [False, True], ids=["dashboard", "cli"])
-def test_licensed_sso_rejects_new_users_with_a_clear_seat_error_without_provisioning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cli: bool
-) -> None:
-    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
-    license_check: Final = LicenseCheck()
-    assert (
-        license_check.verify_license_without_api_request(license_check.public_key, os.environ["LITELLM_LICENSE"])
-        is True
-    )
-    seat_limit: Final = license_check.user_seat_limit()
-    assert seat_limit is not None
-    with _sso_gateway(tmp_path, {}) as gateway:
-        first: Final = _sign_in(gateway, "licensed-seat-0")
-        assert first.status_code == 303, first.text
-        write_rows(
-            'INSERT INTO "LiteLLM_UserTable" (user_id, user_email, user_role, models) '
-            "SELECT 'licensed-seat-' || i, 'licensed-seat-' || i || '@example.com', "
-            "'internal_user', ARRAY[]::text[] FROM generate_series(1, %s::int) AS i",
-            (str(seat_limit),),
-            database_url=gateway.database_url,
-        )
-        before_users: Final = gateway.rows('SELECT COUNT(*) AS count FROM "LiteLLM_UserTable"', ())
-        before_keys: Final = gateway.rows('SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken"', ())
-        direct: Final = gateway.request("POST", "/user/new", {"user_id": "licensed-direct-new"})
-        assert direct.status_code == 403, direct.text
-        assert JSON_OBJECT.validate_json(direct.content) == {
-            "error": {
-                "message": "License is over limit. Please contact support@berri.ai to upgrade your license.",
-                "type": "auth_error",
-                "param": None,
-                "code": "403",
-            }
-        }
-        rejected: Final = _sign_in(gateway, "licensed-new-user", cli=cli)
-
-        assert rejected.status_code == 403, rejected.text
-        assert JSON_OBJECT.validate_json(rejected.content) == {
-            "error": {
-                "message": "No LiteLLM licenses are available. Please contact your administrator.",
-                "type": "auth_error",
-                "param": None,
-                "code": "403",
-            }
-        }
-        assert not rejected.cookies
-        assert gateway.rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', ("licensed-new-user",)) == []
-        assert gateway.rows('SELECT COUNT(*) AS count FROM "LiteLLM_UserTable"', ()) == before_users
-        assert gateway.rows('SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken"', ()) == before_keys
-        existing: Final = _sign_in(gateway, "licensed-seat-0")
-        assert existing.status_code == 303, existing.text
 
 
 def test_free_sso_admission_preserves_existing_users_and_serializes_the_last_seat(

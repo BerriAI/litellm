@@ -25,7 +25,6 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -1459,11 +1458,6 @@ class _UserTable:
     async def find_unique(self, where: dict[str, str]) -> LiteLLM_UserTable | None:
         return self.rows.get(where["user_id"])
 
-    async def count(self, where: Mapping[str, object] | None = None) -> int:
-        if where is None:
-            return len(self.rows)
-        return sum((row.metadata or {}).get("scim_active") is False for row in self.rows.values())
-
 
 def _users_db(table: _UserTable) -> SimpleNamespace:
     database: Final = SimpleNamespace(litellm_usertable=table)
@@ -1498,30 +1492,6 @@ async def test_first_sign_in_signs_in_to_the_account_a_concurrent_first_sign_in_
     signed_in: Final = await _first_sign_in(_UserTable(winner))
 
     assert signed_in == winner
-
-
-@pytest.mark.parametrize("premium", [False, True], ids=["free", "premium"])
-@pytest.mark.asyncio
-async def test_first_sign_in_reports_exhausted_license_seats_without_provisioning(premium: bool) -> None:
-    license_check: Final = LicenseCheck()
-    license_check.airgapped_license_data = {"max_users": 1}
-    occupants: Final = tuple(LiteLLM_UserTable(user_id=f"licensed-seat-{index}") for index in range(2))
-    table: Final = _UserTable(*occupants)
-
-    with (
-        patch("litellm.proxy.proxy_server._license_check", license_check),
-        patch("litellm.proxy.proxy_server.premium_user", premium),
-        pytest.raises(ProxyException) as rejected,
-    ):
-        await _first_sign_in(table)
-
-    assert rejected.value.to_dict() == {
-        "message": "No LiteLLM licenses are available. Please contact your administrator.",
-        "type": "auth_error",
-        "param": None,
-        "code": "403",
-    }
-    assert table.rows == {row.user_id: row for row in occupants}
 
 
 @pytest.mark.asyncio

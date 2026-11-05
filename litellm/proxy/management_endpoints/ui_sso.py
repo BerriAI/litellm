@@ -2938,14 +2938,6 @@ async def insert_sso_user(
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
             )
         except ProxyException as error:
-            if error.openai_code == ProxyErrorTypes.license_limit_exceeded:
-                raise _SSOUserAdmissionError(
-                    message="No LiteLLM licenses are available. Please contact your administrator.",
-                    type=error.type,
-                    param=error.param,
-                    code=error.code,
-                    headers=error.headers,
-                ) from error
             if premium_user is True:
                 raise
             raise _SSOUserAdmissionError(
