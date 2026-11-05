@@ -18,7 +18,7 @@ export default function AlertsPage() {
       >
         <PageTabsList>
           <PageTabsTrigger value="model-deprecations">Model deprecations</PageTabsTrigger>
-          <PageTabsTrigger value="usage">Usage</PageTabsTrigger>
+          <PageTabsTrigger value="usage">Performance</PageTabsTrigger>
         </PageTabsList>
         <PageTabsContent value="model-deprecations">
           <ModelDeprecationsPanel />

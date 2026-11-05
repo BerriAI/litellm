@@ -1,5 +1,7 @@
 import type { RuleInput } from "./usageAlertApi";
 
+export const METRIC_MINIMUMS = { spend: 10, requests: 100, latency: 100, errors: 10 };
+
 export const DEFAULT_RULE: RuleInput = {
   name: "",
   scope_type: "deployment",
@@ -10,7 +12,7 @@ export const DEFAULT_RULE: RuleInput = {
   baseline_days: 7,
   min_history_days: 3,
   min_requests: 100,
-  min_value: 0,
+  min_value: METRIC_MINIMUMS.spend,
   enabled: true,
   notification_channels: [],
   email_recipients: [],
