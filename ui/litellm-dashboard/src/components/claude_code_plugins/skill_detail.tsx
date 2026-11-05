@@ -15,6 +15,7 @@ import {
   MARKETPLACE_KEY_PLACEHOLDER,
 } from "./helpers";
 import { Plugin } from "./types";
+import SkillVersionHistory from "./SkillVersionHistory";
 
 const SkillSource: React.FC<Pick<SkillDetailProps, "skill" | "accessToken">> = ({ skill, accessToken }) => {
   const { t } = useTranslation();
@@ -133,6 +134,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
   const tabs = [
     { key: "overview", label: t("claudeCodePlugins.skillDetail.tabs.overview") },
     { key: "usage", label: t("claudeCodePlugins.skillDetail.tabs.usage") },
+    ...(accessToken ? [{ key: "history", label: t("claudeCodePlugins.skillDetail.history.title") }] : []),
   ];
 
   return (
@@ -175,6 +177,9 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
       </div>
 
       {/* Overview tab */}
+      {activeTab === "history" && accessToken && (
+        <SkillVersionHistory key={`${skill.id}:${accessToken}`} skill={skill} accessToken={accessToken} />
+      )}
       {activeTab === "overview" && (
         <div className="flex gap-16">
           {/* Left column */}

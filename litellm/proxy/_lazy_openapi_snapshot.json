@@ -7912,7 +7912,7 @@
                 }
               ],
               "default": "1.0.0",
-              "description": "Semantic version",
+              "description": "Semantic version, defaults to 1.0.0 on creation",
               "title": "Version"
             }
           },
@@ -7950,7 +7950,7 @@
           "type": "object"
         },
         "UpdatePluginRequest": {
-          "description": "Request body for replacing an existing plugin.\n\nThe plugin name is the resource identity and is supplied as the path\nparameter, so it cannot be changed here. This is a full replace: omitted\nfields reset to their defaults, so version is cleared rather than\ndefaulting to the create-time \"1.0.0\".",
+          "description": "Request body for replacing an existing plugin.\n\nThe plugin name is the resource identity and is supplied as the path\nparameter, so it cannot be changed here. This is a full replace: omitted\nfields reset to their defaults, except version which automatically increments\nthe published patch version when omitted or null.",
           "properties": {
             "author": {
               "anyOf": [
@@ -7998,6 +7998,19 @@
               ],
               "description": "Skill domain (e.g., 'Productivity')",
               "title": "Domain"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published updated_at read by the editor. A stale value returns 409",
+              "title": "Expected Updated At"
             },
             "homepage": {
               "anyOf": [
@@ -8072,7 +8085,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Semantic version; cleared if omitted",
+              "description": "Explicit higher SemVer, or omit/null for an automatic patch bump",
               "title": "Version"
             }
           },
@@ -8203,7 +8216,7 @@
                 }
               ],
               "default": "1.0.0",
-              "description": "Semantic version",
+              "description": "Semantic version, defaults to 1.0.0 on creation",
               "title": "Version"
             }
           },
@@ -8535,7 +8548,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default, except version which automatically increments\nthe published patch version when omitted or null.\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
           "parameters": [
             {
@@ -58937,7 +58950,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Version label for the imported snapshot",
+              "description": "Semantic version, or omit/null to start at 1.0.0",
               "title": "Version"
             }
           },
@@ -59006,6 +59019,19 @@
               ],
               "title": "Domain"
             },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Published updated_at read by the editor. A stale value returns 409",
+              "title": "Expected Updated At"
+            },
             "keywords": {
               "anyOf": [
                 {
@@ -59040,6 +59066,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Explicit higher SemVer, or omit/null for an automatic patch bump",
               "title": "Version"
             }
           },
@@ -59102,6 +59129,18 @@
               "title": "Source",
               "type": "object"
             },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated At"
+            },
             "version": {
               "anyOf": [
                 {
@@ -59129,6 +59168,123 @@
             "source"
           ],
           "title": "SkillHubSkill",
+          "type": "object"
+        },
+        "SkillHubVersion": {
+          "properties": {
+            "content_kind": {
+              "enum": [
+                "stored_archive",
+                "source_reference"
+              ],
+              "title": "Content Kind",
+              "type": "string"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "download_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Download Url"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "manifest": {
+              "additionalProperties": true,
+              "title": "Manifest",
+              "type": "object"
+            },
+            "published_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Published At"
+            },
+            "published_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Published By"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "description",
+            "manifest",
+            "published_at",
+            "published_by",
+            "content_kind",
+            "download_url"
+          ],
+          "title": "SkillHubVersion",
+          "type": "object"
+        },
+        "SkillHubVersions": {
+          "properties": {
+            "next_offset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Offset"
+            },
+            "versions": {
+              "items": {
+                "$ref": "#/components/schemas/SkillHubVersion"
+              },
+              "title": "Versions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "versions",
+            "next_offset"
+          ],
+          "title": "SkillHubVersions",
           "type": "object"
         },
         "ValidationError": {
@@ -59707,6 +59863,192 @@
             }
           ],
           "summary": "Unpublish Skill",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/versions": {
+        "get": {
+          "description": "Read published metadata history. External references are not retained artifacts.",
+          "operationId": "list_skill_versions_skill_hub_skills__name__versions_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubVersions"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Skill Versions",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/versions/{version_id}": {
+        "get": {
+          "description": "Read a retained publication under the current skill's visibility policy.",
+          "operationId": "get_skill_version_skill_hub_skills__name__versions__version_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version_id",
+              "required": true,
+              "schema": {
+                "title": "Version Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillHubVersion"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Skill Version",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/versions/{version_id}/archive": {
+        "get": {
+          "description": "Download a retained publication as a portable ZIP with SKILL.md at its root.",
+          "operationId": "download_skill_version_skill_hub_skills__name__versions__version_id__archive_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "path",
+              "name": "version_id",
+              "required": true,
+              "schema": {
+                "title": "Version Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Download Skill Version",
           "tags": [
             "skill_hub"
           ]
