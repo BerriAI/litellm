@@ -4404,6 +4404,12 @@ class ProxyLogging:
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
 
+                if callback.post_call_deployment_hook_ran(
+                    cast("dict[str, object]", data),  # cast-ok: proxy request payloads are str-keyed
+                    response,
+                ):
+                    continue
+
                 if callback.guardrail_name and callback.guardrail_name in pipeline_managed:
                     continue
 
@@ -4494,6 +4500,11 @@ class ProxyLogging:
         """
 
         async def _run_one(callback: CustomGuardrail) -> None:
+            if callback.post_call_deployment_hook_ran(
+                cast("dict[str, object]", data),  # cast-ok: proxy request payloads are str-keyed
+                response,
+            ):
+                return
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
             if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:

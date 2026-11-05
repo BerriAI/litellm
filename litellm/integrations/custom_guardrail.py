@@ -73,6 +73,7 @@ GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 _PRE_CALL_RAISED_TOKEN: Final = secrets.token_hex(16)
 _DEPLOYMENT_HOOK_RAN_TOKEN: Final = secrets.token_hex(16)
+_POST_CALL_DEPLOYMENT_HOOK_RAN_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
@@ -938,6 +939,34 @@ class CustomGuardrail(CustomLogger):
         """Whether a deployment-level hook ran this guardrail as a policy pipeline step of this request."""
         return _request_carries_marker(data, self._marker(_DEPLOYMENT_HOOK_RAN_TOKEN))
 
+    def _post_call_deployment_marker(self, response: object) -> str | None:
+        response_id: Final[object] = (
+            cast("Mapping[object, object]", response).get("id")  # cast-ok: only reading a mapping value
+            if isinstance(response, Mapping)
+            else getattr(response, "id", None)
+        )
+        if not isinstance(response_id, str) or not response_id.strip():
+            return None
+        return self._marker(f"{_POST_CALL_DEPLOYMENT_HOOK_RAN_TOKEN}:{response_id}")
+
+    def post_call_deployment_hook_ran(self, data: Mapping[str, object], response: object) -> bool:
+        return _request_carries_marker(data, self._post_call_deployment_marker(response))
+
+    def _record_post_call_deployment_hook_run(
+        self,
+        data: dict[str, object],  # mutable-ok: deployment and proxy hooks share this request metadata
+        response: object,
+    ) -> None:
+        marker: Final = self._post_call_deployment_marker(response)
+        if marker is None:
+            return
+        meta: Final = cast("dict[str, object]", get_or_create_metadata_bucket(data)[1])  # cast-ok: str-keyed metadata
+        recorded: Final = _str_collection(meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY))
+        meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [
+            *recorded,
+            *(() if marker in recorded else (marker,)),
+        ]
+
     def _record_deployment_hook_run(
         self,
         data: dict[str, object],  # mutable-ok: the request payload the run is recorded on
@@ -1122,6 +1151,11 @@ class CustomGuardrail(CustomLogger):
             self._record_deployment_hook_run(
                 cast("dict[str, object]", request_data)  # cast-ok: proxy request payloads are str-keyed
             )
+
+        self._record_post_call_deployment_hook_run(
+            cast("dict[str, object]", request_data),  # cast-ok: proxy request payloads are str-keyed
+            result if self._is_valid_response_type(result) else response,
+        )
 
         if not self._is_valid_response_type(result):
             return None

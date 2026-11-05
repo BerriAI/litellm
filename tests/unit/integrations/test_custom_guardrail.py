@@ -3091,6 +3091,53 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
     VectorStorePreCallHook that attaches provider_specific_fields["search_results"])."""
 
     @pytest.mark.asyncio
+    async def test_post_call_marker_uses_replacement_response_id(self) -> None:
+        from litellm.types.utils import LLMResponseTypes
+
+        replacement: Final = ModelResponse(id="chatcmpl-replacement")
+
+        class Guardrail(CustomGuardrail):
+            async def async_post_call_success_hook(
+                self, data: dict[str, object], response: LLMResponseTypes, user_api_key_dict: UserAPIKeyAuth
+            ) -> LLMResponseTypes:
+                return replacement
+
+        guardrail: Final = Guardrail(guardrail_name="post-mod", event_hook=GuardrailEventHooks.post_call)
+        data: Final = {"guardrails": ["post-mod"], "metadata": {}}
+        original: Final = ModelResponse(id="chatcmpl-original")
+        result: Final = await guardrail.async_post_call_success_deployment_hook(data, original, CallTypes.acompletion)
+        assert result is replacement
+        assert guardrail.post_call_deployment_hook_ran(data, replacement) is True
+        assert guardrail.post_call_deployment_hook_ran(data, original) is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("block", [False, True])
+    async def test_post_call_marker_only_records_success(self, block: bool) -> None:
+        from fastapi import HTTPException
+
+        guardrail: Final = _ApplyStyleGuardrail(block=block)
+        guardrail.event_hook = GuardrailEventHooks.post_call
+        data: Final = {"guardrails": ["apply-style-guardrail"], "metadata": {}}
+        response: Final = ModelResponse(
+            id="chatcmpl-moderated", choices=[Choices(message=Message(role="assistant", content="Hello"))]
+        )
+        if block:
+            with pytest.raises(HTTPException):
+                await guardrail.async_post_call_success_deployment_hook(data, response, CallTypes.acompletion)
+        else:
+            await guardrail.async_post_call_success_deployment_hook(data, response, CallTypes.acompletion)
+        assert guardrail.post_call_deployment_hook_ran(data, response) is (not block)
+        assert guardrail.post_call_deployment_hook_ran(data, response.model_copy(update={"id": "other"})) is False
+
+    @pytest.mark.parametrize("response_id", [None, "", " ", 42])
+    def test_post_call_marker_requires_usable_id(self, response_id: object) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="post-mod")
+        data: Final[dict[str, object]] = {"metadata": {}}
+        guardrail._record_post_call_deployment_hook_run(data, {"id": response_id})
+        assert data == {"metadata": {}}
+        assert guardrail.post_call_deployment_hook_ran(data, {"id": response_id}) is False
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_retains_request_identity(self) -> None:
         from litellm.types.guardrails import GuardrailEventHooks
         from litellm.types.utils import Choices, Message, ModelResponse

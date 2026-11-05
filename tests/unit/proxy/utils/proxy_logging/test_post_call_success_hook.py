@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,8 +11,10 @@ from fastapi import HTTPException
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +32,58 @@ def _make_guardrail(name="g", should_run=True, override=None):
     cb.should_run_guardrail = MagicMock(return_value=should_run)
     cb.async_post_call_success_hook = AsyncMock(return_value=override)
     cb.run_in_parallel = False
+    cb.post_call_deployment_hook_ran = CustomGuardrail(guardrail_name=name).post_call_deployment_hook_ran
     return cb
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallel", [False, True])
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("scenario", ["model", "model-and-request", "cache-hit", "request-only", "discarded", "no-id"])
+async def test_post_call_moderates_returned_response_once(
+    proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch, parallel: bool, metadata_key: str, scenario: str
+) -> None:
+    class Guardrail(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(guardrail_name="post-mod", event_hook=GuardrailEventHooks.post_call, default_on=False)
+            self.evaluations = 0
+            self.run_in_parallel = parallel
+
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict[str, object],
+            input_type: str,
+            logging_obj: object = None,
+        ) -> GenericGuardrailAPIInputs:
+            self.evaluations += 1
+            return inputs
+
+    guardrail: Final = Guardrail()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    metadata: Final[dict[str, object]] = {"guardrails": ["post-mod"]}
+    data: Final = {"model": "m", metadata_key: metadata}
+    response: Final = ModelResponse(
+        id="" if scenario == "no-id" else "chatcmpl-returned",
+        choices=[{"message": {"role": "assistant", "content": "Hello"}}],
+    )
+    deployment_response: Final = (
+        response.model_copy(update={"id": "chatcmpl-discarded"}) if scenario == "discarded" else response
+    )
+    if scenario not in ("cache-hit", "request-only"):
+        await guardrail.async_post_call_success_deployment_hook(
+            request_data={**data, "guardrails": ["post-mod"]},
+            response=deployment_response,
+            call_type=CallTypes.acompletion,
+        )
+    returned: Final = response.model_copy(deep=True)
+    out: Final = await proxy_logging.post_call_success_hook(
+        data={**data, **({"guardrails": ["post-mod"]} if scenario == "model-and-request" else {})},
+        response=returned,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+    assert out is returned
+    assert guardrail.evaluations == (2 if scenario in ("discarded", "no-id") else 1)
 
 
 @pytest.mark.asyncio
