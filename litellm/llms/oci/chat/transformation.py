@@ -20,7 +20,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
-from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    merge_consecutive_system_messages,
+    messages_with_file_parts_as_image_urls,
+    system_messages_first,
+)
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -54,7 +59,6 @@ from litellm.llms.oci.common_utils import (
     sign_oci_request,
     validate_oci_environment,
 )
-from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.types.llms.oci import (
     CohereChatRequest,
     OCIChatRequestPayload,
@@ -693,14 +697,18 @@ class OCIChatConfig(BaseConfig):
                 chatRequest=chat_request,
             )
         else:
+            generic_messages: Final = list(messages_with_file_parts_as_image_urls(messages))
+            normalized_messages: Final = (
+                merge_consecutive_system_messages(system_messages_first(generic_messages))
+                if model.lower().removeprefix("oci/").startswith("google.gemini")
+                else generic_messages
+            )
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
                 servingMode=serving_mode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(
-                        list(messages_with_file_parts_as_image_urls(messages))
-                    ),
+                    messages=adapt_messages_to_generic_oci_standard(normalized_messages),
                     **self._get_optional_params(vendor, optional_params, model),
                 ),
             )

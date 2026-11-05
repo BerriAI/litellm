@@ -11,7 +11,8 @@ modules listed there. The lists hold what is used today and may only shrink:
   also fails, so the entry is removed in the same change.
 
 "Outside" means every non-test file under litellm/ and enterprise/ except
-litellm/router.py and the router's own modules. Uses from the router family
+litellm/router.py and the router's own modules (including every
+module under litellm/router_rust/, the Rust core's host-side glue). Uses from the router family
 (litellm/router_utils, litellm/router_strategy) are listed separately, because
 those modules become private parts of the router core in a later step.
 
@@ -38,11 +39,18 @@ ALLOWLIST = os.path.join(os.path.dirname(__file__), "router_surface_allowlist.js
 ROUTER_FILES = {
     "litellm/router.py",
     "litellm/router_api.py",
+    "litellm/router_config.py",
+    "litellm/router_core.py",
+    "litellm/router_python_core.py",
+    "litellm/router_python_host.py",
+    "litellm/router_rust/core.py",
     "litellm/router_deprecated.py",
     "litellm/router_host.py",
 }
-ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_deprecated.py"]
-ROUTER_CLASS_NAMES = {"Router", "DeprecatedRouterMembers"}
+# The Rust core's host-side glue modules are part of the router.
+ROUTER_FILE_PREFIXES = ("litellm/router_rust/",)
+ROUTER_CLASS_FILES = ["litellm/router.py", "litellm/router_python_core.py", "litellm/router_deprecated.py"]
+ROUTER_CLASS_NAMES = {"Router", "PythonCore", "DeprecatedRouterMembers"}
 
 SCAN_ROOTS = ["litellm", "enterprise"]
 SKIP_DIRS = {
@@ -124,7 +132,7 @@ def scan() -> Dict[str, Dict[str, Set[str]]]:
     uses: Dict[str, Dict[str, Set[str]]] = {"outside": {}, "router_family": {}}
     imports: Dict[str, Set[str]] = {}
     for rel, path in _python_files():
-        if rel in ROUTER_FILES or _is_test(rel):
+        if rel in ROUTER_FILES or rel.startswith(ROUTER_FILE_PREFIXES) or _is_test(rel):
             continue
         with open(path, encoding="utf-8") as f:
             src = f.read()

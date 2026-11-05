@@ -75,6 +75,7 @@ from litellm.types.workload_identity import (
 )
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from ..litellm_core_utils.hidden_params import set_extra_attribute
 from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
@@ -105,6 +106,7 @@ from .llms.openai import (
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
     WebSearchOptions,
+    _JsonValue,
 )
 from .rerank import RerankResponse as RerankResponse
 
@@ -222,9 +224,11 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
+    thinking_on_by_default: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
+    supports_continuation: ReadOnly[bool | None]
     supports_none_reasoning_effort: bool | None
     supports_minimal_reasoning_effort: bool | None
     supports_low_reasoning_effort: bool | None
@@ -244,6 +248,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
     token_count_framing: ReadOnly[int | None]
+    token_count_tool_framing: ReadOnly[int | None]
+    token_count_responses_framing: ReadOnly[int | None]
+    token_count_responses_tool_framing: ReadOnly[int | None]
     token_count_model: ReadOnly[TokenCountModelInfo | None]
     token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
@@ -377,6 +384,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
     input_cost_per_audio_token_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_flex: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_priority: ReadOnly[float | None]
+    input_cost_per_audio_token_above_200k_tokens_batches: ReadOnly[float | None]
     input_cost_per_audio_token_priority: ReadOnly[float | None]
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
@@ -402,10 +413,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
     input_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_200k_tokens_flex: ReadOnly[float | None]
     output_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
@@ -419,6 +432,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     regional_processing_uplift_multiplier_us: (
         float | None
     )  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    fedramp_uplift_multiplier: ReadOnly[
+        float | None
+    ]  # OpenAI FedRAMP endpoint (gov.api.openai.com) uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     regional_endpoint_uplift_multiplier: ReadOnly[
         float | None
     ]  # Vertex AI non-global (regional) endpoint uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
@@ -438,6 +454,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
+    output_cost_per_image_token_priority: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -463,6 +480,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
+    search_queries_cost_per_query: ReadOnly[float | SearchContextCostPerQuery | None]
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
@@ -547,6 +565,11 @@ class CallTypes(str, Enum):
     aextraction = "aextraction"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
+    acreate_realtime_client_secret = "acreate_realtime_client_secret"
+    arealtime_calls = "arealtime_calls"
+    acreate_realtime_transcription_session = "acreate_realtime_transcription_session"
+    acreate_realtime_translation_client_secret = "acreate_realtime_translation_client_secret"
+    arealtime_translation_calls = "arealtime_translation_calls"
     create_batch = "create_batch"
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
@@ -674,6 +697,12 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -781,6 +810,8 @@ CallTypesLiteral = Literal[
     "acreate_realtime_client_secret",
     "arealtime_calls",
     "acreate_realtime_transcription_session",
+    "acreate_realtime_translation_client_secret",
+    "arealtime_translation_calls",
 ]
 
 MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
@@ -789,6 +820,10 @@ MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
+    "/v1/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/realtime/translations/client_secrets": (CallTypes.acreate_realtime_translation_client_secret,),
+    "/v1/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
+    "/realtime/translations/calls": (CallTypes.arealtime_translation_calls,),
     # Chat Completions
     "/chat/completions": [CallTypes.acompletion, CallTypes.completion],
     "/v1/chat/completions": [CallTypes.acompletion, CallTypes.completion],
@@ -1107,9 +1142,11 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     "/openai/v1/responses/{response_id}/input_items": (CallTypes.alist_input_items,),
     # Realtime API
-    "/realtime": [CallTypes.arealtime],
-    "/v1/realtime": [CallTypes.arealtime],
-    "/openai/v1/realtime": [CallTypes.arealtime],
+    "/realtime": (CallTypes.arealtime,),
+    "/v1/realtime": (CallTypes.arealtime,),
+    "/openai/v1/realtime": (CallTypes.arealtime,),
+    "/realtime/translations": (CallTypes.arealtime,),
+    "/v1/realtime/translations": (CallTypes.arealtime,),
     "/live/sessions": (CallTypes.arealtime,),
     "/v1/live/sessions": (CallTypes.arealtime,),
     "/openai/v1/live/sessions": (CallTypes.arealtime,),
@@ -1142,6 +1179,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # A2A (Agent-to-Agent)
     "/a2a/{agent_id}": [CallTypes.asend_message, CallTypes.send_message],
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
+    "/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
+    "/v1/a2a/{agent_id}/message/stream": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
         CallTypes.allm_passthrough_route,
@@ -2149,6 +2188,13 @@ class UnreportedUsage(Usage):
 
 
 class StreamingChoices(OpenAIObject):
+    if TYPE_CHECKING:
+        finish_reason: str | None
+        index: int
+        delta: Delta
+        enhancements: object
+        logprobs: ChoiceLogprobs | JsonValue
+
     def __init__(
         self,
         finish_reason=None,
@@ -2162,25 +2208,22 @@ class StreamingChoices(OpenAIObject):
         # https://github.com/BerriAI/litellm/issues/8455
         params.pop("message", None)
         super().__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
+        set_extra_attribute(self, "finish_reason", map_finish_reason(finish_reason) if finish_reason else None)
+        set_extra_attribute(self, "index", index)
         if delta is not None:
             if isinstance(delta, Delta):
-                self.delta = delta
+                set_extra_attribute(self, "delta", delta)
             elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
+                set_extra_attribute(self, "delta", Delta(**delta))
         else:
-            self.delta = Delta()
+            set_extra_attribute(self, "delta", Delta())
         if enhancements is not None:
-            self.enhancements = enhancements
+            set_extra_attribute(self, "enhancements", enhancements)
 
         if isinstance(logprobs, (dict, BaseModel)):
-            self.logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs)
+            set_extra_attribute(self, "logprobs", CHOICE_LOGPROBS_OR_JSON.validate_python(logprobs))
         else:
-            self.logprobs = logprobs
+            set_extra_attribute(self, "logprobs", logprobs)
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -2234,7 +2277,10 @@ class ModelResponseBase(OpenAIObject):
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
-        return self._hidden_params
+        private: Final = self.__pydantic_private__
+        if private is None or "_hidden_params" not in private:
+            return self._hidden_params
+        return private["_hidden_params"]
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
@@ -2929,9 +2975,19 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
+class TranscriptionDetectedLanguage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+
+
+_DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ...])
+
+
 class TranscriptionResponse(OpenAIObject):
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
+    languages: Sequence[TranscriptionDetectedLanguage] | None = None
 
     _hidden_params: dict = {}
     _response_headers: dict | None = None
@@ -2944,8 +3000,28 @@ class TranscriptionResponse(OpenAIObject):
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, text=None) -> None:
-        super().__init__(text=text)
+    def __init__(
+        self,
+        text: str | None = None,
+        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | Mapping[str, object] | None = None,
+        languages: Sequence[TranscriptionDetectedLanguage | Mapping[str, object]] | None = None,
+        **kwargs: object,  # kwargs-ok: OpenAI-compatible responses preserve provider extension fields
+    ) -> None:
+        super().__init__(
+            text=text, usage=usage, languages=TranscriptionResponse.detected_languages(languages), **kwargs
+        )
+        if self.languages is None:
+            del self.languages
+
+    @staticmethod
+    def detected_languages(value: object) -> tuple[TranscriptionDetectedLanguage, ...] | None:
+        try:
+            return _DETECTED_LANGUAGES.validate_python(value, from_attributes=True)
+        except ValidationError:
+            return None
+
+    def set_audio_transcription_duration(self, duration: float) -> None:
+        self._hidden_params["audio_transcription_duration"] = duration
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -3315,6 +3391,11 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     classifier_failure_reason: ReadOnly[ClassifierFailureReason]
     classifier_error_type: ReadOnly[str]
+    classifier_input_budget_tokens: ReadOnly[int]
+    classifier_input_tokens: ReadOnly[int]
+    classifier_input_count_method: ReadOnly[str]
+    classifier_input_truncated: ReadOnly[bool]
+    classifier_input_budget_status: ReadOnly[str]
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
     heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
@@ -3373,6 +3454,11 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "classifier_failure_reason",
         "classifier_error_type",
+        "classifier_input_budget_tokens",
+        "classifier_input_tokens",
+        "classifier_input_count_method",
+        "classifier_input_truncated",
+        "classifier_input_budget_status",
         "classifier_probabilities",
         "classifier_confidence",
         "heuristic_v2_forecast",
@@ -3452,6 +3538,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: list[str] | None
     batch_successful_requests: ReadOnly[int | None]
     batch_failed_requests: ReadOnly[int | None]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -4097,6 +4184,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_audio_token_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_flex: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_priority: float | None = None
+    input_cost_per_audio_token_above_200k_tokens_batches: float | None = None
     input_cost_per_audio_token_priority: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
@@ -4107,6 +4198,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_272k_tokens_flex: float | None = None
     input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_200k_tokens_flex: float | None = None
     input_cost_per_token_above_100k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
@@ -4136,12 +4228,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_272k_tokens_flex: float | None = None
     output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_200k_tokens_flex: float | None = None
     output_cost_per_token_above_100k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
+    output_cost_per_image_token_priority: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -4149,6 +4243,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    search_queries_cost_per_query: float | SearchContextCostPerQuery | None = None
     google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
@@ -4167,6 +4262,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    fedramp_uplift_multiplier: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
@@ -4201,12 +4297,25 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
         "supports_pdf_input",
+        "supports_continuation",
         "reasoning_modes",
         "reasoning_contexts",
     }
 )
 
-DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
+DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"max_input_tokens", "max_output_tokens", "max_tokens"}
+)
+
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "token_count_framing",
+        "token_count_tool_framing",
+        "token_count_responses_framing",
+        "token_count_responses_tool_framing",
+        "token_count_model",
+    }
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
@@ -4313,6 +4422,7 @@ bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_COMPARISON_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
@@ -4536,10 +4646,12 @@ class LlmProviders(str, Enum):
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
+    PARALLEL_AI = "parallel_ai"
     NACE = "nace"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
+    EMPIRIOLABS = "empiriolabs"
     EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
@@ -4661,12 +4773,14 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    HOSTINGER_ROUTER = "hostinger_router"
     ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
     STREAMLAKE = "streamlake"
+    WALLY = "wally"
     OPPER = "opper"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
@@ -4943,29 +5057,50 @@ def _batch_usage_from_chat_usage(usage: Usage) -> BatchUsage:
     )
 
 
+OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS: Final = MappingProxyType(
+    {"pending": "validating", "running": "in_progress"}
+)
+
+
+def openai_batch_status(status: _JsonValue) -> _JsonValue:
+    return OPENAI_BATCH_STATUS_FOR_VLLM_ROUTER_STATUS.get(status, status) if isinstance(status, str) else status
+
+
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
 
+    object: Literal["batch"] = "batch"
+
+    @field_validator("object", mode="before")
+    @classmethod
+    def _default_missing_object_type(cls, value: _JsonValue) -> _JsonValue:
+        return "batch" if value is None else value
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _map_vllm_router_status(cls, value: _JsonValue) -> _JsonValue:
+        return openai_batch_status(value)
+
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
     usage: Usage | None = None
 
     @field_validator("usage", mode="before")
     @classmethod
-    def _usage_from_batch_token_counts(cls, value: object) -> object:
+    def _usage_from_batch_token_counts(cls, value: _JsonValue) -> _JsonValue:
         counts: Final = _parse_batch_token_counts(value)
         return value if counts is None else _usage_with_batch_token_counts(Usage.model_validate(value), counts)
 
     @field_serializer("usage")
     def _serialize_usage_with_batch_fields(
         self, usage: Usage | None, info: FieldSerializationInfo
-    ) -> Mapping[str, object] | None:
+    ) -> Mapping[str, _JsonValue] | None:
         if not isinstance(usage, Usage):
             return usage
         chat_fields: Final = usage.model_dump(
@@ -5132,11 +5267,13 @@ class DataResidency(Enum):
     Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
     us.api.openai.com -> US). Used to apply the regional-processing
     cost uplift (see ``regional_processing_uplift_multiplier_<region>``
-    on ModelInfo).
+    on ModelInfo). gov.api.openai.com maps to FEDRAMP, which applies
+    ``fedramp_uplift_multiplier`` instead.
     """
 
     US = "us"
     EU = "eu"
+    FEDRAMP = "fedramp"
 
 
 LLMResponseTypes = (

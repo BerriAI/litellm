@@ -4323,6 +4323,186 @@ def test_add_litellm_metadata_from_request_headers_traceparent_and_baggage_toget
     assert data["litellm_session_id"] == "baggage-session-42"
 
 
+def _bedrock_passthrough_data(
+    client_body: dict[str, object], custom_llm_provider: str = "bedrock"
+) -> dict[str, object]:
+    return {
+        "method": "POST",
+        "endpoint": "model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse",
+        "custom_llm_provider": custom_llm_provider,
+        "data": client_body,
+        "litellm_metadata": {},
+    }
+
+
+@pytest.mark.parametrize(
+    ("headers", "client_body"),
+    [
+        pytest.param({}, {"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}}, id="converse_body"),
+        pytest.param(
+            {"X-Amzn-Bedrock-Request-Metadata": '{"threadId": "thread-abc-123", "team": "search"}'},
+            {"messages": []},
+            id="invoke_header",
+        ),
+    ],
+)
+def test_bedrock_request_metadata_thread_id_becomes_session_id(
+    headers: dict[str, str], client_body: dict[str, object]
+):
+    sent_body: Final = copy.deepcopy(client_body)
+    data: Final = _bedrock_passthrough_data(client_body)
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == "thread-abc-123"
+    assert data["litellm_metadata"] == {"session_id": "thread-abc-123"}
+    assert "litellm_trace_id" not in data, "a conversation tag must not merge the turns into one trace"
+    assert data["data"] == sent_body, "the tags must still reach Bedrock unchanged"
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ({"threadId": "thread-abc-123", "sessionId": "session-xyz-789"}, "session-xyz-789"),
+        ({"conversationId": "conversation-42", "threadId": "thread-abc-123"}, "thread-abc-123"),
+        ({"conversationId": "conversation-42", "user": "shrey-1234"}, "conversation-42"),
+        ({"sessionId": "", "threadId": "thread-abc-123"}, "thread-abc-123"),
+        ({"sessionId": "conv-42"}, "conv-42"),
+        ({"sessionId": "user:123 / thread.7"}, "user:123 / thread.7"),
+    ],
+)
+def test_bedrock_request_metadata_session_key_priority(tags: dict[str, str], expected: str):
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": tags})
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == expected
+
+
+@pytest.mark.parametrize(
+    ("headers", "data"),
+    [
+        pytest.param(
+            {"x-amzn-bedrock-request-metadata": '{"threadId": "thread-abc-123"'},
+            _bedrock_passthrough_data({"messages": []}),
+            id="malformed_header_json",
+        ),
+        pytest.param(
+            {"x-amzn-bedrock-request-metadata": '["thread-abc-123"]'},
+            _bedrock_passthrough_data({"messages": []}),
+            id="header_json_not_an_object",
+        ),
+        pytest.param(
+            {}, _bedrock_passthrough_data({"requestMetadata": {"threadId": 1234567890}}), id="non_string_value"
+        ),
+        pytest.param({}, _bedrock_passthrough_data({"requestMetadata": {"threadId": ""}}), id="empty"),
+        pytest.param({}, _bedrock_passthrough_data({"requestMetadata": {"user": "shrey-1234"}}), id="no_session_key"),
+        pytest.param(
+            {"x-amzn-bedrock-request-metadata": '{"threadId": "thread-abc-123"}'},
+            {"model": "claude", "custom_llm_provider": "bedrock", "litellm_metadata": {}},
+            id="not_a_passthrough_body",
+        ),
+        pytest.param(
+            {},
+            _bedrock_passthrough_data(
+                {"requestMetadata": {"threadId": "thread-abc-123"}}, custom_llm_provider="vertex_ai"
+            ),
+            id="not_bedrock",
+        ),
+    ],
+)
+def test_bedrock_request_metadata_without_usable_session_id_sets_no_session(
+    headers: dict[str, str], data: dict[str, object]
+):
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert "litellm_session_id" not in data
+
+
+@pytest.mark.parametrize(
+    ("body_tags", "header_tags", "expected"),
+    [
+        pytest.param({"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"),
+        pytest.param({"sessionId": "body-session"}, {"sessionId": "header-session"}, "body-session", id="body_wins"),
+    ],
+)
+def test_bedrock_request_metadata_reads_body_tags_then_header_tags(
+    body_tags: dict[str, str], header_tags: dict[str, str], expected: str
+):
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": body_tags})
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-amzn-bedrock-request-metadata": json.dumps(header_tags)},
+        data=data,
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    assert data["litellm_session_id"] == expected
+
+
+@pytest.mark.parametrize("metadata_bucket", ["litellm_metadata", "metadata"])
+def test_bedrock_request_metadata_never_replaces_a_caller_metadata_session(metadata_bucket: str):
+    data: Final = {
+        **_bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-B"}}),
+        metadata_bucket: {"session_id": "conversation-A"},
+    }
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert "litellm_session_id" not in data
+    assert data[metadata_bucket]["session_id"] == "conversation-A"
+
+
+def test_bedrock_request_metadata_stamps_a_tag_equal_to_the_caller_metadata_session():
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}})
+    data["litellm_metadata"] = {"session_id": "thread-abc-123"}
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == "thread-abc-123"
+
+
+def test_bedrock_request_metadata_header_leaves_non_passthrough_caller_session_alone():
+    data: Final = {"model": "claude", "custom_llm_provider": "bedrock", "metadata": {"session_id": "caller-session-1"}}
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-amzn-bedrock-request-metadata": '{"threadId": "thread-abc-123"}'},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+
+    assert data["metadata"] == {"session_id": "caller-session-1"}
+    assert "litellm_session_id" not in data
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        pytest.param({"x-litellm-session-id": "explicit-session-1"}, "explicit-session-1", id="explicit_header_wins"),
+        pytest.param({"baggage": "session.id=baggage-session-42"}, "thread-abc-123", id="beats_baggage"),
+    ],
+)
+def test_bedrock_request_metadata_session_precedence(headers: dict[str, str], expected: str):
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}})
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == expected
+    assert data["litellm_metadata"]["session_id"] == expected
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_traceparent():
     """x-litellm-trace-id must win over a traceparent header carrying a
     different trace-id - explicit litellm headers are always highest priority."""
@@ -5358,6 +5538,88 @@ async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_
     assert data["metadata"]["guardrails"] == ["pii_blocker"]
     assert data["metadata"]["_pipeline_managed_guardrails"] == {"pii_blocker"}
     assert [pipeline.mode for _policy_name, pipeline in data["metadata"]["_guardrail_pipelines"]] == ["post_call"]
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_keeps_configured_guardrails_and_skips_ones_already_selected():
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    configured = {"pii_blocker": {"extra_body": {"threshold": 0.9}}}
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"guardrails": [configured, "audit"]},
+    }
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "baseline": Policy(guardrails=PolicyGuardrails(add=["pii_blocker", "audit", "hipaa_audit"])),
+    }
+    policy_registry._initialized = True
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="baseline", scope="*")]
+    attachment_registry._initialized = True
+
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+    assert data["metadata"]["guardrails"] == [configured, "audit", "hipaa_audit"]
+
+
+def test_add_guardrails_from_auth_metadata_lists_each_key_and_team_guardrail_once_keeping_the_key_s_settings():
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+
+    configured = {"pii_blocker": {"extra_body": {"threshold": 0.9}}}
+    data = {"model": "gpt-4", "metadata": {}}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={"guardrails": [configured, "audit"]},
+        team_metadata={"guardrails": ["audit", "pii_blocker", "toxic"]},
+    )
+
+    with patch("litellm.proxy.utils.premium_user_check"):
+        add_guardrails_from_auth_metadata(
+            user_api_key_dict=user_api_key_dict, data=data, metadata_variable_name="metadata"
+        )
+
+    assert data["metadata"]["guardrails"] == [configured, "audit", "toxic"]
+
+
+def test_add_guardrails_from_auth_metadata_keeps_a_selected_guardrail_s_settings_when_a_key_policy_adds_it():
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    configured = {"pii_blocker": {"extra_body": {"threshold": 0.9}}}
+    data = {"model": "gpt-4", "metadata": {"guardrails": [configured, "audit"]}}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "baseline": Policy(guardrails=PolicyGuardrails(add=["pii_blocker", "audit", "hipaa_audit"])),
+    }
+    policy_registry._initialized = True
+
+    try:
+        with patch("litellm.proxy.utils.premium_user_check"):
+            add_guardrails_from_auth_metadata(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", metadata={"policies": ["baseline"]}),
+                data=data,
+                metadata_variable_name="metadata",
+            )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+
+    assert data["metadata"]["guardrails"] == [configured, "audit", "hipaa_audit"]
 
 
 @pytest.mark.asyncio
@@ -9514,6 +9776,19 @@ async def test_missing_session_id_reject_accepts_body_metadata_session_id():
     )
 
     assert updated["metadata"]["session_id"] == "body-session-1"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_reject_accepts_bedrock_request_metadata_session_id():
+    updated: Final = await add_litellm_data_to_request(
+        data=_bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}}),
+        request=_request_for("/bedrock/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert _spend_log_session_id(updated, "litellm_metadata") == "thread-abc-123"
 
 
 @pytest.mark.asyncio

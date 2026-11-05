@@ -334,8 +334,10 @@ def test_settings_snapshot_is_reused_until_a_setting_is_written(router):
     assert router.settings().fallbacks == [{"gpt": ["team-gpt"]}]
     router._core_fallbacks = [{"gpt": ["other"]}]  # the router's own writes invalidate it too
     assert router.settings().fallbacks == [{"gpt": ["other"]}]
-    router.settings().fallbacks.append({"x": ["y"]})  # the snapshot holds the router's own objects
-    assert router._core_fallbacks[-1] == {"x": ["y"]}
+    router.settings().fallbacks.append(
+        {"x": ["y"]}
+    )  # the snapshot's lists are copies: settings change only via apply()
+    assert router._core_fallbacks == [{"gpt": ["other"]}]
     unrelated = router.settings()
     router._core_model_list = list(router._core_model_list)
     assert router.settings() is unrelated
@@ -359,7 +361,7 @@ def test_settings_snapshot_is_frozen(router):
 def test_unset_setting_raises_attribute_error_through_old_name():
     r = _router()
     try:
-        del r.__dict__["_core_kubernetes_pod_discovery"]
+        del r._core.__dict__["_core_kubernetes_pod_discovery"]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             assert getattr(r, "kubernetes_pod_discovery", "missing") == "missing"
@@ -372,14 +374,14 @@ def test_unset_setting_raises_attribute_error_through_old_name():
 
 def test_unset_attribute_error_names_the_public_attribute(router):
     # Reading (or deleting) an old attribute the router never set raises what reading it raised before.
-    router.__dict__.pop("_core_slack_alerting_logger", None)
+    router._core.__dict__.pop("_core_slack_alerting_logger", None)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with pytest.raises(AttributeError) as read:
             _ = router.slack_alerting_logger
         with pytest.raises(AttributeError) as deleted:
             del router.slack_alerting_logger
-        del router.__dict__["_core_kubernetes_pod_discovery"]
+        del router._core.__dict__["_core_kubernetes_pod_discovery"]
         with pytest.raises(AttributeError) as setting:
             _ = router.kubernetes_pod_discovery
     for caught, name in ((read, "slack_alerting_logger"), (setting, "kubernetes_pod_discovery")):
@@ -446,84 +448,30 @@ def test_generate_model_id_is_the_module_function():
         assert Router.generate_model_id("g", params) == deployment_id("g", params)
 
 
-def test_subclass_override_of_an_old_member_is_still_called():
-    calls = []
+def test_router_cannot_be_subclassed():
+    with pytest.raises(TypeError, match=r"^litellm\.Router cannot be subclassed"):
 
-    class Sub(litellm.Router):
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            calls.append(model)
-            return await super().async_pre_routing_hook(model, request_kwargs, messages, input, specific_deployment)
-
-    r = Sub(
-        model_list=[
-            {
-                "model_name": "m",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x", "mock_response": "ok"},
-            }
-        ]
-    )
-    response = asyncio.run(r.acompletion(model="m", messages=[{"role": "user", "content": "hi"}]))
-    assert response.choices[0].message.content == "ok"
-    assert calls == ["m"]
+        class Sub(litellm.Router):
+            pass
 
 
-def test_direct_call_of_a_subclass_override_runs_it_once():
-    calls = []
+def test_core_classes_can_still_be_subclassed():
+    from litellm.router_python_core import PythonCore
 
-    class Sub(litellm.Router):
-        def get_model_access_groups(self, model_name=None, model_access_group=None, team_id=None):
-            calls.append(model_name)
-            return super().get_model_access_groups(model_name, model_access_group, team_id)
+    class PythonSub(PythonCore):
+        pass
 
-    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert r.get_model_access_groups("m") == {}
-    assert calls == ["m"]
-    assert asyncio.run(asyncio.to_thread(r.registry().access_groups, model_name="m")) == {}
-    assert calls == ["m", "m"]
+    assert isinstance(object.__new__(PythonSub), Router)
 
+    try:
+        from litellm.router_rust.core import RustCore
+    except ImportError:
+        pytest.skip("the native lib does not load")
 
-def test_subclass_staticmethod_override_is_still_consulted():
-    calls = []
+    class RustSub(RustCore):
+        pass
 
-    class Sub(litellm.Router):
-        @staticmethod
-        def is_deployment_blocked(deployment):
-            calls.append(deployment.model_info.id)
-            return True
-
-    r = Sub(
-        model_list=[
-            {
-                "model_name": "m",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
-                "model_info": {"id": "d1"},
-            }
-        ]
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert r.get_deployment_credentials(model_id="d1") is None
-    assert calls == ["d1"]
-
-
-def test_private_alias_skips_a_subclass_override_of_the_public_name():
-    calls = []
-
-    class Sub(litellm.Router):
-        def get_all_deployments(self, *args, **kwargs):
-            calls.append("get_all_deployments")
-            return super().get_all_deployments(*args, **kwargs)
-
-    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
-    calls.clear()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        assert len(r._get_all_deployments(model_name="m")) == 1
-    assert calls == []
+    assert issubclass(RustSub, RustCore)
 
 
 def test_old_name_writes_and_deletes_warn(router):
@@ -779,23 +727,6 @@ def test_old_members_refuse_objects_that_are_not_routers():
         _as_router(object())  # pyright: ignore[reportArgumentType]
 
 
-def test_direct_call_of_an_async_subclass_override_runs_it_once():
-    calls = []
-
-    class Sub(litellm.Router):
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            calls.append(model)
-            return await super().async_pre_routing_hook(model, request_kwargs, messages, input, specific_deployment)
-
-    r = Sub(model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"}}])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        asyncio.run(r.async_pre_routing_hook("m", {}))
-    assert calls == ["m"]
-
-
 def test_routing_context_forwards_to_the_router(router, monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
@@ -827,3 +758,77 @@ def test_attribute_errors_about_other_objects_pass_through_unchanged(router):
 
     other = AttributeError("'dict' object has no attribute 'x'", name="x", obj={})
     assert _public_attribute_error(router, "_core_x", "x", other) is other
+
+
+# Router-family helpers whose Router parameter became a RoutingContext keep the old spellings.
+
+
+def test_renamed_router_keyword_still_works_and_warns(router):
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+        get_deployment_failures_for_current_minute,
+        increment_deployment_failures_for_current_minute,
+    )
+
+    deployment_id = router.registry().names(kind="ids")[0]
+    label = (
+        "litellm.router_utils.router_callbacks.track_deployment_metrics."
+        "increment_deployment_failures_for_current_minute"
+    )
+    before = DEPRECATED_ROUTER_MEMBER_USES[label]
+
+    with pytest.warns(DeprecationWarning, match=r"litellm_router_instance= is deprecated; pass ctx="):
+        increment_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id=deployment_id)
+
+    assert DEPRECATED_ROUTER_MEMBER_USES[label] == before + 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert get_deployment_failures_for_current_minute(ctx=router._core_ctx, deployment_id=deployment_id) == 1
+
+
+def test_router_passed_where_the_context_goes_is_converted_with_a_warning(router):
+    from litellm.router_utils.cooldown_handlers import get_cooldown_deployments
+
+    with pytest.warns(DeprecationWarning, match="passing a Router is deprecated"):
+        assert get_cooldown_deployments(router, None) == []
+    with pytest.warns(DeprecationWarning, match="a Router as ctx= is deprecated"):
+        assert get_cooldown_deployments(ctx=router, parent_otel_span=None) == []
+
+
+def test_renamed_router_keyword_alongside_the_new_one_is_rejected(router):
+    from litellm.router_utils.cooldown_handlers import get_cooldown_deployments
+
+    with pytest.raises(TypeError, match="got both litellm_router_instance= and ctx="):
+        get_cooldown_deployments(ctx=router._core_ctx, litellm_router_instance=router, parent_otel_span=None)
+
+
+def test_renamed_router_param_maps_to_a_differently_named_context(router):
+    from litellm.router_api import RoutingContext
+    from litellm.router_deprecated import renamed_router_param
+
+    @renamed_router_param("litellm_router", new="litellm_routing_ctx")
+    def helper(*, litellm_routing_ctx: RoutingContext) -> RoutingContext:
+        return litellm_routing_ctx
+
+    with pytest.warns(DeprecationWarning, match="litellm_router= is deprecated; pass litellm_routing_ctx="):
+        assert helper(litellm_router=router) is router._core_ctx
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert helper(litellm_routing_ctx=router._core_ctx) is router._core_ctx
+
+
+def test_renamed_router_attribute_reads_and_writes_the_context(router):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    check = EncryptedContentAffinityCheck(ctx=router._core_ctx)
+    with pytest.warns(DeprecationWarning, match=r"EncryptedContentAffinityCheck\.router: reading this attribute"):
+        assert check.router is router._core_ctx
+
+    other = _router()
+    with pytest.warns(DeprecationWarning, match="setting this attribute is deprecated; set .ctx"):
+        check.router = other
+    assert check.ctx is other._core_ctx
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        other.retire()

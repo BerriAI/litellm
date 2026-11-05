@@ -974,7 +974,7 @@ class TestDiscoverModels:
 
 class TestClientsideBaseOverride:
     def test_client_api_base_override_clears_deployment_wif(self, deployment_wif: dict[str, str]) -> None:
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         redirected: Final = get_dynamic_litellm_params(
             litellm_params={"model": "openai/gpt-4o-mini", **deployment_wif},

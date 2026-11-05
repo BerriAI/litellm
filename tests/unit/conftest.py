@@ -216,6 +216,7 @@ def _reset_aws_auth_caches() -> None:
 def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
+    image_handling_module.pdf_probe_verdicts.flush_cache()
     _reset_aws_auth_caches()
 
 
@@ -249,6 +250,12 @@ def socket_tempdir(socket_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point ``tempfile``'s default directory at ``socket_dir``, for code that picks its own socket directory."""
     monkeypatch.setattr(tempfile, "tempdir", str(socket_dir))
     return socket_dir
+
+
+@pytest.fixture
+def python_router_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``Router`` on ``PythonCore``, for a test that patches a member the Rust core never reads."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
 
 
 @pytest.fixture(autouse=True, scope="session")
