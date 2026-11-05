@@ -50,8 +50,9 @@ describe("model migration impact", () => {
         body: request.method === "PUT" ? await request.clone().json() : null,
       };
       calls.push(call);
-      if (url.pathname.endsWith("/alerts/tags")) return apiResponse([]);
-      if (request.method === "PUT") return apiResponse({ status: "resolved" });
+      if (url.pathname === "/alerting/model-deprecations/tags") return apiResponse([]);
+      if (request.method === "PUT" && url.pathname === "/alerting/model-deprecations/state")
+        return apiResponse({ status: "resolved" });
       if (url.pathname.endsWith("/aggregated/keys")) {
         const offset = Number(url.searchParams.get("offset") || 0);
         const rows = Array.from({ length: 50 }, (_, i) => ({
@@ -108,7 +109,11 @@ describe("model migration impact", () => {
       last_seen_date: "2026-11-04",
       last_seen_requests: 20,
     };
-    await waitFor(() => expect(calls.find((call) => call.method === "PUT")?.body).toEqual(expectedAcknowledgement));
+    await waitFor(() =>
+      expect(
+        calls.find((call) => call.method === "PUT" && call.path === "/alerting/model-deprecations/state")?.body,
+      ).toEqual(expectedAcknowledgement),
+    );
 
     expect(
       calls.some(
