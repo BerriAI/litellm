@@ -10,11 +10,13 @@
 import asyncio
 import contextlib
 import copy
+import functools
 import inspect
 import itertools
 import json
 import re
-from collections.abc import Collection, Iterable, Mapping, Sequence
+import traceback
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
@@ -432,6 +434,11 @@ _ESCAPED_CHARACTERS: Final = ('"', "\\")
 _INPUT_VALUE_LABEL: Final = "input_value="
 _INPUT_TYPE_LABEL: Final = ", input_type="
 _MAX_SCRUB_COMPARISONS: Final = 10_000_000
+_MAX_ECHO_OCCURRENCES: Final = 10_000
+_QUOTES: Final = ("'", '"')
+_ESCAPE_TAIL: Final = re.compile(r"\\(?:[abfnrtv]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})\Z")
+_DIRECT_CAUSE_LINE: Final = "\nThe above exception was the direct cause of the following exception:\n\n"
+_CONTEXT_LINE: Final = "\nDuring handling of the above exception, another exception occurred:\n\n"
 
 
 def _child_values(value: object) -> tuple[object, ...]:
@@ -498,14 +505,83 @@ def scrub_request_text(text: str, texts: Collection[str]) -> str:
     )
     label_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL in form)
     other_quotes: Final = tuple(form for form in echoes if _INPUT_VALUE_LABEL not in form)
-    return _with_echoes_replaced(_with_input_values_replaced(_with_echoes_replaced(text, label_quotes)), other_quotes)
+    with_label_quotes_replaced: Final = _with_echoes_replaced(text, label_quotes)
+    scrubbed: Final = (
+        None
+        if with_label_quotes_replaced is None
+        else _with_echoes_replaced(_with_input_values_replaced(with_label_quotes_replaced), other_quotes)
+    )
+    return REDACTED_BY_LITELLM if scrubbed is None else scrubbed
 
 
-def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str:
-    """``text`` with one pass that replaces each of ``echoes``, in order, by ``REDACTED_BY_LITELLM``."""
-    if not echoes:
-        return text
-    return re.sub("|".join(_echo_pattern(form) for form in echoes), REDACTED_BY_LITELLM, text)
+def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
+    """
+    ``text`` with each quote of ``echoes`` replaced by ``REDACTED_BY_LITELLM`` in one left-to-right pass, the
+    longest where several start at one place. ``None`` when ``echoes`` turn up more often than a failure path
+    should look through.
+    """
+    found: Final = tuple(
+        itertools.islice(
+            itertools.chain.from_iterable(_quote_spans(text, form) for form in echoes), _MAX_ECHO_OCCURRENCES + 1
+        )
+    )
+    if len(found) > _MAX_ECHO_OCCURRENCES:
+        return None
+    ends: Final = dict(sorted((span for span in found if _stands_alone(text, *span)), key=lambda span: span[1]))
+    starts: Final = sorted(ends)
+    frontiers: Final = itertools.accumulate(starts, functools.partial(_frontier_after, ends), initial=0)
+    chosen: Final = tuple(start for start, frontier in zip(starts, frontiers) if start >= frontier)
+    resumes: Final = (0, *(ends[start] for start in chosen))
+    kept_and_replaced: Final = itertools.chain.from_iterable(
+        (text[resume:start], REDACTED_BY_LITELLM) for resume, start in zip(resumes, chosen)
+    )
+    return "".join((*kept_and_replaced, text[resumes[-1] :]))
+
+
+def _frontier_after(ends: Mapping[int, int], frontier: int, start: int) -> int:
+    """Where the next replacement may start once the quote at ``start`` is passed, replacing it if it starts at or
+    past ``frontier``."""
+    return ends[start] if start >= frontier else frontier
+
+
+def _quote_spans(text: str, form: str) -> Iterator[tuple[int, int]]:
+    """Where each quote of ``form`` in ``text`` starts and ends, overlaps included. A form short enough to occur in
+    ordinary wording only counts between quotes."""
+    if len(form) >= _MIN_UNQUOTED_TEXT_LENGTH:
+        return ((start, start + len(form)) for start in _found(text, form))
+    quoted_starts: Final = itertools.chain.from_iterable(
+        _found(text, f"{opening}{form}{closing}") for opening, closing in itertools.product(_QUOTES, repeat=2)
+    )
+    return ((start + 1, start + 1 + len(form)) for start in quoted_starts)
+
+
+def _found(text: str, piece: str) -> Iterator[int]:
+    """Every index ``piece`` starts at in ``text``, overlaps included."""
+    return itertools.takewhile(
+        lambda start: start >= 0,
+        itertools.accumulate(
+            itertools.repeat(None), lambda start, _: text.find(piece, start + 1), initial=text.find(piece)
+        ),
+    )
+
+
+def _stands_alone(text: str, start: int, end: int) -> bool:
+    """Whether ``text[start:end]`` is not part of a longer word. An escape such as ``\\n`` before it counts as a break."""
+    return (not _is_word_character(text[start]) or _is_word_break(text, start)) and (
+        not _is_word_character(text[end - 1]) or end == len(text) or not _is_word_character(text[end])
+    )
+
+
+def _is_word_break(text: str, index: int) -> bool:
+    return (
+        index == 0
+        or not _is_word_character(text[index - 1])
+        or _ESCAPE_TAIL.search(text, max(0, index - 10), index) is not None
+    )
+
+
+def _is_word_character(character: str) -> bool:
+    return character.isascii() and (character.isalnum() or character == "_")
 
 
 def _with_input_values_replaced(text: str) -> str:
@@ -523,12 +599,6 @@ def _line_with_input_value_replaced(line: str) -> str:
     value_start: Final = start + len(_INPUT_VALUE_LABEL)
     type_start: Final = line.rfind(_INPUT_TYPE_LABEL, value_start)
     return f"{line[:value_start]}{REDACTED_BY_LITELLM}{line[type_start:] if type_start >= 0 else ''}"
-
-
-def _echo_pattern(form: str) -> str:
-    """A quote of ``form``. A form short enough to occur in ordinary wording only counts between quotes."""
-    escaped: Final = re.escape(form)
-    return escaped if len(form) >= _MIN_UNQUOTED_TEXT_LENGTH else f"(?<=['\"]){escaped}(?=['\"])"
 
 
 def scrubbed_error_information(
@@ -586,6 +656,41 @@ def scrubbed_exception_text(model_call_details: Mapping[str, object]) -> tuple[s
         return None
     logged_traceback_text: Final = traceback_text if isinstance(traceback_text, str) else ""
     return (message if isinstance(message, str) else _exception_text(logged_traceback_text), logged_traceback_text)
+
+
+def scrubbed_exception_record(model_call_details: Mapping[str, object]) -> tuple[str, str] | None:
+    """
+    The message and stack trace to record for the failure's exception when redaction scrubbed the request's text
+    out of the logged error, as ``scrubbed_exception_text`` reads them. A failure that logged no traceback gets the
+    exception's own frames, with ``REDACTED_BY_LITELLM`` for the text of each exception it chains.
+    """
+    scrubbed: Final = scrubbed_exception_text(model_call_details)
+    exception: Final = model_call_details.get("exception")
+    if scrubbed is None or scrubbed[1] or not isinstance(exception, BaseException):
+        return scrubbed
+    return scrubbed[0], _exception_stack(exception, scrubbed[0], frozenset())
+
+
+def _exception_stack(exception: BaseException, message: str, newer: frozenset[int]) -> str:
+    """``exception``'s traceback as Python prints it, with ``message`` for its text and ``REDACTED_BY_LITELLM`` for
+    the text of each exception it chains. ``newer`` holds the exceptions already printed after it."""
+    printed: Final = newer | {id(exception)}
+    caused: Final = exception.__cause__ is not None
+    chained: Final = (
+        exception.__cause__ if caused else None if exception.__suppress_context__ else exception.__context__
+    )
+    earlier: Final = (
+        ""
+        if chained is None or id(chained) in printed
+        else _exception_stack(chained, REDACTED_BY_LITELLM, printed) + (_DIRECT_CAUSE_LINE if caused else _CONTEXT_LINE)
+    )
+    frames: Final = "".join(traceback.format_tb(exception.__traceback__))
+    header: Final = "Traceback (most recent call last):\n" if frames else ""
+    kind: Final = type(exception)
+    name: Final = (
+        kind.__qualname__ if kind.__module__ in ("__main__", "builtins") else f"{kind.__module__}.{kind.__qualname__}"
+    )
+    return f"{earlier}{header}{frames}{name}: {message}\n" if message else f"{earlier}{header}{frames}{name}\n"
 
 
 def _exception_text(traceback_text: str) -> str:

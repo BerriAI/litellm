@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import threading
+import traceback
 import tracemalloc
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime
@@ -37,6 +38,7 @@ from litellm.litellm_core_utils.redact_messages import (
     request_texts,
     scrub_request_text,
     scrubbed_error_information_for_request,
+    scrubbed_exception_record,
     scrubbed_exception_text,
     should_redact_failed_request,
     should_redact_message_logging,
@@ -2444,6 +2446,71 @@ def test_scrub_request_text_replaces_a_short_text_only_between_quotes() -> None:
     assert scrubbed == "Invalid value 'redacted-by-litellm' and \"redacted-by-litellm\"; 432 is too short"
 
 
+@pytest.mark.parametrize(
+    ("prompt", "error"),
+    [
+        ("Error", "litellm.RateLimitError: Rate limit reached"),
+        ("test", "The model `gpt-4-latest` does not exist"),
+        ("text", "litellm.ContextWindowExceededError: too long"),
+        ("test", "No deployment named test_model"),
+    ],
+    ids=["word_end", "word_start", "word_middle", "before_underscore"],
+)
+def test_scrub_request_text_leaves_a_prompt_that_only_occurs_inside_a_longer_word(prompt: str, error: str) -> None:
+    assert scrub_request_text(error, request_texts(prompt)) == error
+
+
+@pytest.mark.parametrize(
+    ("error", "scrubbed"),
+    [
+        ("Error", "redacted-by-litellm"),
+        ("Invalid content: Error.", "Invalid content: redacted-by-litellm."),
+        ('content: "first\\nError"', 'content: "first\\nredacted-by-litellm"'),
+        ('content: "\\u00e9Error"', 'content: "\\u00e9redacted-by-litellm"'),
+        ("content: 'caf\\xe9Error'", "content: 'caf\\xe9redacted-by-litellm'"),
+        ("内容错误Error请重试", "内容错误redacted-by-litellm请重试"),
+    ],
+    ids=["whole_text", "whole_word", "after_newline_escape", "after_unicode_escape", "after_hex_escape", "non_ascii"],
+)
+def test_scrub_request_text_replaces_a_prompt_that_stands_as_its_own_word(error: str, scrubbed: str) -> None:
+    assert scrub_request_text(error, request_texts("Error")) == scrubbed
+
+
+def test_scrub_request_text_replaces_the_longest_prompt_that_starts_at_one_place() -> None:
+    scrubbed: Final = scrub_request_text("bad: secret code list", request_texts("secret", "secret code", "code list"))
+
+    assert scrubbed == "bad: redacted-by-litellm list"
+
+
+@pytest.mark.parametrize(
+    ("echoes", "scrubbed"),
+    [(10_000, "bad: redacted-by-litellm " * 10_000), (10_001, "redacted-by-litellm")],
+    ids=["at_the_limit", "past_the_limit"],
+)
+def test_scrub_request_text_replaces_the_whole_text_when_the_prompt_repeats_past_the_limit(
+    echoes: int, scrubbed: str
+) -> None:
+    assert scrub_request_text("bad: secret " * echoes, request_texts("secret")) == scrubbed
+
+
+def test_scrub_request_text_keeps_no_copy_of_the_prompt_after_it_returns() -> None:
+    prompt: Final = "".join(f"secret {index} " for index in range(20_000))
+    error: Final = f"Invalid content: '{prompt}'"
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    baseline, _ = tracemalloc.get_traced_memory()
+    try:
+        scrubbed: Final = scrub_request_text(error, request_texts(prompt))
+        kept, _ = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    assert scrubbed == "Invalid content: 'redacted-by-litellm'"
+    assert kept - baseline < len(prompt) // 2, f"scrubbing kept {kept - baseline} bytes alive after returning"
+
+
 def test_scrub_request_text_replaces_the_whole_text_when_the_search_is_too_large() -> None:
     texts: Final = request_texts([f"message number {index}" for index in range(5_000)])
 
@@ -2570,6 +2637,76 @@ def test_scrubbed_exception_text_reads_the_message_off_the_traceback_without_a_l
         "BadRequestError: Invalid content: 'redacted-by-litellm'\nReceived Messages=['redacted-by-litellm']",
         traceback_text,
     )
+
+
+class _ProviderError(Exception):
+    pass
+
+
+def _raise_chained(chain: tuple[BaseException, ...]) -> None:
+    """Raise the last of ``chain`` while handling the one before it, and so on down to the first."""
+    if len(chain) == 1:
+        raise chain[0]
+    try:
+        _raise_chained(chain[:-1])
+    except BaseException as earlier:
+        raise chain[-1] from earlier
+
+
+def _raised(chain: tuple[BaseException, ...]) -> BaseException:
+    with pytest.raises(type(chain[-1])) as raised:
+        _raise_chained(chain)
+    return raised.value
+
+
+def _failure(exception: BaseException, error_information: Mapping[str, str]) -> dict[str, object]:
+    return {"exception": exception, "standard_logging_object": {"error_information": error_information}}
+
+
+SCRUBBED_ERROR: Final = {"error_message": "bad: redacted-by-litellm", "traceback": ""}
+
+
+def test_scrubbed_exception_record_prints_the_exceptions_own_frames_without_a_logged_traceback() -> None:
+    exception: Final = _raised(
+        (ValueError("redacted-by-litellm"), KeyError("redacted-by-litellm"), _ProviderError("bad: redacted-by-litellm"))
+    )
+    printed: Final = "".join(traceback.format_exception(exception))
+    scrubbed: Final = scrubbed_exception_record(_failure(exception, SCRUBBED_ERROR))
+
+    assert scrubbed == (
+        "bad: redacted-by-litellm",
+        printed.replace("KeyError: 'redacted-by-litellm'", "KeyError: redacted-by-litellm"),
+    )
+    assert scrubbed is not None and "in _raise_chained" in scrubbed[1]
+
+
+def test_scrubbed_exception_record_replaces_the_text_of_each_exception_the_failure_chains() -> None:
+    exception: Final = _raised((ValueError(PROMPT), _ProviderError("bad: redacted-by-litellm")))
+    scrubbed: Final = scrubbed_exception_record(_failure(exception, SCRUBBED_ERROR))
+
+    assert scrubbed is not None and "123-45-6789" not in scrubbed[1]
+    assert "ValueError: redacted-by-litellm\n\nThe above exception was the direct cause" in scrubbed[1]
+    assert scrubbed[1].endswith("_ProviderError: bad: redacted-by-litellm\n")
+
+
+def test_scrubbed_exception_record_stops_at_an_exception_chained_back_to_itself() -> None:
+    first: Final = ValueError("redacted-by-litellm")
+    second: Final = _ProviderError("bad: redacted-by-litellm")
+    first.__context__ = second
+    second.__context__ = first
+
+    assert scrubbed_exception_record(_failure(second, SCRUBBED_ERROR)) == (
+        "bad: redacted-by-litellm",
+        "".join(traceback.format_exception(second)),
+    )
+
+
+def test_scrubbed_exception_record_keeps_a_logged_traceback_and_skips_an_unscrubbed_error() -> None:
+    exception: Final = _raised((_ProviderError(f"bad: {PROMPT}"),))
+    logged: Final = {"error_message": "bad: redacted-by-litellm", "traceback": "tb redacted-by-litellm"}
+
+    assert scrubbed_exception_record(_failure(exception, logged)) == (logged["error_message"], logged["traceback"])
+    assert scrubbed_exception_record(_failure(exception, {"error_message": "bad", "traceback": ""})) is None
 
 
 def test_scrubbed_error_information_for_request_scrubs_only_when_the_request_redacts() -> None:
