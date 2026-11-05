@@ -1052,3 +1052,4 @@ async def test_async_increment_count_falls_back_to_the_in_memory_count_when_redi
     assert await dual_cache.async_increment_count("deployment:d1:allowed_fails", 1, ttl=60.0) == 1
     assert await dual_cache.async_increment_count("deployment:d1:allowed_fails", 1, local_only=True) == 2
     redis_cache.async_increment_count.assert_awaited_once()
+

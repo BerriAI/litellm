@@ -1542,15 +1542,15 @@ class RedisCache(BaseCache):
         _redis_client: Final = self.init_async_client()
         start_time: Final = time.time()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
-        key = self.check_and_fix_namespace(key=key)
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
-                pipe.incrby(name=key, amount=value)
-                pipe.ttl(key)
+                pipe.incrby(name=namespaced_key, amount=value)
+                pipe.ttl(namespaced_key)
                 result, current_ttl = await pipe.execute()
             if _used_ttl is not None and current_ttl == -1:
-                await _redis_client.expire(key, _used_ttl)
-            end_time = time.time()
+                await _redis_client.expire(namespaced_key, _used_ttl)
+            end_time: Final = time.time()
             asyncio.create_task(
                 self.service_logger_obj.async_service_success_hook(
                     service=ServiceTypes.REDIS,
@@ -1564,16 +1564,16 @@ class RedisCache(BaseCache):
             )
             return int(result)
         except Exception as e:
-            end_time = time.time()
+            failed_at: Final = time.time()
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
-                    duration=end_time - start_time,
+                    duration=failed_at - start_time,
                     error=e,
                     call_type="async_increment_count",
                     caller=_get_call_stack_info(),
                     start_time=start_time,
-                    end_time=end_time,
+                    end_time=failed_at,
                     parent_otel_span=parent_otel_span,
                 )
             )

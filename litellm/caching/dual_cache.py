@@ -590,14 +590,15 @@ class DualCache(BaseCache):
     ) -> int | None:
         """``async_increment_cache`` for whole-number counters: Redis gets INCRBY, so the key holds an
         integer. Returns the new count, the in-memory one when Redis fails, or None with no backend."""
-        result: int | None = None
+        in_memory: Final = (
+            None
+            if self.in_memory_cache is None
+            else int(await self.in_memory_cache.async_increment(key, value, ttl=ttl))
+        )
+        if self.redis_cache is None or local_only:
+            return in_memory
         try:
-            if self.in_memory_cache is not None:
-                result = int(await self.in_memory_cache.async_increment(key, value, ttl=ttl))
-            if self.redis_cache is not None and local_only is False:
-                result = await self.redis_cache.async_increment_count(
-                    key, value, ttl=ttl, parent_otel_span=parent_otel_span
-                )
+            return await self.redis_cache.async_increment_count(key, value, ttl=ttl, parent_otel_span=parent_otel_span)
         except Exception as e:  # noqa: BLE001  # same tolerance as async_increment_cache: a Redis failure keeps the in-memory count
             log_redis_failure(
                 verbose_logger,
@@ -605,7 +606,7 @@ class DualCache(BaseCache):
                 "Redis async_increment_count failed, falling back to in-memory result",
                 e,
             )
-        return result
+            return in_memory
 
     async def async_increment_cache_post_call(
         self,

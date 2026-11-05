@@ -1758,3 +1758,13 @@ async def test_async_increment_count_uses_incrby_and_sets_the_ttl_only_on_a_new_
     assert all(type(count) is int for count in (first, second))
     assert [command for command, _, _ in client.commands] == ["incrby", "ttl", "expire", "incrby", "ttl"]
     assert client.ttls == {"deployment:d1:allowed_fails": 60}
+
+
+@pytest.mark.asyncio
+async def test_async_increment_count_reraises_a_redis_failure(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache()
+    client: Final = MagicMock()
+    client.pipeline.side_effect = ConnectionError("redis down")
+    with patch.object(redis_cache, "init_async_client", return_value=client), pytest.raises(ConnectionError):
+        await redis_cache.async_increment_count("deployment:d1:allowed_fails", 1, ttl=60.0)
