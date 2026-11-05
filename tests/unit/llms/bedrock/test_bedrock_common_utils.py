@@ -2365,7 +2365,7 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
 @pytest.mark.parametrize(
     ("model", "model_info", "expected"),
     [
-        ("us.anthropic.claude-opus-4-8", None, True),
+        ("us.anthropic.claude-opus-4-8", None, False),
         ("global.anthropic.claude-sonnet-5", None, True),
         ("us-gov.anthropic.claude-opus-4-8", None, False),
         ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
