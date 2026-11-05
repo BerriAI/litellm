@@ -94,6 +94,82 @@ def test_team_admin_can_manage_team_alerts_but_member_can_only_read(gateway: Gat
             assert gateway.request("DELETE", path, key=admin_key).status_code == 204
 
 
+def test_info_only_credentials_cannot_mutate_alerts(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        admin: Final = scenario.user(user_role="proxy_admin")
+        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        reader: Final = scenario.key(user_id=owner, key_type="default", allowed_routes=["info_routes"])
+        admin_reader: Final = scenario.key(user_id=admin, key_type="default", allowed_routes=["info_routes"])
+        config: Final = {
+            "name": "Read-only route grant",
+            "scope_type": "user",
+            "scope_id": owner,
+            "metric": "spend",
+            "direction": "increase",
+        }
+        created: Final = gateway.request("POST", "/usage/alert-rules", config, key=owner_key)
+        assert created.status_code == 201
+        path: Final = f"/usage/alert-rules/{created.json()['id']}"
+        try:
+            assert gateway.request("GET", path, key=reader).status_code == 200
+            assert gateway.request("POST", "/usage/alert-rules", config, key=reader).status_code == 403
+            assert gateway.request("PUT", path, config, key=reader).status_code == 403
+            assert gateway.request("DELETE", path, key=reader).status_code == 403
+            assert (
+                gateway.request("PATCH", "/issues/families/spend", {"enabled": False}, key=admin_reader).status_code
+                == 403
+            )
+            assert (
+                gateway.request(
+                    "PATCH", "/issues/unavailable", {"status": "resolved", "expected_status": "open"}, key=admin_reader
+                ).status_code
+                == 403
+            )
+        finally:
+            assert gateway.request("DELETE", path, key=owner_key).status_code == 204
+
+
+def test_only_admins_can_configure_operator_notifications(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        config: Final = {
+            "name": "Operator delivery",
+            "scope_type": "user",
+            "scope_id": owner,
+            "metric": "spend",
+            "direction": "increase",
+        }
+        for notification in (
+            {"notification_channels": ["slack"]},
+            {"notification_channels": ["email"], "email_recipients": ["ops@example.com"]},
+        ):
+            assert (
+                gateway.request("POST", "/usage/alert-rules", {**config, **notification}, key=owner_key).status_code
+                == 403
+            )
+        assert (
+            gateway.request(
+                "POST", "/usage/alert-rules", {**config, "overrides_defaults": True}, key=owner_key
+            ).status_code
+            == 422
+        )
+        assert (
+            gateway.request("POST", "/usage/alert-rules", {**config, "name": "Spend\r\nInjected: header"}).status_code
+            == 422
+        )
+        created: Final = gateway.request("POST", "/usage/alert-rules", {**config, "notification_channels": ["slack"]})
+        assert created.status_code == 201
+        assert "overrides_defaults" not in created.json()
+        path: Final = f"/usage/alert-rules/{created.json()['id']}"
+        try:
+            assert gateway.request("PUT", path, config, key=owner_key).status_code == 403
+            assert gateway.request("DELETE", path, key=owner_key).status_code == 403
+        finally:
+            assert gateway.request("DELETE", path).status_code == 204
+
+
 @pytest.mark.asyncio(loop_scope="session")
 async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gateway, db: ManagementDatabase) -> None:
     """Populate an explicit storage fixture, then exercise the real incident HTTP API."""
@@ -208,6 +284,36 @@ async def test_ongoing_episode_preserves_its_original_evidence_and_activity_link
         assert new_episode.activity_path != original.activity_path
     finally:
         await repository.delete_rule(rule.id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_rule_scope_changes_reject_stale_updates_and_deletes(db: ManagementDatabase) -> None:
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    definition: Final = UsageAlertRuleInput(
+        name="Concurrent scope edit", scope_type="user", scope_id="original-owner", metric="spend", direction="increase"
+    )
+    original: Final = await repository.save_rule(definition, "qa-admin")
+    assert original is not None
+    try:
+        moved: Final = await repository.save_rule(
+            definition.model_copy(update={"scope_id": "different-owner"}), "qa-admin", existing=original
+        )
+        assert moved is not None
+        assert await repository.save_rule(definition, "original-owner", existing=original) is None
+        assert not await repository.delete_rule(original.id, existing=original)
+        assert await repository.get_rule(original.id) == moved
+        current: Final = await repository.save_rule(
+            definition.model_copy(update={"scope_id": moved.scope_id, "name": "Current authorized edit"}),
+            "qa-admin",
+            existing=moved,
+        )
+        assert current is not None
+        assert not await repository.delete_rule(original.id, existing=moved)
+        assert await repository.delete_rule(original.id, existing=current)
+        assert await repository.save_rule(definition, "qa-admin", existing=current) is None
+        assert await repository.get_rule(original.id) is None
+    finally:
+        await repository.delete_rule(original.id)
 
 
 @pytest.mark.asyncio(loop_scope="session")

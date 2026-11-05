@@ -7,17 +7,20 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { ColumnDef } from "@tanstack/react-table";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { TopModelData } from "../types";
+import { OtherModelData, TopModelData } from "../types";
 
 interface KeyModelUsageViewProps {
   topModels: TopModelData[];
+  otherModels?: OtherModelData;
 }
+
+type ModelUsageRow = TopModelData & { id: string };
 
 const VISIBLE_ROWS = 5;
 const COMPACT_TABLE_HEADER_HEIGHT = 33;
 const COMPACT_TABLE_ROW_HEIGHT = 32;
 
-const columns: ColumnDef<TopModelData>[] = [
+const columns: ColumnDef<ModelUsageRow>[] = [
   {
     header: () => i18n.t("usage.keyModelUsage.columns.model"),
     accessorKey: "model",
@@ -49,11 +52,22 @@ const columns: ColumnDef<TopModelData>[] = [
   },
 ];
 
-const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
+const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels, otherModels }) => {
   const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
+  const models = topModels.map((model) => ({ ...model, id: `model:${model.model}` }));
+  const rows: ModelUsageRow[] = otherModels
+    ? [
+        ...models,
+        {
+          ...otherModels,
+          id: "other",
+          model: `Other (${otherModels.model_count.toLocaleString()} ${otherModels.model_count === 1 ? "model" : "models"})`,
+        },
+      ]
+    : models;
 
-  if (topModels.length === 0) {
+  if (rows.length === 0) {
     return null;
   }
 
@@ -82,8 +96,8 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
         {viewMode === "chart" ? (
           <div className="max-h-[234px] overflow-y-auto">
             <BarChart
-              style={{ height: topModels.length * 40 }}
-              data={topModels.map((m) => ({ key: m.model, spend: m.spend }))}
+              style={{ height: rows.length * 40 }}
+              data={rows.map((m) => ({ key: m.model, spend: m.spend }))}
               index="key"
               categories={["spend"]}
               colors={["cyan"]}
@@ -97,8 +111,8 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
         ) : (
           <DataTable
             columns={columns}
-            data={topModels}
-            getRowId={(row) => row.model}
+            data={rows}
+            getRowId={(row) => row.id}
             maxBodyHeight={COMPACT_TABLE_HEADER_HEIGHT + VISIBLE_ROWS * COMPACT_TABLE_ROW_HEIGHT}
             size="compact"
           />

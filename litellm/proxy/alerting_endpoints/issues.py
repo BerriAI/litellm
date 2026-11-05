@@ -1,5 +1,7 @@
 """Unified issue inbox and investigations backed by existing daily aggregates."""
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import date
 from typing import Final
 
@@ -13,11 +15,16 @@ from litellm.proxy.alerting_endpoints.usage_alerts import (
     User,
     require_repository,
     require_scope,
+    require_write_access,
 )
 from litellm.proxy.deps.repositories import IssueActivityRepositoryDep, IssuesRepositoryDep, UsageAlertsRepositoryDep
+from litellm.proxy.management.teams.authz import is_team_admin
+from litellm.proxy.management_endpoints.common_utils import team_member_has_permission
+from litellm.repositories.analytics_budget import AnalyticsCapacityError
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.issues import (
     Issue,
+    IssueActivityResponse,
     IssueFamily,
     IssueFamilyList,
     IssueFamilySetting,
@@ -32,7 +39,6 @@ from litellm.types.proxy.issues import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityKeyPageResponse,
     DailyActivityUserPageResponse,
-    SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.usage_alert_defaults import PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import UsageAlertStatus
@@ -50,6 +56,14 @@ def require_activity(repository: IssueActivityStore | None) -> IssueActivityStor
     if repository is None:
         raise HTTPException(status_code=503, detail="Issue Activity requires a database connection")
     return repository
+
+
+@contextmanager
+def activity_budget() -> Generator[None]:
+    try:
+        yield
+    except AnalyticsCapacityError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"}) from exc
 
 
 async def authorized_issue(
@@ -71,6 +85,25 @@ async def authorized_issue(
         write=write,
     )
     return issue
+
+
+async def can_view_activity(issue: Issue, user: User, repository: IssueStore) -> bool:
+    if issue.cohort.scope_type != "team" or user.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        return True
+    if user.user_id is None or issue.cohort.scope_id is None:
+        return False
+    team: Final = await repository.team_activity_access(issue.cohort.scope_id, user.user_id)
+    return team is not None and (
+        is_team_admin(user, team) or team_member_has_permission(user, team, "/team/daily/activity")
+    )
+
+
+async def require_activity_access(issue: Issue, user: User, repository: IssuesRepositoryDep) -> None:
+    if not await can_view_activity(issue, user, require_issues(repository)):
+        raise HTTPException(status_code=403, detail="Full team Activity permission is required for this investigation")
 
 
 def activity_range(issue: Issue, start_date: date | None, end_date: date | None) -> tuple[date, date]:
@@ -118,6 +151,7 @@ async def update_issue_family(
     repository: IssuesRepositoryDep,
     alerts: UsageAlertsRepositoryDep,
 ) -> IssueFamilySetting:
+    require_write_access(user, f"/issues/families/{family}")
     await require_scope(user, require_repository(alerts), "deployment", None, write=True)
     try:
         result: Final = await require_issues(repository).update_family(family, data)
@@ -137,7 +171,22 @@ async def get_issue(
     repository: IssuesRepositoryDep,
     alerts: UsageAlertsRepositoryDep,
 ) -> Issue:
-    return await authorized_issue(issue_id, user, repository, alerts)
+    issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    activity_allowed: Final = await can_view_activity(issue, user, require_issues(repository))
+    try:
+        require_write_access(user, f"/issues/{issue_id}")
+        await require_scope(
+            user,
+            require_repository(alerts),
+            "model" if issue.cohort.scope_type == "provider" else issue.cohort.scope_type,
+            issue.cohort.scope_id,
+            write=True,
+        )
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        return issue.model_copy(update={"can_update_status": False, "can_view_activity": activity_allowed})
+    return issue.model_copy(update={"can_update_status": True, "can_view_activity": activity_allowed})
 
 
 @router.patch("/{issue_id}", response_model=Issue)
@@ -148,6 +197,7 @@ async def update_issue(
     repository: IssuesRepositoryDep,
     alerts: UsageAlertsRepositoryDep,
 ) -> Issue:
+    require_write_access(user, f"/issues/{issue_id}")
     issue: Final = await authorized_issue(issue_id, user, repository, alerts, write=True)
     if issue.kind == "model_deprecation" and not issue.active and data.status == "open":
         raise HTTPException(status_code=409, detail="This retirement issue reopens when the model receives new traffic")
@@ -181,7 +231,7 @@ async def list_issue_signals(
     return await require_issues(repository).list_signals(issue_id, limit, offset, visible_scope)
 
 
-@router.get("/{issue_id}/activity", response_model=SpendAnalyticsPaginatedResponse)
+@router.get("/{issue_id}/activity", response_model=IssueActivityResponse)
 async def get_issue_activity(
     issue_id: str,
     user: User,
@@ -190,10 +240,13 @@ async def get_issue_activity(
     activity: IssueActivityRepositoryDep,
     start_date: date | None = None,
     end_date: date | None = None,
-) -> SpendAnalyticsPaginatedResponse:
+    model_limit: Limit = 20,
+) -> IssueActivityResponse:
     issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    await require_activity_access(issue, user, repository)
     start, end = activity_range(issue, start_date, end_date)
-    return await require_activity(activity).daily_activity(issue.cohort, start, end)
+    with activity_budget():
+        return await require_activity(activity).daily_activity(issue.cohort, start, end, model_limit)
 
 
 @router.get("/{issue_id}/keys", response_model=DailyActivityKeyPageResponse)
@@ -209,8 +262,10 @@ async def get_issue_keys(
     offset: Offset = 0,
 ) -> DailyActivityKeyPageResponse:
     issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    await require_activity_access(issue, user, repository)
     start, end = activity_range(issue, start_date, end_date)
-    return await require_activity(activity).keys(issue.cohort, start, end, limit, offset)
+    with activity_budget():
+        return await require_activity(activity).keys(issue.cohort, start, end, limit, offset)
 
 
 @router.get("/{issue_id}/users", response_model=DailyActivityUserPageResponse)
@@ -226,10 +281,12 @@ async def get_issue_users(
     offset: Offset = 0,
 ) -> DailyActivityUserPageResponse:
     issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    await require_activity_access(issue, user, repository)
     if issue.cohort.scope_type == "team":
         raise HTTPException(status_code=422, detail="Historical team aggregates do not retain user membership")
     start, end = activity_range(issue, start_date, end_date)
-    return await require_activity(activity).users(issue.cohort, start, end, limit, offset)
+    with activity_budget():
+        return await require_activity(activity).users(issue.cohort, start, end, limit, offset)
 
 
 @router.get("/{issue_id}/impact", response_model=IssueImpact)
@@ -243,5 +300,7 @@ async def get_issue_impact(
     end_date: date | None = None,
 ) -> IssueImpact:
     issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    await require_activity_access(issue, user, repository)
     start, end = activity_range(issue, start_date, end_date)
-    return await require_activity(activity).impact(issue.cohort, start, end)
+    with activity_budget():
+        return await require_activity(activity).impact(issue.cohort, start, end)

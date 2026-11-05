@@ -10,6 +10,7 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
 from litellm.types.proxy.issues import (
@@ -31,7 +32,7 @@ from litellm.types.proxy.issues import (
     IssueSignalInput,
     IssueSignalList,
 )
-from litellm.types.proxy.usage_alert_defaults import PerformanceIssueFamily
+from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS, PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import UsageAlertMetric, UsageAlertStatus
 
 if TYPE_CHECKING:
@@ -164,6 +165,25 @@ class IssuesRepository:
             await self.database.query_raw(f"SELECT {_RECORD} AS record {_JOIN} WHERE i.id=$1", issue_id)
         )
         return (await self._labels((rows[0].record,)))[0] if rows else None
+
+    async def team_activity_access(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
+        rows: Final = TypeAdapter(tuple[LiteLLM_TeamTable, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT t.team_id,
+                    CASE WHEN m.role IS NULL THEN '[]'::jsonb
+                        ELSE jsonb_build_array(jsonb_build_object('user_id',$2::text,'role',m.role)) END
+                        AS members_with_roles,
+                    CASE WHEN '/team/daily/activity'=ANY(t.team_member_permissions)
+                        THEN ARRAY['/team/daily/activity'] ELSE ARRAY[]::text[] END AS team_member_permissions
+                FROM "LiteLLM_TeamTable" t LEFT JOIN LATERAL (
+                    SELECT member->>'role' AS role FROM jsonb_array_elements(t.members_with_roles) member
+                    WHERE member->>'user_id'=$2 ORDER BY (member->>'role'='admin') DESC LIMIT 1
+                ) m ON true WHERE t.team_id=$1""",
+                team_id,
+                user_id,
+            )
+        )
+        return rows[0] if rows else None
 
     async def list_issues(
         self,
@@ -346,26 +366,56 @@ class IssuesRepository:
             )
         )
 
-    async def recover_issues(self, day: date) -> int:
+    async def recover_issues(self, day: date, issue_ids: tuple[str, ...] | None = None) -> int:
+        if issue_ids == ():
+            return 0
+        if issue_ids is not None and len(issue_ids) > 10:
+            raise ValueError("Recover at most 10 resource alerts")
+        selection: Final = "i.id=ANY($3::text[])" if issue_ids is not None else "$3::text[] IS NULL"
         rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
             await self.database.query_raw(
-                """WITH healthy AS (
-                SELECT i.id FROM "LiteLLM_Issue" i JOIN "LiteLLM_IssueSignal" s ON s.issue_id=i.id
+                f"""WITH primary_signals AS (
+                SELECT i.id,a.id AS source_id,a.breached,a.evaluation_day,a.evaluation_revision,
+                    max(a.evaluation_day) OVER (PARTITION BY i.id) AS latest_observation_day,
+                    r.id AS rule_id,r.record AS rule_record,
+                    COALESCE(r.enabled AND NOT r.deleted
+                        AND r.scope_type=a.scope_type AND r.record->>'metric'=a.metric
+                        AND r.record->>'direction'=a.record->>'direction'
+                        AND (r.scope_id IS NULL OR r.scope_id=a.scope_id)
+                        AND (NOT(r.id=ANY($2::text[])) OR NOT EXISTS (
+                            SELECT 1 FROM "LiteLLM_UsageAlertRule" custom WHERE custom.enabled AND NOT custom.deleted
+                            AND COALESCE((custom.record->>'overrides_defaults')::boolean,false)
+                            AND NOT(custom.id=ANY($2::text[])) AND custom.scope_type=r.scope_type
+                            AND custom.record->>'metric'=r.record->>'metric'
+                            AND custom.record->>'direction'=r.record->>'direction'
+                            AND (custom.scope_id IS NULL OR custom.scope_id=a.scope_id))),false) AS eligible
+                FROM "LiteLLM_Issue" i JOIN "LiteLLM_IssueSignal" s ON s.issue_id=i.id
                 LEFT JOIN "LiteLLM_UsageAlertIncident" a ON a.id=s.source_id
+                LEFT JOIN "LiteLLM_UsageAlertRule" r ON r.id=a.rule_id
                 WHERE i.kind='performance' AND i.active AND i.scope_type<>'provider' AND s.source='usage_alert'
+                    AND ({selection})
                     AND s.record->'usage_alert'->>'scope_type'=i.scope_type
                     AND s.record->'usage_alert'->>'scope_id' IS NOT DISTINCT FROM i.scope_id
                     AND ((i.family='spend' AND s.record->'usage_alert'->>'metric'='spend')
                         OR (i.family='latency' AND s.record->'usage_alert'->>'metric'='latency')
                         OR (i.family='traffic' AND s.record->'usage_alert'->>'metric'='requests')
                         OR (i.family='reliability' AND s.record->'usage_alert'->>'metric' IN ('errors','error_rate')))
-                GROUP BY i.id HAVING bool_and(a.id IS NOT NULL AND NOT a.breached AND a.evaluation_day<=$1)
+            ), observations AS (
+                SELECT *,COALESCE(source_id IS NOT NULL AND NOT breached AND evaluation_day<=$1
+                    AND evaluation_day>=latest_observation_day
+                    AND NULLIF(evaluation_revision,'')::timestamptz=(rule_record->>'updated_at')::timestamptz,false) AS healthy
+                FROM primary_signals
+            ), healthy AS (
+                SELECT id FROM observations GROUP BY id
+                HAVING bool_or(eligible AND healthy) AND bool_and(NOT eligible OR healthy)
             ), changed AS (
                 UPDATE "LiteLLM_Issue" i SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
                 WHERE id IN(SELECT id FROM healthy) AND active RETURNING id
             ) SELECT count(*)::int AS count FROM changed""",
                 day.isoformat(),
+                tuple(DEFAULT_USAGE_RULE_IDS),
+                issue_ids,
             )
         )
         return rows[0].count

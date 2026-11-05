@@ -22,10 +22,15 @@ class UsageAlertStore(Protocol):
     async def get_rule(self, rule_id: str) -> UsageAlertRule | None: ...
 
     async def save_rule(
-        self, data: UsageAlertRuleInput, created_by: str | None, existing: UsageAlertRule | None = None
+        self,
+        data: UsageAlertRuleInput,
+        created_by: str | None,
+        existing: UsageAlertRule | None = None,
+        *,
+        overrides_defaults: bool = False,
     ) -> UsageAlertRule | None: ...
 
-    async def delete_rule(self, rule_id: str) -> None: ...
+    async def delete_rule(self, rule_id: str, *, existing: UsageAlertRule | None = None) -> bool: ...
 
     async def list_rules(
         self,
