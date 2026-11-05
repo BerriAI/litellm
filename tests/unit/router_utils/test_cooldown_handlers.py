@@ -1844,10 +1844,21 @@ async def await_scheduled_success_logging() -> None:
         pytest.param({"api_base": "https://upstream.example/v1/"}, id="api_base_with_trailing_slash"),
     ],
 )
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        pytest.param({}, id="plain_request"),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_hash": "hashed-key"}},
+            id="guardrail_planted_litellm_metadata_without_model_info",
+        ),
+    ],
+)
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "isolated_prometheus_registry")
 @pytest.mark.asyncio
 async def test_deployment_state_returns_to_healthy_after_cooldown_when_group_name_differs_from_model(
     endpoint_params: dict[str, str],
+    request_params: dict[str, dict[str, str]],
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     deployment_state_values: Callable[[str], list[float]],
@@ -1866,7 +1877,7 @@ async def test_deployment_state_returns_to_healthy_after_cooldown_when_group_nam
 
     respx_mock.post(url__regex=r".*/chat/completions$").mock(return_value=httpx.Response(200, json=CHAT_COMPLETION))
 
-    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
+    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}], **request_params)
     await await_scheduled_success_logging()
     assert deployment_state_values("dep-1") == [0.0]
 
@@ -1875,7 +1886,7 @@ async def test_deployment_state_returns_to_healthy_after_cooldown_when_group_nam
     )
     assert deployment_state_values("dep-1") == [2.0]
 
-    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
+    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}], **request_params)
     await await_scheduled_success_logging()
 
     assert deployment_state_values("dep-1") == [0.0]
