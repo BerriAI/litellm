@@ -593,10 +593,10 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
     assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
 
 
-@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
 def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot_enforce_it(
-    respx_mock: respx.MockRouter, model: str, drop_params: bool
+    respx_mock: respx.MockRouter, model: str, tool_choice: dict[str, object]
 ):
     with pytest.raises(
         litellm.BadRequestError, match=r"allowed_tools.*only supported for azure, litellm_proxy, openai"
@@ -605,8 +605,7 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
             model=model,
             messages=[{"role": "user", "content": "What time is it?"}],
             tools=_TWO_TOOLS,
-            tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
-            drop_params=drop_params,
+            tool_choice=tool_choice,
             api_key="fake_api_key",
             aws_access_key_id="fake",
             aws_secret_access_key="fake",
@@ -614,6 +613,38 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
         )
     assert exc.value.status_code == 400
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_choice"),
+    [
+        ("hosted_vllm/my-model", _ALLOWED_TOOLS_TOOL_CHOICE),
+        ("hosted_vllm/my-model", _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE),
+        ("openai/gpt-5.5", {"type": "allowed_tools", "mode": "required", "tools": []}),
+        ("openai/gpt-5.5", {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]}),
+    ],
+)
+def test_completion_drop_params_drops_an_allowed_tools_tool_choice_it_cannot_send(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str, tool_choice: dict[str, object]
+):
+    mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=_TWO_TOOLS,
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "tool_choice" not in sent
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {

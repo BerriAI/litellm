@@ -9655,6 +9655,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
+    drop_params: bool = False,
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -9673,6 +9674,8 @@ def validate_chat_completion_tool_choice(
                     object, tool_choice
                 )
             )
+            if allowed_tools is None and drop_params:
+                return None
             if allowed_tools is None:
                 raise BadRequestError(
                     message=(
