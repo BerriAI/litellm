@@ -3374,7 +3374,10 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic"]]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic", "switchyard"]]
+    switchyard_algorithm: ReadOnly[str]
+    switchyard_evidence: ReadOnly[object]
+    switchyard_fallback_reason: ReadOnly[str]
     router_config_id: ReadOnly[str]
     router_config_updated_at: ReadOnly[str]
     router_config_fingerprint: ReadOnly[str]

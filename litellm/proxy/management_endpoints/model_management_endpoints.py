@@ -374,6 +374,11 @@ def _strategy_router_write_violation(
     """
     if incoming_params is None:
         return None
+    from litellm.router_strategy.switchyard_router.config import validate_switchyard_config_write
+
+    switchyard_violation: Final = validate_switchyard_config_write(incoming_params.switchyard_router_config)
+    if switchyard_violation is not None:
+        return switchyard_violation
     config_violation: Final = validate_complexity_router_config_write(
         complexity_router_config=(
             _effective_complexity_router_config(incoming_params, existing_params)

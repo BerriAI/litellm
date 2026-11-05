@@ -11420,3 +11420,23 @@ async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+@pytest.mark.parametrize("invalid", [
+    {"algorithm": "random"},
+    {"classifier": {}},
+    {"options": {"capable_system_prompt": "ignored"}},
+])
+def test_switchyard_write_rejects_unloadable_configuration(invalid: dict[str, object]) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import _strategy_router_write_violation
+    from litellm.types.router import updateLiteLLMParams
+
+    violation: Final = _strategy_router_write_violation(
+        incoming_params=updateLiteLLMParams(
+            model="auto_router/switchyard",
+            switchyard_router_config={"models": {"capable": "strong", "efficient": "fast"}, **invalid},
+        ),
+        existing_params=None,
+    )
+    assert violation is not None
+    assert "Invalid switchyard_router_config" in violation

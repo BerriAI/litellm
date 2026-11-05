@@ -1816,6 +1816,9 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_provider_default_deployment_ids: list[str] = []
         self._core_pattern_router = PatternMatchRouter()
         self._core_team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
+        self._core_switchyard_routers: dict[  # mutable-ok: registry supports deployment hot reload
+            str, list[TaggedPreRoutingStrategy[PreRoutingStrategy]]
+        ] = {}
         self._core_auto_routers: dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]] = {}
         self._core_complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self._core_adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
@@ -11363,6 +11366,27 @@ class PythonCore(DeprecatedRouterMembers):
         """Deployment tags used to disambiguate strategy registries keyed by model_name."""
         return tuple(deployment.litellm_params.tags or ())
 
+    def init_switchyard_router_deployment(self, deployment: Deployment) -> None:
+        from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig
+        from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
+
+        config: Final = SwitchyardRouterConfig.model_validate(deployment.litellm_params.switchyard_router_config)
+        if deployment.model_name in (config.models.capable, config.models.efficient, config.models.judge):
+            raise ValueError("Switchyard cannot route to itself")
+
+        async def complete_judge(request: Mapping[str, object]) -> ModelResponse:
+            result: Final = await self._core_ctx.acompletion(**request)
+            if not isinstance(result, ModelResponse):
+                raise TypeError("Switchyard judge must return a non-streaming completion")
+            return result
+
+        self._register_pre_routing_strategy(
+            registry=self._core_switchyard_routers,
+            deployment=deployment,
+            strategy=SwitchyardRouter(deployment.model_name, config, complete_judge),
+            strategy_label="Switchyard",
+        )
+
     def init_auto_router_deployment(self, deployment: Deployment):
         """
         Initialize the auto-router deployment.
@@ -11602,7 +11626,12 @@ class PythonCore(DeprecatedRouterMembers):
             return
         model_name: Final = deployment.model_name
         tags: Final = self._deployment_tags(deployment)
-        for registry in (self._core_auto_routers, self._core_complexity_routers, self._core_quality_routers):
+        for registry in (
+            self._core_auto_routers,
+            self._core_complexity_routers,
+            self._core_quality_routers,
+            self._core_switchyard_routers,
+        ):
             self._unregister_pre_routing_strategy(registry, model_name, tags)
         if self._unregister_pre_routing_strategy(self._core_adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -11825,6 +11854,7 @@ class PythonCore(DeprecatedRouterMembers):
         self._core_quality_routers = {}
         self._core_complexity_routers = {}
         self._core_auto_routers = {}
+        self._core_switchyard_routers = {}
         self._provider_unresolved_deployments = ()
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
@@ -12017,6 +12047,8 @@ class PythonCore(DeprecatedRouterMembers):
         #########################################################
         # Check if this is an auto-router deployment
         #########################################################
+        if classify_strategy_router_model(deployment.litellm_params.model) == "switchyard":
+            self.init_switchyard_router_deployment(deployment)
         if self._is_auto_router_deployment(litellm_params=deployment.litellm_params):
             self.init_auto_router_deployment(deployment=deployment)
 
@@ -16749,6 +16781,7 @@ class PythonCore(DeprecatedRouterMembers):
         deployment selection.
         """
         registries: Final = (
+            self._core_switchyard_routers,
             self._core_auto_routers,
             self._core_complexity_routers,
             self._core_adaptive_routers,
@@ -16850,6 +16883,7 @@ class PythonCore(DeprecatedRouterMembers):
             return registered_model_name
         if not any(
             (
+                self._core_switchyard_routers,
                 self._core_auto_routers,
                 self._core_complexity_routers,
                 self._core_adaptive_routers,

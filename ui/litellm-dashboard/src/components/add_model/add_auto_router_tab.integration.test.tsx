@@ -202,6 +202,22 @@ describe("AddAutoRouterTab", () => {
     vi.mocked(modelCostMap).mockResolvedValue({});
   });
 
+  it("keeps existing strategies reachable and preserves the Switchyard draft across strategy changes", async () => {
+    renderAdvanced(<Harness />);
+    expect(screen.getByRole("radio", { name: "Heuristics", exact: true })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: "LLM", exact: true })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: "Decisions Model", exact: true })).toBeEnabled();
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.getByText("Stage Router", { exact: true })).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Router name"), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expect(screen.getByText("Stage Router", { exact: true })).not.toBeVisible();
+    expect(screen.getByText("Define your tiers")).toBeVisible();
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.getByLabelText("Router name")).toHaveValue("stage-test");
+    expect(screen.getByText("Stage Router", { exact: true })).toBeVisible();
+  });
+
   it("creates the goal-selected latest OpenAI pair using its Bedrock deployment aliases", async () => {
     mockFetchAvailableModels.mockResolvedValue(
       ["small", "middle-old", "middle", "large"].map((model_group) => ({ model_group, mode: "chat" })),
