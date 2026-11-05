@@ -266,13 +266,16 @@ class CodexCatalogSource:
         self._cache[slot] = entry
         self._cache.move_to_end(slot)
         while len(self._cache) > self._cached_versions:
-            del self._cache[self._eviction_victim()]
+            del self._cache[self._eviction_victim(keep=slot)]
         return entry.stock
 
-    def _eviction_victim(self) -> _CacheSlot:
-        """The least recently asked release still on the vendored pair, else the least recently asked one, so
-        releases no catalog answered push each other out before a fetched release goes."""
-        vendored: Final = (slot for slot, cached in self._cache.items() if cached.stock.source == _VENDORED_SOURCE)
+    def _eviction_victim(self, keep: _CacheSlot) -> _CacheSlot:
+        """The least recently asked release other than ``keep`` still on the vendored pair, else the least recently
+        asked one, so releases no catalog answered push each other out before a fetched release goes, while the
+        release just asked keeps its retry time."""
+        vendored: Final = (
+            slot for slot, cached in self._cache.items() if slot != keep and cached.stock.source == _VENDORED_SOURCE
+        )
         return next(vendored, next(iter(self._cache)))
 
     async def _fetch(

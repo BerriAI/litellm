@@ -300,6 +300,27 @@ def test_releases_no_catalog_answered_leave_the_cache_before_a_fetched_one() -> 
     assert tree.calls.count(models_url) == 1, tree.calls
 
 
+def test_a_release_whose_fetch_just_failed_keeps_its_retry_time_when_the_cache_is_full_of_fetched_ones() -> None:
+    older: Final = "0.165.0"
+    tree: Final = _RawTree({**_tree(older), **_tree(RELEASE)})
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, cached_versions=2)
+    missing: Final = "0.204.0"
+
+    async def walk() -> None:
+        await source.stock(older)
+        clock.now += 301
+        await source.stock(RELEASE)
+        clock.now += 301
+        await source.stock(missing)
+        clock.now += 100
+        await source.stock(missing)
+
+    asyncio.run(walk())
+    missing_url: Final = next(url for url in tree.calls if f"rust-v{missing}/" in url and url.endswith("models.json"))
+    assert tree.calls.count(missing_url) == 1, tree.calls
+
+
 def test_a_catalog_url_that_redirects_to_itself_serves_the_vendored_pair_and_waits_out_the_retry_window() -> None:
     hops: Final[list[str]] = []
 
