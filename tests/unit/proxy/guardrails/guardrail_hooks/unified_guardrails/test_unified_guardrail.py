@@ -3371,6 +3371,46 @@ _TOOL_DEFINITION_REQUESTS: Final = (
 )
 
 
+_GEMINI_TOOL_DEFINITION_REQUESTS: Final = (
+    pytest.param(
+        CallTypes.agenerate_content.value,
+        {
+            "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {"name": "get_weather", "description": _POISONED_DESCRIPTION, "parameters": _WEATHER_SCHEMA}
+                    ]
+                }
+            ],
+        },
+        id="gemini_generate_content",
+    ),
+    pytest.param(
+        CallTypes.agenerate_content.value,
+        {
+            "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
+            "tools": [
+                {
+                    "function_declarations": [
+                        {
+                            "name": "get_weather",
+                            "description": "Gets the weather.",
+                            "parameters_json_schema": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string", "description": _POISONED_DESCRIPTION}},
+                            },
+                        }
+                    ]
+                }
+            ],
+        },
+        id="gemini_generate_content_snake_case",
+    ),
+)
+_TOOL_DESCRIPTION_SCAN_REQUESTS: Final = (*_TOOL_DEFINITION_REQUESTS, *_GEMINI_TOOL_DEFINITION_REQUESTS)
+
+
 class PhraseGuardrail(RecordingGuardrail):
     def __init__(self, *, mask: bool, scan_tool_descriptions: bool | None) -> None:
         super().__init__()
@@ -3412,7 +3452,7 @@ def _tool_definition_request(
 
 
 @pytest.mark.usefixtures("_real_translation_mappings")
-@pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
+@pytest.mark.parametrize(("call_type", "body"), _TOOL_DESCRIPTION_SCAN_REQUESTS)
 @pytest.mark.asyncio
 async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_description(
     call_type: str, body: Mapping[str, object]
@@ -3429,7 +3469,7 @@ async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_descr
 
 
 @pytest.mark.usefixtures("_real_translation_mappings")
-@pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
+@pytest.mark.parametrize(("call_type", "body"), _TOOL_DESCRIPTION_SCAN_REQUESTS)
 @pytest.mark.asyncio
 async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(
     call_type: str, body: Mapping[str, object]
@@ -3452,7 +3492,7 @@ async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(
 
 
 @pytest.mark.usefixtures("_real_translation_mappings")
-@pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
+@pytest.mark.parametrize(("call_type", "body"), _TOOL_DESCRIPTION_SCAN_REQUESTS)
 @pytest.mark.asyncio
 async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(
     call_type: str, body: Mapping[str, object]
@@ -3468,6 +3508,29 @@ async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(
         return json.loads(json.dumps(value).replace("IGNORE PRIOR INSTRUCTIONS", "[MASKED]"))
 
     assert result["tools"] == masked(body["tools"])
+
+
+@pytest.mark.usefixtures("_real_translation_mappings")
+@pytest.mark.asyncio
+async def test_deployment_hook_keeps_masked_tool_descriptions_in_the_request_kwargs() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "description": _POISONED_DESCRIPTION, "parameters": _WEATHER_SCHEMA},
+        }
+    ]
+    kwargs: Final[dict[str, object]] = {  # mutable-ok: async_pre_call_deployment_hook takes kwargs as a dict
+        "model": "gpt-5.5",
+        "messages": [{"role": "user", "content": "weather in Paris?"}],
+        "tools": copy.deepcopy(tools),
+        "guardrails": ["recording-guardrail"],
+    }
+
+    await PhraseGuardrail(mask=True, scan_tool_descriptions=True).async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.acompletion
+    )
+
+    assert kwargs["tools"] == json.loads(json.dumps(tools).replace("IGNORE PRIOR INSTRUCTIONS", "[MASKED]"))
 
 
 @pytest.mark.usefixtures("_real_translation_mappings")
@@ -3529,6 +3592,15 @@ _NESTED_SCHEMA_REQUESTS: Final = (
         ("input_schema",),
         id="anthropic_messages",
     ),
+    pytest.param(
+        CallTypes.agenerate_content.value,
+        {
+            "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
+            "tools": [{"functionDeclarations": [{"name": "search", "parameters": _NESTED_SCHEMA}]}],
+        },
+        ("functionDeclarations", 0, "parameters"),
+        id="gemini_generate_content",
+    ),
 )
 
 
@@ -3536,7 +3608,7 @@ _NESTED_SCHEMA_REQUESTS: Final = (
 @pytest.mark.parametrize(("call_type", "body", "schema_path"), _NESTED_SCHEMA_REQUESTS)
 @pytest.mark.asyncio
 async def test_pre_call_masks_nested_schema_descriptions_but_not_schema_values(
-    call_type: str, body: Mapping[str, object], schema_path: tuple[str, ...]
+    call_type: str, body: Mapping[str, object], schema_path: tuple[str | int, ...]
 ) -> None:
     result: Final = await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),

@@ -32,7 +32,8 @@ def effective_scan_tool_descriptions_as_text_for_guardrail(guardrail_to_apply: C
     )
 
 
-_TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema")
+_TOOL_SCHEMA_KEYS: Final = ("parameters", "input_schema", "parametersJsonSchema", "parameters_json_schema")
+_DECLARATION_KEYS: Final = ("functionDeclarations", "function_declarations")
 _SUBSCHEMA_KEYWORDS: Final = ("items", "additionalProperties", "not")
 _SUBSCHEMA_LIST_KEYWORDS: Final = ("items", "prefixItems", "anyOf", "oneOf", "allOf")
 _SUBSCHEMA_MAP_KEYWORDS: Final = ("properties", "patternProperties", "$defs", "definitions")
@@ -56,10 +57,12 @@ def _tool_holders(tool: JsonValue, path: DescriptionPath) -> Iterator[tuple[Desc
     yield path, tool
     if isinstance(function := tool.get("function"), dict):
         yield (*path, "function"), function
-    if tool.get("type") == "namespace" and isinstance(members := tool.get("tools"), list):
-        for index, member in enumerate(members):
-            if isinstance(member, dict):
-                yield (*path, "tools", index), member
+    member_keys: Final = ("tools", *_DECLARATION_KEYS) if tool.get("type") == "namespace" else _DECLARATION_KEYS
+    for key in member_keys:
+        if isinstance(members := tool.get(key), list):
+            for index, member in enumerate(members):
+                if isinstance(member, dict):
+                    yield (*path, key, index), member
 
 
 def _schemas(
@@ -157,4 +160,6 @@ async def scan_tool_descriptions(
     }
     if not replacements:
         return data
-    return {**data, "tools": with_replaced_descriptions(tools, replacements)}
+    rewritten_tools: Final = with_replaced_descriptions(tools, replacements)
+    data["tools"] = rewritten_tools  # rebind-ok: the deployment hook reads only messages back from a returned dict
+    return data
