@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 from typing import Final, cast
 
@@ -8,6 +9,7 @@ from litellm.repositories.analytics_budget import (
     AnalyticsCapacityError,
     AnalyticsDatabase,
     BoundedAnalyticsDatabase,
+    analytics_deadline,
 )
 
 _SETTINGS: Final = """SELECT current_setting('statement_timeout') AS statement_timeout,
@@ -57,3 +59,24 @@ async def test_expensive_analytics_are_cancelled_and_release_capacity(db: Manage
     assert active[0]["running"] == 0
     assert (await bounded.query_raw("SELECT 1 AS result"))[0]["result"] == 1
     assert await db.prisma.writer_db.query_raw(_SETTINGS) == before
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_work_deadline_cancels_inflight_sql_and_restores_capacity(db: ManagementDatabase) -> None:
+    database: Final = cast(AnalyticsDatabase, db.prisma.writer_db)
+    bounded: Final = BoundedAnalyticsDatabase(database, background=True)
+    loop: Final = asyncio.get_running_loop()
+    start: Final = loop.time()
+    with analytics_deadline(start + 0.25), analytics_deadline(start + 10):
+        with pytest.raises(AnalyticsCapacityError):
+            await bounded.query_raw("SELECT 1 FROM pg_sleep(30) /* bounded_analytics_deadline */")
+    assert loop.time() - start < 2
+    active: Final = await db.prisma.writer_db.query_raw(
+        """SELECT count(*)::int AS running FROM pg_stat_activity
+        WHERE pid<>pg_backend_pid() AND state='active' AND query LIKE $1""",
+        "%bounded_analytics_deadline%",
+    )
+    assert active[0]["running"] == 0
+    with analytics_deadline(loop.time() - 1), pytest.raises(AnalyticsCapacityError):
+        await bounded.query_raw("SELECT 1 AS result")
+    assert (await bounded.query_raw("SELECT 1 AS result"))[0]["result"] == 1
