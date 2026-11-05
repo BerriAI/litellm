@@ -15,11 +15,12 @@ import {
 
 export interface FieldConfig {
   name: string;
-  label: string;
+  labelKey: ParseKeys;
   type: "text" | "textarea" | "url" | "switch" | "list" | "select";
   required?: boolean;
-  tooltip?: string;
+  tooltipKey?: ParseKeys;
   placeholder?: string;
+  placeholderKey?: ParseKeys;
   defaultValue?: any;
   rows?: number;
   validation?: any[];
@@ -50,42 +51,41 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "name",
-        label: "Display Name",
+        labelKey: "agents.formConfig.fields.name.label",
         type: "text",
         required: true,
-        placeholder: "e.g., Customer Support Agent",
+        placeholderKey: "agents.formConfig.fields.name.placeholder",
       },
       {
         name: "description",
-        label: "Description",
+        labelKey: "agents.formConfig.fields.description.label",
         type: "textarea",
         required: false,
-        placeholder: "Describe what this agent does...",
+        placeholderKey: "agents.formConfig.fields.description.placeholder",
         rows: 3,
       },
       {
         name: "url",
-        label: "URL",
+        labelKey: "agents.formConfig.fields.url.label",
         type: "url",
         required: false,
         placeholder: "http://localhost:9999/",
-        tooltip: "Base URL where the agent is hosted (optional)",
+        tooltipKey: "agents.formConfig.fields.url.tooltip",
       },
       {
         name: "version",
-        label: "Version",
+        labelKey: "agents.formConfig.fields.version.label",
         type: "text",
         placeholder: "1.0.0",
         defaultValue: "1.0.0",
       },
       {
         name: "protocolVersion",
-        label: "Protocol Version",
+        labelKey: "agents.formConfig.fields.protocolVersion.label",
         type: "select",
         options: ["1.0", "0.3"],
         defaultValue: "1.0",
-        tooltip:
-          "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version.",
+        tooltipKey: "agents.formConfig.fields.protocolVersion.tooltip",
         helpTextKey: "agents.formConfig.basic.protocolVersionHelp",
       },
     ],
@@ -96,7 +96,7 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "skills",
-        label: "Skills",
+        labelKey: "agents.formConfig.fields.skills.label",
         type: "list",
         defaultValue: [],
       },
@@ -108,18 +108,18 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "streaming",
-        label: "Streaming",
+        labelKey: "agents.formConfig.fields.streaming.label",
         type: "switch",
         defaultValue: false,
       },
       {
         name: "pushNotifications",
-        label: "Push Notifications",
+        labelKey: "agents.formConfig.fields.pushNotifications.label",
         type: "switch",
       },
       {
         name: "stateTransitionHistory",
-        label: "State Transition History",
+        labelKey: "agents.formConfig.fields.stateTransitionHistory.label",
         type: "switch",
       },
     ],
@@ -130,19 +130,19 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "iconUrl",
-        label: "Icon URL",
+        labelKey: "agents.formConfig.fields.iconUrl.label",
         type: "url",
         placeholder: "https://example.com/icon.png",
       },
       {
         name: "documentationUrl",
-        label: "Documentation URL",
+        labelKey: "agents.formConfig.fields.documentationUrl.label",
         type: "url",
         placeholder: "https://docs.example.com",
       },
       {
         name: "supportsAuthenticatedExtendedCard",
-        label: "Supports Authenticated Extended Card",
+        labelKey: "agents.formConfig.fields.supportsAuthenticatedExtendedCard.label",
         type: "switch",
       },
     ],
@@ -153,12 +153,12 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "model",
-        label: "Model (Optional)",
+        labelKey: "agents.formConfig.fields.model.label",
         type: "text",
       },
       {
         name: "make_public",
-        label: "Make Public",
+        labelKey: "agents.formConfig.fields.makePublic.label",
         type: "switch",
       },
     ],
@@ -169,24 +169,24 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "cost_per_query",
-        label: "Cost Per Query ($)",
+        labelKey: "agents.formConfig.fields.costPerQuery.label",
         type: "text",
         placeholder: "0.0",
-        tooltip: "Fixed cost per query",
+        tooltipKey: "agents.formConfig.fields.costPerQuery.tooltip",
       },
       {
         name: "input_cost_per_token",
-        label: "Input Cost Per Token ($)",
+        labelKey: "agents.formConfig.fields.inputCostPerToken.label",
         type: "text",
         placeholder: "0.000001",
-        tooltip: "Cost per input token",
+        tooltipKey: "agents.formConfig.fields.inputCostPerToken.tooltip",
       },
       {
         name: "output_cost_per_token",
-        label: "Output Cost Per Token ($)",
+        labelKey: "agents.formConfig.fields.outputCostPerToken.label",
         type: "text",
         placeholder: "0.000002",
-        tooltip: "Cost per output token",
+        tooltipKey: "agents.formConfig.fields.outputCostPerToken.tooltip",
       },
     ],
   },
@@ -196,10 +196,10 @@ export const AGENT_FORM_CONFIG: {
     fields: [
       {
         name: "enable_tracing",
-        label: "Enable Tracing",
+        labelKey: "agents.formConfig.fields.enableTracing.label",
         type: "switch",
         defaultValue: false,
-        tooltip: "Enable request tracing for this agent",
+        tooltipKey: "agents.formConfig.fields.enableTracing.tooltip",
       },
     ],
   },

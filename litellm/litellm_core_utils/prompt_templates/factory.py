@@ -5879,7 +5879,7 @@ def _bedrock_tools_pt(
             description = name
 
         defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
+        defs_copy = defs if isinstance(defs, dict) else {}
         # Expand $ref references in parameters using the definitions
         # Note: We don't pre-flatten defs as that causes exponential memory growth
         # with circular references (see issue #19098). unpack_defs handles nested

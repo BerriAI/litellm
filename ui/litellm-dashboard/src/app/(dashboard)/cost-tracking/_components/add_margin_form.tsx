@@ -1,4 +1,5 @@
 import React from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { CircleHelp } from "lucide-react";
 import { Providers, provider_map } from "@/components/provider_info_helpers";
@@ -37,14 +38,14 @@ interface ProviderOption {
   providerEnum: string | null;
 }
 
-const GLOBAL_OPTION: ProviderOption = {
+const GLOBAL_OPTION = {
   value: "global",
-  label: "Global (All Providers)",
+  labelKey: "costTracking.addMarginForm.provider.global",
   providerEnum: null,
-};
+} as const;
 
-const buildProviderOptions = (marginConfig: MarginConfig): ProviderOption[] => [
-  GLOBAL_OPTION,
+const buildProviderOptions = (marginConfig: MarginConfig, t: TFunction): ProviderOption[] => [
+  { value: GLOBAL_OPTION.value, label: t(GLOBAL_OPTION.labelKey), providerEnum: GLOBAL_OPTION.providerEnum },
   ...Object.entries(Providers).flatMap(([providerEnum, providerDisplayName]) => {
     const providerValue = provider_map[providerEnum as keyof typeof provider_map];
     if (providerValue && marginConfig[providerValue]) {
@@ -77,7 +78,7 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
   onAddProvider,
 }) => {
   const { t } = useTranslation();
-  const providerOptions = buildProviderOptions(marginConfig);
+  const providerOptions = buildProviderOptions(marginConfig, t);
   const selectedOption = providerOptions.find((option) => option.value === selectedProvider) ?? null;
 
   return (
