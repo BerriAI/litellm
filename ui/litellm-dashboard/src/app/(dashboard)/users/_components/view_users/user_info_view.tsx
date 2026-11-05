@@ -500,7 +500,7 @@ export default function UserInfoView({
         onValueChange={(v: unknown) => setActiveTab(String(v) as typeof activeTab)}
         className="gap-0"
       >
-        <TabsList variant="line" className="mb-4">
+        <TabsList variant="line" className="mb-4 w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.overview")}
           </TabsTrigger>

@@ -263,7 +263,7 @@ export const ModelSection = ({
 }) => {
   const { t } = useTranslation();
   return (
-    <div className="grid gap-3">
+    <div className="grid grid-cols-1 gap-3">
       <StatStrip columns={5}>
         <StatCell>
           <Stat

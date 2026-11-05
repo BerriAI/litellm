@@ -748,7 +748,7 @@ export default function KeyInfoView({
       </Dialog>
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.overview")}
           </TabsTrigger>

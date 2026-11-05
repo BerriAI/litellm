@@ -2763,7 +2763,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           onTabChange(value);
         }}
       >
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
               {label}
