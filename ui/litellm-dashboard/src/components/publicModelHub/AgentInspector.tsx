@@ -1,6 +1,7 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import type { AgentCard } from "@/components/PublicModelHubTableColumns";
 import { Button } from "@/components/ui/button";
@@ -19,20 +20,32 @@ const modes = (agent: AgentCard) => {
 };
 
 export function AgentInspector({ agent }: { agent: AgentCard }) {
+  const { t } = useTranslation();
   const capabilities = agentCapabilities(agent);
   return (
     <div className="flex flex-col gap-6 p-6">
-      <InspectorHeader title={agent.name} copyLabel="Copy agent name" description={agent.description} />
+      <InspectorHeader
+        title={agent.name}
+        copyLabel={t("publicModelHub.agentInspector.copyName")}
+        description={agent.description}
+      />
       <Facts
         groups={[
           [
-            { label: "Version", value: agent.version },
-            { label: "Owner", value: agent.provider?.organization },
-            { label: "Protocol", value: agent.protocolVersion && `A2A ${agent.protocolVersion}` },
+            { label: t("publicModelHub.agentInspector.facts.version"), value: agent.version },
+            { label: t("publicModelHub.agentInspector.facts.owner"), value: agent.provider?.organization },
+            {
+              label: t("publicModelHub.agentInspector.facts.protocol"),
+              value: agent.protocolVersion && `A2A ${agent.protocolVersion}`,
+            },
           ],
           [
-            { label: "Input / output", wide: true, value: modes(agent) },
-            { label: "Capabilities", wide: true, value: capabilities.length > 0 && <Badges items={capabilities} /> },
+            { label: t("publicModelHub.agentInspector.facts.inputOutput"), wide: true, value: modes(agent) },
+            {
+              label: t("publicModelHub.agentInspector.facts.capabilities"),
+              wide: true,
+              value: capabilities.length > 0 && <Badges items={capabilities} />,
+            },
           ],
         ]}
       />
@@ -44,12 +57,12 @@ export function AgentInspector({ agent }: { agent: AgentCard }) {
           className="h-auto self-start px-0"
           render={<a href={agent.documentationUrl} target="_blank" rel="noopener noreferrer" />}
         >
-          Read the documentation
+          {t("publicModelHub.agentInspector.documentation")}
           <ExternalLink />
         </Button>
       )}
       {(agent.skills ?? []).length > 0 && (
-        <PaneSection title="Skills">
+        <PaneSection title={t("publicModelHub.agentInspector.skills")}>
           <ItemGroup className="gap-2">
             {agent.skills.map((skill) => (
               <Item key={skill.id} variant="outline" size="sm" role="listitem">
@@ -65,11 +78,11 @@ export function AgentInspector({ agent }: { agent: AgentCard }) {
           </ItemGroup>
         </PaneSection>
       )}
-      <PaneSection title="Call this agent">
+      <PaneSection title={t("publicModelHub.agentInspector.callAgent")}>
         {agentSnippets(agent).map((snippet, index) => (
           <Field key={snippet.title}>
             <FieldDescription>
-              Step {index + 1}: {snippet.title}
+              {t("publicModelHub.agentInspector.step", { step: index + 1, title: snippet.title })}
             </FieldDescription>
             <CodeBlock code={snippet.code} />
           </Field>

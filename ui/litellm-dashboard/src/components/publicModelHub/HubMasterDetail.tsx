@@ -7,6 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
+import i18n from "@/i18n/i18n";
 
 import { NotListed } from "./HubEmpty";
 import { InSheet } from "./InspectorHeader";
@@ -121,7 +122,7 @@ function useSheet<T>(
   const { row } = content;
   return {
     open: chosen !== undefined || missingKey !== undefined,
-    title: row ? getKey(row) : content.missingKey ?? "Details",
+    title: row ? getKey(row) : content.missingKey ?? i18n.t("publicModelHub.masterDetail.details"),
     body: row ? renderDetail(row) : content.missingKey && <NotListed name={content.missingKey} />,
   };
 }
