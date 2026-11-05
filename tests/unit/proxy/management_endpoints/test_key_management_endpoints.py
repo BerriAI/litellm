@@ -24265,3 +24265,52 @@ async def test_key_health_reports_a_callback_settings_secret_it_cannot_read(monk
     assert health["key"] == "unhealthy"
     assert health["logging_callbacks"]["callbacks"] == ["arize_space_b"]
     assert "callback_settings.arize_space_b.arize_api_key" in str(health["logging_callbacks"]["details"])
+
+
+@pytest.mark.asyncio
+async def test_update_key_by_a_non_admin_cannot_drop_a_stored_callback_settings_reference(monkeypatch):
+    """The gate has to see the stored metadata, or sending ``metadata`` without ``logging`` silently removes the reference."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateKeyRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import _validate_update_key_data
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"arize_space_a": {"callback_type": "arize", "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY"}},
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    mock_prisma_client.db = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    existing_key_row = MagicMock(
+        token="hashed_alice_personal_key",
+        user_id="alice",
+        team_id=None,
+        created_by="alice",
+        max_budget=None,
+        organization_id=None,
+        project_id=None,
+        metadata={
+            "logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}],
+            "note": "original",
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-alice-personal", metadata={"note": "edited"}),
+            existing_key_row=existing_key_row,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-alice", user_id="alice"
+            ),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "callback_settings reference" in str(exc.value.detail)

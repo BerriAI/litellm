@@ -1897,3 +1897,25 @@ def test_add_team_callback_rejects_non_string_destination_callback_vars(callback
     with pytest.raises(ValidationError) as exc:
         AddTeamCallback(callback_name="newrelic", callback_vars=callback_vars)
     assert f"{callback_var} must be a string, got {type(value).__name__}" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_add_team_callbacks_refuses_a_callback_settings_reference(patched_prisma, monkeypatch):
+    """A reference only resolves on a key, so storing one on a team must fail loudly instead of logging nowhere."""
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"arize_space_a": {"callback_type": "arize", "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY"}},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=AddTeamCallback(callback_name="arize_space_a", callback_type="success", callback_vars={}),
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=_admin_auth(),
+        )
+
+    assert exc.value.status_code == 400
+    assert "arize_space_a" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()

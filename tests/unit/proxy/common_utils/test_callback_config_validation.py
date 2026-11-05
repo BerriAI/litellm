@@ -6,10 +6,12 @@ import pytest
 import litellm
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
+    callback_settings_definition_error,
     conflicting_callback_var_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
     logging_metadata_config_error,
+    team_callback_reference_error,
 )
 
 
@@ -567,3 +569,83 @@ class TestCallbackReferenceEntries:
         }
 
         assert logging_metadata_config_error({"logging": [reference, inline]}) is None
+
+
+class TestCallbackSettingsDefinitionError:
+    def test_a_well_formed_definition_next_to_plain_settings_passes(self):
+        assert (
+            callback_settings_definition_error(
+                {
+                    "arize_space_a": {
+                        "callback_type": "arize",
+                        "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY",
+                        "arize_space_id": "os.environ/LIT10061_ARIZE_SPACE_ID",
+                        "excluded_services": "postgres,redis",
+                    },
+                    "audit_sink": {"callback_type": "generic_api", "endpoint": "https://sink.local", "headers": {}},
+                    "otel": {"message_logging": False},
+                }
+            )
+            is None
+        )
+
+    def test_a_definition_named_after_a_callback_is_rejected(self):
+        error: Final = callback_settings_definition_error(
+            {"langfuse": {"callback_type": "arize", "arize_api_key": "k"}}
+        )
+
+        assert error is not None and "callback_settings.langfuse" in error
+
+    def test_an_unknown_backend_is_rejected(self):
+        error: Final = callback_settings_definition_error(
+            {"arize_space_a": {"callback_type": "arise", "arize_api_key": "k"}}
+        )
+
+        assert error is not None and "'arise'" in error
+
+    def test_a_field_no_callback_accepts_is_rejected(self):
+        error: Final = callback_settings_definition_error(
+            {"arize_space_a": {"callback_type": "arize", "arize_api_kye": "k", "arize_space_id": "s"}}
+        )
+
+        assert error is not None and "arize_api_kye" in error and "arize_space_id" not in error
+
+
+class TestTeamCallbackReferenceError:
+    @pytest.fixture(autouse=True)
+    def definitions(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            litellm, "callback_settings", {"arize_space_a": {"callback_type": "arize", "arize_api_key": "k"}}
+        )
+
+    def test_a_team_entry_naming_a_definition_is_refused(self):
+        error: Final = team_callback_reference_error(
+            [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]
+        )
+
+        assert error is not None and "arize_space_a" in error
+
+    def test_inline_team_entries_are_not_affected(self):
+        inline: Final = {"callback_name": "arize", "callback_type": "success", "callback_vars": {"arize_api_key": "k"}}
+
+        assert team_callback_reference_error([inline]) is None
+        assert team_callback_reference_error(None) is None
+
+
+def test_a_logging_entry_without_callback_vars_is_refused_at_write_time(monkeypatch):
+    """Such an entry fails model validation at request time and is dropped, so accepting it would store a no-op."""
+    monkeypatch.setattr(
+        litellm, "callback_settings", {"arize_space_a": {"callback_type": "arize", "arize_api_key": "k"}}
+    )
+
+    error: Final = logging_metadata_config_error(
+        {"logging": [{"callback_name": "arize_space_a", "callback_type": "success"}]}
+    )
+
+    assert error is not None and "callback_vars" in error and "arize_space_a" in error
+    assert (
+        logging_metadata_config_error(
+            {"logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]}
+        )
+        is None
+    )

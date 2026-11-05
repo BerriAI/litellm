@@ -167,7 +167,10 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.callback_config_validation import is_named_callback_definition
+from litellm.proxy.common_utils.callback_config_validation import (
+    callback_settings_definition_error,
+    is_named_callback_definition,
+)
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
@@ -6868,6 +6871,11 @@ class ProxyConfig:
         ## Callback settings
         callback_settings: Final = config.get("callback_settings", {})
         if callback_settings:
+            definition_error: Final = callback_settings_definition_error(
+                _SETTINGS_ADAPTER.validate_python(callback_settings)
+            )
+            if definition_error is not None:
+                raise ValueError(definition_error)
             litellm.callback_settings = callback_settings
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)

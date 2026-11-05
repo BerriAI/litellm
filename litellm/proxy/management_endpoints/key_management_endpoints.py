@@ -21,12 +21,12 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -434,6 +434,15 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_STORED_METADATA: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _stored_metadata(metadata: object) -> Mapping[str, object] | None:
+    """A key row's metadata with its callback vars decrypted, or None when the row carries no metadata object."""
+    try:
+        return _STORED_METADATA.validate_python(_DECODED_JSON.validate_python(decrypt_callback_vars(metadata)))
+    except ValidationError:
+        return None
 
 
 def _decode_json_string_column(column: str, value: object) -> object:
@@ -934,33 +943,59 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+_CallbackReference: TypeAlias = tuple[str, Mapping[str, str], Mapping[str, object]]
+
+
 def raise_on_unauthorized_callback_reference(
-    metadata: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    existing_metadata: Mapping[str, object] | None = None,
 ) -> None:
-    """Only a proxy admin may point a key at a ``callback_settings`` definition.
+    """Only a proxy admin may point a key at a ``callback_settings`` definition, or change or drop that reference.
 
     The definition carries the operator's secret-manager references, so a key that
     names it must not be writable by the team admins and members who can otherwise
-    edit key metadata, and must not override the values the definition sets.
+    edit key metadata, and must not override the values the definition sets. Those
+    callers may still edit the rest of the key's metadata as long as they send the
+    stored reference back unchanged.
     """
-    references: Final = tuple(
+    if metadata is None:
+        return
+    references: Final = _callback_references(metadata)
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        overridden: Final = next(
+            (error for reference in references if (error := _overridden_definition_var_error(reference)) is not None),
+            None,
+        )
+        if overridden is not None:
+            raise HTTPException(status_code=400, detail={"error": overridden})
+        return
+    stored: Final = _callback_references(existing_metadata or {})
+    if _reference_keys(references) == _reference_keys(stored):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only a proxy admin can point a key at a callback_settings definition"
+                if not stored
+                else "Only a proxy admin can change or remove a key's callback_settings reference"
+            )
+        },
+    )
+
+
+def _callback_references(metadata: Mapping[str, object]) -> tuple[_CallbackReference, ...]:
+    return tuple(
         (callback_name, callback_vars, definition)
-        for callback_name, callback_vars in stored_callback_entries((metadata or {}).get("logging"))
+        for callback_name, callback_vars in stored_callback_entries(metadata.get("logging"))
         if callback_name is not None and (definition := named_callback_definition(callback_name)) is not None
     )
-    if not references:
-        return
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": "Only a proxy admin can point a key at a callback_settings definition"},
-        )
-    overridden: Final = next(
-        (error for reference in references if (error := _overridden_definition_var_error(reference)) is not None),
-        None,
-    )
-    if overridden is not None:
-        raise HTTPException(status_code=400, detail={"error": overridden})
+
+
+def _reference_keys(references: Sequence[_CallbackReference]) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    return tuple((name, tuple(sorted(callback_vars.items()))) for name, callback_vars, _ in references)
 
 
 def _overridden_definition_var_error(
@@ -981,6 +1016,7 @@ def common_key_access_checks(
     llm_router: Router | None,
     premium_user: bool,
     user_id: str | None = None,
+    existing_metadata: Mapping[str, object] | None = None,
 ) -> Literal[True]:
     """
     Check if user is allowed to make a key request, for this key
@@ -1007,7 +1043,7 @@ def common_key_access_checks(
         llm_router=llm_router,
         premium_user=premium_user,
     )
-    raise_on_unauthorized_callback_reference(data.metadata, user_api_key_dict)
+    raise_on_unauthorized_callback_reference(data.metadata, user_api_key_dict, existing_metadata=existing_metadata)
     return True
 
 
@@ -3816,6 +3852,7 @@ async def _validate_update_key_data(
         user_id=user_api_key_dict.user_id if acting_as_team_admin else existing_key_row.user_id,
         llm_router=llm_router,
         premium_user=premium_user,
+        existing_metadata=_stored_metadata(existing_key_row.metadata),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -6509,7 +6546,11 @@ def _check_regenerate_guardrail_opt_out(
         user_api_key_dict,
         existing_metadata=existing_metadata,
     )
-    raise_on_unauthorized_callback_reference(data.metadata, user_api_key_dict)
+    raise_on_unauthorized_callback_reference(
+        data.metadata,
+        user_api_key_dict,
+        existing_metadata=_stored_metadata(existing_metadata),
+    )
 
 
 @router.post(

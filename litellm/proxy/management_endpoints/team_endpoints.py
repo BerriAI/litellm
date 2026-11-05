@@ -131,6 +131,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_shared,
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.callback_config_validation import team_callback_reference_error
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -290,6 +291,12 @@ class _TeamIdKeyCount(TypedDict):
 class _TeamIdGroupRow(TypedDict):
     team_id: str
     _count: _TeamIdKeyCount
+
+
+def _raise_on_team_callback_reference(metadata: Mapping[str, object] | None) -> None:
+    error: Final = team_callback_reference_error((metadata or {}).get("logging"))
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
 
 
 def _as_object(value: object) -> object:
@@ -1907,6 +1914,7 @@ async def new_team(
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
 
+        _raise_on_team_callback_reference(data.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
         await validate_team_metadata_if_configured(
             operation="create",
             metadata=data.metadata,
@@ -2616,6 +2624,7 @@ async def update_team(
             metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
         )
+        _raise_on_team_callback_reference(data.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
 
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget

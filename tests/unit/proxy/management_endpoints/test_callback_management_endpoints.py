@@ -552,3 +552,68 @@ class TestCallbackReferenceKeyWrites:
             assert raise_on_unauthorized_callback_reference(metadata, UserAPIKeyAuth(user_role="proxy_admin")) is None
         finally:
             is_otel_v2_enabled.cache_clear()
+
+
+class TestCallbackReferenceKeyUpdates:
+    """A non-admin may edit a referencing key only by sending its stored reference back unchanged."""
+
+    _STORED: Final = {
+        "logging": [
+            {
+                "callback_name": "arize_space_a",
+                "callback_type": "success",
+                "callback_vars": {"turn_off_message_logging": "true"},
+            }
+        ],
+        "note": "original",
+    }
+
+    @pytest.fixture(autouse=True)
+    def definitions(self, monkeypatch) -> None:
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+
+    @staticmethod
+    def _check(metadata, role: str):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_unauthorized_callback_reference,
+        )
+
+        return raise_on_unauthorized_callback_reference(
+            metadata, UserAPIKeyAuth(user_role=role), existing_metadata=TestCallbackReferenceKeyUpdates._STORED
+        )
+
+    def test_a_non_admin_can_edit_other_metadata_while_resending_the_stored_reference(self):
+        assert self._check({**self._STORED, "note": "edited"}, "internal_user") is None
+
+    def test_a_non_admin_sending_no_metadata_leaves_the_reference_alone(self):
+        assert self._check(None, "internal_user") is None
+
+    @pytest.mark.parametrize(
+        "new_metadata",
+        [
+            {"note": "edited"},
+            {"logging": [], "note": "edited"},
+            {"logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]},
+            {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_api_key": "mine", "arize_space_id": "space-b"},
+                    }
+                ]
+            },
+        ],
+        ids=["dropped", "emptied", "vars-changed", "swapped-for-inline"],
+    )
+    def test_a_non_admin_cannot_drop_or_change_the_stored_reference(self, new_metadata):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            self._check(new_metadata, "internal_user")
+        assert exc.value.status_code == 403
+        assert "change or remove" in str(exc.value.detail)
+
+    def test_a_proxy_admin_can_remove_the_reference(self):
+        assert self._check({"note": "edited"}, "proxy_admin") is None

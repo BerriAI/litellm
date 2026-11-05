@@ -6621,3 +6621,25 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_fails_on_a_callback_definition_no_key_could_use(tmp_path, monkeypatch):
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "callback_settings:\n"
+        "  arize_space_a:\n"
+        "    callback_type: arize\n"
+        "    arize_api_kye: os.environ/LIT10061_ARIZE_API_KEY\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "callback_settings", {})
+
+    with pytest.raises(ValueError, match="arize_api_kye"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.callback_settings == {}

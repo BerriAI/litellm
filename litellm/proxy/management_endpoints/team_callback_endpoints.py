@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     conflicting_span_scope_error,
     cross_entry_family_error,
     stored_callback_entries,
+    team_callback_reference_error,
 )
 from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
     _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -78,6 +79,9 @@ def _callback_config_error(message: str) -> HTTPException:
 
 
 def _validate_team_callback(data: "AddTeamCallback") -> None:
+    reference_error: Final = team_callback_reference_error([data.model_dump()])
+    if reference_error is not None:
+        raise _callback_config_error(reference_error)
     error: Final = callback_config_error(data.callback_name, data.callback_vars, data.callback_type)
     if error is not None:
         raise _callback_config_error(error)

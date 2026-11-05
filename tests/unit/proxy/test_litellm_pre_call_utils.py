@@ -11574,3 +11574,45 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.asyncio
+async def test_a_referencing_keys_resolved_secret_never_reaches_the_spend_log_row(monkeypatch):
+    """The request carries the resolved secret for the logger, but the spend log row built from it must not."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "resolved-arize-secret-lit10061")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hello"}]},
+        request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
+        user_api_key_dict=_key_auth_referencing("arize_space_a"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated["arize_api_key"] == "resolved-arize-secret-lit10061"
+
+    row: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-5-mini",
+            "custom_llm_provider": "openai",
+            "litellm_params": {
+                "metadata": updated["metadata"],
+                "proxy_server_request": updated["proxy_server_request"],
+            },
+            "standard_callback_dynamic_params": {
+                "arize_api_key": updated["arize_api_key"],
+                "arize_space_id": updated["arize_space_id"],
+            },
+        },
+        response_obj={},
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+    )
+
+    assert "resolved-arize-secret-lit10061" not in json.dumps(row, default=repr)
+    assert "resolved-arize-secret-lit10061" not in json.dumps(updated["metadata"], default=repr)
+    assert "resolved-arize-secret-lit10061" not in json.dumps(updated["proxy_server_request"], default=repr)

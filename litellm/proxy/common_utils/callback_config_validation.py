@@ -6,14 +6,14 @@ per-integration checks here.
 """
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
+from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR, StandardCallbackDynamicParams
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
@@ -25,7 +25,11 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
 _GENERIC_API_CALLBACK_TYPE: Final = "generic_api"
+_CALLBACK_TYPE_FIELD: Final = "callback_type"
 _STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DEFINITION_VAR_KEYS: Final[frozenset[str]] = frozenset(
+    {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR}
+)
 
 
 def is_named_callback_definition(definition: object) -> bool:
@@ -51,6 +55,48 @@ def callback_backend_name(callback_name: str) -> str:
     """The backend a key's ``logging`` entry runs on: the definition's ``callback_type`` for a reference."""
     definition: Final = named_callback_definition(callback_name)
     return callback_name if definition is None else str(definition["callback_type"])
+
+
+def callback_settings_definition_error(callback_settings: Mapping[str, object]) -> str | None:
+    """Why a named ``callback_settings`` definition can never work from a key, checked at config load.
+
+    A definition named after a callback would be handed to that callback's constructor
+    and would reroute every inline key entry naming that callback to the definition's
+    backend with its secrets merged in. Other mistakes would only surface on
+    ``/key/health`` of a key that already depends on the definition.
+    """
+    return next((error for error in _definition_errors(callback_settings) if error is not None), None)
+
+
+def _definition_errors(callback_settings: Mapping[str, object]) -> Iterator[str | None]:
+    for name, definition in callback_settings.items():
+        if is_named_callback_definition(definition):
+            yield _definition_error(name, _STRING_KEYED_MAPPING.validate_python(definition))
+
+
+def _definition_error(name: str, definition: Mapping[str, object]) -> str | None:
+    known_callbacks: Final = litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the registry of callback names has no public accessor
+    if name in known_callbacks:
+        return f"callback_settings.{name} is named after the {name} callback, so a key could not tell them apart"
+    backend: Final = str(definition[_CALLBACK_TYPE_FIELD])
+    if backend not in known_callbacks:
+        return f"callback_settings.{name}.callback_type {backend!r} is not a known callback"
+    unknown: Final = tuple(key for key in definition if key != _CALLBACK_TYPE_FIELD and key not in _DEFINITION_VAR_KEYS)
+    if unknown:
+        return f"callback_settings.{name} sets {', '.join(unknown)}, which no callback accepts as a callback var"
+    return None
+
+
+def team_callback_reference_error(logging_entries: object) -> str | None:
+    """A ``callback_settings`` reference only resolves on a key, so a team entry naming one is refused."""
+    return next(
+        (
+            f"callback_settings.{name} can only be referenced from a key's logging metadata, not a team's"
+            for name, _ in stored_callback_entries(logging_entries)
+            if name is not None and named_callback_definition(name) is not None
+        ),
+        None,
+    )
 
 
 def callback_config_error(
@@ -396,9 +442,11 @@ def _logging_entry_error(entry: object) -> str | None:
         )
     )
     callback_name: Final = typed_entry.get("callback_name")
-    callback_vars_raw: Final = typed_entry.get("callback_vars")
-    if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
+    if not isinstance(callback_name, str):
         return None
+    callback_vars_raw: Final = typed_entry.get("callback_vars")
+    if not isinstance(callback_vars_raw, Mapping):
+        return f"logging entry {callback_name!r} needs a callback_vars object, pass {{}} when it has no values"
     callback_vars: Final[Mapping[object, object]] = cast(  # cast-ok: Mapping check preserves arbitrary key types
         Mapping[object, object], callback_vars_raw
     )

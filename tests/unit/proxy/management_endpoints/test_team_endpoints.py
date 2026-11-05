@@ -19450,3 +19450,61 @@ async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monk
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")
+
+
+_REFERENCE_LOGGING: Final = {
+    "logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]
+}
+
+
+@pytest.mark.asyncio
+async def test_new_team_refuses_a_callback_settings_reference_in_its_logging_metadata(
+    mock_db_client: MagicMock,
+    mock_admin_auth: UserAPIKeyAuth,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {})
+    monkeypatch.setattr(
+        litellm, "callback_settings", {"arize_space_a": {"callback_type": "arize", "arize_api_key": "k"}}
+    )
+    mock_team_create: Final = _wire_new_team_prisma(mock_db_client)
+
+    exc: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc:
+        await new_team(
+            data=NewTeamRequest(team_alias="t", metadata=dict(_REFERENCE_LOGGING)),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc.value.code) == "400"
+    assert "arize_space_a" in str(exc.value.message)
+    mock_team_create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_team_refuses_a_callback_settings_reference_in_its_logging_metadata(
+    mock_db_client: MagicMock,
+    mock_admin_auth: UserAPIKeyAuth,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "callback_settings", {"arize_space_a": {"callback_type": "arize", "arize_api_key": "k"}}
+    )
+    existing: Final[MagicMock] = MagicMock()
+    existing.metadata = {}
+    existing.model_dump.return_value = {"team_id": "t1", "organization_id": "org-1", "metadata": {}}
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+
+    exc: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc:
+        await update_team(
+            data=UpdateTeamRequest(team_id="t1", metadata=dict(_REFERENCE_LOGGING)),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc.value.code) == "400"
+    assert "arize_space_a" in str(exc.value.message)
+    mock_db_client.db.litellm_teamtable.update.assert_not_called()
