@@ -4,7 +4,7 @@
      Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
      "## Affected release" with nothing under it must not appear in the final description -->
 
-## Human PR description
+## Handwritten 1-3 sentence description
 
 <!-- The author writes this in their own words, and it can be left empty. AI agents never write here,
      and when updating an existing PR they keep whatever the author wrote. Keep this heading even when it is empty
