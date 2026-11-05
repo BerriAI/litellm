@@ -1,8 +1,14 @@
 """Bounded, writer-consistent storage for daily alert rules and episodes."""
 
 import json
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import (  # PrismaWrapper forwards generated client methods dynamically
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # PrismaWrapper forwards generated client methods dynamically
+)
 from urllib.parse import urlencode
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -31,25 +37,20 @@ class AlertDatabase(Protocol):
     async def query_raw(self, query: str, *args: object) -> object: ...
 
 
-class _Record(BaseModel):
-    record: dict[str, object]
+class _Record(BaseModel, frozen=True):
+    record: Mapping[str, object]
 
 
-class _Count(BaseModel):
+class _Count(BaseModel, frozen=True):
     count: int
 
 
-class _Episode(_Record):
-    evaluation_day: date
-    breached: bool
-
-
-class _Pending(_Record):
-    rule: dict[str, object]
+class _Pending(_Record, frozen=True):
+    rule: Mapping[str, object]
     notified_channels: tuple[UsageAlertChannel, ...]
 
 
-class _Ownership(BaseModel):
+class _Ownership(BaseModel, frozen=True):
     user_id: str | None
     team_id: str | None
 
@@ -71,7 +72,7 @@ def activity_path(
             + "?"
             + urlencode(
                 {
-                    "range": "custom",
+                    "tab": "keys",
                     "from": (day - timedelta(days=baseline_days)).isoformat(),
                     "to": day.isoformat(),
                     "alert": alert_id,
@@ -89,13 +90,47 @@ def activity_path(
     return route + "?" + urlencode(query)
 
 
+def _observation_payload(rule: UsageAlertRule, item: UsageAlertObservation, now: datetime) -> Mapping[str, object]:
+    alert_id: Final = str(
+        uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.id}:{item.entity_id or ''}:{item.day.isoformat()}")
+    )
+    incident: Final = UsageAlert(
+        id=alert_id,
+        rule_id=rule.id,
+        rule_name=rule.name,
+        scope_type=rule.scope_type,
+        scope_id=item.entity_id,
+        metric=rule.metric,
+        direction=rule.direction,
+        status="open",
+        day=item.day,
+        baseline_start=item.day - timedelta(days=rule.baseline_days),
+        baseline_end=item.day - timedelta(days=1),
+        baseline_sample_days=item.baseline_sample_days,
+        observed_value=item.observed,
+        baseline_value=item.baseline,
+        threshold=item.threshold,
+        first_seen=now,
+        last_seen=now,
+        activity_path=activity_path(rule.scope_type, item.entity_id, item.day, alert_id, rule.baseline_days),
+    )
+    return {
+        "scope_key": item.entity_id or "",
+        "breached": item.breached,
+        "day": item.day.isoformat(),
+        "record": incident.model_dump(mode="json"),
+    }
+
+
 class UsageAlertsRepository:
-    def __init__(self, database: AlertDatabase):
+    def __init__(self, database: AlertDatabase) -> None:
         self.database: Final = database
 
     @classmethod
     def from_prisma(cls, prisma: "PrismaClient") -> "UsageAlertsRepository":
-        return cls(cast(AlertDatabase, prisma.writer_db))
+        return cls(
+            cast(AlertDatabase, prisma.writer_db)  # cast-ok: PrismaWrapper forwards query_raw to its generated client
+        )
 
     async def get_rule(self, rule_id: str) -> UsageAlertRule | None:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
@@ -107,14 +142,16 @@ class UsageAlertsRepository:
 
     async def save_rule(
         self, data: UsageAlertRuleInput, created_by: str | None, existing: UsageAlertRule | None = None
-    ) -> UsageAlertRule:
+    ) -> UsageAlertRule | None:
         now: Final = datetime.now(timezone.utc)
-        rule: Final = UsageAlertRule(
-            **data.model_dump(),
-            id=existing.id if existing else str(uuid4()),
-            created_by=existing.created_by if existing else created_by,
-            created_at=existing.created_at if existing else now,
-            updated_at=now,
+        rule: Final = UsageAlertRule.model_validate(
+            {
+                **data.model_dump(),
+                "id": existing.id if existing else str(uuid4()),
+                "created_by": existing.created_by if existing else created_by,
+                "created_at": existing.created_at if existing else now,
+                "updated_at": now,
+            }
         )
         rows: Final = await self.database.query_raw(
             """INSERT INTO "LiteLLM_UsageAlertRule" (id,scope_type,scope_id,enabled,record) VALUES ($1,$2,$3,$4,$5::jsonb)
@@ -126,7 +163,8 @@ class UsageAlertsRepository:
             rule.enabled,
             rule.model_dump_json(),
         )
-        return UsageAlertRule.model_validate(TypeAdapter(tuple[_Record, ...]).validate_python(rows)[0].record)
+        saved: Final = TypeAdapter(tuple[_Record, ...]).validate_python(rows)
+        return UsageAlertRule.model_validate(saved[0].record) if saved else None
 
     async def delete_rule(self, rule_id: str) -> None:
         await self.database.query_raw(
@@ -269,24 +307,27 @@ class UsageAlertsRepository:
 
     async def ensure_default_rules(self, rules: tuple[UsageAlertRuleInput, ...]) -> None:
         for rule in rules:
-            rule_id: Final = str(
-                uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.scope_type}:{rule.metric}:{rule.direction}")
-            )
-            now: Final = datetime.now(timezone.utc)
-            record: Final = UsageAlertRule(
-                **rule.model_dump(), id=rule_id, created_at=now, updated_at=now, created_by=None
-            )
-            await self.database.query_raw(
-                'INSERT INTO "LiteLLM_UsageAlertRule" (id,scope_type,scope_id,enabled,record) VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT(id) DO NOTHING RETURNING id',
-                rule_id,
-                rule.scope_type,
-                rule.scope_id,
-                rule.enabled,
-                record.model_dump_json(),
-            )
+            await self._ensure_default_rule(rule)
+
+    async def _ensure_default_rule(self, rule: UsageAlertRuleInput) -> None:
+        rule_id: Final = str(
+            uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.scope_type}:{rule.metric}:{rule.direction}")
+        )
+        now: Final = datetime.now(timezone.utc)
+        record: Final = UsageAlertRule.model_validate(
+            {**rule.model_dump(), "id": rule_id, "created_at": now, "updated_at": now, "created_by": None}
+        )
+        await self.database.query_raw(
+            'INSERT INTO "LiteLLM_UsageAlertRule" (id,scope_type,scope_id,enabled,record) VALUES ($1,$2,$3,$4,$5::jsonb) ON CONFLICT(id) DO NOTHING RETURNING id',
+            rule_id,
+            rule.scope_type,
+            rule.scope_id,
+            rule.enabled,
+            record.model_dump_json(),
+        )
 
     async def list_breached_entity_ids(self, rule_id: str, limit: int = 500, offset: int = 0) -> tuple[str | None, ...]:
-        rows: Final = TypeAdapter(tuple[dict[str, str | None], ...]).validate_python(
+        rows: Final = TypeAdapter(tuple[Mapping[str, str | None], ...]).validate_python(
             await self.database.query_raw(
                 'SELECT DISTINCT scope_id FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND breached ORDER BY scope_id NULLS FIRST LIMIT $2 OFFSET $3',
                 rule_id,
@@ -300,11 +341,11 @@ class UsageAlertsRepository:
         self, rule: UsageAlertRule, day: date, status: UsageAlertEvaluationStatus
     ) -> None:
         await self.database.query_raw(
-            """UPDATE "LiteLLM_UsageAlertRule" SET record=record || jsonb_build_object('last_evaluated_day',$2::text,'evaluation_status',$3::text) WHERE id=$1 AND record->>'updated_at'=$4 AND NOT deleted RETURNING id""",
+            """UPDATE "LiteLLM_UsageAlertRule" SET record=record || jsonb_build_object('last_evaluated_day',$2::text,'evaluation_status',$3::text) WHERE id=$1 AND (record->>'updated_at')::timestamptz=$4::timestamptz AND NOT deleted RETURNING id""",
             rule.id,
             day.isoformat(),
             status,
-            rule.model_dump(mode="json")["updated_at"],
+            rule.updated_at.isoformat(),
         )
 
     async def record_observation(
@@ -340,38 +381,7 @@ class UsageAlertsRepository:
         if len(observations) > 500 or len({item.entity_id for item in observations}) != len(observations):
             raise ValueError("An observation batch must contain at most 500 distinct entities")
         now: Final = datetime.now(timezone.utc)
-        records: Final = []
-        for item in observations:
-            alert_id: Final = str(
-                uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.id}:{item.entity_id or ''}:{item.day.isoformat()}")
-            )
-            incident: Final = UsageAlert(
-                id=alert_id,
-                rule_id=rule.id,
-                rule_name=rule.name,
-                scope_type=rule.scope_type,
-                scope_id=item.entity_id,
-                metric=rule.metric,
-                direction=rule.direction,
-                status="open",
-                day=item.day,
-                baseline_start=item.day - timedelta(days=rule.baseline_days),
-                baseline_end=item.day - timedelta(days=1),
-                observed_value=item.observed,
-                baseline_value=item.baseline,
-                threshold=item.threshold,
-                first_seen=now,
-                last_seen=now,
-                activity_path=activity_path(rule.scope_type, item.entity_id, item.day, alert_id, rule.baseline_days),
-            )
-            records.append(
-                {
-                    "scope_key": item.entity_id or "",
-                    "breached": item.breached,
-                    "day": item.day.isoformat(),
-                    "record": incident.model_dump(mode="json"),
-                }
-            )
+        records: Final = tuple(_observation_payload(rule, item, now) for item in observations)
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw(
                 """
@@ -381,7 +391,7 @@ class UsageAlertsRepository:
                 FROM input x LEFT JOIN LATERAL (
                     SELECT * FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=x.scope_key ORDER BY evaluation_day DESC,id DESC LIMIT 1
                 ) p ON true
-                WHERE EXISTS (SELECT 1 FROM "LiteLLM_UsageAlertRule" WHERE id=$1 AND enabled AND NOT deleted AND record->>'updated_at'=$3)
+                WHERE EXISTS (SELECT 1 FROM "LiteLLM_UsageAlertRule" WHERE id=$1 AND enabled AND NOT deleted AND (record->>'updated_at')::timestamptz=$3::timestamptz)
             ), updated AS (
                 UPDATE "LiteLLM_UsageAlertIncident" i SET
                     evaluation_day=p.day, breached=p.breached,
@@ -403,7 +413,7 @@ class UsageAlertsRepository:
             """,
                 rule.id,
                 json.dumps(records),
-                rule.model_dump(mode="json")["updated_at"],
+                rule.updated_at.isoformat(),
             )
         )
         return tuple(UsageAlert.model_validate(row.record) for row in rows)
@@ -450,7 +460,7 @@ class UsageAlertsRepository:
         )
 
     async def team_role(self, team_id: str, user_id: str) -> str | None:
-        rows: Final = TypeAdapter(tuple[dict[str, str], ...]).validate_python(
+        rows: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
             await self.database.query_raw(
                 """SELECT member->>'role' AS role FROM "LiteLLM_TeamTable", jsonb_array_elements(members_with_roles) member WHERE team_id=$1 AND member->>'user_id'=$2 LIMIT 1""",
                 team_id,

@@ -1,16 +1,16 @@
 """Daily usage alert rules and incidents shared by the API and evaluator."""
 
 from datetime import date, datetime
-from typing import Literal, Self
+from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-UsageAlertScope = Literal["deployment", "key", "user", "team", "model"]
-UsageAlertMetric = Literal["spend", "requests", "latency", "errors"]
-UsageAlertDirection = Literal["increase", "decrease"]
-UsageAlertStatus = Literal["open", "resolved", "dismissed"]
-UsageAlertChannel = Literal["email", "slack"]
-UsageAlertEvaluationStatus = Literal["pending", "complete", "insufficient_coverage", "insufficient_history"]
+UsageAlertScope: TypeAlias = Literal["deployment", "key", "user", "team", "model"]
+UsageAlertMetric: TypeAlias = Literal["spend", "requests", "latency", "errors"]
+UsageAlertDirection: TypeAlias = Literal["increase", "decrease"]
+UsageAlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
+UsageAlertChannel: TypeAlias = Literal["email", "slack"]
+UsageAlertEvaluationStatus: TypeAlias = Literal["pending", "complete", "insufficient_coverage", "insufficient_history"]
 
 
 class UsageAlertRuleInput(BaseModel):
@@ -36,7 +36,7 @@ class UsageAlertRuleInput(BaseModel):
             raise ValueError("min_history_days must not exceed baseline_days")
         if self.scope_type == "deployment" and self.scope_id is not None:
             raise ValueError("Deployment alerts cover the whole gateway; omit scope_id")
-        if self.scope_type == "key" and self.scope_id is not None and self.scope_id.startswith("sk-"):
+        if self.scope_type == "key" and self.scope_id is not None and self.scope_id.removeprefix("raw:").startswith("sk-"):
             raise ValueError("Use the key's reporting ID, never the secret key")
         if len(set(self.notification_channels)) != len(self.notification_channels):
             raise ValueError("notification_channels must be unique")
@@ -72,6 +72,7 @@ class UsageAlert(BaseModel):
     day: date
     baseline_start: date
     baseline_end: date
+    baseline_sample_days: int | None = Field(default=None, ge=1, le=30)
     observed_value: float
     baseline_value: float
     threshold: float
@@ -85,14 +86,14 @@ class UsageAlertUpdate(BaseModel):
     status: UsageAlertStatus
 
 
-class UsageAlertRuleList(BaseModel):
+class UsageAlertRuleList(BaseModel, frozen=True):
     data: tuple[UsageAlertRule, ...]
     total: int
     limit: int
     offset: int
 
 
-class UsageAlertList(BaseModel):
+class UsageAlertList(BaseModel, frozen=True):
     data: tuple[UsageAlert, ...]
     total: int
     limit: int
@@ -112,5 +113,6 @@ class UsageAlertObservation(BaseModel):
     day: date
     observed: float
     baseline: float
+    baseline_sample_days: int | None = Field(default=None, ge=1, le=30)
     threshold: float
     breached: bool

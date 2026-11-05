@@ -1,7 +1,7 @@
 """Public management API for daily usage alert rules and incidents."""
 
 from datetime import date
-from typing import Annotated, Final
+from typing import Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
@@ -32,11 +32,11 @@ def usage_alert_repository(database: DatabaseDep) -> UsageAlertsRepository:
     return UsageAlertsRepository.from_prisma(database.prisma)
 
 
-User = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
-Repository = Annotated[UsageAlertsRepository, Depends(usage_alert_repository)]
-Limit = Annotated[int, Query(ge=1, le=100)]
-Offset = Annotated[int, Query(ge=0, le=100000)]
-ScopeId = Annotated[str | None, Query(min_length=1, max_length=1024)]
+User: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+Repository: TypeAlias = Annotated[UsageAlertsRepository, Depends(usage_alert_repository)]
+Limit: TypeAlias = Annotated[int, Query(ge=1, le=100)]
+Offset: TypeAlias = Annotated[int, Query(ge=0, le=100000)]
+ScopeId: TypeAlias = Annotated[str | None, Query(min_length=1, max_length=1024)]
 
 
 async def require_scope(
@@ -101,7 +101,10 @@ async def list_usage_alert_rules(
 @router.post("/alert-rules", response_model=UsageAlertRule, status_code=201)
 async def create_usage_alert_rule(data: UsageAlertRuleInput, user: User, repository: Repository) -> UsageAlertRule:
     await require_scope(user, repository, data.scope_type, data.scope_id, write=True)
-    return await repository.save_rule(data, user.user_id)
+    saved: Final = await repository.save_rule(data, user.user_id)
+    if saved is None:
+        raise HTTPException(status_code=409, detail="Alert rule could not be saved")
+    return saved
 
 
 @router.get("/alert-rules/{rule_id}", response_model=UsageAlertRule)
@@ -122,7 +125,10 @@ async def update_usage_alert_rule(
         raise HTTPException(status_code=404, detail="Alert rule not found")
     await require_scope(user, repository, rule.scope_type, rule.scope_id, write=True)
     await require_scope(user, repository, data.scope_type, data.scope_id, write=True)
-    return await repository.save_rule(data, user.user_id, existing=rule)
+    saved: Final = await repository.save_rule(data, user.user_id, existing=rule)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    return saved
 
 
 @router.delete("/alert-rules/{rule_id}", status_code=204)

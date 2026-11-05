@@ -18834,6 +18834,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/usage/alert-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Usage Alert Rules */
+        get: operations["list_usage_alert_rules_usage_alert_rules_get"];
+        put?: never;
+        /** Create Usage Alert Rule */
+        post: operations["create_usage_alert_rule_usage_alert_rules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/alert-rules/{rule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Usage Alert Rule */
+        get: operations["get_usage_alert_rule_usage_alert_rules__rule_id__get"];
+        /** Update Usage Alert Rule */
+        put: operations["update_usage_alert_rule_usage_alert_rules__rule_id__put"];
+        post?: never;
+        /** Delete Usage Alert Rule */
+        delete: operations["delete_usage_alert_rule_usage_alert_rules__rule_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Usage Alerts */
+        get: operations["list_usage_alerts_usage_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/alerts/{alert_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Usage Alert */
+        get: operations["get_usage_alert_usage_alerts__alert_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Usage Alert */
+        patch: operations["update_usage_alert_usage_alerts__alert_id__patch"];
+        trace?: never;
+    };
     "/user/available_roles": {
         parameters: {
             query?: never;
@@ -50331,6 +50403,250 @@ export interface components {
              */
             version: string | null;
         };
+        /** UsageAlert */
+        UsageAlert: {
+            /** Activity Path */
+            activity_path: string;
+            /**
+             * Baseline End
+             * Format: date
+             */
+            baseline_end: string;
+            /** Baseline Sample Days */
+            baseline_sample_days?: number | null;
+            /**
+             * Baseline Start
+             * Format: date
+             */
+            baseline_start: string;
+            /** Baseline Value */
+            baseline_value: number;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /** Id */
+            id: string;
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "spend" | "requests" | "latency" | "errors";
+            /** Observed Value */
+            observed_value: number;
+            /** Rule Id */
+            rule_id: string;
+            /** Rule Name */
+            rule_name: string;
+            /** Scope Id */
+            scope_id: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "deployment" | "key" | "user" | "team" | "model";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /** Threshold */
+            threshold: number;
+        };
+        /** UsageAlertList */
+        UsageAlertList: {
+            /** Data */
+            data: components["schemas"]["UsageAlert"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** UsageAlertRule */
+        UsageAlertRule: {
+            /**
+             * Baseline Days
+             * @default 7
+             */
+            baseline_days: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
+            /**
+             * Email Recipients
+             * @default []
+             */
+            email_recipients: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Evaluation Status
+             * @default pending
+             * @enum {string}
+             */
+            evaluation_status: "pending" | "complete" | "insufficient_coverage" | "insufficient_history";
+            /** Id */
+            id: string;
+            /** Last Evaluated Day */
+            last_evaluated_day?: string | null;
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "spend" | "requests" | "latency" | "errors";
+            /**
+             * Min History Days
+             * @default 3
+             */
+            min_history_days: number;
+            /**
+             * Min Requests
+             * @default 100
+             */
+            min_requests: number;
+            /**
+             * Min Value
+             * @description Minimum absolute change in the metric's units
+             * @default 0
+             */
+            min_value: number;
+            /**
+             * Multiplier
+             * @default 3
+             */
+            multiplier: number;
+            /** Name */
+            name: string;
+            /**
+             * Notification Channels
+             * @default []
+             */
+            notification_channels: ("email" | "slack")[];
+            /** Scope Id */
+            scope_id?: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "deployment" | "key" | "user" | "team" | "model";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** UsageAlertRuleInput */
+        UsageAlertRuleInput: {
+            /**
+             * Baseline Days
+             * @default 7
+             */
+            baseline_days: number;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "increase" | "decrease";
+            /**
+             * Email Recipients
+             * @default []
+             */
+            email_recipients: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "spend" | "requests" | "latency" | "errors";
+            /**
+             * Min History Days
+             * @default 3
+             */
+            min_history_days: number;
+            /**
+             * Min Requests
+             * @default 100
+             */
+            min_requests: number;
+            /**
+             * Min Value
+             * @description Minimum absolute change in the metric's units
+             * @default 0
+             */
+            min_value: number;
+            /**
+             * Multiplier
+             * @default 3
+             */
+            multiplier: number;
+            /** Name */
+            name: string;
+            /**
+             * Notification Channels
+             * @default []
+             */
+            notification_channels: ("email" | "slack")[];
+            /** Scope Id */
+            scope_id?: string | null;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "deployment" | "key" | "user" | "team" | "model";
+        };
+        /** UsageAlertRuleList */
+        UsageAlertRuleList: {
+            /** Data */
+            data: components["schemas"]["UsageAlertRule"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** UsageAlertUpdate */
+        UsageAlertUpdate: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+        };
         /** UsageChartPoint */
         UsageChartPoint: {
             /** Blocked */
@@ -78229,6 +78545,272 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_usage_alert_rules_usage_alert_rules_get: {
+        parameters: {
+            query?: {
+                scope_type?: ("deployment" | "key" | "user" | "team" | "model") | null;
+                scope_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertRuleList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_usage_alert_rule_usage_alert_rules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageAlertRuleInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertRule"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_usage_alert_rule_usage_alert_rules__rule_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertRule"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_usage_alert_rule_usage_alert_rules__rule_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageAlertRuleInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertRule"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_usage_alert_rule_usage_alert_rules__rule_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_usage_alerts_usage_alerts_get: {
+        parameters: {
+            query?: {
+                scope_type?: ("deployment" | "key" | "user" | "team" | "model") | null;
+                scope_id?: string | null;
+                metric?: ("spend" | "requests" | "latency" | "errors") | null;
+                status?: ("open" | "resolved" | "dismissed") | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlertList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_usage_alert_usage_alerts__alert_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlert"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_usage_alert_usage_alerts__alert_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageAlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageAlert"];
                 };
             };
             /** @description Validation Error */
