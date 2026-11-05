@@ -1,3 +1,5 @@
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
@@ -76,6 +78,7 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useUrlTab(["overview", "activity", "raw"], "overview", "detail_tab");
   const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -609,10 +612,13 @@ export default function ModelInfoView({
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("entityActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.rawJson")}
@@ -620,6 +626,9 @@ export default function ModelInfoView({
         </TabsList>
 
         <div>
+          <TabsContent value="activity">
+            {activeTab === "activity" && <EntityActivity scope="model" id={modelData.litellm_model_name} />}
+          </TabsContent>
           <TabsContent value="overview" keepMounted>
             {/* Overview Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">

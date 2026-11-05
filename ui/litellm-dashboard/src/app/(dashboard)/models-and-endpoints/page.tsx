@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
-import { parseAsString, useQueryStates } from "nuqs";
+import { ArrowLeft, RefreshCw } from "lucide-react";
+import { parseAsString, useQueryState, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -30,6 +30,8 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { modelActivityParser } from "@/components/UsagePage/entityActivityState";
 
 const MODEL_TAB_SLUGS = [
   "add",
@@ -91,6 +93,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
+  const [activityModel, setActivityModel] = useQueryState("activity_model", modelActivityParser);
   const { t } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
@@ -205,7 +208,16 @@ export default function ModelsAndEndpointsPage() {
 
         {!isViewOnly && <DecisionModelsBanner />}
 
-        {modelId ? (
+        {activityModel ? (
+          <div className="space-y-4">
+            <Button variant="ghost" onClick={() => void setActivityModel(null)}>
+              <ArrowLeft className="h-4 w-4" />
+              {t("modelInfoView.backToModels")}
+            </Button>
+            <h2 className="text-lg font-semibold">{activityModel}</h2>
+            <EntityActivity scope="model" id={activityModel} />
+          </div>
+        ) : modelId ? (
           <ModelInfoView
             modelId={modelId}
             onClose={close}

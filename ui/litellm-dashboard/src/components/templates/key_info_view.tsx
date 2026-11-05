@@ -1,3 +1,5 @@
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
@@ -99,6 +101,7 @@ const isEmptyValue = (v: unknown): boolean =>
  */
 export default function KeyInfoView({
   onClose,
+  keyId,
   keyData,
   teams,
   onKeyDataUpdate,
@@ -107,6 +110,11 @@ export default function KeyInfoView({
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "activity", "savings", "auto-router-usage", "settings"],
+    "overview",
+    "detail_tab",
+  );
   const accessGroupNames = useModelAccessGroupNames();
   const activityDateRange = useActivityDateRange();
   const queryClient = useQueryClient();
@@ -739,10 +747,13 @@ export default function KeyInfoView({
         </DialogContent>
       </Dialog>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("entityActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             {t("keyDetail.keyInfoView.tabs.savings")}
@@ -758,6 +769,9 @@ export default function KeyInfoView({
         </TabsList>
 
         <div>
+          <TabsContent value="activity">
+            {activeTab === "activity" && <EntityActivity scope="key" id={keyId} />}
+          </TabsContent>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">

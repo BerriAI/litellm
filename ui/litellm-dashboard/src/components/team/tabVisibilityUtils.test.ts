@@ -20,15 +20,21 @@ describe("team_info_tabs", () => {
   });
 
   describe("getTeamInfoVisibleTabs", () => {
-    it("returns overview, my user, and virtual keys when user cannot edit team", () => {
+    it("returns overview, activity, my user, and virtual keys when user cannot edit team", () => {
       const tabs = getTeamInfoVisibleTabs(false);
-      expect(tabs).toEqual([TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]);
+      expect(tabs).toEqual([
+        TEAM_INFO_TAB_KEYS.OVERVIEW,
+        TEAM_INFO_TAB_KEYS.ACTIVITY,
+        TEAM_INFO_TAB_KEYS.MY_USER,
+        TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+      ]);
     });
 
     it("returns all tabs when user can edit team", () => {
       const tabs = getTeamInfoVisibleTabs(true);
       expect(tabs).toEqual([
         TEAM_INFO_TAB_KEYS.OVERVIEW,
+        TEAM_INFO_TAB_KEYS.ACTIVITY,
         TEAM_INFO_TAB_KEYS.MY_USER,
         TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
         TEAM_INFO_TAB_KEYS.MEMBERS,

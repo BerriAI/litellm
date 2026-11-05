@@ -1,3 +1,5 @@
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -698,7 +700,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
-  const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
+  const [activeTab, setActiveTab] = useUrlTab(visibleTabs, defaultTabKey, "detail_tab");
+  const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
 
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
@@ -1602,6 +1605,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} disabledCallbacks={[]} variant="card" />
         </div>
       ),
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.ACTIVITY,
+      label: t("entityActivity.title"),
+      children: activeTab === TEAM_INFO_TAB_KEYS.ACTIVITY ? <EntityActivity scope="team" id={teamId} /> : null,
     },
     {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
@@ -2747,7 +2755,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={defaultTabKey} className="mb-4" onValueChange={onTabChange}>
+      <Tabs
+        value={activeTab}
+        className="mb-4"
+        onValueChange={(value) => {
+          setActiveTab(String(value));
+          onTabChange(value);
+        }}
+      >
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">

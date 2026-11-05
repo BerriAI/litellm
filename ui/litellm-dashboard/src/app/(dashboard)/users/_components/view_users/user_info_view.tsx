@@ -1,3 +1,5 @@
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import type { ParseKeys } from "i18next";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -106,7 +108,11 @@ export default function UserInfoView({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "activity", "details", "savings", "auto-router-usage"],
+    initialTab === 1 ? "details" : "overview",
+    "detail_tab",
+  );
   const hiddenSavingsTab = activeTab === "savings" && !canViewSavings;
   const hiddenRouterTab = activeTab === "auto-router-usage" && !canViewAutoRouterUsage;
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -491,12 +497,15 @@ export default function UserInfoView({
 
       <Tabs
         value={hiddenSavingsTab || hiddenRouterTab ? "overview" : activeTab}
-        onValueChange={(v: unknown) => setActiveTab(String(v))}
+        onValueChange={(v: unknown) => setActiveTab(String(v) as typeof activeTab)}
         className="gap-0"
       >
         <TabsList variant="line" className="mb-4">
           <TabsTrigger value="overview" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none data-active:text-primary after:bg-primary">
+            {t("entityActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="details" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.details")}
@@ -514,6 +523,9 @@ export default function UserInfoView({
         </TabsList>
 
         {/* Overview Panel */}
+        <TabsContent value="activity">
+          {activeTab === "activity" && <EntityActivity scope="user" id={userId} />}
+        </TabsContent>
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             <Card className="block p-6">

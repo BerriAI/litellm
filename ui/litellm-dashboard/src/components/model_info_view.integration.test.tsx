@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders as render } from "../../tests/test-utils";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";

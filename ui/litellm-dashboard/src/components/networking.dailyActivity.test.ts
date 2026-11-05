@@ -41,6 +41,14 @@ afterEach(() => {
 });
 
 describe("dailyActivityAggregatedCall", () => {
+  it("uses UTC for incident ranges while preserving the default timezone for other callers", async () => {
+    const mockFetch = captureFetch();
+    await dailyActivityAggregatedCall("user", req({ timezoneOffsetMinutes: 0 }));
+    expect(requestedUrl(mockFetch).searchParams.get("timezone")).toBe("0");
+    await dailyActivityAggregatedCall("user", req());
+    expect(requestedUrl(mockFetch, 1).searchParams.get("timezone")).toBe(new Date().getTimezoneOffset().toString());
+  });
+
   it.each<[DailyActivityEntity, string]>([
     ["user", "user_id"],
     ["team", "team_ids"],
