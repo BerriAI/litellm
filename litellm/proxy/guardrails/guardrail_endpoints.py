@@ -2347,27 +2347,31 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
         return {}
 
 
-_CALLER_OWNED_KEY_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_end_user_id"})
-
 _WITHHELD_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_request_route", "agent_id"})
 
-_RESERVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
-    {"requester_ip_address", "user_agent", "agent_id", "actor_agent_id"}
+_PROXY_RESOLVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "requester_ip_address",
+        "user_agent",
+        "headers",
+        "agent_id",
+        "actor_agent_id",
+        "target_agent_id",
+        "billing_agent_id",
+        "agent_execution_mode",
+        "verified_human_user_id",
+    }
 )
 
 
-def _is_key_identity_field(key: str) -> bool:
+def _is_proxy_identity_field(key: str) -> bool:
     """Whether a metadata field attributes the authenticated caller rather than the request.
 
-    Pre-call processing owns the whole ``user_api_key_`` namespace, except the end user the call
-    is made for, which the caller owns here as it does on every LLM route.
-
-    Attribution also reaches outside that namespace, so the fields pre-call processing fills in
-    from the key and the connection are reserved by name as well.
+    Pre-call processing owns the whole ``user_api_key_`` namespace, the end user included, and
+    fills the agent, connection and header fields from the key and the connection right after,
+    so a caller value never reaches an LLM route. The same fields are reserved here.
     """
-    if key in _CALLER_OWNED_KEY_FIELDS:
-        return False
-    return key in _RESERVED_IDENTITY_FIELDS or key == "user_api_key" or key.startswith("user_api_key_")
+    return key in _PROXY_RESOLVED_IDENTITY_FIELDS or key == "user_api_key" or key.startswith("user_api_key_")
 
 
 def _guardrail_request_metadata(
@@ -2378,6 +2382,10 @@ def _guardrail_request_metadata(
     The result is handed to the guardrail as ``request_data["metadata"]``, which providers
     write their own detection details into, so it cannot be a read-only mapping.
 
+    The caller's bucket goes through the sanitizer the LLM routes use, so this endpoint drops
+    the same fields they do, and what that leaves is then overlaid with the identity the proxy
+    resolved.
+
     The request route is withheld from both sides. The tool policy guardrail reads the request
     itself when a route is present, instead of the tools replayed to it, so a route here turns
     its checks off: the caller must not be able to set one, and this endpoint's own route
@@ -2387,13 +2395,15 @@ def _guardrail_request_metadata(
     key is bound to none. Pre-call processing keeps the request's own agent when the key has none,
     so the processed metadata is not a trustworthy source for it either.
     """
-    caller_fields: Final = tuple(
-        (key, value) for key, value in _metadata_fields(caller).items() if not _is_key_identity_field(key)
-    )
+    from litellm.proxy.litellm_pre_call_utils import strip_caller_supplied_identity
+
+    sanitized: Final = dict(_metadata_fields(caller))
+    strip_caller_supplied_identity(sanitized)
+    caller_fields: Final = tuple((key, value) for key, value in sanitized.items() if not _is_proxy_identity_field(key))
     key_identity: Final = tuple(
         (key, value)
         for key, value in _metadata_fields(proxy).items()
-        if _is_key_identity_field(key) and key not in _WITHHELD_FIELDS
+        if _is_proxy_identity_field(key) and key not in _WITHHELD_FIELDS
     )
     bound_agent: Final = (("agent_id", agent_id),) if agent_id is not None else ()
     return dict((*caller_fields, *key_identity, *bound_agent))
