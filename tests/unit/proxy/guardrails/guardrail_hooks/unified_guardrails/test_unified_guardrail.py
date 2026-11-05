@@ -3393,7 +3393,7 @@ def _tool_definition_request(
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_description(call_type, body) -> None:
+async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_description(call_type: str, body: Mapping[str, object]) -> None:
     with pytest.raises(HTTPException) as exc_info:
         await UnifiedLLMGuardrails().async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
@@ -3408,7 +3408,7 @@ async def test_pre_call_blocks_request_whose_only_offending_text_is_a_tool_descr
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(call_type, body) -> None:
+async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(call_type: str, body: Mapping[str, object]) -> None:
     async def blocked(scan_tool_definitions: bool | None) -> bool:
         try:
             await UnifiedLLMGuardrails().async_pre_call_hook(
@@ -3429,7 +3429,7 @@ async def test_pre_call_tool_description_scan_is_opt_in_per_guardrail(call_type,
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(call_type, body) -> None:
+async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(call_type: str, body: Mapping[str, object]) -> None:
     result: Final = await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
         cache=DualCache(),
@@ -3446,7 +3446,7 @@ async def test_pre_call_masks_tool_descriptions_without_touching_the_schema(call
 @pytest.mark.usefixtures("_real_translation_mappings")
 @pytest.mark.parametrize(("call_type", "body"), _TOOL_DEFINITION_REQUESTS)
 @pytest.mark.asyncio
-async def test_pre_call_skips_tool_description_scan_for_guardrails_without_support(call_type, body) -> None:
+async def test_pre_call_skips_tool_description_scan_for_guardrails_without_support(call_type: str, body: Mapping[str, object]) -> None:
     guardrail: Final = NoToolScanPhraseGuardrail(mask=False, scan_tool_definitions=True)
 
     await UnifiedLLMGuardrails().async_pre_call_hook(
@@ -3507,7 +3507,7 @@ _NESTED_SCHEMA_REQUESTS: Final = (
 @pytest.mark.parametrize(("call_type", "body", "schema_path"), _NESTED_SCHEMA_REQUESTS)
 @pytest.mark.asyncio
 async def test_pre_call_masks_nested_schema_descriptions_but_not_schema_values(
-    call_type, body, schema_path: tuple[str, ...]
+    call_type: str, body: Mapping[str, object], schema_path: tuple[str, ...]
 ) -> None:
     result: Final = await UnifiedLLMGuardrails().async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),

@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from typing import ClassVar, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1997,7 +1997,7 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     ],
     ids=["panw_prisma_airs", "presidio"],
 )
-def test_scan_tool_definitions_in_guardrail_is_accepted_on_text_guardrails(params):
+def test_scan_tool_definitions_in_guardrail_is_accepted_on_text_guardrails(params: Mapping[str, str]) -> None:
     guardrail = TestScanOnlyToolResultsInitRefusal()._initialize(
         f"{params['guardrail']}-tool-scan", {**params, "scan_tool_definitions_in_guardrail": True}
     )
@@ -2006,7 +2006,7 @@ def test_scan_tool_definitions_in_guardrail_is_accepted_on_text_guardrails(param
     assert guardrail["litellm_params"].scan_tool_definitions_in_guardrail is True
 
 
-def test_scan_tool_definitions_in_guardrail_is_rejected_on_other_guardrails():
+def test_scan_tool_definitions_in_guardrail_is_rejected_on_other_guardrails() -> None:
     with pytest.raises(ValueError, match="only supported on panw_prisma_airs and presidio"):
         TestScanOnlyToolResultsInitRefusal()._initialize(
             "generic-tool-scan",
