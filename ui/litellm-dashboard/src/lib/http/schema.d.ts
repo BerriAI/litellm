@@ -27672,6 +27672,11 @@ export interface components {
              */
             scan_raw_request?: boolean | null;
             /**
+             * Scan Tool Definitions In Guardrail
+             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails reject this setting.
+             */
+            scan_tool_definitions_in_guardrail?: boolean | null;
+            /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
              */
@@ -37791,6 +37796,11 @@ export interface components {
              * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
              */
             scan_raw_request?: boolean | null;
+            /**
+             * Scan Tool Definitions In Guardrail
+             * @description When True, a pre_call panw_prisma_airs or presidio guardrail also scans the descriptions inside the request's tools[] definitions, and can block the request or mask those descriptions. Off by default. Other guardrails reject this setting.
+             */
+            scan_tool_definitions_in_guardrail?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers
