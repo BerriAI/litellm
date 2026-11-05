@@ -26,9 +26,9 @@ export default function ModelUsageChart({
   range: ReturnType<typeof deprecationUsageRange>;
 }) {
   const [legendExpanded, setLegendExpanded] = useState(false);
-  const activity = useQuery({
+  const activityOptions = {
     queryKey: ["deprecationDailyUsage", scope, model, team, range],
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
       const query = { ...range, model, api_key_limit: 100, timezone: 0 };
       if (team) {
         const { data } = await backgroundFetchClient.GET("/team/daily/activity/aggregated", {
@@ -47,7 +47,8 @@ export default function ModelUsageChart({
     },
     staleTime: 5 * 60 * 1000,
     refetchInterval: 5 * 60 * 1000,
-  });
+  };
+  const activity = useQuery(activityOptions);
   const daily = useMemo(() => dailyModelRequests(activity.data?.results ?? [], range), [activity.data, range]);
   const totals = useMemo(() => new Map(daily.map((day) => [day.date, day.requests])), [daily]);
   const series = useMemo(() => {
