@@ -7,12 +7,15 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    MODEL_LIST_ROUTES,
     UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     UserAPIKeyAuth,
 )
 
@@ -70,6 +73,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
 _LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
+_EU_JEV_DECISION_ROUTE: Final = "/eu_jev/v1/systemone"
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
 
 # Writes that only touch the caller's own credential row (BYOK connections and
@@ -93,8 +97,7 @@ _SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
 
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
-        "/models",
-        "/v1/models",
+        *MODEL_LIST_ROUTES,
         "/utils/token_counter",
         "/utils/transform_request",
         "/responses/input_tokens",
@@ -108,14 +111,7 @@ _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 class RouteChecks:
     @staticmethod
-    def should_call_route(
-        route: str,
-        valid_token: UserAPIKeyAuth,
-        request: Request | None = None,
-    ):
-        """
-        Check if management route is disabled and raise exception
-        """
+    def check_route_enabled(route: str) -> None:
         try:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
@@ -125,6 +121,16 @@ class RouteChecks:
         except Exception:
             pass
 
+    @staticmethod
+    def should_call_route(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ):
+        """
+        Check if management route is disabled and raise exception
+        """
+        RouteChecks.check_route_enabled(route)
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
         return True
@@ -160,7 +166,7 @@ class RouteChecks:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
-                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                        allowed_routes=LiteLLMRoutes[allowed_route].value,
                     ):
                         if (
                             allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
@@ -284,7 +290,7 @@ class RouteChecks:
             route (str): The route being accessed
 
         Raises:
-            Exception: With user role and masked user_id information
+            ProxyException: 401 with user role and masked user_id information
         """
         user_role = "unknown"
         user_id = "unknown"
@@ -293,8 +299,14 @@ class RouteChecks:
             user_id = user_obj.user_id or "unknown"
 
         masked_user_id: Final = RouteChecks._mask_user_id(user_id)
-        raise Exception(
-            f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+        raise ProxyException(
+            message=(
+                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+                f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=status.HTTP_401_UNAUTHORIZED,
         )
 
     @staticmethod
@@ -495,7 +507,19 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
-        return False
+        return RouteChecks.is_builtin_eu_jev_decision_route(route=route)
+
+    @staticmethod
+    def is_builtin_eu_jev_decision_route(route: str) -> bool:
+        if route.rstrip("/") != _EU_JEV_DECISION_ROUTE:
+            return False
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass_through_endpoints imports the auth stack
+            InitPassThroughEndpointHelpers,
+        )
+
+        return not InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
+            route=_EU_JEV_DECISION_ROUTE
+        )
 
     @staticmethod
     def _is_get_mcp_server_discovery_route(route: str, request: Request | None) -> bool:

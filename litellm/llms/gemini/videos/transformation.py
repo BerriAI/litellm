@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
@@ -37,6 +38,8 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
     """
@@ -60,7 +63,7 @@ def _convert_image_to_gemini_format(image_file) -> dict[str, str]:
 
 def _json_payload(raw_response: httpx.Response) -> object:
     """Read an HTTP response body as an opaque JSON payload."""
-    return raw_response.json()
+    return _DECODED_JSON.validate_python(raw_response.json())
 
 
 def _usage_video_resolution_from_parameters(

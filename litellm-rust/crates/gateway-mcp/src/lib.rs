@@ -3,6 +3,7 @@ mod error;
 mod legacy;
 mod native;
 mod relay;
+mod request;
 mod routes;
 mod server;
 mod sessions;
@@ -13,7 +14,7 @@ use http::request::Parts;
 use rmcp::{RoleServer, model::*, service::RequestContext};
 
 pub use configured::ConfiguredGateway;
-pub use error::{ConnectError, Error};
+pub use error::{ConfigFault, ConnectError, Error};
 pub use native::{Limits, NativeGateway, Registry, Server, ServerResolver};
 pub use relay::RelayClient;
 pub use rmcp;

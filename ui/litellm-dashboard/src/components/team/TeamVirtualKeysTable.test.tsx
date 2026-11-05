@@ -7,6 +7,7 @@ import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
@@ -487,6 +488,22 @@ describe("TeamVirtualKeysTable", () => {
     await waitFor(() => {
       expect(screen.getByText("Key Info View")).toBeInTheDocument();
     });
+  });
+
+  it("should open a key without its own organization without the team's organization", async () => {
+    const keyWithoutOrganization = {
+      keys: [createMockKey({ token: "sk-no-org", key_alias: "no_org_key", organization_id: null })],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    };
+    mockUseKeys.mockReturnValue(createKeysQueryResult(keyWithoutOrganization));
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /sk-no-org/ }));
+
+    await screen.findByText("Key Info View");
+    expect(vi.mocked(KeyInfoView).mock.lastCall?.[0].keyData).toMatchObject({ organization_id: null });
   });
 
   describe("entity links out of the key rows", () => {

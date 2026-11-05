@@ -6,8 +6,11 @@ from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row ha
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -22,7 +25,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
 
     events: Final[list[dict]] = []
     for block in chunk.split("\n\n"):
-        for line in block.splitlines():
+        for line in split_sse_lines(block):
             stripped = line.strip()
             if not stripped.startswith("data:"):
                 continue
@@ -30,7 +33,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
             if not payload or payload == "[DONE]":
                 continue
             try:
-                parsed = json.loads(payload)
+                parsed = _DECODED_JSON.validate_python(json.loads(payload))
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict):

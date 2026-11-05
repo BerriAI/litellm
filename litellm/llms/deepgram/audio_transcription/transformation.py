@@ -2,12 +2,13 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
-from collections.abc import Iterable, Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final, Protocol, cast
 from urllib.parse import urlencode
 
 from httpx import Headers, Response
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, InstanceOf, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -27,6 +28,31 @@ from ..common_utils import DeepgramException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_RESPONSE_BODY: Final = TypeAdapter(InstanceOf[dict[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_WORD_LIST: Final = TypeAdapter(InstanceOf[list[object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
+class _DeepgramAlternative(TypedDict):
+    transcript: ReadOnly[str]
+    words: ReadOnly[Sequence[Mapping[str, object]]]
+    paragraphs: ReadOnly[NotRequired[Mapping[str, str]]]
+
+
+class _DeepgramChannel(TypedDict):
+    alternatives: ReadOnly[Sequence[_DeepgramAlternative]]
+
+
+class _DeepgramResponse(TypedDict):
+    results: ReadOnly[Mapping[str, Sequence[_DeepgramChannel]]]
+    metadata: ReadOnly[Mapping[str, float]]
 
 
 class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -82,7 +108,10 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transforms the raw response from Deepgram to the TranscriptionResponse format
         """
         try:
-            response_json: Final = raw_response.json()
+            body: Final = _json_body(raw_response)
+            response_json: Final = cast(  # cast-ok: the body passes through unvalidated, as before it was typed
+                _DeepgramResponse, body
+            )
 
             # Get the first alternative from the first channel
             first_channel: Final = response_json["results"]["channels"][0]
@@ -102,7 +131,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 text = first_alternative["paragraphs"]["transcript"]
             else:
                 # Diarization without paragraphs: reconstruct from words
-                text = self._reconstruct_diarized_transcript(first_alternative["words"])
+                text = self._reconstruct_diarized_transcript(_WORD_LIST.validate_python(first_alternative["words"]))
 
             # Create TranscriptionResponse object
             response: Final = TranscriptionResponse(text=text)
@@ -124,7 +153,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 ]
 
             # Store full response in hidden params
-            response.hidden_params = response_json
+            response.hidden_params = _RESPONSE_BODY.validate_python(body)
 
             return response
 

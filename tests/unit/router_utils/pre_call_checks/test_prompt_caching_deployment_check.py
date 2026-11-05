@@ -314,6 +314,27 @@ async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_in_request",
+    [{"_excluded_deployment_ids": ["dep-2"]}, {"_retry_skipped_deployment_ids": ("dep-2",)}],
+)
+async def test_async_filter_deployments_does_not_pin_to_a_deployment_that_failed_this_request(
+    failed_in_request: dict[str, object],
+):
+    cache: Final = DualCache()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    assert await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=_deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6"),
+        messages=messages,
+        request_kwargs=failed_in_request,
+    ) == _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is_lower():
     """
     Same ~1400-token prompt that must not pin an Opus 4.6 group, on an Opus 4.8 group whose real

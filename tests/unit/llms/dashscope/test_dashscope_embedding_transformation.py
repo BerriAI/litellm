@@ -3,6 +3,7 @@ Unit tests for DashScope embedding transformation.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -15,6 +16,40 @@ from litellm.llms.dashscope.embed.transformation import (
     DashScopeEmbeddingConfig,
 )
 from litellm.types.utils import EmbeddingResponse
+
+WORKSPACE: Final = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+
+
+def test_get_complete_url_derives_the_compatible_base_from_any_standard_base():
+    config: Final = DashScopeEmbeddingConfig()
+
+    for api_base in (
+        WORKSPACE,
+        f"{WORKSPACE}/compatible-mode/v1",
+        f"{WORKSPACE}/apps/anthropic",
+        f"{WORKSPACE}/api/v1",
+    ):
+        url: Final = config.get_complete_url(
+            api_base=api_base,
+            api_key="sk-test",
+            model="text-embedding-v4",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == f"{WORKSPACE}/compatible-mode/v1/embeddings"
+
+
+def test_get_complete_url_keeps_unrecognized_hosts():
+    url: Final = DashScopeEmbeddingConfig().get_complete_url(
+        api_base="https://gateway.example.com/v1",
+        api_key="sk-test",
+        model="text-embedding-v4",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == "https://gateway.example.com/v1/embeddings"
 
 
 def test_validate_environment_and_url():

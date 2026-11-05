@@ -4,6 +4,11 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from typing_extensions import TypedDict, Unpack
+
+
+class _RequestOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class HTTPClient:
@@ -29,7 +34,7 @@ class HTTPClient:
         data: Mapping[str, object] | list | bytes | None = None,
         json: Mapping[str, object] | list | None = None,
         headers: dict[str, str] | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_RequestOptions],
     ) -> Any:
         """Make an HTTP request to the LiteLLM proxy server.
 

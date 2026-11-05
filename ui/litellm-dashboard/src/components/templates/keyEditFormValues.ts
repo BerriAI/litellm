@@ -6,7 +6,7 @@ import { ToolPermissionsChangeOrigin } from "../mcp_server_management/MCPToolPer
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
-import { canonicalBudgetDuration } from "./keyEditFieldNormalizers";
+import { canonicalBudgetDuration, keyOrganizationId } from "./keyEditFieldNormalizers";
 
 export interface McpServersAndGroups {
   servers: string[];
@@ -109,7 +109,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     accessGroups: keyData.object_permission?.agent_access_groups || [],
   },
   skills: keyData.object_permission?.skills || [],
-  organization_id: keyData.organization_id,
+  organization_id: keyOrganizationId(keyData),
   team_id: keyData.team_id,
   project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
@@ -215,7 +215,7 @@ export const toSubmittedValues = (
   team_id: values.team_id,
   logging_settings: values.logging_settings,
   metadata: values.metadata,
-  duration: values.duration,
+  ...(typeof values.duration === "string" && values.duration.trim() === "" ? {} : { duration: values.duration }),
   token: values.token,
   disabled_callbacks: values.disabled_callbacks,
   auto_rotate: values.auto_rotate,

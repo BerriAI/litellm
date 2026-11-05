@@ -74,14 +74,14 @@ import os
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -90,12 +90,15 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
     from jwt.types import Options
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _OIDCDiscoveryDocument(TypedDict, total=False):
@@ -279,11 +282,13 @@ class MCPJWTSigner(CustomGuardrail):
         debug_headers: bool = False,
         # FR-10: Configurable scopes
         allowed_scopes: list[str] | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
-        super().__init__(**base_kwargs)
+        options: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
+        super().__init__(**options)
 
         # --- Signing key setup ---
         key_material: Final = os.environ.get(self.SIGNING_KEY_ENV)
