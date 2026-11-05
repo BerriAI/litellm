@@ -6,10 +6,6 @@ import ModelDeprecationsPanel from "@/components/ModelDeprecationAlerts/ModelDep
 export default function AlertsPage() {
   return (
     <Page className="h-full gap-4">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Review and resolve issues across your keys and teams.</p>
-      </header>
       <PageTabs defaultValue="model-deprecations" className="gap-4">
         <PageTabsList>
           <PageTabsTrigger value="model-deprecations">Model deprecations</PageTabsTrigger>

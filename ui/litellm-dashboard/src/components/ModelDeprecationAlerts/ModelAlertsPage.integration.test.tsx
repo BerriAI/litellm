@@ -68,7 +68,7 @@ describe("model migration impact", () => {
   afterEach(() => vi.restoreAllMocks());
   it("should render the inbox with last seen and the recommendation supplied by the API", () => {
     renderWithProviders(<ModelAlertsPage />);
-    expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Model deprecations", exact: true })).toBeInTheDocument();
     expect(screen.getByText("replacement-model")).toBeInTheDocument();
     expect(screen.getByText("2026-11-04")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Review impact →" })).toHaveAttribute(

@@ -2,8 +2,12 @@ import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import type { DeprecationAlert } from "./deprecationAlerts";
 import { migrationHref } from "./migrationRoute";
 
+export function deprecationProvider(alert: DeprecationAlert): string {
+  return alert.model.litellm_provider || alert.usageModel.split("/")[0];
+}
+
 export function DeprecationModel({ alert }: { alert: DeprecationAlert }) {
-  const provider = alert.model.litellm_provider || alert.usageModel.split("/")[0];
+  const provider = deprecationProvider(alert);
   return (
     <a href={migrationHref(alert.usageModel)} className="inline-flex items-center gap-2 font-medium hover:underline">
       <ProviderLogo provider={provider} className="size-4 shrink-0" />

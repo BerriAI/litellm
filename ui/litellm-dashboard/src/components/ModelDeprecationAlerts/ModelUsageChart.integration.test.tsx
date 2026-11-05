@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen } from "../../../tests/test-utils";
 import ModelUsageChart from "./ModelUsageChart";
 
-vi.mock("@/components/shared/charts", () => ({
+vi.mock("@/components/shared/charts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/shared/charts")>()),
   StackedUsageChart: ({ data, labels }: { data: unknown; labels: string[] }) => (
     <div role="img" aria-label="Daily key usage chart">
       {JSON.stringify({ data, labels })}
@@ -53,9 +54,8 @@ describe("model daily usage", () => {
     const request = fetch.mock.calls[0][0] as Request;
     expect(new URL(request.url).searchParams.get("model")).toBe("anthropic/retiring-model");
   });
-  it("should apply the selected team and let users switch to spend", async () => {
+  it("should apply the selected team and show requests without metric controls", async () => {
     const fetch = mockActivity();
-    const user = userEvent.setup();
     renderWithProviders(
       <ModelUsageChart model="anthropic/retiring-model" team="support" scope="test-team" range={range} />,
     );
@@ -63,9 +63,41 @@ describe("model daily usage", () => {
     const request = fetch.mock.calls[0][0] as Request;
     expect(new URL(request.url).pathname).toBe("/team/daily/activity/aggregated");
     expect(new URL(request.url).searchParams.get("team_ids")).toBe("support");
-    await user.click(screen.getByRole("radio", { name: "Spend", exact: true }));
-    await waitFor(() =>
-      expect(screen.getByRole("img", { name: "Daily key usage chart" })).toHaveTextContent('"s0":3,"s1":2,"s2":5'),
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Daily key usage chart" })).toHaveTextContent('"s0":30,"s1":20,"s2":50');
+  });
+  it("should keep all keys in the stacks while allowing the key labels to expand", async () => {
+    const fetch = mockActivity();
+    const keys = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [
+        `key-${index}`,
+        {
+          metrics: { api_requests: 10, spend: 1, total_tokens: 100 },
+          metadata: { key_alias: `Key ${index + 1}` },
+        },
+      ]),
     );
+    const response = {
+      results: [
+        {
+          date: "2026-11-03",
+          metrics: { api_requests: 120, spend: 12, total_tokens: 1200 },
+          breakdown: { api_keys: keys },
+        },
+      ],
+    };
+    fetch.mockResolvedValueOnce(
+      new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelUsageChart model="anthropic/retiring-model" team={null} scope="test-legend" range={range} />,
+    );
+    expect(await screen.findByRole("img", { name: "Daily key usage chart" })).toHaveTextContent('"s11":10');
+    expect(screen.queryByText("Key 12", { exact: true })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show all key labels" }));
+    expect(screen.getByText("Key 12", { exact: true })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show fewer key labels" }));
+    expect(screen.queryByText("Key 12", { exact: true })).not.toBeInTheDocument();
   });
 });

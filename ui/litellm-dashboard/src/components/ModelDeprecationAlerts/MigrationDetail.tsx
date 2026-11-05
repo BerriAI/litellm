@@ -195,7 +195,7 @@ export default function MigrationDetail({
   };
   return (
     <>
-      <section className="flex flex-wrap items-start justify-between gap-4 rounded-xl border bg-card p-4">
+      <section className="flex flex-wrap items-start justify-between gap-3 rounded-xl border bg-card p-3">
         <div>
           <span className="rounded-full border px-2 py-0.5 text-xs capitalize">{status}</span>
           <h2 className="mt-3 text-lg font-semibold">{heading}</h2>
@@ -252,7 +252,8 @@ export default function MigrationDetail({
           Could not save alert status. Please retry.
         </p>
       )}
-      <div className="grid grid-cols-3 divide-x rounded-xl border bg-card">
+      <ModelUsageChart model={model} team={params.team} scope={scope} range={range} />
+      <div className="grid shrink-0 grid-cols-3 divide-x rounded-xl border bg-card">
         <div className="p-3">
           <p className="text-xs text-muted-foreground">{params.team ? "Keys in this team" : "Affected keys"}</p>
           <p className="mt-1 text-xl font-semibold tabular-nums">
@@ -270,7 +271,6 @@ export default function MigrationDetail({
           </p>
         </div>
       </div>
-      <ModelUsageChart model={model} team={params.team} scope={scope} range={range} />
       <section className="flex h-[480px] shrink-0 flex-col overflow-hidden rounded-xl border">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
           <div>

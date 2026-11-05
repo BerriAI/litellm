@@ -1,7 +1,8 @@
 "use client";
 
 import { useQueryStates } from "nuqs";
-import { Bell } from "lucide-react";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { deprecationProvider } from "./DeprecationModel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Page } from "@/components/shared/Page";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -11,7 +12,7 @@ import { migrationUrlParsers, migrationHref } from "./migrationRoute";
 import AlertsInbox from "./AlertsInbox";
 import MigrationDetail from "./MigrationDetail";
 
-export default function ModelAlertsPage() {
+export default function ModelDeprecationsPanel() {
   const { accessToken, userRole, isViewOnly } = useAuthorized();
   const allowed = hasCapability(userRole, "viewGlobalSpend");
   const [params, setParams] = useQueryStates(migrationUrlParsers);
@@ -33,20 +34,15 @@ export default function ModelAlertsPage() {
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-              <Bell size={20} />
-              {params.model || "Model deprecations"}
+              {selected && <ProviderLogo provider={deprecationProvider(selected)} className="size-6 shrink-0" />}
+              <code className="rounded-md border bg-muted/50 px-2.5 py-1.5 font-mono text-base font-medium break-all">
+                {params.model}
+              </code>
             </h1>
-            {!params.model && (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Review impact, contact owners, and resolve each model migration.
-              </p>
-            )}
           </div>
-          {params.model && (
-            <a className={buttonVariants({ variant: "outline" })} href={migrationHref()}>
-              ← Model deprecations
-            </a>
-          )}
+          <a className={buttonVariants({ variant: "outline" })} href={migrationHref()}>
+            ← Model deprecations
+          </a>
         </header>
       )}
       {alerts.isError ? (
