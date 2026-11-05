@@ -16,9 +16,10 @@ import { activityPresets, defaultActivityDays, entityActivityParsers, localActiv
 interface Props {
   scope: ActivityScope;
   id: string;
+  teamId?: string;
 }
 
-export default function EntityActivity({ scope, id }: Props) {
+export default function EntityActivity({ scope, id, teamId }: Props) {
   const { t } = useTranslation();
   const { accessToken, userId, userRole } = useAuthorized();
   const [params, setParams] = useQueryStates(entityActivityParsers);
@@ -28,9 +29,12 @@ export default function EntityActivity({ scope, id }: Props) {
   const invalidRange = from > to;
   const allowed = scope !== "model" || hasProxyWideSpendView(userRole);
   const currentUser = spendScopeUserId(userRole, userId);
+  const keyTeamId = scope === "key" && currentUser ? teamId : undefined;
+  const entity = scope === "team" || keyTeamId ? "team" : "user";
   const request = useMemo<DailyActivityRequest>(() => {
     let entityIds = currentUser ? [currentUser] : null;
     if (scope === "team" || scope === "user") entityIds = [id];
+    if (keyTeamId) entityIds = [keyTeamId];
     return {
       accessToken: accessToken ?? "",
       startTime: new Date(`${from}T00:00:00`),
@@ -42,12 +46,12 @@ export default function EntityActivity({ scope, id }: Props) {
       apiKeyLimit: 1,
       includeCurrentUtcDay: true,
     };
-  }, [accessToken, currentUser, scope, id, from, to]);
+  }, [accessToken, currentUser, scope, id, keyTeamId, from, to]);
   const hasScope = Boolean(accessToken && id);
   const { data, loading, failed, reload } = useAggregatedDailyActivity({
-    fetch: () => ENTITY_API[scope === "team" ? "team" : "user"].aggregated(request),
+    fetch: () => ENTITY_API[entity].aggregated(request),
     enabled: hasScope && allowed && !invalidRange,
-    deps: [accessToken, currentUser, scope, id, from, to],
+    deps: [accessToken, currentUser, scope, id, keyTeamId, from, to],
   });
 
   const fetchTopApiKeys = useCallback(

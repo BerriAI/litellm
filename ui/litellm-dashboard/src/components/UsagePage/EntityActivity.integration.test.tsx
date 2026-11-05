@@ -68,6 +68,17 @@ describe("entity activity", () => {
     expect(urls()[0].searchParams.get("user_id")).toBe("viewer");
   });
 
+  it("loads a member's key through the authorized team scope without filtering to the viewer", async () => {
+    auth.userRole = "Internal User";
+    renderWithProviders(<EntityActivity scope="key" id="member-key" teamId="team-1" />, { searchParams: dates });
+    await screen.findByText("No activity in this date range.");
+    expect(urls()).toHaveLength(1);
+    expect(urls()[0].pathname).toBe("/team/daily/activity/aggregated");
+    expect(urls()[0].searchParams.get("team_ids")).toBe("team-1");
+    expect(urls()[0].searchParams.get("api_key")).toBe("member-key");
+    expect(urls()[0].searchParams.has("user_id")).toBe(false);
+  });
+
   it("does not query global model activity for a member", async () => {
     auth.userRole = "Internal User";
     renderWithProviders(<EntityActivity scope="model" id="provider/model-1" />, { searchParams: dates });

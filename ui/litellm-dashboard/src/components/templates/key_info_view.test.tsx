@@ -259,6 +259,25 @@ describe("KeyInfoView", () => {
     expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
   });
 
+  it("keeps the team tab when changing a nested key tab", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+        tabQueryKey="key_detail_tab"
+      />,
+      { searchParams: "detail_tab=virtual_keys", onUrlUpdate },
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Savings" }));
+    expect(screen.getByRole("tab", { name: "Savings" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("key_detail_tab")).toBe("savings"));
+    expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("detail_tab")).toBe("virtual_keys");
+  });
+
   describe("last updated", () => {
     const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
