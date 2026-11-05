@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, SquarePen, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,52 +15,68 @@ interface ProviderDiscountTableProps {
 }
 
 interface ProviderDiscountRow {
+  key: string;
   provider: string;
+  modelPattern: string | null;
   discount: number;
 }
+
+const splitDiscountKey = (key: string): { provider: string; modelPattern: string | null } => {
+  const slashIndex = key.indexOf("/");
+  if (slashIndex < 0) {
+    return { provider: key, modelPattern: null };
+  }
+  return { provider: key.slice(0, slashIndex), modelPattern: key.slice(slashIndex + 1) };
+};
 
 const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   discountConfig,
   onDiscountChange,
   onRemoveProvider,
 }) => {
-  const [editingProvider, setEditingProvider] = useState<string | null>(null);
+  const { t } = useTranslation();
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>("");
 
-  const handleStartEdit = (provider: string, currentDiscount: number) => {
-    setEditingProvider(provider);
+  const handleStartEdit = (key: string, currentDiscount: number) => {
+    setEditingKey(key);
     setEditValue((currentDiscount * 100).toString());
   };
 
-  const handleSaveEdit = (provider: string) => {
+  const handleSaveEdit = (key: string) => {
     const percentValue = parseFloat(editValue);
     if (!isNaN(percentValue) && percentValue >= 0 && percentValue <= 100) {
-      onDiscountChange(provider, (percentValue / 100).toString());
+      onDiscountChange(key, (percentValue / 100).toString());
     }
-    setEditingProvider(null);
+    setEditingKey(null);
     setEditValue("");
   };
 
   const handleCancelEdit = () => {
-    setEditingProvider(null);
+    setEditingKey(null);
     setEditValue("");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
+  const handleKeyDown = (e: React.KeyboardEvent, key: string) => {
     if (e.key === "Enter") {
-      handleSaveEdit(provider);
+      handleSaveEdit(key);
     } else if (e.key === "Escape") {
       handleCancelEdit();
     }
   };
 
+  const rowLabel = (row: ProviderDiscountRow): string => {
+    const { displayName } = getProviderLogoAndName(row.provider);
+    return row.modelPattern ? `${displayName} (${row.modelPattern})` : displayName;
+  };
+
   // Convert discount config to array and sort
   const data: ProviderDiscountRow[] = Object.entries(discountConfig)
-    .map(([provider, discount]) => ({ provider, discount }))
+    .map(([key, discount]) => ({ key, ...splitDiscountKey(key), discount }))
     .sort((a, b) => {
       const displayA = getProviderLogoAndName(a.provider).displayName;
       const displayB = getProviderLogoAndName(b.provider).displayName;
-      return displayA.localeCompare(displayB);
+      return displayA.localeCompare(displayB) || (a.modelPattern ?? "").localeCompare(b.modelPattern ?? "");
     });
 
   return (
@@ -67,7 +84,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
       data={data}
       columns={[
         {
-          header: "Provider",
+          header: t("costTracking.discountTable.columns.provider"),
           cell: (row) => {
             const { displayName } = getProviderLogoAndName(row.provider);
             return (
@@ -79,17 +96,27 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           },
         },
         {
-          header: "Discount Percentage",
+          header: t("costTracking.discountTable.columns.models"),
+          cell: (row) =>
+            row.modelPattern ? (
+              <span className="font-mono text-sm">{row.modelPattern}</span>
+            ) : (
+              <span className="text-muted-foreground">{t("costTracking.discountTable.allModels")}</span>
+            ),
+        },
+        {
+          header: t("costTracking.discountTable.columns.discountPercentage"),
+          numeric: true,
           cell: (row) => {
-            const { displayName } = getProviderLogoAndName(row.provider);
+            const label = rowLabel(row);
             return (
-              <div className="flex items-center gap-2">
-                {editingProvider === row.provider ? (
+              <div className="flex items-center justify-end gap-2">
+                {editingKey === row.key ? (
                   <>
                     <Input
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
-                      onKeyDown={(e) => handleKeyDown(e, row.provider)}
+                      onKeyDown={(e) => handleKeyDown(e, row.key)}
                       placeholder="5"
                       className="w-20"
                       autoFocus
@@ -98,8 +125,8 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Save discount for ${displayName}`}
-                      onClick={() => handleSaveEdit(row.provider)}
+                      aria-label={t("costTracking.discountTable.actions.save", { label })}
+                      onClick={() => handleSaveEdit(row.key)}
                       className="cursor-pointer text-success hover:text-success/80"
                     >
                       <Check className="size-5" />
@@ -107,7 +134,7 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Cancel editing discount for ${displayName}`}
+                      aria-label={t("costTracking.discountTable.actions.cancel", { label })}
                       onClick={handleCancelEdit}
                       className="cursor-pointer text-muted-foreground hover:text-foreground"
                     >
@@ -120,8 +147,8 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Edit discount for ${displayName}`}
-                      onClick={() => handleStartEdit(row.provider, row.discount)}
+                      aria-label={t("costTracking.discountTable.actions.edit", { label })}
+                      onClick={() => handleStartEdit(row.key, row.discount)}
                       className="cursor-pointer text-info hover:text-info/80"
                     >
                       <SquarePen className="size-5" />
@@ -134,15 +161,15 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           width: "250px",
         },
         {
-          header: "Actions",
+          header: t("costTracking.discountTable.columns.actions"),
           cell: (row) => {
-            const { displayName } = getProviderLogoAndName(row.provider);
+            const label = rowLabel(row);
             return (
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Remove discount for ${displayName}`}
-                onClick={() => onRemoveProvider(row.provider, displayName)}
+                aria-label={t("costTracking.discountTable.actions.remove", { label })}
+                onClick={() => onRemoveProvider(row.key, label)}
                 className="cursor-pointer hover:text-destructive"
               >
                 <Trash2 className="size-5" />
@@ -152,8 +179,8 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           width: "80px",
         },
       ]}
-      getRowKey={(row) => row.provider}
-      emptyMessage="No provider discounts configured"
+      getRowKey={(row) => row.key}
+      emptyMessage={t("costTracking.discountTable.empty")}
     />
   );
 };

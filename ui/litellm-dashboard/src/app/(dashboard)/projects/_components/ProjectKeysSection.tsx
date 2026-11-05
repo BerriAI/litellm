@@ -1,29 +1,28 @@
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { PaginationState } from "@tanstack/react-table";
 import { KeyIcon, SearchIcon, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ProjectKeysTable } from "./ProjectKeysTable";
+import { useProjectKeysTableState } from "./useProjectsUrlState";
 
 interface ProjectKeysSectionProps {
   projectId: string;
 }
 
-const PAGE_SIZE = 5;
-
 export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
-  const [keyAlias, setKeyAlias] = useState<string>("");
+  const { t } = useTranslation();
+  const {
+    search: keyAlias,
+    setSearch: setKeyAlias,
+    pagination,
+    onPaginationChange: setPagination,
+  } = useProjectKeysTableState();
 
-  const { data, isLoading } = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
+  const { data, isLoading, isError } = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
     projectID: projectId,
     selectedKeyAlias: keyAlias || null,
   });
-
-  useEffect(() => {
-    setPagination((current) => ({ ...current, pageIndex: 0 }));
-  }, [keyAlias]);
 
   const keys = data?.keys ?? [];
   const totalCount = data?.total_count ?? 0;
@@ -33,7 +32,7 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <KeyIcon className="size-4" />
-          Keys
+          {t("projects.keys.title")}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -43,13 +42,17 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
               <SearchIcon className="size-3.5 text-muted-foreground" />
             </InputGroupAddon>
             <InputGroupInput
-              placeholder="Filter by key name..."
+              placeholder={t("projects.keys.filterPlaceholder")}
               value={keyAlias}
               onChange={(e) => setKeyAlias(e.target.value)}
             />
             {keyAlias && (
               <InputGroupAddon align="inline-end">
-                <InputGroupButton size="icon-xs" aria-label="Clear key filter" onClick={() => setKeyAlias("")}>
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("projects.keys.clearFilter")}
+                  onClick={() => setKeyAlias("")}
+                >
                   <X />
                 </InputGroupButton>
               </InputGroupAddon>
@@ -60,6 +63,7 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
           keys={keys}
           totalCount={totalCount}
           isLoading={isLoading}
+          isError={isError}
           pagination={pagination}
           onPaginationChange={setPagination}
         />

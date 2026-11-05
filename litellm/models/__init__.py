@@ -3,6 +3,7 @@ Domain models for LiteLLM backend.
 """
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
+from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
@@ -29,6 +30,7 @@ from litellm.models.organization_membership import LiteLLM_OrganizationMembershi
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.skills import LiteLLM_SkillsTable
 from litellm.models.spend_logs import LiteLLM_ErrorLogs, LiteLLM_SpendLogs
+from litellm.models.subscription_account import LiteLLM_SubscriptionAccountTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -40,6 +42,7 @@ __all__ = [
     "CredentialBase",
     "CredentialItem",
     "LiteLLM_AccessGroupTable",
+    "LiteLLM_AutoRouterSession",
     "LiteLLM_BudgetTable",
     "LiteLLM_BudgetTableFull",
     "LiteLLM_Config",
@@ -57,6 +60,7 @@ __all__ = [
     "LiteLLM_ProxyModelTable",
     "LiteLLM_SkillsTable",
     "LiteLLM_SpendLogs",
+    "LiteLLM_SubscriptionAccountTable",
     "LiteLLM_TagTable",
     "LiteLLM_TeamMemberTable",
     "LiteLLM_TeamMembership",

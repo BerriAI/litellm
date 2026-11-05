@@ -1,4 +1,6 @@
-import { z } from "zod/v4";
+import { z } from "zod";
+
+import i18n from "@/i18n/i18n";
 
 export const ALL_TEAM_MODELS = "all-team-models";
 
@@ -16,10 +18,13 @@ const modelLimitSchema = z.object({
 export const projectFormSchema = z
   .object({
     project_alias: z.string().min(1, "Please enter a project name"),
-    team_id: z.string().min(1, "Please select a team"),
+    team_id: z
+      .string()
+      .nullable()
+      .pipe(z.string({ error: "Please select a team" }).min(1, "Please select a team")),
     description: z.string().optional(),
     models: z.array(z.string()),
-    max_budget: z.number().optional(),
+    max_budget: z.number().nullish(),
     isBlocked: z.boolean(),
     guardrails: z.array(z.string()).optional(),
     modelLimits: z.array(modelLimitSchema).optional(),
@@ -36,23 +41,32 @@ export const projectFormSchema = z
     const models = (values.modelLimits ?? []).map((entry) => entry.model);
     models.forEach((_, index) => {
       if (repeatsEarlierValue(models, index)) {
-        ctx.addIssue({ code: "custom", message: "Duplicate model", path: ["modelLimits", index, "model"] });
+        ctx.addIssue({
+          code: "custom",
+          message: i18n.t("projects.form.errors.duplicateModel"),
+          path: ["modelLimits", index, "model"],
+        });
       }
     });
 
     const keys = (values.metadata ?? []).map((entry) => entry.key);
     keys.forEach((_, index) => {
       if (repeatsEarlierValue(keys, index)) {
-        ctx.addIssue({ code: "custom", message: "Duplicate key", path: ["metadata", index, "key"] });
+        ctx.addIssue({
+          code: "custom",
+          message: i18n.t("projects.form.errors.duplicateKey"),
+          path: ["metadata", index, "key"],
+        });
       }
     });
   });
 
-export type ProjectFormValues = z.output<typeof projectFormSchema>;
+export type ProjectFormValues = z.input<typeof projectFormSchema>;
+export type ProjectSubmitValues = z.output<typeof projectFormSchema>;
 
 export const emptyProjectFormValues: ProjectFormValues = {
   project_alias: "",
-  team_id: "",
+  team_id: null,
   description: undefined,
   models: [],
   max_budget: undefined,

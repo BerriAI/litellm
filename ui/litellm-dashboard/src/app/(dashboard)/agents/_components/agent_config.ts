@@ -1,7 +1,17 @@
+import type { ParseKeys } from "i18next";
+import { parseIdentityForForm } from "./agent_identity";
 /**
  * Shared configuration for agent form fields
  * Used across create, view, and update operations
  */
+
+import {
+  EMPTY_KILL_SWITCH_FORM,
+  buildKillSwitchFromForm,
+  parseKillSwitchForForm,
+  type KillSwitchConfig,
+  type KillSwitchFormValue,
+} from "./kill_switch_config";
 
 export interface FieldConfig {
   name: string;
@@ -14,12 +24,12 @@ export interface FieldConfig {
   rows?: number;
   validation?: any[];
   options?: string[];
-  helpText?: string;
+  helpTextKey?: ParseKeys;
 }
 
 export interface SectionConfig {
   key: string;
-  title: string;
+  titleKey: ParseKeys;
   fields: FieldConfig[];
   defaultExpanded?: boolean;
 }
@@ -35,7 +45,7 @@ export const AGENT_FORM_CONFIG: {
 } = {
   basic: {
     key: "basic",
-    title: "Basic Information",
+    titleKey: "agents.formConfig.basic.title",
     defaultExpanded: true,
     fields: [
       {
@@ -49,7 +59,7 @@ export const AGENT_FORM_CONFIG: {
         name: "description",
         label: "Description",
         type: "textarea",
-        required: true,
+        required: false,
         placeholder: "Describe what this agent does...",
         rows: 3,
       },
@@ -76,14 +86,13 @@ export const AGENT_FORM_CONFIG: {
         defaultValue: "1.0",
         tooltip:
           "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version.",
-        helpText:
-          "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version.",
+        helpTextKey: "agents.formConfig.basic.protocolVersionHelp",
       },
     ],
   },
   skills: {
     key: "skills",
-    title: "Skills",
+    titleKey: "agents.formConfig.skills.title",
     fields: [
       {
         name: "skills",
@@ -95,7 +104,7 @@ export const AGENT_FORM_CONFIG: {
   },
   capabilities: {
     key: "capabilities",
-    title: "Capabilities",
+    titleKey: "agents.formConfig.capabilities.title",
     fields: [
       {
         name: "streaming",
@@ -117,7 +126,7 @@ export const AGENT_FORM_CONFIG: {
   },
   optional: {
     key: "optional",
-    title: "Optional Settings",
+    titleKey: "agents.formConfig.optional.title",
     fields: [
       {
         name: "iconUrl",
@@ -140,7 +149,7 @@ export const AGENT_FORM_CONFIG: {
   },
   litellm: {
     key: "litellm",
-    title: "LiteLLM Parameters",
+    titleKey: "agents.formConfig.litellm.title",
     fields: [
       {
         name: "model",
@@ -156,7 +165,7 @@ export const AGENT_FORM_CONFIG: {
   },
   cost: {
     key: "cost",
-    title: "Cost Configuration",
+    titleKey: "agents.formConfig.cost.title",
     fields: [
       {
         name: "cost_per_query",
@@ -183,7 +192,7 @@ export const AGENT_FORM_CONFIG: {
   },
   tracing: {
     key: "tracing",
-    title: "Tracing",
+    titleKey: "agents.formConfig.tracing.title",
     fields: [
       {
         name: "enable_tracing",
@@ -199,33 +208,33 @@ export const AGENT_FORM_CONFIG: {
 export const SKILL_FIELD_CONFIG = {
   id: {
     name: "id",
-    label: "Skill ID",
+    labelKey: "agents.formConfig.skillFields.id" as ParseKeys,
     required: true,
-    placeholder: "e.g., hello_world",
+    placeholderKey: "agents.formConfig.skillFields.idPlaceholder" as ParseKeys,
   },
   name: {
     name: "name",
-    label: "Skill Name",
+    labelKey: "agents.formConfig.skillFields.name" as ParseKeys,
     required: true,
-    placeholder: "e.g., Returns hello world",
+    placeholderKey: "agents.formConfig.skillFields.namePlaceholder" as ParseKeys,
   },
   description: {
     name: "description",
-    label: "Description",
+    labelKey: "agents.formConfig.skillFields.description" as ParseKeys,
     required: true,
-    placeholder: "What this skill does",
+    placeholderKey: "agents.formConfig.skillFields.descriptionPlaceholder" as ParseKeys,
     rows: 2,
   },
   tags: {
     name: "tags",
-    label: "Tags",
+    labelKey: "agents.formConfig.skillFields.tags" as ParseKeys,
     required: true,
-    placeholder: "Type a tag and press Enter",
+    placeholderKey: "agents.formConfig.skillFields.tagsPlaceholder" as ParseKeys,
   },
   examples: {
     name: "examples",
-    label: "Examples",
-    placeholder: "Type an example and press Enter",
+    labelKey: "agents.formConfig.skillFields.examples" as ParseKeys,
+    placeholderKey: "agents.formConfig.skillFields.examplesPlaceholder" as ParseKeys,
   },
 };
 
@@ -236,6 +245,7 @@ export const getDefaultFormValues = () => {
   const defaults: any = {
     defaultInputModes: ["text"],
     defaultOutputModes: ["text"],
+    kill_switch: { ...EMPTY_KILL_SWITCH_FORM },
   };
 
   Object.values(AGENT_FORM_CONFIG).forEach((section) => {
@@ -310,15 +320,54 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
     agentData.extra_headers = values.extra_headers;
   }
 
+  applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
+
   return agentData;
 };
+
+export const applyKillSwitchToPayload = (
+  agentData: { kill_switch?: KillSwitchConfig | null },
+  form: KillSwitchFormValue | undefined,
+  existingAgent?: { kill_switch?: KillSwitchConfig | null },
+) => {
+  const killSwitch = buildKillSwitchFromForm(form);
+  if (killSwitch !== undefined && (killSwitch !== null || existingAgent?.kill_switch)) {
+    agentData.kill_switch = killSwitch;
+  }
+};
+
+export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] | null }) => ({
+  access_group_ids: agent.access_group_ids ?? [],
+});
+
+export const parseMcpPermissionsForForm = (agent: any) => ({
+  ...parseIdentityForForm(agent),
+  allowed_mcp_servers_and_groups: {
+    servers: agent.object_permission?.mcp_servers ?? [],
+    accessGroups: agent.object_permission?.mcp_access_groups ?? [],
+    toolsets: agent.object_permission?.mcp_toolsets ?? [],
+  },
+  mcp_tool_permissions: agent.object_permission?.mcp_tool_permissions ?? {},
+});
+
+/**
+ * Always includes every MCP key (empty when cleared) so removals persist;
+ * the proxy merges object_permission per key, leaving non-MCP grants untouched.
+ */
+export const buildMcpObjectPermission = (values: any) => ({
+  mcp_servers: values.allowed_mcp_servers_and_groups?.servers ?? [],
+  mcp_access_groups: values.allowed_mcp_servers_and_groups?.accessGroups ?? [],
+  mcp_toolsets: values.allowed_mcp_servers_and_groups?.toolsets ?? [],
+  mcp_tool_permissions: values.mcp_tool_permissions ?? {},
+});
 
 /**
  * Parse agent data for form fields
  */
 export const parseAgentForForm = (agent: any) => {
+  const card = agent.agent_card_params ?? {};
   const skills =
-    agent.agent_card_params?.skills?.map((skill: any) => ({
+    card.skills?.map((skill: any) => ({
       ...skill,
       tags: skill.tags,
       examples: skill.examples || [],
@@ -326,18 +375,18 @@ export const parseAgentForForm = (agent: any) => {
 
   return {
     agent_name: agent.agent_name,
-    name: agent.agent_card_params?.name,
-    description: agent.agent_card_params?.description,
-    url: agent.agent_card_params?.url,
-    version: agent.agent_card_params?.version,
-    protocolVersion: agent.agent_card_params?.protocolVersion,
-    streaming: agent.agent_card_params?.capabilities?.streaming,
-    pushNotifications: agent.agent_card_params?.capabilities?.pushNotifications,
-    stateTransitionHistory: agent.agent_card_params?.capabilities?.stateTransitionHistory,
+    name: card.name || agent.agent_name,
+    description: card.description,
+    url: card.url,
+    version: card.version,
+    protocolVersion: card.protocolVersion,
+    streaming: card.capabilities?.streaming,
+    pushNotifications: card.capabilities?.pushNotifications,
+    stateTransitionHistory: card.capabilities?.stateTransitionHistory,
     skills: skills,
-    iconUrl: agent.agent_card_params?.iconUrl,
-    documentationUrl: agent.agent_card_params?.documentationUrl,
-    supportsAuthenticatedExtendedCard: agent.agent_card_params?.supportsAuthenticatedExtendedCard,
+    iconUrl: card.iconUrl,
+    documentationUrl: card.documentationUrl,
+    supportsAuthenticatedExtendedCard: card.supportsAuthenticatedExtendedCard,
     model: agent.litellm_params?.model,
     make_public: agent.litellm_params?.make_public,
     cost_per_query: agent.litellm_params?.cost_per_query,
@@ -356,5 +405,8 @@ export const parseAgentForForm = (agent: any) => {
       : [],
     // extra_headers: already an array of strings
     extra_headers: agent.extra_headers ?? [],
+    kill_switch: parseKillSwitchForForm(agent.kill_switch),
+    ...parseMcpPermissionsForForm(agent),
+    ...parseAccessGroupIdsForForm(agent),
   };
 };

@@ -7,15 +7,19 @@ import json
 from typing import Final
 from urllib.parse import quote
 
+from pydantic import TypeAdapter
+
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 
 from .base_cache import BaseCache
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GCSCache(BaseCache):
@@ -31,7 +35,7 @@ class GCSCache(BaseCache):
         self.key_prefix = gcs_path.rstrip("/") + "/" if gcs_path else ""
         # create httpx clients
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
 
     def _construct_headers(self) -> dict:
         base: Final = GCSBucketBase(bucket_name=self.bucket_name)
@@ -70,7 +74,7 @@ class GCSCache(BaseCache):
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
             response: Final = self.sync_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                cached_response: Final = json.loads(response.text)
+                cached_response: Final = _DECODED_JSON.validate_python(json.loads(response.text))
                 verbose_logger.debug(
                     "Got GCS Cache: key: %s, cached_response %s. Type Response %s",
                     key,
@@ -90,7 +94,7 @@ class GCSCache(BaseCache):
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
             response: Final = await self.async_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                return json.loads(response.text)
+                return _DECODED_JSON.validate_python(json.loads(response.text))
             return None
         except Exception as e:
             verbose_logger.error("GCS Caching: async_get_cache() - Got exception from GCS: %s", e)

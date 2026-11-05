@@ -2,7 +2,7 @@
 Shared sanitization for ``output_config`` / ``output_format`` on Vertex AI
 Claude. Lives in its own module so both the chat-completion transformation
 (``transformation.py``) and the Messages pass-through transformation
-(``experimental_pass_through/transformation.py``) can import it without
+(``messages/transformation.py``) can import it without
 forming a cycle through the parent module's heavier imports.
 
 CodeQL flagged the ``..transformation`` import path as a potential cyclic
@@ -10,7 +10,10 @@ import; extracting the helper into a leaf module resolves the warning and
 keeps the parent module's import surface narrow.
 """
 
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 # Keys inside ``output_config`` that Vertex AI Claude rejects regardless of
 # the target model. Add an entry only when a 400 "Extra inputs are not
@@ -28,7 +31,36 @@ def _model_accepts_output_config_effort(model: str) -> bool:
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    return AnthropicConfig._model_supports_effort_param(model, "vertex_ai")
+    return AnthropicConfig.model_supports_effort_param(model, "vertex_ai")
+
+
+_OUTPUT_CONFIG: Final = TypeAdapter(Mapping[str, object])
+
+
+def _as_output_config(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OUTPUT_CONFIG.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _fold_output_format_into_output_config(
+    output_config: Mapping[str, object] | None, output_format: object, model: str
+) -> Mapping[str, object] | None:
+    if output_format is None:
+        return output_config
+    output_format_object: Final = _as_output_config(output_format)
+    if output_format_object is not None:
+        return {**(output_config or {}), "format": output_format_object}
+    from litellm.exceptions import UnsupportedParamsError
+
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} on vertex_ai needs `output_format` to be a JSON object, got {type(output_format).__name__}. "
+            "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+        status_code=400,
+    )
 
 
 def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
@@ -44,15 +76,21 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
       * Keys in ``VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS`` are always filtered.
       * ``output_config`` left empty after filtering is removed so the request
         body has no empty dict.
-      * ``output_format`` is forwarded as-is (Vertex AI Claude accepts it).
+      * ``output_format`` is moved into ``output_config.format``, because
+        Vertex AI Claude rejects the top-level field as deprecated. When both
+        are set, a dict ``output_format`` wins, as it does in the Anthropic
+        adapter. A non-dict ``output_format`` raises a 400
+        ``UnsupportedParamsError``, since the parent config already dropped it
+        under ``drop_params``.
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
     """
-    output_config: Final = data.get("output_config")
+    request: Final[dict[str, object]] = data  # mutable-ok: the caller's request body is sanitized in place
+    output_config: Final = _fold_output_format_into_output_config(
+        _as_output_config(request.get("output_config")), request.pop("output_format", None), model
+    )
     if output_config is None:
-        return
-    if not isinstance(output_config, dict):
-        data.pop("output_config", None)
+        request.pop("output_config", None)
         return
 
     drop_keys: Final = set(VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS)
@@ -68,6 +106,6 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
 
     sanitized: Final = {k: v for k, v in output_config.items() if k not in drop_keys}
     if sanitized:
-        data["output_config"] = sanitized
+        request["output_config"] = sanitized
     else:
-        data.pop("output_config", None)
+        request.pop("output_config", None)

@@ -7,13 +7,18 @@ so a read-back reflects the change. Router settings, which mutate global proxy
 state, are exercised with a benign, self-restoring change so a shared proxy is left
 as it was found.
 
-Cache settings and the Vault config override are deliberately not covered here.
-Both routes reconfigure the whole proxy: /cache/settings persists what it receives
-into a row that outranks the YAML cache_params and is re-applied on a timer, and
-/config_overrides/hashicorp_vault swaps the process-wide secret manager. Neither can
-be exercised safely against the shared proxy the suites run on, so they need an
-isolated proxy before a test lands. Do not add a read-then-write-back test for
-either one.
+Cache settings, the Vault config override and the allowed-IP routes are deliberately
+not covered here. All three reconfigure the whole proxy: /cache/settings persists what
+it receives into a row that outranks the YAML cache_params and is re-applied on a timer,
+/config_overrides/hashicorp_vault swaps the process-wide secret manager, and
+/add/allowed_ip mutates the live general_settings["allowed_ips"] that
+auth_utils._check_valid_ip reads, so the first call locks every other client out of the
+shared proxy. The allowlist is an exact string match with no CIDR support, and no route
+reports the caller's address as the proxy sees it, so a test cannot allowlist itself
+first; /delete/allowed_ip sits behind the same auth dependency, so the cleanup is locked
+out too and the proxy stays poisoned for the rest of the build. None of the three can be
+exercised safely against the shared proxy the suites run on, so they need an isolated
+proxy before a test lands. Do not add a read-then-write-back test for any of them.
 """
 
 from __future__ import annotations
@@ -26,7 +31,8 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, Success, unwrap, unwrap_status
+from e2e_http import NoBody, Result, Success, UnknownApiError, unwrap, unwrap_status
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
@@ -135,10 +141,13 @@ class ComplianceResponse(BaseModel):
 # ---- fallback management ---------------------------------------------------
 
 
-class FallbackShape(BaseModel):
+class FallbackTarget(BaseModel):
     model: str
-    fallback_models: list[str]
     fallback_type: str
+
+
+class FallbackShape(FallbackTarget):
+    fallback_models: list[str]
 
 
 class FallbackCreateBody(FallbackShape):
@@ -155,6 +164,28 @@ class FallbackGetParams(BaseModel):
 
 class FallbackGetResponse(FallbackShape):
     pass
+
+
+class FallbackDeleteResponse(FallbackTarget):
+    message: str
+
+
+class RouterFallbackValues(BaseModel):
+    fallbacks: list[dict[str, list[str]]] | None = None
+
+
+class RouterFallbackOwnership(BaseModel):
+    current_values: RouterFallbackValues
+    source: dict[str, str]
+
+
+class ConfigOwnedDetail(BaseModel):
+    keys: list[str]
+    section: str
+
+
+class ConfigOwnedRejection(BaseModel):
+    detail: ConfigOwnedDetail
 
 
 # ---- jwt key mapping -------------------------------------------------------
@@ -187,7 +218,7 @@ class JwtKeyMappingResponse(BaseModel):
 
 
 class RouterSettingsPatch(BaseModel):
-    num_retries: int
+    retry_after: int
 
 
 class ConfigUpdateBody(BaseModel):
@@ -199,7 +230,7 @@ class ConfigUpdateResponse(BaseModel):
 
 
 class RouterCurrentValues(BaseModel):
-    num_retries: int | None = None
+    retry_after: int | None = None
 
 
 class RouterSettingsResponse(BaseModel):
@@ -226,6 +257,7 @@ class McpServerResponse(BaseModel):
 
 class TestInventoryRoutes:
     @pytest.mark.covers("mgmt.callback.list.happy_path")
+    @meta(Subject(domain=Domain.OBSERVABILITY))
     def test_callbacks_list_reports_active_logging_callbacks(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -242,6 +274,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.tool_management.list.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_tool_list_returns_catalog_with_consistent_total(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -256,6 +289,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.workflow.list.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_workflow_runs_list_returns_consistent_count(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -270,6 +304,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.credential_migration.check.happy_path")
+    @meta(Subject(domain=Domain.DEPLOY_OPS))
     def test_credential_migration_check_reports_residual_scan(self, client: ManagementClient) -> None:
         report = unwrap(
             client.proxy.transport.get(
@@ -290,6 +325,7 @@ class TestInventoryRoutes:
 
 class TestCostEstimate:
     @pytest.mark.covers("mgmt.cost_tracking.estimate.happy_path")
+    @meta(Subject(domain=Domain.COST_MAP))
     def test_estimate_computes_cost_from_token_counts(self, client: ManagementClient) -> None:
         estimate = unwrap(
             client.proxy.transport.post(
@@ -320,6 +356,7 @@ class TestCostEstimate:
 
 class TestComplianceRoutes:
     @pytest.mark.covers("mgmt.compliance.gdpr.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_gdpr_check_derives_verdict_from_the_request(self, client: ManagementClient) -> None:
         result = unwrap(
             client.proxy.transport.post(
@@ -351,21 +388,21 @@ class TestComplianceRoutes:
 
 class TestFallbackManagement:
     @pytest.mark.covers("mgmt.fallback_management.update.happy_path")
+    @meta(Subject(domain=Domain.ROUTING))
     def test_create_persists_and_is_read_back(self, client: ManagementClient, resources: ResourceManager) -> None:
-        primary = f"e2e-fallback-primary-{unique_marker()}"
-        secondary = f"e2e-fallback-secondary-{unique_marker()}"
-        params = LiteLLMParamsBody(model="openai/gpt-5.5", api_key="e2e-dummy-key")
-        primary_id = client.proxy.create_model(primary, params)
-        resources.defer(lambda: client.proxy.delete_model(primary_id))
-        secondary_id = client.proxy.create_model(secondary, params)
-        resources.defer(lambda: client.proxy.delete_model(secondary_id))
-        resources.defer(lambda: self._delete_fallback(client, primary))
+        ownership = self._router_fallback_ownership(client)
+        assert ownership.source.get("context_window_fallbacks") != "config", (
+            "the proxy config sets router_settings.context_window_fallbacks, so /fallback cannot write it and this "
+            "round trip needs a fallback type the database owns"
+        )
+        primary, secondary = self._register_fallback_pair(client, resources)
+        resources.defer(lambda: self._delete_fallback(client, primary, "context_window"))
 
         created = unwrap(
             client.proxy.transport.post(
                 "/fallback",
                 headers=client.proxy.transport.master,
-                json=FallbackCreateBody(model=primary, fallback_models=[secondary], fallback_type="general"),
+                json=FallbackCreateBody(model=primary, fallback_models=[secondary], fallback_type="context_window"),
                 response_type=FallbackResponse,
             )
         )
@@ -375,13 +412,7 @@ class TestFallbackManagement:
         )
 
         def read_back() -> FallbackGetResponse | None:
-            result = client.proxy.transport.get(
-                f"/fallback/{primary}",
-                headers=client.proxy.transport.master,
-                params=FallbackGetParams(fallback_type="general"),
-                response_type=FallbackGetResponse,
-            )
-            match result:
+            match self._get_fallback(client, primary, "context_window"):
                 case Success(data=data) if secondary in data.fallback_models:
                     return data
                 case _:
@@ -392,19 +423,111 @@ class TestFallbackManagement:
             f"GET /fallback/{primary} reports fallbacks {got.fallback_models}, configured [{secondary!r}]"
         )
 
+        deleted = unwrap(self._delete_fallback(client, primary, "context_window"))
+        assert deleted.model == primary and deleted.fallback_type == "context_window", (
+            f"DELETE /fallback/{primary} answered for model={deleted.model!r} type={deleted.fallback_type!r}"
+        )
+
+        def gone() -> bool | None:
+            match self._get_fallback(client, primary, "context_window"):
+                case UnknownApiError(status_code=404):
+                    return True
+                case _:
+                    return None
+
+        _ = _poll(client, gone, f"GET /fallback/{primary} still reports a fallback after DELETE /fallback/{primary}")
+
+    @pytest.mark.covers("mgmt.fallback_management.update.config_owned_refused")
+    @meta(Subject(domain=Domain.ROUTING))
+    def test_write_to_config_owned_fallbacks_is_refused(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        before = self._router_fallback_ownership(client)
+        config_rules = before.current_values.fallbacks
+        assert before.source.get("fallbacks") == "config" and config_rules, (
+            "this test needs router_settings.fallbacks set in the proxy config, but /router/settings reports "
+            f"source={before.source.get('fallbacks')!r} value={config_rules}"
+        )
+        primary, secondary = self._register_fallback_pair(client, resources)
+        resources.defer(lambda: self._delete_fallback(client, primary, "general"))
+
+        result = client.proxy.transport.post(
+            "/fallback",
+            headers=client.proxy.transport.master,
+            json=FallbackCreateBody(model=primary, fallback_models=[secondary], fallback_type="general"),
+            response_type=FallbackResponse,
+        )
+        match result:
+            case UnknownApiError(status_code=400, body=body):
+                rejection = ConfigOwnedRejection.model_validate_json(body).detail
+            case _:
+                pytest.fail(f"/fallback accepted a write to the config-owned router_settings.fallbacks: {result}")
+        assert rejection.keys == ["fallbacks"] and rejection.section == "router_settings", (
+            f"/fallback refused the write naming keys={rejection.keys} section={rejection.section!r}, "
+            "expected router_settings.fallbacks"
+        )
+
+        after = self._router_fallback_ownership(client).current_values.fallbacks
+        assert after == config_rules, (
+            f"the refused write changed router_settings.fallbacks from {config_rules} to {after}"
+        )
+        match self._get_fallback(client, primary, "general"):
+            case UnknownApiError(status_code=404):
+                pass
+            case refused_rule:
+                pytest.fail(f"the refused rule for {primary} is served anyway: {refused_rule}")
+        config_model, config_targets = next(iter(config_rules[0].items()))
+        served = unwrap(self._get_fallback(client, config_model, "general"))
+        assert served.fallback_models == config_targets, (
+            f"GET /fallback/{config_model} reports {served.fallback_models}, "
+            f"the config file routes it to {config_targets}"
+        )
+
     @staticmethod
-    def _delete_fallback(client: ManagementClient, model: str) -> None:
-        _ = client.proxy.transport.delete(
+    def _register_fallback_pair(client: ManagementClient, resources: ResourceManager) -> tuple[str, str]:
+        primary = f"e2e-fallback-primary-{unique_marker()}"
+        secondary = f"e2e-fallback-secondary-{unique_marker()}"
+        params = LiteLLMParamsBody(model="openai/gpt-5.5", api_key="e2e-dummy-key")
+        primary_id = client.proxy.create_model(primary, params)
+        resources.defer(lambda: client.proxy.delete_model(primary_id))
+        secondary_id = client.proxy.create_model(secondary, params)
+        resources.defer(lambda: client.proxy.delete_model(secondary_id))
+        return primary, secondary
+
+    @staticmethod
+    def _router_fallback_ownership(client: ManagementClient) -> RouterFallbackOwnership:
+        return unwrap(
+            client.proxy.transport.get(
+                "/router/settings",
+                headers=client.proxy.transport.master,
+                params=NoBody(),
+                response_type=RouterFallbackOwnership,
+            )
+        )
+
+    @staticmethod
+    def _get_fallback(client: ManagementClient, model: str, fallback_type: str) -> Result[FallbackGetResponse]:
+        return client.proxy.transport.get(
+            f"/fallback/{model}",
+            headers=client.proxy.transport.master,
+            params=FallbackGetParams(fallback_type=fallback_type),
+            response_type=FallbackGetResponse,
+        )
+
+    @staticmethod
+    def _delete_fallback(client: ManagementClient, model: str, fallback_type: str) -> Result[FallbackDeleteResponse]:
+        return client.proxy.transport.delete(
             f"/fallback/{model}",
             headers=client.proxy.transport.master,
             json=NoBody(),
-            params=FallbackGetParams(fallback_type="general"),
-            response_type=NoBody,
+            params=FallbackGetParams(fallback_type=fallback_type),
+            response_type=FallbackDeleteResponse,
         )
 
 
 class TestJwtKeyMapping:
     @pytest.mark.covers("mgmt.jwt_key_mapping.new.happy_path")
+    @meta(Subject(domain=Domain.PROXY_AUTH))
     def test_new_persists_mapping_and_is_read_back(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -456,22 +579,31 @@ class TestJwtKeyMapping:
 
 class TestRouterSettings:
     @pytest.mark.covers("mgmt.router_settings.update.happy_path")
+    @meta(Subject(domain=Domain.ROUTING, route=Route.PROXY_CONFIG))
     def test_config_update_persists_router_setting_to_get(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         """/config/update is the only write path for router_settings (there is no
         dedicated router-settings write route). The change is restored on teardown so
-        the shared proxy keeps its original retry policy."""
-        original = self._read_num_retries(client)
-        assert original is not None, "GET /router/settings did not report num_retries; cannot prove a change"
-        resources.defer(lambda: self._write_num_retries(client, original))
+        the shared proxy keeps its original retry policy.
 
-        target = original + 5
+        retry_after is the subject because it satisfies all three constraints at once:
+        no lane's config file declares it, so the database owns it and the write is not
+        refused as config-owned; it is in RUNTIME_UPDATABLE_ROUTER_SETTINGS, so
+        /config/update accepts it; and it is in ROUTER_SETTINGS_FIELDS backed by an
+        always-set Router attribute, so GET /router/settings reports it for the
+        read-back. Bumping it by one second is the smallest change that proves the
+        round-trip without slowing a concurrent test that hits a retry."""
+        original = self._read_retry_after(client)
+        assert original is not None, "GET /router/settings did not report retry_after; cannot prove a change"
+        resources.defer(lambda: self._write_retry_after(client, original))
+
+        target = original + 1
         response = unwrap(
             client.proxy.transport.post(
                 "/config/update",
                 headers=client.proxy.transport.master,
-                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(num_retries=target)),
+                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(retry_after=target)),
                 response_type=ConfigUpdateResponse,
             )
         )
@@ -481,20 +613,20 @@ class TestRouterSettings:
 
         _ = _poll(
             client,
-            lambda: True if self._read_num_retries(client) == target else None,
-            f"GET /router/settings never reported num_retries {target} after /config/update",
+            lambda: True if self._read_retry_after(client) == target else None,
+            f"GET /router/settings never reported retry_after {target} after /config/update",
         )
 
-        self._write_num_retries(client, original)
+        self._write_retry_after(client, original)
         restored = _poll(
             client,
-            lambda: original if self._read_num_retries(client) == original else None,
-            f"GET /router/settings never returned to the original num_retries {original} after the restore",
+            lambda: original if self._read_retry_after(client) == original else None,
+            f"GET /router/settings never returned to the original retry_after {original} after the restore",
         )
-        assert restored == original, f"router num_retries left at {restored}, expected the original {original}"
+        assert restored == original, f"router retry_after left at {restored}, expected the original {original}"
 
     @staticmethod
-    def _read_num_retries(client: ManagementClient) -> int | None:
+    def _read_retry_after(client: ManagementClient) -> int | None:
         return unwrap(
             client.proxy.transport.get(
                 "/router/settings",
@@ -502,15 +634,15 @@ class TestRouterSettings:
                 params=NoBody(),
                 response_type=RouterSettingsResponse,
             )
-        ).current_values.num_retries
+        ).current_values.retry_after
 
     @staticmethod
-    def _write_num_retries(client: ManagementClient, value: int) -> None:
+    def _write_retry_after(client: ManagementClient, value: int) -> None:
         _ = unwrap(
             client.proxy.transport.post(
                 "/config/update",
                 headers=client.proxy.transport.master,
-                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(num_retries=value)),
+                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(retry_after=value)),
                 response_type=ConfigUpdateResponse,
             )
         )
@@ -518,6 +650,7 @@ class TestRouterSettings:
 
 class TestMcpServerSubmission:
     @pytest.mark.covers("mgmt.mcp_server.register.happy_path")
+    @meta(Subject(domain=Domain.MCP, route=Route.MCP))
     def test_register_submits_pending_server(self, client: ManagementClient, resources: ResourceManager) -> None:
         """A non-admin, team-scoped key submits an MCP server for review; the proxy
         stores it as pending_review without loading it into the runtime registry."""
@@ -551,6 +684,7 @@ class TestMcpServerSubmission:
         )
 
     @pytest.mark.covers("mgmt.mcp_server.approve.persists")
+    @meta(Subject(domain=Domain.MCP, route=Route.MCP))
     def test_approve_activates_submission_and_persists(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

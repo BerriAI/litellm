@@ -10,11 +10,16 @@ this hook manages:
 Works across multiple proxy instances via DualCache (in-memory + Redis).
 """
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_guardrail import get_session_id_from_request_data
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -29,6 +34,7 @@ else:
 
 SENSITIVE_ROUTING_CACHE_PREFIX: Final = "sensitive_route"
 DEFAULT_SENSITIVE_ROUTING_TTL: Final = 3600
+_CACHED_ROUTE: Final = TypeAdapter(object)
 
 
 class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
@@ -77,15 +83,18 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         ]
         return "|".join(principal) if principal else "default"
 
+    @with_service_target("sensitive_route_pins")
     async def _get_routed_model(self, session_id: str, user_api_key_dict: UserAPIKeyAuth | None) -> str | None:
         """Get the model this session should be routed to, if any."""
         cache_key: Final = self._make_cache_key(session_id, self._resolve_tenant(user_api_key_dict))
 
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             try:
-                result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(key=cache_key)
-                if result is not None:
-                    routed_model: Final = str(result)
+                redis_route: Final = _CACHED_ROUTE.validate_python(
+                    await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(key=cache_key)
+                )
+                if redis_route is not None:
+                    routed_model: Final = str(redis_route)
                     remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(key=cache_key)
                     await self.internal_usage_cache.async_set_cache(
                         key=cache_key,
@@ -96,20 +105,25 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                     )
                     return routed_model
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "SensitiveDataRoutingHandler: Redis GET failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "SensitiveDataRoutingHandler: Redis GET failed, falling back to in-memory",
+                    e,
                 )
 
-        result = await self.internal_usage_cache.async_get_cache(
-            key=cache_key,
-            litellm_parent_otel_span=None,
-            local_only=True,
+        local_route: Final = _CACHED_ROUTE.validate_python(
+            await self.internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
         )
-        if result is not None:
-            return str(result)
+        if local_route is not None:
+            return str(local_route)
         return None
 
+    @with_service_target("sensitive_route_pins")
     async def set_session_routing(
         self,
         session_id: str,
@@ -142,9 +156,11 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                     ttl=self.ttl,
                 )
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "SensitiveDataRoutingHandler: Redis SET failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "SensitiveDataRoutingHandler: Redis SET failed, falling back to in-memory",
+                    e,
                 )
 
         await self.internal_usage_cache.async_set_cache(
@@ -155,6 +171,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             local_only=True,
         )
 
+    @with_service_target("sensitive_route_pins")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -194,3 +211,6 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         data["metadata"] = metadata
 
         return data
+
+
+PROXY_SensitiveDataRoutingHandler: Final = _PROXY_SensitiveDataRoutingHandler

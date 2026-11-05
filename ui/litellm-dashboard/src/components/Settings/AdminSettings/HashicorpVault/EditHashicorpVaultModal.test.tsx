@@ -26,6 +26,8 @@ vi.mock("@/lib/toast", () => ({
 const ALL_FIELDS = [
   "vault_addr",
   "vault_namespace",
+  "vault_login_namespace",
+  "vault_secret_namespace",
   "vault_mount_name",
   "vault_path_prefix",
   "vault_token",
@@ -84,16 +86,19 @@ describe("EditHashicorpVaultModal", () => {
     await waitFor(() => {
       expect(mutate).toHaveBeenCalledTimes(1);
     });
-    expect(mutate.mock.calls[0][0]).toEqual({
+    const expectedPayload = {
       vault_addr: "https://vault.example.com",
       vault_namespace: "team-ns",
+      vault_login_namespace: "",
+      vault_secret_namespace: "",
       vault_mount_name: "",
       vault_path_prefix: "",
       approle_role_id: "",
       approle_mount_path: "",
       client_cert: "",
       vault_cert_role: "",
-    });
+    };
+    expect(mutate.mock.calls[0][0]).toEqual(expectedPayload);
   });
 
   it("sends a sensitive field only once it is typed into", async () => {
@@ -108,6 +113,25 @@ describe("EditHashicorpVaultModal", () => {
       expect(mutate).toHaveBeenCalledTimes(1);
     });
     expect(mutate.mock.calls[0][0]).toMatchObject({ vault_token: "rotated-token" });
+  });
+
+  it("sends the login and secret namespaces the admin types in", async () => {
+    setup({ values: { vault_addr: "https://vault.example.com", vault_namespace: "root" } });
+    const user = userEvent.setup();
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText("Login Namespace"), { target: { value: "root" } });
+    fireEvent.change(screen.getByLabelText("Secret Namespace"), { target: { value: "teams/team-a" } });
+    await save(user);
+
+    await waitFor(() => {
+      expect(mutate).toHaveBeenCalledTimes(1);
+    });
+    expect(mutate.mock.calls[0][0]).toMatchObject({
+      vault_namespace: "root",
+      vault_login_namespace: "root",
+      vault_secret_namespace: "teams/team-a",
+    });
   });
 
   it("never seeds a stored secret into its input", () => {

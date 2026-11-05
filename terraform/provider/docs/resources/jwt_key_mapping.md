@@ -65,7 +65,8 @@ resource "litellm_jwt_key_mapping" "developer" {
 
 - `jwt_claim_name` - (Required, ForceNew) Name of the JWT claim to match on, for example `client_id`, `azp` or `sub`. Must match `virtual_key_claim_field` in the proxy JWT config
 - `jwt_claim_value` - (Required, ForceNew) Value of the claim identifying the JWT client. Unique together with `jwt_claim_name`, so a second mapping for the same pair fails with a 409
-- `key` - (Required, Sensitive) The virtual key this claim value maps to. It has to exist already, otherwise the proxy rejects the mapping with `The provided key does not match an existing virtual key`
+- `key` - (Optional, Sensitive) The virtual key this claim value maps to, as plaintext. It has to exist already, otherwise the proxy rejects the mapping with `The provided key does not match an existing virtual key`. Exactly one of `key` or `token_id` is required. `litellm_key` marks its generated `key` write-only, so this cannot reference a `litellm_key` resource -- use `token_id` for that, or supply the plaintext from a variable or a secret manager
+- `token_id` - (Optional) The SHA-256 hash of the virtual key this claim value maps to, which is what the proxy stores. `litellm_key` exposes it as `token_id`, so unlike `key` it can be referenced directly from a `litellm_key` resource. Not a secret, so it is not marked sensitive. Exactly one of `key` or `token_id` is required
 - `description` - (Optional) Description of the mapping
 - `is_active` - (Optional) Whether the mapping is active. Inactive mappings are ignored during JWT auth. Defaults to `true`
 

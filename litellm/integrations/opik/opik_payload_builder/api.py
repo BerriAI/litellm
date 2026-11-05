@@ -1,11 +1,16 @@
 """Public API for Opik payload building."""
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.integrations.opik import utils
 
 from . import extractors, payload_builders, types
+
+_STANDARD_LOGGING_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def build_opik_payload(
@@ -36,12 +41,14 @@ def build_opik_payload(
         - First element is TracePayload if creating a new trace, None if attaching to existing
         - Second element is always SpanPayload
     """
-    standard_logging_object: Final = kwargs["standard_logging_object"]
+    standard_logging_object: Final = _STANDARD_LOGGING_FIELDS.validate_python(kwargs["standard_logging_object"])
 
     # Extract litellm params and metadata
     litellm_params: Final = kwargs.get("litellm_params", {}) or {}
     litellm_metadata: Final = litellm_params.get("metadata", {}) or {}
-    standard_logging_metadata: Final = standard_logging_object.get("metadata", {}) or {}
+    standard_logging_metadata: Final = _STANDARD_LOGGING_FIELDS.validate_python(
+        standard_logging_object.get("metadata", {}) or {}
+    )
 
     # Extract and merge Opik metadata
     opik_metadata: Final = extractors.extract_opik_metadata(litellm_metadata, standard_logging_metadata)

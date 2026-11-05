@@ -45,6 +45,16 @@ describe("PromptCodeSnippets", () => {
     expect(screen.getByRole("combobox", { name: "Language" })).toHaveTextContent("Python (OpenAI SDK)");
   });
 
+  it("shows a key placeholder when there is no access token", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    render(<PromptCodeSnippets promptId="welcome" model="gpt-4o" accessToken={null} version="2" />);
+    await user.click(screen.getByRole("button", { name: /get code/i }));
+    await screen.findByText("Generated Code");
+
+    await user.click(screen.getByRole("button", { name: /copy to clipboard/i }));
+    expect(await navigator.clipboard.readText()).toContain("'Authorization: Bearer <your-master-key>'");
+  });
+
   it("includes the viewed environment in every generated request", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     render(

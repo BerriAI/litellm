@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   Combobox,
   ComboboxContent,
@@ -9,6 +9,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import i18n from "@/i18n/i18n";
 
 export interface SearchSelectOption {
   label: string;
@@ -19,17 +20,25 @@ export interface SearchSelectOption {
   icon?: React.ReactNode;
 }
 
+interface CustomValue {
+  hint: string;
+  accepts: (typed: string) => boolean;
+}
+
 interface SearchSelectProps {
   options: SearchSelectOption[];
-  value?: string;
-  onValueChange: (value: string) => void;
+  value?: string | null;
+  onValueChange: (value: string | null) => void;
   placeholder?: string;
   emptyText?: string;
   disabled?: boolean;
   className?: string;
   inputId?: string;
   allowClear?: boolean;
+  customValue?: CustomValue;
+  reservedValues?: readonly string[];
   "aria-label"?: string;
+  id?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -42,33 +51,42 @@ export function SearchSelect({
   options,
   value,
   onValueChange,
-  placeholder = "Select…",
-  emptyText = "No results",
+  placeholder = i18n.t("shared.searchSelect.placeholder"),
+  emptyText = i18n.t("shared.searchSelect.empty"),
   disabled = false,
   className,
   inputId,
   allowClear = true,
+  customValue,
+  reservedValues = [],
   "aria-label": ariaLabel,
+  id,
 }: SearchSelectProps) {
+  const [query, setQuery] = useState("");
   const selected =
-    value === undefined || value === ""
-      ? null
-      : options.find((option) => option.value === value) ?? { label: value, value };
-  const items =
+    value == null || value === "" ? null : options.find((option) => option.value === value) ?? { label: value, value };
+  const known =
     selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
+  const typed = query.trim();
+  const isNewValue = typed !== "" && !reservedValues.includes(typed) && !known.some((option) => option.value === typed);
+  const items =
+    customValue !== undefined && isNewValue && customValue.accepts(typed)
+      ? [...known, { label: typed, value: typed, sublabel: customValue.hint }]
+      : known;
 
   return (
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
+      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? null)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={matchesQuery}
+      onInputValueChange={setQuery}
       disabled={disabled}
     >
       <ComboboxInput
-        id={inputId}
+        id={id ?? inputId}
         aria-label={ariaLabel}
         placeholder={placeholder}
         showClear={allowClear && value != null && value !== ""}
