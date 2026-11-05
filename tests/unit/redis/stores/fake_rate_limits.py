@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, Generic, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -22,6 +22,7 @@ from litellm.redis.stores.rate_limits import (
 )
 from litellm.rust_bridge._native import NativeRateLimits
 
+_T = TypeVar("_T")
 RawScript = Callable[..., Awaitable[object]]
 RawValue = int | float | str | bytes | None
 _RAW: Final = TypeAdapter(list[RawValue])
@@ -40,17 +41,18 @@ def window_key(counter: NativeCounter) -> str:
     return scope_key((counter[0], counter[1]), "window")
 
 
-class Resolved:
-    """A script call; declared on a request that logs ``events`` (``FakeNativeRequest``), it notes the declaration
-    there and refuses to answer before that request's pre-call batch was flushed."""
+class Resolved(Generic[_T]):
+    """A script call; declared with a send that logs ``events`` (a ``FakeNativeRequest`` standing in for the
+    request's ``NativeSend``), it notes the declaration there and refuses to answer before that request's pre-call
+    batch was flushed."""
 
-    def __init__(self, reply: Callable[[], Awaitable[object]], request: object, name: str) -> None:
+    def __init__(self, reply: Callable[[], Awaitable[_T]], send: object, name: str) -> None:
         self._reply: Final = reply
-        self._events: Final = _events(request)
+        self._events: Final = _events(send)
         if self._events is not None:
             self._events.append(f"declare {name}")
 
-    def resolve(self) -> Awaitable[object]:
+    def resolve(self) -> Awaitable[_T]:
         if self._events is not None and "flush_pre" not in self._events:
             raise ConnectionError("resolved before its batch was flushed")
         return asyncio.ensure_future(self._reply())
@@ -97,6 +99,7 @@ class FakeRateLimits:
     redis_increments: list[tuple[str, float, int | None]] = field(default_factory=list)
     post_call: list[str] = field(default_factory=list)
     memory: NativeRateLimits = field(default_factory=lambda: NativeRateLimits(None))
+    deferred: list[asyncio.Future[None]] = field(default_factory=list)
 
     def store(self) -> RateLimitStore:
         return RateLimitStore(None, handle=lambda _client, _ttl, _redis_ttl: self)
@@ -108,54 +111,55 @@ class FakeRateLimits:
             raise AssertionError(f"the test gave the limiter no fake for {name}")
         return _RAW.validate_python(await script(keys=list(keys), args=list(args)))
 
+    @property
     def has_redis(self) -> bool:
         return self.connected
 
-    def slot_groups(self, scopes_: Sequence[NativeScope], force: bool) -> list[list[int]]:
-        return self.memory.slot_groups(scopes_, force)
+    def slot_groups(self, scopes: Sequence[NativeScope], force: bool) -> list[list[int]]:
+        return self.memory.slot_groups(scopes, force)
 
-    def local(self, entries: Sequence[NativeEntry]) -> list[LocalValue | None]:
-        return self.memory.local(entries)
+    def get_local(self, entry: NativeEntry) -> LocalValue | None:
+        return self.memory.get_local(entry)
 
     def set_local(self, entry: NativeEntry, value: LocalValue, ttl_seconds: float | None) -> None:
         self.memory.set_local(entry, value, ttl_seconds)
 
     async def get(self, entry: NativeEntry, *, backfill_ttl_seconds: float | None = None) -> LocalValue | None:
-        return self.memory.local((entry,))[0]
+        return self.memory.get_local(entry)
 
     def sliding_window(
-        self, counters_: Sequence[NativeCounter], now: int, window_size: int, *, request: object = None
-    ) -> Resolved:
-        keys: Final = [key for counter in counters_ for key in (window_key(counter), counter_key(counter))]
+        self, counters: Sequence[NativeCounter], now: int, window_size: int, send: object
+    ) -> Resolved[list[tuple[str, int]]]:
+        keys: Final = [key for counter in counters for key in (window_key(counter), counter_key(counter))]
 
-        async def reply() -> object:
+        async def reply() -> list[tuple[str, int]]:
             raw: Final = await self._run(
                 self.batch_rate_limiter_script, "batch_rate_limiter_script", keys, [now, window_size]
             )
-            return [(_text(raw[index]), _int(raw[index + 1])) for index in range(0, len(raw), 2)]
+            return [(_text(raw[index]) or "", _int(raw[index + 1])) for index in range(0, len(raw), 2)]
 
-        return Resolved(reply, request, "sliding_window")
+        return Resolved(reply, send, "sliding_window")
 
-    def read_counters(self, counters_: Sequence[NativeCounter], *, request: object = None) -> Resolved:
-        keys: Final = [key for counter in counters_ for key in (window_key(counter), counter_key(counter))]
+    def read_counters(self, counters: Sequence[NativeCounter], send: object) -> Resolved[list[str | None]]:
+        keys: Final = [key for counter in counters for key in (window_key(counter), counter_key(counter))]
 
-        async def reply() -> object:
+        async def reply() -> list[str | None]:
             raw: Final = await self._run(self.batch_counter_read_script, "batch_counter_read_script", keys, [])
             return [_text(value) for value in raw]
 
-        return Resolved(reply, request, "read_counters")
+        return Resolved(reply, send, "read_counters")
 
-    def check_and_increment(self, counters_: Sequence[NativeAtomicCounter], *, request: object = None) -> Resolved:
-        keys: Final = [key for counter, *_ in counters_ for key in (window_key(counter), counter_key(counter))]
-        args: Final = [arg for _counter, *numbers in counters_ for arg in numbers]
+    def check_and_increment(self, counters: Sequence[NativeAtomicCounter], send: object) -> Resolved[tuple[tuple[int, int, int] | None, list[tuple[int, int]]]]:
+        keys: Final = [key for counter, *_ in counters for key in (window_key(counter), counter_key(counter))]
+        args: Final = [arg for _counter, *numbers in counters for arg in numbers]
 
-        async def reply() -> object:
+        async def reply() -> tuple[tuple[int, int, int] | None, list[tuple[int, int]]]:
             over_limit, rest = _statused(
                 await self._run(self.check_and_increment_by_n_script, "check_and_increment_by_n_script", keys, args)
             )
             return over_limit, [(_int(rest[index]), _int(rest[index + 1])) for index in range(0, len(rest), 2)]
 
-        return Resolved(reply, request, "check_and_increment")
+        return Resolved(reply, send, "check_and_increment")
 
     def guarded_increment(
         self,
@@ -163,10 +167,9 @@ class FakeRateLimits:
         expected_window_start: str,
         amount: float,
         ttl_seconds: int | None,
-        *,
-        request: object = None,
-    ) -> Resolved:
-        async def reply() -> object:
+        send: object,
+    ) -> Resolved[tuple[bool, int]]:
+        async def reply() -> tuple[bool, int]:
             raw: Final = await self._run(
                 self.window_guarded_token_increment_script,
                 "window_guarded_token_increment_script",
@@ -175,74 +178,87 @@ class FakeRateLimits:
             )
             return _int(raw[0]) == 1, _int(raw[1])
 
-        return Resolved(reply, request, "guarded_increment")
+        return Resolved(reply, send, "guarded_increment")
 
     def parallel_acquire(
         self,
         gauges: Sequence[tuple[NativeScope, int]],
         slot_ttl_seconds: int,
         slot_id: str,
-        *,
-        request: object = None,
-    ) -> Resolved:
+        send: object,
+    ) -> Resolved[tuple[tuple[int, int, int] | None, list[int]]]:
         keys: Final = [scope_key(scope, "max_parallel_requests") for scope, _limit in gauges]
         args: Final = [arg for _scope, limit in gauges for arg in (limit, slot_ttl_seconds, slot_id)]
 
-        async def reply() -> object:
+        async def reply() -> tuple[tuple[int, int, int] | None, list[int]]:
             over_limit, rest = _statused(
                 await self._run(self.parallel_acquire_script, "parallel_acquire_script", keys, args)
             )
             return over_limit, [_int(value) for value in rest]
 
-        return Resolved(reply, request, "parallel_acquire")
+        return Resolved(reply, send, "parallel_acquire")
 
-    def parallel_release(self, gauges: Sequence[NativeScope], slot_id: str, *, request: object = None) -> Resolved:
+    def parallel_release(self, gauges: Sequence[NativeScope], slot_id: str, send: object) -> Resolved[list[int]]:
         keys: Final = [scope_key(scope, "max_parallel_requests") for scope in gauges]
 
-        async def reply() -> object:
+        async def reply() -> list[int]:
             raw: Final = await self._run(
                 self.parallel_release_script, "parallel_release_script", keys, [slot_id for _ in gauges]
             )
             return [_int(value) for value in raw]
 
-        return Resolved(reply, request, "parallel_release")
+        return Resolved(reply, send, "parallel_release")
 
     def parallel_count(
-        self, gauges: Sequence[NativeScope], slot_ttl_seconds: int, *, request: object = None
-    ) -> Resolved:
+        self, gauges: Sequence[NativeScope], slot_ttl_seconds: int, send: object
+    ) -> Resolved[list[int]]:
         keys: Final = [scope_key(scope, "max_parallel_requests") for scope in gauges]
 
-        async def reply() -> object:
+        async def reply() -> list[int]:
             raw: Final = await self._run(
                 self.parallel_count_script, "parallel_count_script", keys, [slot_ttl_seconds for _ in gauges]
             )
             return [_int(value) for value in raw]
 
-        return Resolved(reply, request, "parallel_count")
+        return Resolved(reply, send, "parallel_count")
 
-    def token_increment(self, increments_: Sequence[NativeIncrement], *, request: object = None) -> Resolved:
-        keys: Final = [counter_key(counter) for counter, _amount, _ttl in increments_]
-        args: Final = [arg for _counter, amount, ttl in increments_ for arg in (amount, ttl or 0)]
+    def token_increment(self, increments: Sequence[NativeIncrement], send: object) -> Resolved[list[float]]:
+        keys: Final = [counter_key(counter) for counter, _amount, _ttl in increments]
+        args: Final = [arg for _counter, amount, ttl in increments for arg in (amount, ttl or 0)]
 
-        async def reply() -> object:
+        async def reply() -> list[float]:
             raw: Final = await self._run(self.token_increment_script, "token_increment_script", keys, args)
             return [float(_text(value) or 0) for value in raw]
 
-        return Resolved(reply, request, "token_increment")
+        return Resolved(reply, send, "token_increment")
 
-    async def token_increment_post_call(self, request: object, increments_: Sequence[NativeIncrement]) -> None:
+    async def settle(self) -> None:
+        """Runs the post-call writes declared so far, as the request's post-call flush would."""
+        await asyncio.gather(*self.deferred)
+
+    def token_increment_post_call(self, request: object, increments: Sequence[NativeIncrement]) -> bool:
         self.post_call.append("token_increment")
-        try:
-            await self.token_increment(increments_).resolve()
-        except Exception:  # noqa: BLE001  # the store's post-call path falls back exactly like this
-            await self.increment_many(increments_)
 
-    async def parallel_release_post_call(self, request: object, gauges: Sequence[NativeScope], slot_id: str) -> None:
+        async def run() -> None:
+            try:
+                await self.token_increment(increments, None).resolve()
+            except Exception:  # noqa: BLE001  # the store's post-call path falls back exactly like this
+                await self.increment_many(increments)
+
+        self.deferred.append(asyncio.ensure_future(run()))
+        return self.connected
+
+    def parallel_release_post_call(self, request: object, gauges: Sequence[NativeScope], slot_id: str) -> bool:
         self.post_call.append("parallel_release")
-        try:
-            await self.parallel_release(gauges, slot_id).resolve()
-        except Exception:  # noqa: BLE001  # the store's post-call path only logs this
-            return
+
+        async def run() -> None:
+            try:
+                await self.parallel_release(gauges, slot_id, None).resolve()
+            except Exception:  # noqa: BLE001  # the store's post-call path only logs this
+                return
+
+        self.deferred.append(asyncio.ensure_future(run()))
+        return self.connected
 
     async def increment(self, increment: NativeIncrement) -> float:
         total: Final = await self.memory.increment(increment)
@@ -251,11 +267,11 @@ class FakeRateLimits:
             self.redis_increments.append((counter_key(counter), amount, ttl))
         return total
 
-    async def increment_many(self, increments_: Sequence[NativeIncrement]) -> None:
-        await self.memory.increment_many(increments_)
+    async def increment_many(self, increments: Sequence[NativeIncrement]) -> None:
+        await self.memory.increment_many(increments)
         if self.connected:
-            self.redis_increments.extend((counter_key(counter), amount, ttl) for counter, amount, ttl in increments_)
+            self.redis_increments.extend((counter_key(counter), amount, ttl) for counter, amount, ttl in increments)
 
-    async def increment_many_post_call(self, request: object, increments_: Sequence[NativeIncrement]) -> None:
+    def increment_many_post_call(self, request: object, increments: Sequence[NativeIncrement]) -> None:
         self.post_call.append("increment_many")
-        await self.increment_many(increments_)
+        self.deferred.append(asyncio.ensure_future(self.increment_many(increments)))

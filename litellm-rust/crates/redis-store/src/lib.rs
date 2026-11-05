@@ -1,16 +1,22 @@
 pub mod auth_cache;
 mod codec;
 mod error;
+mod memory;
 mod number;
 pub mod rate_limits;
+mod remote;
 mod request;
 pub mod router_cooldowns;
 pub mod router_usage;
 pub mod spend_counters;
 mod tier;
+mod value;
 
 pub use codec::DecodeError;
-pub use error::ErrorKind;
+pub use error::{Error, ErrorKind};
+pub use memory::{Clock, system_clock};
 pub use number::Number;
-pub use request::RequestRedis;
-pub use tier::{Clock, TierPolicy};
+pub use remote::Remote;
+pub use request::{Pending, RequestRedis, Send};
+pub use tier::TierPolicy;
+pub use value::{FromValue, IntoValue};

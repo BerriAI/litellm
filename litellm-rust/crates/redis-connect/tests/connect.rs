@@ -1,3 +1,4 @@
+use litellm_redis_client::commands;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use litellm_redis_connect::{
@@ -122,14 +123,14 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
     });
     let client = connect(resolved(kwargs), services(), None).unwrap();
     client
-        .set("before", "1", Duration::from_secs(600))
+        .send(commands::set("before", "1", Duration::from_secs(600)))
         .await
         .unwrap();
 
     let promoted = sentinel.failover().await.unwrap();
     eventually(async || {
         client
-            .set("after", "2", Duration::from_secs(600))
+            .send(commands::set("after", "2", Duration::from_secs(600)))
             .await
             .ok()
     })
@@ -138,7 +139,7 @@ async fn python_sentinel_kwargs_follow_the_master_through_a_failover() {
     assert_eq!(promoted, sentinel.replica_port());
     assert_eq!(sentinel.master_port().await.unwrap(), promoted);
     assert_eq!(
-        client.get::<String>("after").await.unwrap().as_deref(),
+        client.send(commands::get::<String>("after")).await.unwrap().as_deref(),
         Some("2")
     );
 }

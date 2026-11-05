@@ -34,6 +34,7 @@ from typing_extensions import NotRequired, ReadOnly
 from litellm import DualCache
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import Batch
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
@@ -1210,7 +1211,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def _read_counter_values_from_redis(self, counters: Sequence[RateLimitCounter]) -> list[CounterState]:
         groups: Final = self._slot_groups(counters)
         group_values: Final = [
-            await self.rate_limits.read_counters(tuple(counters[index] for index in group)) for group in groups
+            await self.rate_limits.read_counters(tuple(counters[index] for index in group), batch=Batch.NONE)
+            for group in groups
         ]
         by_index: Final = {
             index: (values[offset * 2], values[offset * 2 + 1])
@@ -1256,14 +1258,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         slot_groups: Final = self._slot_groups(counters)
         groups: Final = tuple(tuple(counters[index] for index in group) for group in slot_groups)
         states_by_group: Final[list[Sequence[CounterState]]] = []  # mutable-ok: one entry appended per group
+        batched: Final = self.rate_limits.has_pre_call_batch
         pipelined: Final = tuple(
-            self.rate_limits.declare_sliding_window(group, now_int, self.window_size) for group in groups
+            self.rate_limits.sliding_window(group, now_int, self.window_size, batch=Batch.PRE_CALL) if batched else None
+            for group in groups
         )
 
         for index, (group, group_result) in enumerate(zip(groups, pipelined)):
             try:
                 counts = (
-                    await self.rate_limits.sliding_window(group, now_int, self.window_size)
+                    await self.rate_limits.sliding_window(group, now_int, self.window_size, batch=Batch.NONE)
                     if group_result is None
                     else await group_result
                 )
@@ -1505,7 +1509,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     counts = [
                         max(0, value)
                         for value in await self.rate_limits.parallel_count(
-                            gauge_scopes, PARALLEL_REQUEST_SLOT_TTL_SECONDS
+                            gauge_scopes, PARALLEL_REQUEST_SLOT_TTL_SECONDS, batch=Batch.NONE
                         )
                     ]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
@@ -1539,6 +1543,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     tuple((gauge["scope"], gauge["limit"]) for gauge in gauges),
                     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
                     slot_id,
+                    batch=Batch.NONE,
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
                 self._reject_if_rate_limit_unverifiable("parallel_acquire_script", e)
@@ -1652,7 +1657,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         if self.rate_limits.has_redis:
             try:
-                remaining: Final = await self.rate_limits.parallel_release(gauges, slot_id)
+                remaining: Final = await self.rate_limits.parallel_release(gauges, slot_id, batch=Batch.NONE)
                 self._mirror_released_parallel_slots(gauges, remaining)
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
@@ -1678,7 +1683,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not self.rate_limits.has_post_call_batch or not gauges or not slot_id:
             return False
         await self._release_parallel_request_slots_in_memory(gauges, slot_id)
-        return await self.rate_limits.parallel_release_post_call(gauges, slot_id)
+        return self.rate_limits.parallel_release_post_call(gauges, slot_id)
 
     def _mirror_released_parallel_slots(
         self, gauges: Sequence[RateLimitScope], remaining_by_gauge: Sequence[int]
@@ -1849,16 +1854,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         reply: AtomicReply
 
-        pipelined: Final = tuple(
-            self.rate_limits.declare_check_and_increment(counters) for counters, _meta in descriptor_groups
-        )
-        batched: Final = tuple(result for result in pipelined if result is not None)
-        if len(batched) == len(descriptor_groups):
+        if self.rate_limits.has_pre_call_batch:
+            batched: Final = tuple(
+                self.rate_limits.check_and_increment(counters, batch=Batch.PRE_CALL)
+                for counters, _meta in descriptor_groups
+            )
             return await self._settle_pipelined_descriptor_groups(descriptor_groups, batched, parent_otel_span)
 
         for counters, meta in descriptor_groups:
             try:
-                reply = await self.rate_limits.check_and_increment(counters)
+                reply = await self.rate_limits.check_and_increment(counters, batch=Batch.NONE)
             except Exception as e:
                 # Lua failure (timeout, OOM, network partition) leaves Redis
                 # state ambiguous. Refund any prior groups so Redis returns
@@ -2002,7 +2007,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         for refund in refunds:
             try:
-                await self.rate_limits.guarded_increment(refund.counter, refund.window_start, -refund.increment, 0)
+                await self.rate_limits.guarded_increment(
+                    refund.counter, refund.window_start, -refund.increment, 0, batch=Batch.NONE
+                )
             except Exception as e:  # noqa: BLE001  # best-effort rollback, the rejection already decided the request
                 log_redis_failure(
                     verbose_proxy_logger,
@@ -4094,9 +4101,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     operation.amount,
                     operation.ttl or 0,
                 )
-            if await self.rate_limits.token_increment_post_call(group_operations):
+            if self.rate_limits.token_increment_post_call(group_operations):
                 continue
-            await self.rate_limits.token_increment(group_operations)
+            await self.rate_limits.token_increment(group_operations, batch=Batch.NONE)
 
     @with_service_target("rate_limits")
     async def async_increment_tokens_with_ttl_preservation(
@@ -4151,7 +4158,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if self.rate_limits.has_redis:
                 try:
                     await self.rate_limits.guarded_increment(
-                        increment.counter, operation.expected_window_start, increment.amount, increment.ttl
+                        increment.counter,
+                        operation.expected_window_start,
+                        increment.amount,
+                        increment.ttl,
+                        batch=Batch.NONE,
                     )
                     continue
                 except Exception as e:  # noqa: BLE001  # Redis failures use the plain increment fallback

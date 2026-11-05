@@ -17,7 +17,7 @@ import litellm.caching.dual_cache as dual_cache_module
 from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
+from litellm.caching.redis_batch import Batch, active_request_redis_batches, request_redis_batch_scope
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
@@ -27,6 +27,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitUnverifiableError,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores._route import route
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.redis.stores.router_cooldowns import ActiveCooldowns, RouterCooldownStore
 from litellm.router_api import RoutingContext
@@ -44,6 +45,7 @@ from .test_redis_batch import (
     FakeNativeRequest,
     FakeNatives,
     FakeRedisCache,
+    fake_send,
 )
 
 
@@ -123,7 +125,7 @@ async def test_descriptor_lua_calls_share_one_native_pipeline_and_each_keeps_its
         _descriptor("team", "t1", 20),
     ]
 
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         response = await limiter.atomic_check_and_increment_by_n(
             descriptors=descriptors,
             increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
@@ -276,13 +278,11 @@ async def test_without_a_request_scope_descriptor_groups_run_one_at_a_time_and_s
 
 @dataclass
 class _FakeCooldownsHandle:
-    """A connected cooldown store whose ``declare_active`` lands on the request's fake native batch."""
+    """A connected cooldown store whose ``active`` lands on the request's fake native batch."""
 
-    def declare_active(
-        self, request: FakeNativeRequest, model_ids: Sequence[str]
-    ) -> FakeNativePending[ActiveCooldowns]:
-        request.events.append("declare cooldowns")
-        return FakeNativePending(request, lambda: ())
+    def active(self, model_ids: Sequence[str], send: FakeNativeRequest) -> FakeNativePending[ActiveCooldowns]:
+        send.events.append("declare cooldowns")
+        return FakeNativePending(send, lambda: ())
 
 
 @pytest.mark.asyncio
@@ -299,7 +299,7 @@ async def test_the_admission_script_and_the_armed_cooldown_read_go_out_in_one_na
     )  # pyright: ignore[reportArgumentType]  # test double
     natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         arm_cooldowns(cooldowns, ["dep-a"])
         response = await limiter.should_rate_limit([_descriptor("api_key", "k1", 10)])
         active = await read_cooldowns(cooldowns, ["dep-a"], None)
@@ -755,7 +755,7 @@ def _user_entry() -> tuple[_CacheEntry, LiteLLM_UserTable]:
 async def test_auth_write_back_rides_the_native_pre_call_batch_and_the_scope_drains_what_nobody_awaited():
     cache, fake = shared_cache()
     natives: Final = FakeNatives()
-    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await _write_back([_user_entry()], cache)
         assert cache.get_local("user-1")["user_id"] == "user-1"
         assert natives.built[0].events == ["declare write_back (('user-1', 42),)"]
@@ -774,7 +774,7 @@ async def test_auth_write_back_outside_a_scope_writes_through_as_before():
 @pytest.mark.asyncio
 async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_get():
     cache, fake = shared_cache()
-    with request_redis_batch_scope(native_factory=FakeNatives()) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["absent-key"], cache)
         assert await cache.async_get_cache("absent-key") is None
         await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
@@ -787,7 +787,7 @@ async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_g
 async def test_management_object_writes_inside_a_request_ride_its_pipeline_and_write_through_outside():
     cache, fake = shared_cache()
     natives: Final = FakeNatives()
-    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache.async_set_cache("team_id:t1", {"team_id": "t1"}, ttl=60)
         await cache.async_set_cache("hashed-key-object", {"token": "hashed-key-object"}, ttl=60)
         assert cache.get_local("team_id:t1") == {"team_id": "t1"}
@@ -814,7 +814,7 @@ async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_on
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
     team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
     natives: Final = FakeNatives()
-    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache_team_object("t1", team, cache, proxy_logging_obj)
         assert natives.built[0].events == [
             "declare set team_id:t1 ttl=60.0",
@@ -840,7 +840,7 @@ async def test_a_changed_default_in_memory_ttl_reaches_the_native_store():
 async def test_identity_prefetch_is_one_read_after_which_hits_and_misses_alike_cost_no_read():
     cache, fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
     natives: Final = FakeNatives()
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
         assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
         assert await cache.async_get_cache("end_user_id:eu-miss") is None
@@ -857,7 +857,7 @@ async def test_the_auth_prefetch_and_the_armed_cooldown_read_go_out_in_one_nativ
     )  # pyright: ignore[reportArgumentType]  # test double
     natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: arm_cooldowns(cooldowns, ["dep-a"]))
         arm_cooldowns(cooldowns, ["dep-a"])
         active = await read_cooldowns(cooldowns, ["dep-a"], None)
@@ -875,7 +875,7 @@ async def test_a_prefetch_served_from_memory_arms_no_early_cooldown_read():
     cache.set_local("key-hit", {"k": "key-hit"}, None)
     armed: Final[list[str]] = []  # mutable-ok: records the arming callback
 
-    with request_redis_batch_scope(native_factory=FakeNatives()):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: armed.append("armed"))
 
     assert armed == []
@@ -885,9 +885,9 @@ async def test_a_prefetch_served_from_memory_arms_no_early_cooldown_read():
 async def test_awaiting_a_native_read_runs_the_native_hooks_then_flushes_the_native_pre_batch_once_per_request():
     natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=7, native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(post_call_deadline=7, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         native: Final = request.native()
-        request.add_native_flush_hook(lambda: native.events.append("hook"))
+        request.add_pre_call_flush_hook(lambda: native.events.append("hook"))
         result: Final = request.native_result(FakeNativePending(native, lambda: "answer"))
         declared_only: Final = list(native.events)
         answer: Final = await result
@@ -901,10 +901,26 @@ async def test_awaiting_a_native_read_runs_the_native_hooks_then_flushes_the_nat
 
 
 @pytest.mark.asyncio
+async def test_a_pre_call_flush_hook_declares_on_its_own_request_whichever_request_awaits_the_flush():
+    natives: Final = FakeNatives()
+    declared_on: Final[list[object]] = []
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as owner:  # pyright: ignore[reportArgumentType]  # test double
+        owner.add_pre_call_flush_hook(lambda: declared_on.append(route(Batch.PRE_CALL).send))
+        result: Final = owner.native_result(FakeNativePending(owner.native(), lambda: "answer"))
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as other:  # pyright: ignore[reportArgumentType]  # test double
+        other.native()
+        answer: Final = await result
+
+    assert answer == "answer"
+    assert declared_on == [natives.built[0]]
+
+
+@pytest.mark.asyncio
 async def test_a_request_that_no_native_store_asks_for_builds_no_native_batches():
     natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await request.flush_all()
         await request.flush_post_call()
 

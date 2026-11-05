@@ -19,8 +19,9 @@ from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
+from enum import Enum, auto
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Final, Generic, Protocol, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 
 from litellm._internal_context import (
     REDIS_FAMILIES_METADATA_KEY,
@@ -39,7 +40,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import NativeRequestRedis
+    from litellm.rust_bridge._native import NativeRequestRedis, NativeSend
 
 _T = TypeVar("_T")
 _T_co: Final = TypeVar("_T_co", covariant=True)
@@ -478,6 +479,30 @@ def _native_request(post_call_deadline: float) -> NativeRequestRedis:
     return NativeRequestRedis(post_call_deadline)
 
 
+class Batch(Enum):
+    """Which of the request's batches a store op rides: none, so it goes out on its own when awaited, the pre-call
+    batch of reads the request needs before answering, or the post-call batch of writes nobody waits on. Outside a
+    request every op goes out on its own."""
+
+    NONE = auto()
+    PRE_CALL = auto()
+    POST_CALL = auto()
+
+
+RequestPhase: TypeAlias = Literal[Batch.PRE_CALL, Batch.POST_CALL]
+NativeSendFactory: TypeAlias = Callable[[RequestPhase, "NativeRequestRedis"], "NativeSend"]
+
+
+def _native_send(phase: RequestPhase, request: NativeRequestRedis) -> NativeSend:
+    from litellm.rust_bridge._native import NativeSend
+
+    match phase:
+        case Batch.PRE_CALL:
+            return NativeSend.PreCall(request)
+        case Batch.POST_CALL:
+            return NativeSend.PostCall(request)
+
+
 _open_post_call: Final[weakref.WeakSet[RequestRedisBatches]] = weakref.WeakSet()
 """Requests whose post-call batch still holds declared ops, so a shutdown can send them before Redis goes away."""
 
@@ -498,6 +523,7 @@ class RequestRedisBatches:
         "_native",
         "_native_factory",
         "_native_flush_hooks",
+        "_native_send_factory",
         "_native_misses",
         "_post_call",
         "post_call_deadline",
@@ -508,11 +534,13 @@ class RequestRedisBatches:
         self,
         post_call_deadline: float = POST_CALL_FLUSH_DEADLINE_SECONDS,
         native_factory: NativeRequestFactory = _native_request,
+        native_send_factory: NativeSendFactory = _native_send,
     ) -> None:
         self._batches: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
         self._post_call: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
         self.post_call_deadline: Final = post_call_deadline
         self._native_factory: Final = native_factory
+        self._native_send_factory: Final = native_send_factory
         self._native: NativeRequestRedis | None = None
         self._native_flush_hooks: Final[list[Callable[[], None]]] = []  # mutable-ok: append-only registry
         self._native_misses: frozenset[str] = frozenset()
@@ -553,11 +581,20 @@ class RequestRedisBatches:
         _open_post_call.add(self)
         return self.native()
 
+    def native_send(self, phase: RequestPhase) -> NativeSend:
+        """The ``NativeSend`` for ``phase``; a post-call one registers the request with the shutdown drain."""
+        match phase:
+            case Batch.PRE_CALL:
+                return self._native_send_factory(phase, self.native())
+            case Batch.POST_CALL:
+                return self._native_send_factory(phase, self.native_post_call())
+
     def native_result(self, pending: NativePending[_T]) -> NativeBatchResult[_T]:
         return NativeBatchResult(self, pending)
 
-    def add_native_flush_hook(self, hook: Callable[[], None]) -> None:
-        """Called before every native pre-call flush so late readers can declare into the same trip."""
+    def add_pre_call_flush_hook(self, hook: Callable[[], None]) -> None:
+        """Called before every pre-call flush so late readers can declare into the same trip. The hook runs with this
+        request active, so a ``Batch.PRE_CALL`` op it declares rides this request whoever triggered the flush."""
         self._native_flush_hooks.append(hook)
 
     def note_native_misses(self, keys: Sequence[str]) -> None:
@@ -571,8 +608,12 @@ class RequestRedisBatches:
         return key in self._native_misses
 
     async def flush_native_pre(self) -> None:
-        for hook in self._native_flush_hooks:
-            hook()
+        token: Final = _active_request_batches.set(self)
+        try:
+            for hook in self._native_flush_hooks:
+                hook()
+        finally:
+            _active_request_batches.reset(token)
         if self._native is not None:
             await self._native.flush_pre()
 
@@ -581,7 +622,7 @@ class RequestRedisBatches:
         self._deadline_flush = asyncio.ensure_future(self.flush_post_call())
 
     async def flush_all(self) -> None:
-        """Send whatever is still declared (write-backs nobody awaits) before the request scope closes."""
+        """Batch whatever is still declared (write-backs nobody awaits) before the request scope closes."""
         await asyncio.gather(
             *(batch.flush() for batch in self._batches.values() if batch.pending), self.flush_native_pre()
         )
@@ -643,23 +684,27 @@ async def drain_post_call_redis_batches() -> None:
 class request_redis_batch_scope:
     """Redis reads declared inside share one pipeline per backend; nested scopes join the outer one."""
 
-    __slots__ = ("_native_factory", "_post_call_deadline", "_token")
+    __slots__ = ("_native_factory", "_native_send_factory", "_post_call_deadline", "_token")
 
     def __init__(
         self,
         post_call_deadline: float = POST_CALL_FLUSH_DEADLINE_SECONDS,
         native_factory: NativeRequestFactory = _native_request,
+        native_send_factory: NativeSendFactory = _native_send,
     ) -> None:
         self._token: Token[RequestRedisBatches | None] | None = None
         self._post_call_deadline: Final = post_call_deadline
         self._native_factory: Final = native_factory
+        self._native_send_factory: Final = native_send_factory
 
     def __enter__(self) -> RequestRedisBatches:
         outer: Final = _active_request_batches.get()
         if outer is not None:
             return outer
         batches: Final = RequestRedisBatches(
-            post_call_deadline=self._post_call_deadline, native_factory=self._native_factory
+            post_call_deadline=self._post_call_deadline,
+            native_factory=self._native_factory,
+            native_send_factory=self._native_send_factory,
         )
         self._token = _active_request_batches.set(batches)
         return batches

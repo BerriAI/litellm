@@ -1,12 +1,14 @@
 use std::{
     future::Future,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use futures_util::future::join_all;
-use litellm_redis_client::{RedisBatch, RedisClient};
+use futures_util::future::{BoxFuture, join_all};
+use litellm_redis_client::{Declared, RedisBatch, RedisClient};
 use tokio::{runtime::Handle, sync::oneshot, task::JoinHandle};
+
+use crate::memory::lock;
 
 /// One request's Redis batches: a pre-call batch for the reads it needs before answering and a
 /// post-call batch for the writes nobody waits on, one of each per Redis client. The host that owns
@@ -56,7 +58,7 @@ impl RequestRedis {
     /// Runs work that follows this request's post-call batch, such as mirroring settled totals
     /// into memory, on the request's runtime, from any thread. `flush_post` waits for it, so the
     /// shutdown drain does not drop a fallback write still in flight.
-    pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+    pub fn spawn(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
         let follow_up = self.0.runtime.spawn(task);
         lock(&self.0.follow_ups).push(follow_up);
     }
@@ -116,6 +118,37 @@ impl RequestRedis {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+/// Which batch an op rides, picked by the caller because only it knows when it needs the answer.
+/// The store owns its client, so it calls `batch`, the one place a request and a client meet.
+#[derive(Clone, Copy)]
+pub enum Send<'a> {
+    /// On its own, sent at the first `resolve`.
+    Now,
+    /// The request's pre-call batch, sent at the first `resolve` or `flush_pre`.
+    PreCall(&'a RequestRedis),
+    /// The request's post-call batch, sent at `flush_post` or the post-call deadline.
+    PostCall(&'a RequestRedis),
+}
+
+impl Send<'_> {
+    pub fn batch(&self, client: &RedisClient) -> RedisBatch {
+        match self {
+            Self::Now => RedisBatch::alone(client.clone()),
+            Self::PreCall(request) => request.pre(client),
+            Self::PostCall(request) => request.post(client),
+        }
+    }
+}
+
+/// A store op declared on the batch its `Send` picked: building it sends nothing, and awaiting it
+/// flushes that batch if nobody has yet.
+pub type Pending<T> = BoxFuture<'static, Result<T, crate::Error>>;
+
+pub(crate) fn pending<T: std::marker::Send + 'static>(declared: Declared<T>) -> Pending<T> {
+    Box::pin(async move { Ok(declared.resolve().await?) })
+}
+
+/// An op answered without Redis, from memory.
+pub(crate) fn ready<T: std::marker::Send + 'static>(value: T) -> Pending<T> {
+    Box::pin(std::future::ready(Ok(value)))
 }

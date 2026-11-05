@@ -261,7 +261,7 @@ mod tests {
     use std::{collections::HashMap, time::Duration};
 
     use litellm_config::Config;
-    use litellm_redis_client::{Standalone, StaticAuth};
+    use litellm_redis_client::{Standalone, StaticAuth, commands};
     use litellm_redis_testing::RedisServer;
     use litellm_redis_types::{Auth, HealthCheck, Passthrough};
     use rstest::rstest;
@@ -400,16 +400,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            cache.get::<String>("rate-limit").await.unwrap().as_deref(),
+            cache.send(commands::get::<String>("rate-limit")).await.unwrap().as_deref(),
             Some("1")
         );
         assert_eq!(
-            cache.get::<String>("spend").await.unwrap().as_deref(),
+            cache.send(commands::get::<String>("spend")).await.unwrap().as_deref(),
             Some("2")
         );
         assert_eq!(
             unnamespaced
-                .get::<String>("responses:rate-limit")
+                .send(commands::get::<String>("responses:rate-limit"))
                 .await
                 .unwrap()
                 .as_deref(),
@@ -417,7 +417,7 @@ mod tests {
         );
         assert_eq!(
             unnamespaced
-                .get::<String>("responses:spend")
+                .send(commands::get::<String>("responses:spend"))
                 .await
                 .unwrap()
                 .as_deref(),
@@ -425,12 +425,12 @@ mod tests {
         );
         assert!(
             unnamespaced
-                .get::<String>("rate-limit")
+                .send(commands::get::<String>("rate-limit"))
                 .await
                 .unwrap()
                 .is_none()
         );
-        assert!(unnamespaced.get::<String>("spend").await.unwrap().is_none());
+        assert!(unnamespaced.send(commands::get::<String>("spend")).await.unwrap().is_none());
     }
 
     #[rstest]

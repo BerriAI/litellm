@@ -23,21 +23,23 @@
 - The rule never changes, because Python and Rust pods share keys in the same Redis
 
 ## Commands
-- One typed method per command, built with `redis::cmd`. Empty batches (MGET, DEL) return without a round trip, since Redis rejects an empty MGET
+- A command is a value, one constructor in `commands.rs` returning `Command<T>`: its alone and pipelined forms and its reply decode. `RedisClient::send`, `Pipeline::add` and `RedisBatch::add` are the only entry points, and each applies its namespace to the keys once. A new command is one constructor, never a method on an executor. `ping` and `subscribe` stay methods. Empty batches (MGET, DEL) return without a round trip, since Redis rejects an empty MGET
+- A store attaches its value codec with `Command::map`, never a keyspace codec inside this crate
 - On cluster, redis-rs splits MGET and DEL by slot and returns MGET values in input order. Other multi-key commands are not split, so a new one needs a cross-slot test
 - Every command is the one `RedisCache` sends, argument for argument, so `MONITOR` on a mixed fleet shows one shape. A difference from main's Python is a defect even when the result is the same
 - TTLs are `Duration` and are sent in whole seconds (`SET ... EX`, `EXPIRE`, `TTL`), like redis-py's `int(ttl)`. `set_nx` sends `EX` before `NX`, the order redis-py builds
 - Numbers go out as `Amount`, written the way redis-py encodes them: an `int` with `str()` and a `float` with `repr()` from `python-compat`
-- Increments are plain commands, never a script. `incr_by` is `increment_cache`: `INCRBY`, `TTL`, then `EXPIRE` only on a key with no TTL, each its own round trip. `incr_by_float` is `async_increment`: `INCRBYFLOAT` with `EXPIRE` (`Expiry::Refresh`) or `TTL` (`Expiry::KeepExisting`) in one round trip, and for `KeepExisting` a third, `EXPIRE`, only on a key with no TTL. In a pipeline `incr_by_float` is `RedisBatch`'s `_Increment`, `INCRBYFLOAT` then `EXPIRE` when a TTL is given
+- Increments are plain commands, never a script. `incr_by` is `increment_cache`: `INCRBY`, `TTL`, then `EXPIRE` only on a key with no TTL, each its own round trip. `incr_by_float` alone is `async_increment`: `INCRBYFLOAT` with `EXPIRE` (`Expiry::Refresh`) or `TTL` (`Expiry::KeepExisting`) in one round trip, and for `KeepExisting` a third, `EXPIRE`, only on a key with no TTL. Pipelined it is `RedisBatch`'s `_Increment`, `INCRBYFLOAT` then `EXPIRE` when an expiry is given, `KeepExisting` lowered to `Refresh`. `Plan` keeps only the cases whose alone and pipelined forms differ
 
 ## Scripts and pipelines
 - A `Script` declares every key it touches in KEYS. On cluster an undeclared key works or fails depending on which node owns its slot, so it can pass tests and break in production
 - `eval` goes through redis-rs `invoke_async`, which loads the script on NOSCRIPT. Inside a pipeline a script is sent as `EVALSHA`, like `RedisBatch`. A `NOSCRIPT` reply means that op ran nothing, so it alone runs again after the pipeline through `invoke_async` (`EVALSHA`, `SCRIPT LOAD`, `EVALSHA`), like `RedisBatch`'s `_settle_alone`. It then lands after the ops around it, as it does in Python
-- `Entry` keeps a script call apart from plain commands, and the one resend takes only a `ScriptCall` whose reply was `NOSCRIPT`. Nothing can resend a pipeline or a command that already ran, so a retry can never apply an increment twice
+- `Plan::Script` keeps a script call apart from plain commands, and the one resend takes only a `ScriptCall` whose reply was `NOSCRIPT`. Nothing can resend a pipeline or a command that already ran, so a retry can never apply an increment twice
+- `RedisBatch::pipelined` is one `Pipeline` whose ops answer as typed `Declared<T>`s. A store that sends its own pipeline uses it rather than decoding `run`'s raw `Value`s
 - A pipeline is never atomic. Every op gets its own `Result`, from `.ignore_errors()`, so one rejected op leaves the others alone. A transport failure fails every op of that round trip
 - redis-rs rejects an async cluster pipeline whose ops span slots. `Pipeline` groups ops by the slot of their first key and runs the slots concurrently, returning results in input order. Within a slot, runs of idempotent ops (GET, SET, DEL, EXPIRE) share a request and every script op gets its own, sent in order. redis-rs retries a cluster request whole, so a script op batched with others would be applied twice when only a neighbour failed
 - Pipeline ops take one key each. A multi-key op would span slots inside one group. An op can send more than one command for that key (`INCRBYFLOAT` then `EXPIRE`), and settles from the first reply, failing if any of its replies failed
-- Command builders live in `commands.rs` and are shared by `RedisClient` and `Pipeline`, so a command is written once
+- Command constructors live in `commands.rs` and every executor sends them, so a command is written once
 
 ## Pub/sub
 - Classic `PUBLISH` / `SUBSCRIBE`, never sharded, since redis-py publishes and subscribes through one plain client and cluster broadcasts classic messages to every node. Payloads are raw bytes, and the codec belongs to the store that owns the channel
@@ -50,6 +52,7 @@
 ## Batches
 - `RedisBatch` is litellm's `RedisBatch` (`litellm/caching/redis_batch.py`). It keeps each declared op as data and, on a standalone or Sentinel Redis, sends them later as one `Pipeline`, so it inherits every pipeline rule above. On a cluster it never pipelines and runs each op on its own, concurrently, the way `_settle_alone` calls the `RedisCache` method behind it. An increment there keeps a TTL the key already has, as `async_increment` does, where the pipelined one refreshes it like `_Increment`
 - `mget` is one `MGET` of the keys in order with repeats read once, like `_MGet`. Use it instead of one `get` per key whenever Python reads several keys in one call It knows nothing about requests. The host that owns a request (Axum handler, pyo3 adapter) builds one and passes it down as a value, never through a task-local
+- `RedisBatch::alone` runs every op on its own like the cluster path, so a fresh alone batch is "send it now" and `Declared<T>` is the one reply handle on every route
 - Each op returns a `Declared<T>` backed by a oneshot. `flush` sends everything declared so far, one flush at a time, and an empty flush makes no round trip. `resolve` flushes only when its op has not gone out yet, so an op declared after another caller resolved costs a second round trip. Stages that know their reads up front declare all of them and call `flush` once
 - An op whose flush was cancelled resolves as `Transport`, because it may already have reached Redis
 - `settled` waits for whichever flush carries the op and never sends one itself, for follow-ups that must not force a flush. `RedisClient::same_client` tells clones of one client apart from a second connection, so a host can keep one batch per client

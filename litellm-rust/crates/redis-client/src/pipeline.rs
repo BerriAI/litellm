@@ -1,41 +1,18 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use futures_util::future::join_all;
-use redis::{
-    Cmd, ErrorKind, RedisError, RedisResult, ServerErrorKind, ToRedisArgs, ToSingleRedisArg, Value,
-    cluster_routing::Slot,
-};
+use redis::{ErrorKind, RedisError, RedisResult, ServerErrorKind, Value, cluster_routing::Slot};
 
 use crate::{
-    Amount, Error, Namespace, Script, commands, connection::Connection, script::ScriptCall,
+    Command, Error, Namespace,
+    commands::{Op, Plan},
+    connection::Connection,
+    script::ScriptCall,
 };
 
 pub struct Pipeline {
     namespace: Namespace,
     ops: Vec<Op>,
-}
-
-struct Op {
-    entry: Entry,
-    key: String,
-    idempotent: bool,
-}
-
-/// What a pipeline sends for one op. Only a [`ScriptCall`] can be sent again, so a retry can never
-/// repeat a command that already ran.
-enum Entry {
-    /// The op's reply is the first command's, like `RedisBatch`'s `INCRBYFLOAT` plus `EXPIRE`.
-    Commands(Vec<Cmd>),
-    Script(ScriptCall),
-}
-
-impl Entry {
-    fn commands(&self) -> Vec<Cmd> {
-        match self {
-            Self::Commands(commands) => commands.clone(),
-            Self::Script(call) => vec![call.script.evalsha(&call.keys, &call.args)],
-        }
-    }
 }
 
 type Settled = (usize, Result<Value, Error>);
@@ -48,67 +25,14 @@ impl Pipeline {
         }
     }
 
-    pub fn get(self, key: &str) -> Self {
-        let key = self.namespace.apply(key);
-        self.commands(vec![commands::get(key.clone())], key, true)
+    pub(crate) fn of(namespace: Namespace, ops: Vec<Op>) -> Self {
+        Self { namespace, ops }
     }
 
-    /// One `MGET`, so every key must share a hash slot on a cluster. Only `RedisBatch` sends it,
-    /// and a batch never pipelines on a cluster.
-    pub(crate) fn mget(self, keys: &[&str]) -> Self {
-        let keys: Vec<String> = keys.iter().map(|key| self.namespace.apply(key)).collect();
-        let key = keys.first().cloned().unwrap_or_default();
-        self.commands(vec![commands::mget(keys)], key, true)
-    }
-
-    pub fn set(self, key: &str, value: impl ToSingleRedisArg, ttl: Duration) -> Self {
-        let key = self.namespace.apply(key);
-        self.commands(vec![commands::set(key.clone(), value, ttl)], key, true)
-    }
-
-    pub fn del(self, key: &str) -> Self {
-        let key = self.namespace.apply(key);
-        self.commands(vec![commands::del(vec![key.clone()])], key, true)
-    }
-
-    pub fn expire(self, key: &str, ttl: Duration) -> Self {
-        let key = self.namespace.apply(key);
-        self.commands(vec![commands::expire(key.clone(), ttl)], key, true)
-    }
-
-    /// `INCRBYFLOAT`, then `EXPIRE` when a TTL is given, like `RedisBatch` and
-    /// `async_increment_pipeline` send it.
-    pub fn incr_by_float(self, key: &str, amount: Amount, ttl: Option<Duration>) -> Self {
-        let key = self.namespace.apply(key);
-        let increment = commands::incr_by_float(key.clone(), amount);
-        let commands = match ttl {
-            Some(ttl) => vec![increment, commands::expire(key.clone(), ttl)],
-            None => vec![increment],
-        };
-        self.commands(commands, key, false)
-    }
-
-    pub fn eval(self, script: &Script, keys: &[&str], args: impl ToRedisArgs) -> Self {
-        let keys: Vec<String> = keys.iter().map(|key| self.namespace.apply(key)).collect();
-        let key = keys.first().cloned().unwrap_or_default();
-        let call = ScriptCall {
-            script: script.clone(),
-            keys,
-            args: args.to_redis_args(),
-        };
-        self.push(Entry::Script(call), key, false)
-    }
-
-    fn commands(self, commands: Vec<Cmd>, key: String, idempotent: bool) -> Self {
-        self.push(Entry::Commands(commands), key, idempotent)
-    }
-
-    fn push(mut self, entry: Entry, key: String, idempotent: bool) -> Self {
-        self.ops.push(Op {
-            entry,
-            key,
-            idempotent,
-        });
+    /// Appends one command in its pipelined form; `RedisClient::run` answers it in order, undecoded.
+    pub fn add<T>(mut self, command: Command<T>) -> Self {
+        let (op, _) = command.prepare(&self.namespace);
+        self.ops.push(op);
         self
     }
 
@@ -175,8 +99,8 @@ impl Pipeline {
         index: usize,
         reply: RedisResult<Value>,
     ) -> (usize, RedisResult<Value>) {
-        match (&self.ops[index].entry, reply) {
-            (Entry::Script(call), Err(error)) if is_missing_script(&error) => {
+        match (&self.ops[index].plan, reply) {
+            (Plan::Script(call), Err(error)) if is_missing_script(&error) => {
                 (index, rerun_missing_script(connection, call).await)
             }
             (_, reply) => (index, reply),
@@ -190,7 +114,7 @@ impl Pipeline {
         let widths: Vec<usize> = indices
             .iter()
             .map(|&index| {
-                let commands = self.ops[index].entry.commands();
+                let commands = self.ops[index].plan.pipelined();
                 let width = commands.len();
                 for command in commands {
                     pipeline.add_command(command);
@@ -198,8 +122,10 @@ impl Pipeline {
                 width
             })
             .collect();
-        let replies: RedisResult<Vec<RedisResult<Value>>> =
-            pipeline.query_async(&mut connection).await;
+        let replies: RedisResult<Vec<RedisResult<Value>>> = match pipeline.is_empty() {
+            true => Ok(Vec::new()),
+            false => pipeline.query_async(&mut connection).await,
+        };
         let replies = match replies {
             Ok(replies) => replies,
             Err(error) => {
@@ -213,7 +139,10 @@ impl Pipeline {
         let per_op: Vec<(usize, RedisResult<Value>)> = indices
             .iter()
             .zip(widths)
-            .map(|(&index, width)| (index, first_reply(replies.by_ref().take(width))))
+            .map(|(&index, width)| match &self.ops[index].plan {
+                Plan::Reply(value) => (index, Ok(value.clone())),
+                _ => (index, first_reply(replies.by_ref().take(width))),
+            })
             .collect();
         join_all(
             per_op

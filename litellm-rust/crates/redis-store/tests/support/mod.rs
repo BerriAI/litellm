@@ -11,7 +11,7 @@ use litellm_redis_client::{
     RedisEvents, RedisUrl, Target, Timeouts,
 };
 use litellm_redis_store::{
-    Number,
+    Number, Remote,
     router_cooldowns::Cooldown,
     router_usage::{Counter, Kind},
 };
@@ -19,6 +19,14 @@ use litellm_redis_testing::RedisDeployment;
 
 pub fn connect(deployment: &RedisDeployment) -> RedisClient {
     connect_with(deployment, None, None)
+}
+
+/// `client` with `RedisCache`'s default TTL when `litellm.default_redis_ttl` is unset.
+pub fn remote(client: RedisClient) -> Remote {
+    Remote {
+        client,
+        default_ttl: Duration::from_secs(60),
+    }
 }
 
 /// Every round trip a client made, as the client reports it.

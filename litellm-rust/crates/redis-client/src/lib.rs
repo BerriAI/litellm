@@ -1,6 +1,6 @@
 mod batch;
 mod client;
-mod commands;
+pub mod commands;
 mod config;
 mod connection;
 mod error;
@@ -12,7 +12,7 @@ mod script;
 
 pub use batch::{Declared, RedisBatch};
 pub use client::{RedisClient, Ttl, WeakRedisClient};
-pub use commands::{Amount, Expiry};
+pub use commands::{Amount, Command, Expiry};
 pub use config::{Credentials, CredentialsProvider, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
 pub use error::{ConnectError, Error, KeyError};
 pub use events::{CallEvent, FailureKind, Operation, Outcome, RedisEvents};

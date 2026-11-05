@@ -45,7 +45,7 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::rate_limits::NativeRateLimits;
     #[pymodule_export]
-    use crate::redis::store::request::NativeRequestRedis;
+    use crate::redis::store::request::{NativeRequestRedis, NativeSend};
     #[pymodule_export]
     use crate::redis::store::router_usage::NativeRouterUsage;
     #[pymodule_export]
@@ -129,6 +129,7 @@ mod tests {
                 "NativeDiagnosticProcessor",
                 "NativeRedisClient",
                 "NativeRequestRedis",
+                "NativeSend",
                 "NativeAuthCache",
                 "NativeRateLimits",
                 "NativePending",

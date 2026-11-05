@@ -41,7 +41,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import ModelResponse
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 
-from .test_redis_batch import FakeClient, FakeNatives, FakeRedisCache
+from .test_redis_batch import FakeClient, FakeNatives, FakeRedisCache, fake_send
 
 
 async def _script_outside_the_pipeline(keys: Sequence[str], args: Sequence[object]) -> object:
@@ -422,7 +422,7 @@ async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypa
     monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
     pending = [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:team:t1", 0.5)]
 
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await proxy_server._apply_spend_counter_increments(pending)
         declared = list(spend.post_call)
         assert natives.built[0].events == []
@@ -437,7 +437,7 @@ async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypa
 async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_request_boundary():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         request.native_post_call()
         await request.flush_all()
         at_the_boundary = list(natives.built[0].events)
@@ -452,7 +452,7 @@ async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_requ
 async def test_native_post_call_ops_still_waiting_on_their_callbacks_are_drained_at_shutdown():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         request.native_post_call()
         await request.flush_all()
     await drain_post_call_redis_batches()

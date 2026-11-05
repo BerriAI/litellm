@@ -4,15 +4,14 @@ from typing import Final
 
 import pytest
 
-from litellm.caching.redis_batch import request_redis_batch_scope
+from litellm.caching.redis_batch import Batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.redis.stores.rate_limits import (
-    AtomicCounter,
     CounterIncrement,
     RateLimitScope,
     RateLimitStore,
 )
-from tests.unit.caching.test_redis_batch import FakeNatives
+from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,15 +143,16 @@ async def test_without_redis_increments_add_in_memory_as_python_numbers_do():
 
 
 @pytest.mark.asyncio
-async def test_without_redis_nothing_is_declared_on_the_request_and_post_call_writes_are_refused():
+async def test_without_redis_a_script_raises_where_it_is_awaited_and_post_call_writes_are_refused():
     store: Final = RateLimitStore(None)
     counter: Final = RateLimitScope("api_key", "k1").counter("requests")
     natives: Final = FakeNatives()
+    declared: Final = store.sliding_window((counter,), 0, 60, batch=Batch.NONE)
 
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
-        assert store.declare_sliding_window((counter,), 0, 60) is None
-        assert store.declare_check_and_increment((AtomicCounter(counter, 10, 1, 60, 60),)) is None
-        assert not await store.token_increment_post_call((CounterIncrement(counter, 1, 60),))
-        assert not await store.parallel_release_post_call((counter.scope,), "slot")
+    with pytest.raises(RuntimeError, match="no Redis"):
+        await declared
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        assert not store.token_increment_post_call((CounterIncrement(counter, 1, 60),))
+        assert not store.parallel_release_post_call((counter.scope,), "slot")
 
     assert natives.built == []

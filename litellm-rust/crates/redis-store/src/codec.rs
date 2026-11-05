@@ -1,5 +1,7 @@
 use litellm_python_compat::{Value, json, literal};
 
+use crate::Number;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
     #[error("Redis value is not UTF-8")]
@@ -17,4 +19,9 @@ pub(crate) fn python_value(raw: &[u8]) -> Result<Value, DecodeError> {
         Ok(document) => Ok(json::from_json(document)),
         Err(_) => literal::literal_eval(text).map_err(DecodeError::Unparsed),
     }
+}
+
+/// A number written by Python, `shape` naming what it was meant to be when it is not one.
+pub(crate) fn number(raw: &[u8], shape: &'static str) -> Result<Number, DecodeError> {
+    Number::from_value(&python_value(raw)?).ok_or(DecodeError::Shape(shape))
 }

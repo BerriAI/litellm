@@ -19,7 +19,7 @@ from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCool
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_utils import routing_prefetch
 from litellm.rust_bridge._native import NativeRedisClient
-from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNativeRequest, FakeNatives
+from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNatives, ReadyPending, fake_pending, fake_send
 from tests.unit.conftest import redis_cache_double
 from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 from tests.unit.redis.stores.test_router_cooldowns import Handles as CooldownHandles
@@ -219,7 +219,7 @@ async def test_routing_takes_the_armed_cooldown_read_from_the_native_batch_once_
     store, handles = _armed_store()
     natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         routing_prefetch.arm_cooldowns(store, ["dep-a", "dep-b", "dep-c"])
         armed: Final = routing_prefetch.armed()
         first: Final = await routing_prefetch.read_cooldowns(store, ["dep-a", "dep-b"], None)
@@ -238,7 +238,7 @@ async def test_an_armed_cooldown_read_that_does_not_cover_the_routing_ids_is_rea
     store, _ = _armed_store()
     natives: Final = FakeNatives()
 
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         routing_prefetch.arm_cooldowns(store, ["dep-b"])
         active: Final = await routing_prefetch.read_cooldowns(store, ["dep-a", "dep-b"], None)
 
@@ -251,11 +251,11 @@ def _redis_down() -> list[tuple[str, CooldownCacheValue]]:
 
 
 class _UnreachableCooldowns(FakeCooldowns):
-    def declare_active(
-        self, request: FakeNativeRequest, model_ids: Sequence[str]
-    ) -> FakeNativePending[list[tuple[str, CooldownCacheValue]]]:
-        super().declare_active(request, model_ids)
-        return FakeNativePending(request, _redis_down)
+    def active(
+        self, model_ids: Sequence[str], send: object
+    ) -> FakeNativePending[list[tuple[str, CooldownCacheValue]]] | ReadyPending[list[tuple[str, CooldownCacheValue]]]:
+        super().active(model_ids, send)
+        return fake_pending(send, _redis_down)
 
 
 @pytest.mark.asyncio
@@ -269,7 +269,7 @@ async def test_a_failed_armed_cooldown_read_falls_back_to_the_stores_own_read():
     store: Final = RouterCooldownStore(native_client(RedisCache(host="redis.internal")), handle=unreachable)
     store.put("dep-a", {"exception_received": "429", "status_code": "429", "timestamp": 1.0, "cooldown_time": 60}, 60)
 
-    with request_redis_batch_scope(native_factory=FakeNatives()):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         routing_prefetch.arm_cooldowns(store, ["dep-a"])
         active: Final = await routing_prefetch.read_cooldowns(store, ["dep-a"], None)
 
@@ -283,7 +283,7 @@ def test_arming_the_cooldown_read_outside_a_request_or_without_redis_declares_no
     natives: Final = FakeNatives()
 
     routing_prefetch.arm_cooldowns(store, ["dep-a"])
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         routing_prefetch.arm_cooldowns(RouterCooldownStore(None, handle=offline), ["dep-a"])
         armed: Final = routing_prefetch.armed()
 

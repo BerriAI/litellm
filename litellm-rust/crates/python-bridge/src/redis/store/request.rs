@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_redis_store::RequestRedis;
+use litellm_redis_store::{RequestRedis, Send};
 use pyo3::prelude::*;
 
 use super::call;
@@ -37,5 +37,24 @@ impl NativeRequestRedis {
             scope.scope(request.flush_post()).await;
             Ok(())
         })
+    }
+}
+
+/// The Python face of `Send`: which batch a store op rides. Each variant carries exactly what it
+/// needs, so there is no phase string and no phase without a request.
+#[pyclass(frozen, name = "NativeSend")]
+pub(crate) enum NativeSend {
+    Now(),
+    PreCall(Py<NativeRequestRedis>),
+    PostCall(Py<NativeRequestRedis>),
+}
+
+impl NativeSend {
+    pub(crate) fn send(&self) -> Send<'_> {
+        match self {
+            Self::Now() => Send::Now,
+            Self::PreCall(request) => Send::PreCall(&request.get().0),
+            Self::PostCall(request) => Send::PostCall(&request.get().0),
+        }
     }
 }

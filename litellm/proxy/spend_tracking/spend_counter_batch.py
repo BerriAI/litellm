@@ -1,14 +1,14 @@
 """One Redis MGET per phase (admission, reservation, post-call) for the spend counters it reads, not one GET each."""
 
 import asyncio
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_batch import NativeBatchResult, RequestRedisBatches, active_request_redis_batches
+from litellm.caching.redis_batch import Batch, RequestRedisBatches, active_request_redis_batches
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.redis.stores.spend_counters import (
     SpendCounterStore,
@@ -28,8 +28,7 @@ _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
 
 @dataclass(frozen=True, slots=True)
 class _InflightRead:
-    counters: tuple[str, ...]
-    result: NativeBatchResult[Sequence[float | None] | None]
+    result: Awaitable[Mapping[str, float | None] | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,9 +42,9 @@ class SpendCounterBatch:
     ``async_batch_get_cache`` maps a clean miss to ``None`` and drops keys only when Redis failed, so an absent
     key means "read it yourself" and a present ``None`` is an authoritative miss.
 
-    Inside a ``request_redis_batch_scope`` the read rides the request's native pre-call pipeline instead: the
-    native flush hook declares whatever is bound but unread, so whichever native read the request awaits first
-    (the armed cooldown read, or this batch's own) carries the spend counters in the same round trip."""
+    Inside a ``request_redis_batch_scope`` the read rides the request's pre-call pipeline instead: the pre-call
+    flush hook declares whatever is bound but unread, so whichever pre-call read the request awaits first (the
+    armed cooldown read, or this batch's own) carries the spend counters in the same round trip."""
 
     __slots__ = ("_fetched", "_inflight", "_keys", "_loaded", "_lock", "_open", "_request", "_store")
 
@@ -59,7 +58,7 @@ class SpendCounterBatch:
         self._inflight: Final[list[_InflightRead]] = []  # mutable-ok: drained by _load
         self._request: Final[RequestRedisBatches | None] = active_request_redis_batches()
         if self._request is not None:
-            self._request.add_native_flush_hook(self._declare_pending)
+            self._request.add_pre_call_flush_hook(self._declare_pending)
 
     @property
     def counter_keys(self) -> frozenset[str]:
@@ -116,32 +115,29 @@ class SpendCounterBatch:
             return self._loaded
 
     def _declare_pending(self) -> None:
-        """Native flush hook: put every bound-but-unread counter on the native pre-call pipeline about to go out."""
+        """Pre-call flush hook: put every bound-but-unread counter on the pre-call pipeline about to go out."""
         if self._request is None or not self._open:
             return
         pending: Final = tuple(sorted(self._keys - self._fetched))
-        if not pending:
-            return
-        result: Final = self._store.declare_read_many(self._request, pending)
-        if result is None:
+        if not pending or not self._store.has_redis:
             return
         self._fetched = self._fetched | frozenset(pending)
-        self._inflight.append(_InflightRead(counters=pending, result=result))
+        self._inflight.append(_InflightRead(result=self._store.read_many(pending, batch=Batch.PRE_CALL)))
 
     async def _collect_inflight(self) -> None:
         reads: Final = tuple(self._inflight)
         self._inflight.clear()
         for read in reads:
             try:
-                values: Sequence[float | None] | None = await read.result
+                values: Mapping[str, float | None] | None = await read.result
             except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
                 verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
                 continue
             if values is not None:
-                self._loaded = MappingProxyType({**dict(zip(read.counters, values, strict=True)), **self._loaded})
+                self._loaded = MappingProxyType({**values, **self._loaded})
 
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:
-        fetched: Final = await self._store.read_many(sorted(keys))
+        fetched: Final = await self._store.read_many(sorted(keys), batch=Batch.NONE)
         return _NO_VALUES if fetched is None else fetched
 
 

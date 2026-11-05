@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, ops::Add};
 
-use litellm_python_compat::{BigInt, Value};
+use litellm_python_compat::{BigInt, Value, json, repr};
 
 /// A Python `int` or `float`, kept apart because `repr` and `json.dumps` write them differently.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +39,12 @@ impl Number {
             Self::Int(value) => Value::Int(BigInt::from(value)),
             Self::Float(value) => Value::Float(value),
         }
+    }
+
+    /// `json.dumps`, which `RedisCache.async_set_cache` writes.
+    pub fn to_json(self) -> String {
+        let value = self.to_value();
+        json::dumps(&value).unwrap_or_else(|_| repr::to_str(&value))
     }
 
     pub fn from_value(value: &Value) -> Option<Self> {

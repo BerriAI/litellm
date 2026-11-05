@@ -2524,7 +2524,7 @@ async def test_refresh_cached_team_broadcasts_team_and_alias_invalidations(
 async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatch) -> None:
     from litellm.caching.redis_batch import request_redis_batch_scope
     from litellm.proxy.management_endpoints import team_endpoints
-    from tests.unit.caching.test_redis_batch import FakeNatives
+    from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
     from tests.unit.redis.stores.auth_cache_double import shared_cache
 
     natives: Final = FakeNatives()
@@ -2537,7 +2537,7 @@ async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatc
     proxy_logging_obj.internal_usage_cache.dual_cache = None
     monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
 
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await team_endpoints.refresh_cached_team(
             team_row=LiteLLM_TeamTable(team_id="team-order", team_alias=None),
             user_api_key_cache=cache,

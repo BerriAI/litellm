@@ -30,6 +30,11 @@ class DeclaredOp:
         return self.answer()
 
 
+def _on_request(send: object) -> bool:
+    """A fake request stands in for a request's ``NativeSend``; anything else is ``NativeSend.Now()``."""
+    return getattr(send, "events", None) is not None
+
+
 @dataclass
 class FakeAuthCache:
     """``redis`` holds what each key decodes to; ``fail`` makes every direct Redis round trip raise."""
@@ -74,17 +79,17 @@ class FakeAuthCache:
         self._round_trip("SET_STR", key, ttl_seconds)
         self.redis[key] = value
 
-    def set_pre_call(self, request: object, key: str, value: object, ttl_seconds: float | None = None) -> DeclaredOp:
+    def declare_set(self, key: str, value: object, ttl_seconds: float | None, send: object) -> DeclaredOp:
         self.set_local(key, value, ttl_seconds)
-        self._declare(request, f"declare set {key} ttl={ttl_seconds}")
+        self._declare(send, f"declare set {key} ttl={ttl_seconds}")
         self.redis[key] = value
-        return DeclaredOp(request, lambda: None)
+        return DeclaredOp(send, lambda: None)
 
-    def delete_pre_call(self, request: object, key: str) -> DeclaredOp:
+    def declare_delete(self, key: str, send: object) -> DeclaredOp:
         self.delete_local(key)
-        self._declare(request, f"declare del {key}")
+        self._declare(send, f"declare del {key}")
         self.redis.pop(key, None)
-        return DeclaredOp(request, lambda: None)
+        return DeclaredOp(send, lambda: None)
 
     async def set_many(self, entries: Sequence[tuple[str, object]], ttl_seconds: float | None = None) -> None:
         for key, value in entries:
@@ -92,15 +97,15 @@ class FakeAuthCache:
         self._round_trip("SET_MANY", tuple(key for key, _ in entries), ttl_seconds)
         self.redis.update(entries)
 
-    async def write_back(self, request: object | None, entries: Sequence[WriteBack]) -> None:
+    async def write_back(self, entries: Sequence[WriteBack], send: object) -> None:
         for key, value, ttl in entries:
             self.set_local(key, value, ttl)
             self.redis[key] = value
         written: Final = tuple((key, ttl) for key, _value, ttl in entries)
-        if request is None:
+        if not _on_request(send):
             self._round_trip("WRITE_BACK", written)
             return
-        self._declare(request, f"declare write_back {written}")
+        self._declare(send, f"declare write_back {written}")
 
     async def delete(self, keys: Sequence[str]) -> None:
         self.delete_sync(keys)
@@ -112,19 +117,18 @@ class FakeAuthCache:
         for key in keys:
             self.redis.pop(key, None)
 
-    def declare_get_many(self, request: object, keys: Sequence[str]) -> DeclaredOp:
-        self._declare(request, f"declare auth_cache {','.join(keys)}")
+    def get_many(self, keys: Sequence[str], send: object) -> DeclaredOp:
+        on_request: Final = _on_request(send)
+        self._declare(send, f"declare auth_cache {','.join(keys)}")
 
         def answer() -> list[object]:
-            if self.fail is not None:
+            if on_request and self.fail is not None:
                 raise self.fail
+            if not on_request:
+                self._round_trip("MGET", tuple(keys))
             return [self.redis.get(key) for key in keys]
 
-        return DeclaredOp(request, answer)
-
-    async def get_many(self, keys: Sequence[str]) -> list[object]:
-        self._round_trip("MGET", tuple(keys))
-        return [self.redis.get(key) for key in keys]
+        return DeclaredOp(send, answer)
 
     async def increment_if_present(self, key: str, amount: float) -> float | None:
         self._round_trip("INCRBYFLOAT_IF_PRESENT", key, amount)

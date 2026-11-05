@@ -8,6 +8,7 @@ use litellm_redis_client::{
     Credentials, DEFAULT_TIMEOUT, Error, Namespace, Node, RedisClient, RedisConfig, Sentinel,
     Target, Timeouts,
 };
+use litellm_redis_client::commands;
 use litellm_redis_testing::{RedisDeployment, RedisSentinel, SERVICE_NAME, Topology, eventually};
 use rstest::rstest;
 use support::{connect, connect_guarded};
@@ -35,7 +36,7 @@ async fn delivered(
     payload: &[u8],
 ) {
     eventually(async || {
-        publisher.publish(channel, payload).await.ok()?;
+        publisher.send(commands::publish(channel, payload)).await.ok()?;
         let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
         while let Ok(Some(message)) = tokio::time::timeout_at(deadline, received.recv()).await {
             if message == payload {
@@ -147,7 +148,7 @@ async fn an_open_breaker_rejects_a_publish_without_sending_it(
     server.freeze().await.unwrap();
     let opened = [client.ping().await, client.ping().await];
     let started = Instant::now();
-    let rejected = client.publish(CHANNEL, b"payload").await;
+    let rejected = client.send(commands::publish(CHANNEL, b"payload")).await;
     let rejected_in = started.elapsed();
     server.thaw().await.unwrap();
 

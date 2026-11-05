@@ -7,6 +7,8 @@ pub(crate) mod router_usage;
 pub(crate) mod spend_counters;
 mod value;
 
+use value::PyValue;
+
 use std::{
     pin::Pin,
     sync::{Mutex, PoisonError},
@@ -14,16 +16,16 @@ use std::{
 };
 
 use litellm_host_python::PythonContext;
-use litellm_redis_store::{ErrorKind, Number};
+use litellm_redis_store::{Error, FromValue, IntoValue, Number, Pending, Remote};
 use pyo3::{
     IntoPyObjectExt,
-    exceptions::{PyRuntimeError, PyTypeError},
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyBool, PyFloat, PyInt},
 };
 
 use crate::execution::{run_async_value, run_sync_value};
-use crate::redis::events::RedisCall;
+use crate::redis::{client::NativeRedisClient, events::RedisCall};
 
 /// The labels `RedisCache` reports for this operation, in the caller's context so its
 /// `service_target` reaches the service event.
@@ -73,6 +75,14 @@ fn ttl(seconds: Option<f64>) -> Option<Duration> {
     seconds.map(|seconds| Duration::from_secs_f64(seconds.max(0.0)))
 }
 
+/// A store's Redis with the `RedisCache.default_ttl` Python attached it with.
+fn remote(client: &NativeRedisClient, redis_ttl_seconds: u64) -> Remote {
+    Remote {
+        client: client.0.clone(),
+        default_ttl: Duration::from_secs(redis_ttl_seconds),
+    }
+}
+
 type Resolve = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
 /// A Redis call declared on a request's batch. `resolve` flushes that batch if it has not gone
@@ -84,7 +94,7 @@ pub(crate) struct NativePending {
 }
 
 impl NativePending {
-    fn new<T, E: 'static>(
+    pub(crate) fn new<T, E: 'static>(
         call_type: &'static str,
         error: fn(E) -> PyErr,
         reply: impl Future<Output = Result<T, E>> + Send + 'static,
@@ -123,13 +133,29 @@ pyo3::create_exception!(
     "A native Redis store operation failed. Args are (kind, message), kind spelled as litellm-redis-store's ErrorKind."
 );
 
-fn kind_error(kind: ErrorKind, error: &(dyn std::error::Error + 'static)) -> PyErr {
-    let kind: &'static str = kind.into();
-    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(error).to_string()))
+/// What the spend counter and auth cache stores raise.
+fn kind_error(error: Error) -> PyErr {
+    let kind: &'static str = error.kind().into();
+    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(&error).to_string()))
 }
 
-fn store_error(error: litellm_cache::Error) -> PyErr {
+/// What the router stores and the rate limiter raise.
+fn runtime_error(error: Error) -> PyErr {
     PyRuntimeError::new_err(litellm_error::Report::new(&error).to_string())
+}
+
+/// A store op declared on the batch the caller's `NativeSend` picked, answered as `reply` shapes it.
+fn pending<T, R>(
+    call_type: &'static str,
+    error: fn(Error) -> PyErr,
+    declared: Pending<T>,
+    reply: fn(T) -> R,
+) -> NativePending
+where
+    T: Send + 'static,
+    R: for<'a> IntoPyObject<'a> + Send + 'static,
+{
+    NativePending::new(call_type, error, async move { declared.await.map(reply) })
 }
 
 /// A Python `int` or `float` across the bridge, keeping which one it is.
@@ -160,4 +186,33 @@ impl<'py> IntoPyObject<'py> for PyNumber {
             Number::Float(value) => value.into_pyobject(py)?.into_any(),
         })
     }
+}
+
+/// A store type whose Python side is plain data, converted through its `FromValue` and `IntoValue`
+/// so the bridge never names a field. A shape the store refuses is `ValueError`.
+pub(crate) struct PyData<T>(pub(crate) T);
+
+impl<'a, 'py, T: FromValue> FromPyObject<'a, 'py> for PyData<T> {
+    type Error = PyErr;
+
+    fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let PyValue(value) = value.extract()?;
+        T::from_value(&value)
+            .map(Self)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+}
+
+impl<'py, T: IntoValue> IntoPyObject<'py> for PyData<T> {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        PyValue(self.0.into_value()).into_pyobject(py)
+    }
+}
+
+fn unwrap_all<T>(values: Vec<PyData<T>>) -> Vec<T> {
+    values.into_iter().map(|value| value.0).collect()
 }

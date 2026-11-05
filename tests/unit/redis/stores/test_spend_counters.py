@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 
 from litellm._internal_context import current_service_target
-from litellm.caching.redis_batch import request_redis_batch_scope
+from litellm.caching.redis_batch import Batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -24,7 +24,7 @@ from litellm.redis.stores.spend_counters import (
     user_counter,
 )
 from litellm.rust_bridge._native import NativeRedisClient, NativeRedisStoreError, NativeSpendCounters
-from tests.unit.caching.test_redis_batch import FakeNatives
+from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
 
 from .spend_counters_double import FakeSpendCounters
 
@@ -96,7 +96,7 @@ async def test_without_redis_the_native_store_counts_and_answers_from_memory() -
 
     assert (first, second, seeded, repaired) == (2, (2.5, 1.0), 4.0, None)
     assert await store.read("spend:key:k") == (9.0, False)
-    assert await store.read_many(("spend:key:k",)) is None
+    assert await store.read_many(("spend:key:k",), batch=Batch.NONE) is None
     assert not store.has_redis
     assert not store.increment_many_post_call((("spend:key:k", 1.0),))
 
@@ -123,24 +123,18 @@ def test_only_a_timeout_or_an_open_breaker_lets_a_post_call_increment_drop(kind:
     assert not is_unavailable(TimeoutError(kind))
 
 
-def test_redis_attaches_once_and_its_ttl_is_the_lease_the_store_reports() -> None:
-    built: Final[list[tuple[NativeRedisClient | None, int]]] = []
-
-    def handle(client: NativeRedisClient | None, redis_ttl: int) -> FakeSpendCounters:
-        built.append((client, redis_ttl))
-        return FakeSpendCounters(redis=None if client is None else {})
-
-    store: Final = SpendCounterStore(None, handle=handle)
-    first: Final = NativeRedisClient.connect({"host": "127.0.0.1", "port": 1})
-    second: Final = NativeRedisClient.connect({"host": "127.0.0.2", "port": 1})
+def test_redis_attaches_once_keeping_memory_and_its_ttl_is_the_lease_the_store_reports() -> None:
+    store: Final = SpendCounterStore(None)
+    store.set_local(team_counter("team-a"), 4.5)
 
     store.attach_redis(None, redis_ttl=10)
-    store.attach_redis(first, redis_ttl=30)
-    store.attach_redis(second, redis_ttl=90)
+    assert not store.has_redis
+    store.attach_redis(NativeRedisClient.connect({"host": "127.0.0.1", "port": 1}), redis_ttl=30)
+    store.attach_redis(NativeRedisClient.connect({"host": "127.0.0.2", "port": 1}), redis_ttl=90)
 
-    assert built == [(None, 60), (first, 30)]
     assert store.has_redis
     assert store.redis_ttl == 30
+    assert store.get_local(team_counter("team-a")) == 4.5
 
 
 @pytest.mark.asyncio
@@ -157,7 +151,7 @@ async def test_post_call_increments_go_on_the_requests_native_post_call_batch_un
     store: Final = spend.store()
 
     outside: Final = store.increment_many_post_call((("spend:key:k", 1.0),))
-    with request_redis_batch_scope(native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         inside: Final = store.increment_many_post_call((("spend:key:k", 1.0),))
         empty: Final = store.increment_many_post_call(())
 

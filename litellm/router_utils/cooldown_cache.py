@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+from litellm.caching.redis_batch import Batch
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.redis.stores.router_cooldowns import (
     ROUTER_COOLDOWNS_TARGET,
@@ -43,7 +44,7 @@ class CooldownCache:
     async def async_get_active_cooldowns(
         self, model_ids: Sequence[str], parent_otel_span: Span | None
     ) -> list[tuple[str, CooldownCacheValue]]:
-        return list(await self.cooldown_store.active(model_ids, parent_otel_span))
+        return list(await self.cooldown_store.active(model_ids, batch=Batch.NONE))
 
     def get_min_cooldown(self, model_ids: Sequence[str], parent_otel_span: Span | None) -> float:
         return self.cooldown_store.minimum(model_ids, self.default_cooldown_time, parent_otel_span)

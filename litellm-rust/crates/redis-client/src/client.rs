@@ -6,11 +6,13 @@ use std::{
 
 use futures_util::stream::BoxStream;
 use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
-use redis::{Cmd, FromRedisValue, RedisError, ToRedisArgs, ToSingleRedisArg, Value};
+use redis::{Cmd, RedisError, Value};
 
 use crate::{
-    Amount, CallEvent, ConnectError, Error, Expiry, FailureKind, Namespace, Operation, Outcome,
-    Pipeline, RedisBatch, RedisConfig, RedisEvents, Script, commands, connection::Connection,
+    CallEvent, Command, ConnectError, Error, FailureKind, Namespace, Operation, Outcome, Pipeline,
+    RedisBatch, RedisConfig, RedisEvents,
+    commands::{self, Op, Plan, Trips},
+    connection::Connection,
     pubsub::Subscriber,
 };
 
@@ -74,126 +76,70 @@ impl RedisClient {
     }
 
     pub async fn ping(&self) -> Result<(), Error> {
-        self.query("PING", &commands::ping()).await
-    }
-
-    pub async fn get<T: FromRedisValue>(&self, key: &str) -> Result<Option<T>, Error> {
-        self.query("GET", &commands::get(self.key(key))).await
-    }
-
-    pub async fn mget<T: FromRedisValue>(&self, keys: &[&str]) -> Result<Vec<Option<T>>, Error> {
-        if keys.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.query("MGET", &commands::mget(self.keys(keys))).await
-    }
-
-    pub async fn set(
-        &self,
-        key: &str,
-        value: impl ToSingleRedisArg,
-        ttl: Duration,
-    ) -> Result<(), Error> {
-        self.query("SET", &commands::set(self.key(key), value, ttl))
-            .await
-    }
-
-    pub async fn set_nx(
-        &self,
-        key: &str,
-        value: impl ToSingleRedisArg,
-        ttl: Duration,
-    ) -> Result<bool, Error> {
-        let reply: Option<String> = self
-            .query("SET", &commands::set_nx(self.key(key), value, ttl))
-            .await?;
-        Ok(reply.is_some())
-    }
-
-    pub async fn del(&self, keys: &[&str]) -> Result<usize, Error> {
-        if keys.is_empty() {
-            return Ok(0);
-        }
-        self.query("DEL", &commands::del(self.keys(keys))).await
-    }
-
-    pub async fn expire(&self, key: &str, ttl: Duration) -> Result<bool, Error> {
-        self.query("EXPIRE", &commands::expire(self.key(key), ttl))
-            .await
-    }
-
-    pub async fn ttl(&self, key: &str) -> Result<Ttl, Error> {
-        let reply: i64 = self.query("TTL", &commands::ttl(self.key(key))).await?;
-        Ok(match reply {
-            -2 => Ttl::Missing,
-            -1 => Ttl::Persistent,
-            seconds => Ttl::Expires(Duration::from_secs(seconds.unsigned_abs())),
-        })
-    }
-
-    /// `RedisCache.increment_cache`: `INCRBY`, then `TTL`, then `EXPIRE` only when the key has no
-    /// TTL, each its own round trip.
-    pub async fn incr_by(&self, key: &str, delta: i64, ttl: Duration) -> Result<i64, Error> {
-        let key = self.key(key);
-        self.guarded(Operation::Command("INCRBY"), async {
-            let mut connection = self.0.connection.clone();
-            let value: i64 = commands::incr_by(key.clone(), delta)
-                .query_async(&mut connection)
-                .await?;
-            let current: i64 = commands::ttl(key.clone())
-                .query_async(&mut connection)
-                .await?;
-            if current == -1 {
-                commands::expire(key, ttl)
-                    .exec_async(&mut connection)
-                    .await?;
-            }
-            Ok(value)
+        self.guarded(Operation::Command("PING"), async {
+            commands::ping()
+                .query_async(&mut self.0.connection.clone())
+                .await
         })
         .await
     }
 
-    /// `INCRBYFLOAT` alone, `_incrbyfloat_with_ttl` without a TTL.
-    pub(crate) async fn incr_by_float_without_ttl(
-        &self,
-        key: &str,
-        amount: Amount,
-    ) -> Result<f64, Error> {
-        self.query(
-            "INCRBYFLOAT",
-            &commands::incr_by_float(self.key(key), amount),
-        )
-        .await
+    /// Sends one command on its own, the way the `RedisCache` method behind it sends it.
+    pub async fn send<T>(&self, command: Command<T>) -> Result<T, Error> {
+        let (op, decode) = command.prepare(&self.0.namespace);
+        self.run_alone(op).await.and_then(decode)
     }
 
-    /// `RedisCache.async_increment`: `INCRBYFLOAT` and its TTL command in one round trip, and for
-    /// [`Expiry::KeepExisting`] a third, `EXPIRE`, only when the key has no TTL.
-    pub async fn incr_by_float(
-        &self,
-        key: &str,
-        amount: Amount,
-        expiry: Expiry,
-    ) -> Result<f64, Error> {
-        let key = self.key(key);
-        self.guarded(Operation::Command("INCRBYFLOAT"), async {
+    pub(crate) async fn run_alone(&self, op: Op) -> Result<Value, Error> {
+        let Op {
+            operation, plan, ..
+        } = op;
+        self.guarded(operation, async {
             let mut connection = self.0.connection.clone();
-            let mut pipeline = redis::pipe();
-            pipeline.add_command(commands::incr_by_float(key.clone(), amount));
-            match expiry {
-                Expiry::Refresh(ttl) => {
-                    let (value, _): (f64, bool) = pipeline
-                        .add_command(commands::expire(key, ttl))
-                        .query_async(&mut connection)
-                        .await?;
-                    Ok(value)
+            match plan {
+                Plan::Reply(value) => Ok(value),
+                Plan::Commands(commands) => match <[Cmd; 1]>::try_from(commands) {
+                    Ok([command]) => command.query_async(&mut connection).await,
+                    Err(commands) => {
+                        let mut pipeline = redis::pipe();
+                        for command in commands {
+                            pipeline.add_command(command);
+                        }
+                        let replies: Vec<Value> = pipeline.query_async(&mut connection).await?;
+                        Ok(replies.into_iter().next().unwrap_or(Value::Nil))
+                    }
+                },
+                Plan::Script(call) => {
+                    call.script
+                        .invocation(&call.keys, &call.args)
+                        .invoke_async(&mut connection)
+                        .await
                 }
-                Expiry::KeepExisting(ttl) => {
-                    let (value, current): (f64, i64) = pipeline
-                        .add_command(commands::ttl(key.clone()))
-                        .query_async(&mut connection)
-                        .await?;
+                Plan::KeepingTtl {
+                    increment,
+                    key,
+                    ttl,
+                    trips,
+                } => {
+                    let (value, current): (Value, i64) = match trips {
+                        Trips::Shared => {
+                            redis::pipe()
+                                .add_command(increment)
+                                .add_command(commands::ttl_cmd(&key))
+                                .query_async(&mut connection)
+                                .await?
+                        }
+                        Trips::Separate => (
+                            increment.query_async(&mut connection).await?,
+                            commands::ttl_cmd(&key)
+                                .query_async(&mut connection)
+                                .await?,
+                        ),
+                    };
                     if current == -1 {
-                        commands::expire(key, ttl)
+                        redis::cmd("EXPIRE")
+                            .arg(&key)
+                            .arg(ttl.as_secs())
                             .exec_async(&mut connection)
                             .await?;
                     }
@@ -204,58 +150,18 @@ impl RedisClient {
         .await
     }
 
-    pub async fn eval<T: FromRedisValue>(
-        &self,
-        script: &Script,
-        keys: &[&str],
-        args: impl ToRedisArgs,
-    ) -> Result<T, Error> {
-        let keys = self.keys(keys);
-        let args = args.to_redis_args();
-        self.guarded(Operation::Script, async {
-            script
-                .invocation(&keys, &args)
-                .invoke_async(&mut self.0.connection.clone())
-                .await
-        })
-        .await
-    }
-
-    /// The channel is sent as given, without the namespace, like redis-py's `publish`.
-    pub async fn publish(&self, channel: &str, payload: &[u8]) -> Result<(), Error> {
-        self.query("PUBLISH", &commands::publish(channel, payload))
-            .await
-    }
-
     /// Messages published on `channel`, on a connection of its own. After the connection is lost
     /// it reconnects and resubscribes, and messages published meanwhile are not delivered.
     pub fn subscribe(&self, channel: &str) -> BoxStream<'static, Vec<u8>> {
         self.0.subscriber.clone().messages(channel.to_owned())
     }
 
-    /// A script sent with its source as `EVAL` every time, like redis-py's `Redis.eval`, for the
-    /// scripts `RedisCache` runs that way rather than through `register_script`.
-    pub async fn eval_source<T: FromRedisValue>(
-        &self,
-        source: &str,
-        keys: &[&str],
-        args: impl ToRedisArgs,
-    ) -> Result<T, Error> {
-        let keys = self.keys(keys);
-        let command = redis::cmd("EVAL")
-            .arg(source)
-            .arg(keys.len())
-            .arg(keys)
-            .arg(args)
-            .to_owned();
-        self.guarded(Operation::Script, async {
-            command.query_async(&mut self.0.connection.clone()).await
-        })
-        .await
-    }
-
     pub fn pipeline(&self) -> Pipeline {
         Pipeline::new(self.0.namespace.clone())
+    }
+
+    pub(crate) fn namespace(&self) -> &Namespace {
+        &self.0.namespace
     }
 
     pub fn is_cluster(&self) -> bool {
@@ -303,25 +209,6 @@ impl RedisClient {
         });
         self.observe(operation, started, outcome);
         results
-    }
-
-    fn key(&self, key: &str) -> String {
-        self.0.namespace.apply(key)
-    }
-
-    fn keys(&self, keys: &[&str]) -> Vec<String> {
-        keys.iter().map(|key| self.key(key)).collect()
-    }
-
-    async fn query<T: FromRedisValue>(
-        &self,
-        name: &'static str,
-        command: &Cmd,
-    ) -> Result<T, Error> {
-        self.guarded(Operation::Command(name), async {
-            command.query_async(&mut self.0.connection.clone()).await
-        })
-        .await
     }
 
     async fn guarded<T>(

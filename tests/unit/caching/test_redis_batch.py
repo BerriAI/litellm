@@ -189,6 +189,26 @@ class FakeNativePending(Generic[_Answer]):
         return self.answer()
 
 
+@dataclass
+class ReadyPending(Generic[_Answer]):
+    """An op declared with ``NativeSend.Now()``: it answers whenever it is resolved."""
+
+    answer: Callable[[], _Answer]
+
+    async def resolve(self) -> _Answer:
+        return self.answer()
+
+
+def fake_send(_phase: object, request: FakeNativeRequest) -> FakeNativeRequest:
+    """A ``native_send_factory`` for ``FakeNatives``: the fake request stands in for its ``NativeSend``."""
+    return request
+
+
+def fake_pending(send: object, answer: Callable[[], _Answer]) -> FakeNativePending[_Answer] | ReadyPending[_Answer]:
+    """What a fake handle declares for ``send``: on the fake request's batch, or on its own for ``Now()``."""
+    return FakeNativePending(send, answer) if isinstance(send, FakeNativeRequest) else ReadyPending(answer)
+
+
 def make(fail: Exception | None = None, namespace: str | None = None) -> tuple[FakeRedisCache, FakeClient]:
     client = FakeClient(replies, fail)
     return FakeRedisCache(client, namespace), client

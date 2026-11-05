@@ -3,6 +3,8 @@ mod support;
 use std::{sync::Arc, time::Duration};
 
 use litellm_redis_client::{Operation, RedisClient, Script, Ttl};
+use litellm_redis_client::commands;
+use litellm_redis_store::Send as RedisSend;
 use litellm_redis_store::{
     Number, RequestRedis,
     rate_limits::{
@@ -13,7 +15,7 @@ use litellm_redis_store::{
 };
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
-use support::{connect, connect_observed, within};
+use support::{connect, connect_observed, remote, within};
 use tokio::runtime::Handle;
 
 const SLOT_TTL: Duration = Duration::from_secs(3600);
@@ -118,34 +120,31 @@ fn atomic(scope: &Scope, kind: Kind, limit: i64, increment: i64) -> AtomicCounte
     }
 }
 
-/// `BaseCache.default_ttl`, what `RedisCache` gives an increment that names no TTL.
-const REDIS_TTL: Duration = Duration::from_secs(60);
-
 fn store(deployment: &RedisDeployment) -> Arc<RateLimits> {
-    Arc::new(RateLimits::new(Some(connect(deployment)), None, REDIS_TTL))
+    Arc::new(RateLimits::new(Some(remote(connect(deployment))), None))
 }
 
 async fn raw_text(raw: &RedisClient, key: &str) -> Option<String> {
-    raw.get(key).await.unwrap()
+    raw.send(commands::get(key)).await.unwrap()
 }
 
 async fn zcard(raw: &RedisClient, key: &str) -> i64 {
-    raw.eval(
+    raw.send(commands::eval(
         &Script::new("return redis.call('ZCARD', KEYS[1])"),
         &[key],
         Vec::<String>::new(),
-    )
+    ))
     .await
     .unwrap()
 }
 
 async fn redis_now(raw: &RedisClient) -> i64 {
     let time: Vec<String> = raw
-        .eval(
+        .send(commands::eval(
             &Script::new("return redis.call('TIME')"),
             &["any"],
             Vec::<String>::new(),
-        )
+        ))
         .await
         .unwrap();
     time[0].parse().unwrap()
@@ -173,20 +172,17 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
         let requests = counter(&key, Kind::Requests);
         let tokens = counter(&key, Kind::Tokens);
         limits
-            .sliding_window(None, std::slice::from_ref(&requests), now, 60)
+            .sliding_window(RedisSend::Now, std::slice::from_ref(&requests), now, 60)
             .unwrap()
-            .resolve()
             .await
             .unwrap();
         limits
-            .check_and_increment(None, &[atomic(&key, Kind::Tokens, 1000, 40)])
+            .check_and_increment(RedisSend::Now, &[atomic(&key, Kind::Tokens, 1000, 40)])
             .unwrap()
-            .resolve()
             .await
             .unwrap();
         limits
-            .token_increment(
-                None,
+            .token_increment(RedisSend::Now,
                 &[Increment {
                     counter: tokens.clone(),
                     amount: Number::Float(2.5),
@@ -194,12 +190,10 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
                 }],
             )
             .unwrap()
-            .resolve()
             .await
             .unwrap();
         limits
-            .parallel_acquire(
-                None,
+            .parallel_acquire(RedisSend::Now,
                 &[Gauge {
                     scope: key.clone(),
                     limit: 5,
@@ -208,7 +202,6 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
                 "slot-1",
             )
             .unwrap()
-            .resolve()
             .await
             .unwrap();
 
@@ -218,9 +211,8 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
         assert_eq!(zcard(&raw, wire.gauge).await, 1);
         assert_eq!(
             limits
-                .read_counters(None, &[requests, tokens])
+                .read_counters(RedisSend::Now, &[requests, tokens])
                 .unwrap()
-                .resolve()
                 .await
                 .unwrap(),
             vec![
@@ -234,8 +226,7 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
 
     let guarded = scope("api_key", "sha-check");
     limits
-        .guarded_increment(
-            None,
+        .guarded_increment(RedisSend::Now,
             &GuardedIncrement {
                 counter: counter(&guarded, Kind::Tokens),
                 expected_window_start: "0".to_owned(),
@@ -244,14 +235,13 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
             },
         )
         .unwrap()
-        .resolve()
         .await
         .unwrap();
     for pending in [
-        limits.parallel_release(None, std::slice::from_ref(&guarded), "slot-1"),
-        limits.parallel_count(None, std::slice::from_ref(&guarded), SLOT_TTL),
+        limits.parallel_release(RedisSend::Now, std::slice::from_ref(&guarded), "slot-1"),
+        limits.parallel_count(RedisSend::Now, std::slice::from_ref(&guarded), SLOT_TTL),
     ] {
-        pending.unwrap().resolve().await.unwrap();
+        pending.unwrap().await.unwrap();
     }
     for (name, sha) in SCRIPTS {
         let cached = cli(&deployment, &["SCRIPT", "EXISTS", sha]).await;
@@ -296,7 +286,7 @@ async fn reads_values_python_wrote_and_backfills_memory(
     let raw = connect(&deployment);
     let limits = store(&deployment);
     let wire = &SCOPES[0];
-    raw.set(wire.tokens, raw_value, Duration::from_secs(60))
+    raw.send(commands::set(wire.tokens, raw_value, Duration::from_secs(60)))
         .await
         .unwrap();
     let entry = Entry::Counter(counter(&scope(wire.descriptor, wire.value), Kind::Tokens));
@@ -308,7 +298,7 @@ async fn reads_values_python_wrote_and_backfills_memory(
             .unwrap(),
         Some(Local::Number(expected))
     );
-    assert_eq!(limits.local(&entry).unwrap(), Some(Local::Number(expected)));
+    assert_eq!(limits.get_local(&entry).unwrap(), Some(Local::Number(expected)));
 }
 
 #[rstest]
@@ -323,9 +313,9 @@ async fn sliding_window_opens_counts_and_resets_with_its_sibling(
     let requests = counter(&key, Kind::Requests);
     let run = |now: i64| {
         let pending = limits
-            .sliding_window(None, std::slice::from_ref(&requests), now, 60)
+            .sliding_window(RedisSend::Now, std::slice::from_ref(&requests), now, 60)
             .unwrap();
-        async move { pending.resolve().await.unwrap() }
+        async move { pending.await.unwrap() }
     };
 
     assert_eq!(
@@ -336,10 +326,10 @@ async fn sliding_window_opens_counts_and_resets_with_its_sibling(
         }]
     );
     assert_eq!(run(1_059).await[0].count, 2);
-    raw.set("{api_key:k1}:tokens", "500", Duration::from_secs(60))
+    raw.send(commands::set("{api_key:k1}:tokens", "500", Duration::from_secs(60)))
         .await
         .unwrap();
-    let Ttl::Expires(ttl) = raw.ttl("{api_key:k1}:requests").await.unwrap() else {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl("{api_key:k1}:requests")).await.unwrap() else {
         panic!("the counter has no TTL");
     };
     assert!(within(ttl, 60), "{ttl:?}");
@@ -372,9 +362,8 @@ async fn check_and_increment_is_all_or_nothing(
     };
 
     let first = limits
-        .check_and_increment(None, &both(1, 60))
+        .check_and_increment(RedisSend::Now, &both(1, 60))
         .unwrap()
-        .resolve()
         .await
         .unwrap();
     let AtomicReply::Applied(applied) = first else {
@@ -385,9 +374,8 @@ async fn check_and_increment_is_all_or_nothing(
 
     assert_eq!(
         limits
-            .check_and_increment(None, &both(1, 41))
+            .check_and_increment(RedisSend::Now, &both(1, 41))
             .unwrap()
-            .resolve()
             .await
             .unwrap(),
         AtomicReply::OverLimit {
@@ -406,9 +394,8 @@ async fn check_and_increment_is_all_or_nothing(
     );
 
     let at_limit = limits
-        .check_and_increment(None, &both(1, 40))
+        .check_and_increment(RedisSend::Now, &both(1, 40))
         .unwrap()
-        .resolve()
         .await
         .unwrap();
     assert!(
@@ -416,9 +403,8 @@ async fn check_and_increment_is_all_or_nothing(
     );
     assert_eq!(
         limits
-            .check_and_increment(None, &both(0, 0))
+            .check_and_increment(RedisSend::Now, &both(0, 0))
             .unwrap()
-            .resolve()
             .await
             .unwrap(),
         AtomicReply::OverLimit {
@@ -440,9 +426,8 @@ async fn guarded_increment_only_settles_the_window_it_was_reserved_in(
     let key = scope("team", "t1");
     let tokens = counter(&key, Kind::Tokens);
     let reply = limits
-        .check_and_increment(None, &[atomic(&key, Kind::Tokens, 1000, 300)])
+        .check_and_increment(RedisSend::Now, &[atomic(&key, Kind::Tokens, 1000, 300)])
         .unwrap()
-        .resolve()
         .await
         .unwrap();
     let AtomicReply::Applied(applied) = reply else {
@@ -451,8 +436,7 @@ async fn guarded_increment_only_settles_the_window_it_was_reserved_in(
     let Applied { window_start, .. } = applied[0];
     let guarded = |expected_window_start: String, amount: i64| {
         let pending = limits
-            .guarded_increment(
-                None,
+            .guarded_increment(RedisSend::Now,
                 &GuardedIncrement {
                     counter: tokens.clone(),
                     expected_window_start,
@@ -461,7 +445,7 @@ async fn guarded_increment_only_settles_the_window_it_was_reserved_in(
                 },
             )
             .unwrap();
-        async move { pending.resolve().await.unwrap() }
+        async move { pending.await.unwrap() }
     };
 
     assert_eq!(
@@ -498,21 +482,21 @@ async fn gauge_slots_are_acquired_released_by_id_and_expire(
     }];
     let acquire = |slot_id: &'static str, slot_ttl: Duration| {
         let pending = limits
-            .parallel_acquire(None, &gauges, slot_ttl, slot_id)
+            .parallel_acquire(RedisSend::Now, &gauges, slot_ttl, slot_id)
             .unwrap();
-        async move { pending.resolve().await.unwrap() }
+        async move { pending.await.unwrap() }
     };
     let release = |slot_id: &'static str| {
         let pending = limits
-            .parallel_release(None, std::slice::from_ref(&key), slot_id)
+            .parallel_release(RedisSend::Now, std::slice::from_ref(&key), slot_id)
             .unwrap();
-        async move { pending.resolve().await.unwrap() }
+        async move { pending.await.unwrap() }
     };
     let count = |slot_ttl: Duration| {
         let pending = limits
-            .parallel_count(None, std::slice::from_ref(&key), slot_ttl)
+            .parallel_count(RedisSend::Now, std::slice::from_ref(&key), slot_ttl)
             .unwrap();
-        async move { pending.resolve().await.unwrap() }
+        async move { pending.await.unwrap() }
     };
 
     assert_eq!(
@@ -558,22 +542,20 @@ async fn token_increment_sets_a_ttl_only_on_a_key_without_one(
         amount,
         ttl: Some(Duration::from_secs(60)),
     };
-    raw.set("{user:u1}:tokens", "10", Duration::from_secs(600))
+    raw.send(commands::set("{user:u1}:tokens", "10", Duration::from_secs(600)))
         .await
         .unwrap();
 
     let totals = limits
-        .token_increment(
-            None,
+        .token_increment(RedisSend::Now,
             &[increment(Number::Float(0.5)), increment(Number::Int(-3))],
         )
         .unwrap()
-        .resolve()
         .await
         .unwrap();
 
     assert_eq!(totals, vec![10.5, 7.5]);
-    let Ttl::Expires(ttl) = raw.ttl("{user:u1}:tokens").await.unwrap() else {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl("{user:u1}:tokens")).await.unwrap() else {
         panic!("the counter lost its TTL");
     };
     assert!(within(ttl, 600), "{ttl:?}");
@@ -643,9 +625,8 @@ async fn gauges_of_different_slots_in_one_call_fail_only_on_a_cluster(
     });
 
     let acquired = limits
-        .parallel_acquire(None, &gauges, SLOT_TTL, "slot")
+        .parallel_acquire(RedisSend::Now, &gauges, SLOT_TTL, "slot")
         .unwrap()
-        .resolve()
         .await;
 
     match deployment {
@@ -668,9 +649,7 @@ async fn a_cross_slot_token_script_on_the_post_call_batch_falls_back_to_plain_in
         ttl: Some(Duration::from_secs(60)),
     });
 
-    limits
-        .token_increment_post_call(&request, increments.to_vec())
-        .unwrap();
+    assert!(limits.token_increment_post_call(&request, increments.to_vec()));
     assert_eq!(raw_text(&raw, "{api_key:a}:tokens").await, None);
     request.flush_post().await;
 
@@ -680,7 +659,7 @@ async fn a_cross_slot_token_script_on_the_post_call_batch_falls_back_to_plain_in
         assert_eq!(written, "25");
     }
     let local = limits
-        .local(&Entry::Counter(counter(
+        .get_local(&Entry::Counter(counter(
             &scope("api_key", "a"),
             Kind::Tokens,
         )))
@@ -736,7 +715,7 @@ async fn post_call_increments_count_in_memory_now_and_reach_redis_with_the_batch
         amount: Number::Int(-40),
         ttl: Some(Duration::from_secs(60)),
     };
-    raw.set("{end_user:e1}:tokens", "100", Duration::from_secs(600))
+    raw.send(commands::set("{end_user:e1}:tokens", "100", Duration::from_secs(600)))
         .await
         .unwrap();
 
@@ -745,7 +724,7 @@ async fn post_call_increments_count_in_memory_now_and_reach_redis_with_the_batch
         .unwrap();
     assert_eq!(
         limits
-            .local(&Entry::Counter(increment.counter.clone()))
+            .get_local(&Entry::Counter(increment.counter.clone()))
             .unwrap(),
         Some(Local::Number(Number::Int(-40)))
     );
@@ -762,7 +741,7 @@ async fn post_call_increments_count_in_memory_now_and_reach_redis_with_the_batch
     })
     .await;
     assert_eq!(written, "60");
-    let Ttl::Expires(ttl) = raw.ttl("{end_user:e1}:tokens").await.unwrap() else {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl("{end_user:e1}:tokens")).await.unwrap() else {
         panic!("the counter lost its TTL");
     };
     // RedisBatch refreshes the TTL in a pipeline, and on a cluster runs async_increment, which
@@ -786,7 +765,7 @@ async fn increment_keeps_an_existing_ttl_and_counts_in_memory(
         amount: Number::Int(5),
         ttl: Some(Duration::from_secs(60)),
     };
-    raw.set("{organization:o1}:tokens", "10", Duration::from_secs(600))
+    raw.send(commands::set("{organization:o1}:tokens", "10", Duration::from_secs(600)))
         .await
         .unwrap();
 
@@ -794,13 +773,13 @@ async fn increment_keeps_an_existing_ttl_and_counts_in_memory(
         limits.increment(&increment).await.unwrap(),
         Number::Float(15.0)
     );
-    let Ttl::Expires(ttl) = raw.ttl("{organization:o1}:tokens").await.unwrap() else {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl("{organization:o1}:tokens")).await.unwrap() else {
         panic!("the counter lost its TTL");
     };
     assert!(within(ttl, 600), "{ttl:?}");
     assert_eq!(
         limits
-            .local(&Entry::Counter(increment.counter.clone()))
+            .get_local(&Entry::Counter(increment.counter.clone()))
             .unwrap(),
         Some(Local::Number(Number::Int(5)))
     );
@@ -821,9 +800,8 @@ async fn increment_answers_with_memory_while_redis_is_down() {
     assert_eq!(limits.increment(&increment).await.unwrap(), Number::Int(14));
     assert!(
         limits
-            .sliding_window(None, std::slice::from_ref(&increment.counter), 1_000, 60)
+            .sliding_window(RedisSend::Now, std::slice::from_ref(&increment.counter), 1_000, 60)
             .unwrap()
-            .resolve()
             .await
             .is_err()
     );
@@ -831,17 +809,19 @@ async fn increment_answers_with_memory_while_redis_is_down() {
 
 #[tokio::test]
 async fn scripts_need_redis() {
-    let limits = RateLimits::new(None, None, REDIS_TTL);
+    let limits = Arc::new(RateLimits::new(None, None));
+    let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
     assert!(
         limits
-            .sliding_window(
-                None,
+            .sliding_window(RedisSend::Now,
                 &[counter(&scope("api_key", "k"), Kind::Requests)],
                 0,
                 60
             )
-            .is_err()
+            .is_none()
     );
+    assert!(!limits.token_increment_post_call(&request, Vec::new()));
+    assert!(!limits.parallel_release_post_call(&request, &[scope("api_key", "k")], "slot"));
     assert_eq!(
         limits.slot_groups(&[scope("a", "1"), scope("b", "2")], false),
         vec![vec![0, 1]]
@@ -855,23 +835,22 @@ async fn the_limiter_script_and_the_armed_cooldown_read_share_one_pipeline(
 ) {
     let deployment = RedisDeployment::start(topology).await.unwrap();
     let (client, trips) = connect_observed(&deployment);
-    let cooldowns = RouterCooldowns::new(Some(client.clone()), COOLDOWN_POLICY);
-    let limits = RateLimits::new(Some(client), None, REDIS_TTL);
+    let cooldowns = std::sync::Arc::new(RouterCooldowns::new(Some(remote(client.clone())), COOLDOWN_POLICY));
+    let limits = RateLimits::new(Some(remote(client)), None);
     let request = RequestRedis::new(Handle::current(), Duration::from_secs(60));
 
     let armed = cooldowns
-        .declare_active(&request, &["dep-a".to_owned()])
+        .active(RedisSend::PreCall(&request), &["dep-a".to_owned()])
         .unwrap();
     let admission = limits
-        .sliding_window(
-            Some(&request),
+        .sliding_window(RedisSend::PreCall(&request),
             &[counter(&scope("api_key", "k1"), Kind::Requests)],
             1_000,
             60,
         )
         .unwrap();
-    let counts = admission.resolve().await.unwrap();
-    let active = cooldowns.resolve_active(armed).await.unwrap();
+    let counts = admission.await.unwrap();
+    let active = armed.await.unwrap();
 
     assert_eq!(counts[0].count, 1);
     assert!(active.is_empty());
@@ -908,7 +887,7 @@ async fn an_increment_without_a_ttl_takes_the_redis_default_like_async_increment
         .await
         .unwrap();
 
-    let Ttl::Expires(ttl) = raw.ttl("{api_key:k}:tokens").await.unwrap() else {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl("{api_key:k}:tokens")).await.unwrap() else {
         panic!("the counter has no TTL");
     };
     assert!(within(ttl, 60), "{ttl:?}");
@@ -950,9 +929,16 @@ async fn a_cold_script_cache_costs_the_evalshas_redis_py_sends(
     }];
 
     let reply = limits
-        .parallel_acquire(on_request.then_some(&request), &gauges, SLOT_TTL, "slot-1")
+        .parallel_acquire(
+            match on_request {
+                true => RedisSend::PreCall(&request),
+                false => RedisSend::Now,
+            },
+            &gauges,
+            SLOT_TTL,
+            "slot-1",
+        )
         .unwrap()
-        .resolve()
         .await
         .unwrap();
 

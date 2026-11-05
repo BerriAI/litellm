@@ -3,10 +3,11 @@ mod support;
 use std::time::{Duration, Instant};
 
 use litellm_redis_client::Value;
+use litellm_redis_client::commands;
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
 
-use litellm_redis_client::{Amount, DEFAULT_TIMEOUT, Error, Script};
+use litellm_redis_client::{Amount, DEFAULT_TIMEOUT, Error, Expiry, Script};
 use support::connect;
 
 async fn begin_migration(cluster: &litellm_redis_testing::RedisCluster, key: &str) {
@@ -90,7 +91,7 @@ async fn a_retrying_neighbor_cannot_reapply_a_cluster_counter() {
     let client = connect(&server, "", DEFAULT_TIMEOUT);
     let counter = "{migration}:counter";
     client
-        .set(counter, 0, Duration::from_secs(60))
+        .send(commands::set(counter, 0, Duration::from_secs(60)))
         .await
         .unwrap();
     let RedisDeployment::Cluster(cluster) = &server else {
@@ -103,16 +104,16 @@ async fn a_retrying_neighbor_cannot_reapply_a_cluster_counter() {
         .run(
             &client
                 .pipeline()
-                .incr_by_float(counter, Amount::Int(1), Some(Duration::from_secs(60)))
-                .eval(
+                .add(commands::incr_by_float(counter, Amount::Int(1), Some(Expiry::Refresh(Duration::from_secs(60)))))
+                .add(commands::eval::<Value>(
                     &both_keys,
                     &[counter, "{migration}:missing"],
                     Vec::<String>::new(),
-                ),
+                )),
         )
         .await;
 
-    assert_eq!(client.get::<i64>(counter).await.unwrap(), Some(1));
+    assert_eq!(client.send(commands::get::<i64>(counter)).await.unwrap(), Some(1));
     assert_eq!(
         results[0].as_ref().unwrap(),
         &Value::BulkString(b"1".to_vec())
@@ -132,18 +133,18 @@ async fn each_op_settles_on_its_own_in_input_order(
     let server = RedisDeployment::start(topology).await.unwrap();
     let client = connect(&server, "", DEFAULT_TIMEOUT);
     client
-        .set("text", "not a number", Duration::from_secs(60))
+        .send(commands::set("text", "not a number", Duration::from_secs(60)))
         .await
         .unwrap();
     let pipeline = client
         .pipeline()
-        .incr_by_float("a", Amount::Int(1), Some(Duration::from_secs(60)))
-        .incr_by_float("text", Amount::Int(1), Some(Duration::from_secs(60)))
-        .incr_by_float("c", Amount::Int(5), Some(Duration::from_secs(60)))
-        .set("b", "2", Duration::from_secs(60))
-        .get("b")
-        .incr_by_float("a", Amount::Int(1), Some(Duration::from_secs(60)))
-        .get("missing");
+        .add(commands::incr_by_float("a", Amount::Int(1), Some(Expiry::Refresh(Duration::from_secs(60)))))
+        .add(commands::incr_by_float("text", Amount::Int(1), Some(Expiry::Refresh(Duration::from_secs(60)))))
+        .add(commands::incr_by_float("c", Amount::Int(5), Some(Expiry::Refresh(Duration::from_secs(60)))))
+        .add(commands::set("b", "2", Duration::from_secs(60)))
+        .add(commands::get::<Value>("b"))
+        .add(commands::incr_by_float("a", Amount::Int(1), Some(Expiry::Refresh(Duration::from_secs(60)))))
+        .add(commands::get::<Value>("missing"));
 
     let results = client.run(&pipeline).await;
 
@@ -184,7 +185,7 @@ async fn a_lost_script_reruns_after_the_rest_of_its_pipeline_like_redis_py(
     let server = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let client = connect(&server, "ns", DEFAULT_TIMEOUT);
     let incr = Script::new("return redis.call('INCRBY', KEYS[1], ARGV[1])");
-    client.eval::<i64>(&incr, &["warmup"], 1).await.unwrap();
+    client.send(commands::eval::<i64>(&incr, &["warmup"], 1)).await.unwrap();
     if !cached {
         server
             .cli_on_every_node(&["SCRIPT", "FLUSH"])
@@ -193,14 +194,14 @@ async fn a_lost_script_reruns_after_the_rest_of_its_pipeline_like_redis_py(
     }
     let pipeline = client
         .pipeline()
-        .eval(&incr, &["counter"], 2)
-        .get("counter");
+        .add(commands::eval::<Value>(&incr, &["counter"], 2))
+        .add(commands::get::<Value>("counter"));
 
     let results = client.run(&pipeline).await;
 
     assert_eq!(results[0].as_ref().unwrap(), &Value::Int(2));
     assert_eq!(results[1].as_ref().unwrap(), &read_in_the_same_pipeline);
-    assert_eq!(client.get::<i64>("counter").await.unwrap(), Some(2));
+    assert_eq!(client.send(commands::get::<i64>("counter")).await.unwrap(), Some(2));
 }
 
 #[rstest]
@@ -212,8 +213,8 @@ async fn an_unreachable_server_fails_every_op_as_transport(
     let client = connect(&server, "", Duration::from_millis(500));
     let pipeline = client
         .pipeline()
-        .incr_by_float("a", Amount::Int(1), Some(Duration::from_secs(60)))
-        .incr_by_float("c", Amount::Int(1), Some(Duration::from_secs(60)));
+        .add(commands::incr_by_float("a", Amount::Int(1), Some(Expiry::Refresh(Duration::from_secs(60)))))
+        .add(commands::incr_by_float("c", Amount::Int(1), Some(Expiry::Refresh(Duration::from_secs(60)))));
 
     server.freeze().await.unwrap();
     let results = client.run(&pipeline).await;
@@ -271,20 +272,20 @@ async fn a_pipeline_sends_scripts_by_sha_and_reruns_only_the_ones_the_server_los
         .run(
             &client
                 .pipeline()
-                .incr_by_float(
+                .add(commands::incr_by_float(
                     "{a}spend",
                     Amount::Float(0.5),
-                    Some(Duration::from_secs(60)),
-                )
-                .eval(&count, &["{a}"], Vec::<String>::new())
-                .eval(&count, &["b"], Vec::<String>::new()),
+                    Some(Expiry::Refresh(Duration::from_secs(60))),
+                ))
+                .add(commands::eval::<Value>(&count, &["{a}"], Vec::<String>::new()))
+                .add(commands::eval::<Value>(&count, &["b"], Vec::<String>::new())),
         )
         .await;
     let second = client
         .run(
             &client
                 .pipeline()
-                .eval(&count, &["{a}"], Vec::<String>::new()),
+                .add(commands::eval::<Value>(&count, &["{a}"], Vec::<String>::new())),
         )
         .await;
 
@@ -302,7 +303,7 @@ async fn a_pipeline_sends_scripts_by_sha_and_reruns_only_the_ones_the_server_los
             Value::Int(2)
         ]
     );
-    assert_eq!(client.get::<f64>("{a}spend").await.unwrap(), Some(0.5));
+    assert_eq!(client.send(commands::get::<f64>("{a}spend")).await.unwrap(), Some(0.5));
     let stats = support::command_stats(&deployment).await;
     assert!(support::calls(&stats, "evalsha") > 0, "{stats}");
     assert_eq!(support::calls(&stats, "eval"), 0, "{stats}");

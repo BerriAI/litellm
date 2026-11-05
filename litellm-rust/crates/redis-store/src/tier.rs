@@ -1,14 +1,16 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex, MutexGuard},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::Mutex,
+    time::Duration,
 };
 
-use litellm_redis_client::{Declared, Error as RedisError, RedisBatch, RedisClient};
+use litellm_cache::Error;
+use litellm_redis_client::{Declared, Error as RedisError, commands};
 
-use litellm_cache::{BaseCache, DeleteCache, Error, ExactCacheContext, FlushCache};
-
-pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
+use crate::{
+    memory::{Clock, Memory, lock},
+    remote::RemoteSlot,
+};
 
 /// How a read-through family uses its memory tier, declared once by the family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,73 +31,30 @@ pub enum OnBreakerOpen {
 }
 
 /// The memory tier in front of Redis that a read-through family builds for itself, as Python's
-/// `DualCache` with a `RedisCache` does.
-pub struct MemoryTier<L1, L2> {
-    memory: L1,
-    remote: Option<L2>,
+/// `DualCache` with a `RedisCache` does. The family owns the Redis and passes it to each read.
+pub struct MemoryTier<V: Clone> {
+    memory: Memory<V>,
     policy: TierPolicy,
     reads: Mutex<RecentReads>,
-    updates: Mutex<()>,
     now: Clock,
 }
 
-pub fn system_clock() -> Clock {
-    Arc::new(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-    })
-}
-
-impl<V, L1> MemoryTier<L1, RedisClient>
-where
-    V: Clone + Send + Sync + 'static,
-    L1: BaseCache<Value = V, Context = ExactCacheContext> + DeleteCache + FlushCache,
-{
-    pub fn read_through(
-        memory: L1,
-        remote: Option<RedisClient>,
-        policy: TierPolicy,
-        now: Clock,
-    ) -> Self {
+impl<V: Clone + Send + Sync + 'static> MemoryTier<V> {
+    pub fn read_through(policy: TierPolicy, now: Clock) -> Self {
         Self {
-            memory,
-            remote,
+            memory: Memory::new(None, &now),
             reads: Mutex::new(RecentReads::new(policy.tracked_reads)),
             policy,
-            updates: Mutex::new(()),
             now,
         }
     }
 
-    pub fn memory(&self) -> &L1 {
+    pub fn memory(&self) -> &Memory<V> {
         &self.memory
-    }
-
-    pub fn remote(&self) -> Option<&RedisClient> {
-        self.remote.as_ref()
     }
 
     pub fn now(&self) -> Duration {
         (self.now)()
-    }
-
-    pub fn set_memory(&self, key: &str, value: V, ttl: Duration) -> Result<(), Error> {
-        self.memory
-            .set_cache(key, value, &ExactCacheContext { ttl: Some(ttl) })
-    }
-
-    /// Read-modify-write of one memory entry, atomic against every other update of this tier.
-    pub fn update_memory(
-        &self,
-        key: &str,
-        ttl: Duration,
-        update: impl FnOnce(Option<V>) -> V,
-    ) -> Result<V, Error> {
-        let _guard = lock(&self.updates)?;
-        let value = update(self.memory.get_cache(key, &ExactCacheContext::default())?);
-        self.set_memory(key, value.clone(), ttl)?;
-        Ok(value)
     }
 
     /// Python's `DualCache.async_batch_get_cache`: memory first, then one round trip for the misses
@@ -103,28 +62,29 @@ where
     /// `RedisCache` swallows it, and only a breaker refusal releases the refresh it reserved.
     pub async fn get_many<E: std::fmt::Display>(
         &self,
+        remote: &RemoteSlot,
         keys: &[String],
         decode: impl Fn(&[u8]) -> Result<V, E>,
     ) -> Result<Vec<Option<V>>, Error> {
-        let declared = self.declare_many(RedisClient::batch, keys)?;
+        let declared = self.declare_many(remote, crate::Send::Now, keys)?;
         self.resolve_many(declared, decode).await
     }
 
-    /// The first half of `get_many`: reserves the due refreshes and declares their GETs on the
-    /// batch `batch_for` picks for this tier's client, without sending anything.
+    /// The first half of `get_many`: reserves the due refreshes and declares their `MGET` on the
+    /// batch `send` picks for the family's client, without sending anything.
     pub fn declare_many(
         &self,
-        batch_for: impl FnOnce(&RedisClient) -> RedisBatch,
+        remote: &RemoteSlot,
+        send: crate::Send<'_>,
         keys: &[String],
     ) -> Result<DeclaredRead, Error> {
-        let fetch = match &self.remote {
+        let fetch = match remote.client() {
             None => None,
-            Some(remote) => {
+            Some(client) => {
                 let reservation = self.reserve(keys, &self.read_memory(keys)?)?;
                 (!reservation.keys.is_empty()).then(|| {
-                    let batch = batch_for(remote);
                     let keys: Vec<&str> = reservation.keys.iter().map(String::as_str).collect();
-                    let replies = batch.mget::<Vec<u8>>(&keys);
+                    let replies = send.batch(client).add(commands::mget::<Vec<u8>>(&keys));
                     Fetch {
                         reservation,
                         replies,
@@ -153,7 +113,7 @@ where
         else {
             return self.read_memory(&keys);
         };
-        let fetched = settle(replies).await;
+        let fetched = replies.resolve().await;
         let local = self.read_memory(&keys)?;
         let fetched = match fetched {
             Ok(fetched) => fetched,
@@ -191,31 +151,21 @@ where
             .collect()
     }
 
-    pub fn delete_memory(&self, key: &str) -> Result<(), Error> {
-        self.memory.delete_cache(key)
-    }
-
-    pub fn flush_memory(&self) -> Result<(), Error> {
-        self.memory.flush_cache()
-    }
-
     fn read_memory(&self, keys: &[String]) -> Result<Vec<Option<V>>, Error> {
-        let context = ExactCacheContext::default();
-        keys.iter()
-            .map(|key| self.memory.get_cache(key, &context))
-            .collect()
+        keys.iter().map(|key| self.memory.get(key)).collect()
     }
 
     fn backfill(&self, key: &str, value: Option<V>) -> Result<Option<V>, Error> {
         if let Some(value) = &value {
-            self.set_memory(key, value.clone(), self.policy.backfill_ttl)?;
+            self.memory
+                .set(key, value.clone(), Some(self.policy.backfill_ttl))?;
         }
         Ok(value)
     }
 
     fn reserve(&self, keys: &[String], local: &[Option<V>]) -> Result<Reservation, Error> {
         let now = self.now();
-        let mut reads = lock(&self.reads)?;
+        let mut reads = lock(&self.reads);
         let due = keys
             .iter()
             .zip(local)
@@ -235,7 +185,7 @@ where
     }
 
     fn release(&self, reservation: Reservation) -> Result<(), Error> {
-        let mut reads = lock(&self.reads)?;
+        let mut reads = lock(&self.reads);
         for (key, previous) in reservation.keys.into_iter().zip(reservation.previous) {
             match previous {
                 Some(read) => reads.insert(key, read),
@@ -246,18 +196,8 @@ where
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, Error> {
-    Ok(mutex.lock()?)
-}
-
-async fn settle(
-    replies: Declared<Vec<Option<Vec<u8>>>>,
-) -> Result<Vec<Option<Vec<u8>>>, RedisError> {
-    replies.resolve().await
-}
-
 /// The GETs `declare_many` put on a batch, with the refreshes they reserved.
-pub struct DeclaredRead {
+pub(crate) struct DeclaredRead {
     keys: Vec<String>,
     fetch: Option<Fetch>,
 }

@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
-use litellm_redis_store::router_cooldowns::{Cooldown, RouterCooldowns};
+use litellm_redis_store::{
+    Send,
+    router_cooldowns::{Cooldown, RouterCooldowns},
+};
 use pyo3::{
-    exceptions::PyValueError,
     prelude::*,
     types::{PyDict, PyTuple},
 };
 
 use super::{
-    NativePending, PyNumber, policy::router_tier_policies, redis_async, redis_sync,
-    request::NativeRequestRedis, store_error, ttl, value::PyValue,
+    NativePending, PyData, PyNumber, pending, policy::router_tier_policies, redis_sync, remote,
+    request::NativeSend, runtime_error, ttl,
 };
 use crate::redis::client::NativeRedisClient;
 
@@ -17,30 +19,6 @@ use crate::redis::client::NativeRedisClient;
 /// `minimum` and `increment_allowed_fails`, so those block with the GIL released like redis-py.
 #[pyclass(frozen, name = "NativeRouterCooldowns")]
 pub(crate) struct NativeRouterCooldowns(Arc<RouterCooldowns>);
-
-/// A `CooldownCacheValue` dict, whose shape `Cooldown` owns.
-pub(crate) struct PyCooldown(Cooldown);
-
-impl<'a, 'py> FromPyObject<'a, 'py> for PyCooldown {
-    type Error = PyErr;
-
-    fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let PyValue(value) = value.extract()?;
-        Cooldown::from_value(&value)
-            .map(Self)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
-    }
-}
-
-impl<'py> IntoPyObject<'py> for PyCooldown {
-    type Target = PyAny;
-    type Output = Bound<'py, PyAny>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        PyValue(self.0.to_value()).into_pyobject(py)
-    }
-}
 
 /// `[(model_id, cooldown), ...]` the way `RedisCache` hands the router its batch read.
 struct PyActive(Vec<(String, Cooldown)>);
@@ -68,7 +46,7 @@ fn active_to_py(
                 py,
                 [
                     model_id.into_pyobject(py)?.into_any(),
-                    PyCooldown(cooldown).into_pyobject(py)?.into_any(),
+                    PyData(cooldown).into_pyobject(py)?,
                 ],
             )
         })
@@ -78,22 +56,29 @@ fn active_to_py(
 #[pymethods]
 impl NativeRouterCooldowns {
     #[new]
-    fn new(py: Python<'_>, client: Option<PyRef<'_, NativeRedisClient>>) -> PyResult<Self> {
-        let client = client.map(|client| client.0.clone());
+    #[pyo3(signature = (client, redis_ttl_seconds = 60))]
+    fn new(py: Python<'_>, client: Option<PyRef<'_, NativeRedisClient>>, redis_ttl_seconds: u64) -> PyResult<Self> {
+        let remote = client.map(|client| remote(&client, redis_ttl_seconds));
         let policy = router_tier_policies(py)?.cooldowns;
-        Ok(Self(Arc::new(RouterCooldowns::new(client, policy))))
+        Ok(Self(Arc::new(RouterCooldowns::new(remote, policy))))
+    }
+
+    /// Adds the Redis tier and keeps memory; `false` when one was already attached.
+    #[pyo3(signature = (client, redis_ttl_seconds = 60))]
+    fn attach(&self, client: PyRef<'_, NativeRedisClient>, redis_ttl_seconds: u64) -> bool {
+        self.0.attach(remote(&client, redis_ttl_seconds))
     }
 
     fn put(
         &self,
         py: Python<'_>,
         model_id: String,
-        cooldown: PyCooldown,
+        cooldown: PyData<Cooldown>,
         ttl_seconds: f64,
     ) -> PyResult<()> {
         let store = self.0.clone();
         let ttl = ttl(Some(ttl_seconds)).unwrap_or_default();
-        redis_sync(py, "set_cache", store_error, async move {
+        redis_sync(py, "set_cache", runtime_error, async move {
             store.put(&model_id, &cooldown.0, ttl).await
         })
     }
@@ -107,52 +92,33 @@ impl NativeRouterCooldowns {
     ) -> PyResult<i64> {
         let store = self.0.clone();
         let ttl = ttl(Some(ttl_seconds)).unwrap_or_default();
-        redis_sync(py, "increment_cache", store_error, async move {
+        redis_sync(py, "increment_cache", runtime_error, async move {
             store
                 .increment_allowed_fails(&model_id, suffix.as_deref(), ttl)
                 .await
         })
     }
 
-    fn active<'py>(
+    /// The deployments still cooling down, read on the batch `send` picks.
+    fn active(&self, model_ids: Vec<String>, send: &NativeSend) -> PyResult<NativePending> {
+        let active = self.0.active(send.send(), &model_ids).map_err(runtime_error)?;
+        Ok(pending("async_batch_get_cache", runtime_error, active, PyActive))
+    }
+
+    /// `active` on its own with the GIL released, for the router's sync completion path.
+    fn active_sync<'py>(
         &self,
         py: Python<'py>,
         model_ids: Vec<String>,
     ) -> PyResult<Vec<Bound<'py, PyTuple>>> {
-        let store = self.0.clone();
-        let active = redis_sync(py, "batch_get_cache", store_error, async move {
-            store.active(&model_ids).await
-        })?;
+        let active = self.0.active(Send::Now, &model_ids).map_err(runtime_error)?;
+        let active = redis_sync(py, "batch_get_cache", runtime_error, active)?;
         active_to_py(py, active)
-    }
-
-    fn aactive<'py>(&self, py: Python<'py>, model_ids: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        redis_async(py, "async_batch_get_cache", store_error, async move {
-            store.active(&model_ids).await.map(PyActive)
-        })
-    }
-
-    fn declare_active(
-        &self,
-        request: &NativeRequestRedis,
-        model_ids: Vec<String>,
-    ) -> PyResult<NativePending> {
-        let declared = self
-            .0
-            .declare_active(&request.0, &model_ids)
-            .map_err(store_error)?;
-        let store = self.0.clone();
-        Ok(NativePending::new(
-            "async_batch_get_cache",
-            store_error,
-            async move { store.resolve_active(declared).await.map(PyActive) },
-        ))
     }
 
     fn minimum(&self, py: Python<'_>, model_ids: Vec<String>) -> PyResult<Option<PyNumber>> {
         let store = self.0.clone();
-        redis_sync(py, "batch_get_cache", store_error, async move {
+        redis_sync(py, "batch_get_cache", runtime_error, async move {
             store
                 .minimum(&model_ids)
                 .await
@@ -160,18 +126,18 @@ impl NativeRouterCooldowns {
         })
     }
 
-    fn evict_local(&self, model_id: &str) -> PyResult<()> {
-        self.0.evict_local(model_id).map_err(store_error)
+    fn delete_local(&self, model_id: &str) -> PyResult<()> {
+        self.0.delete_local(model_id).map_err(runtime_error)
     }
 
     fn flush_local_counters(&self) -> PyResult<()> {
-        self.0.flush_local_counters().map_err(store_error)
+        self.0.flush_local_counters().map_err(runtime_error)
     }
 
     fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let snapshot = PyDict::new(py);
-        for (key, cooldown) in self.0.snapshot().map_err(store_error)? {
-            snapshot.set_item(key, PyCooldown(cooldown))?;
+        for (key, cooldown) in self.0.snapshot().map_err(runtime_error)? {
+            snapshot.set_item(key, PyData(cooldown))?;
         }
         Ok(snapshot)
     }

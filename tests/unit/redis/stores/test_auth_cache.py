@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.caching.redis_batch import request_redis_batch_scope
+from litellm.caching.redis_batch import Batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.common_utils.user_api_key_cache import is_user_key_cache_key
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore
 from litellm.rust_bridge._native import NativeAuthCache
-from tests.unit.caching.test_redis_batch import FakeNatives
+from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
 
 from .auth_cache_double import FakeAuthCache
 
@@ -124,13 +124,13 @@ async def test_a_key_the_request_read_found_absent_is_answered_without_another_r
     fake: Final = FakeAuthCache(redis={"team_id:hit": {"team_id": "hit"}})
     store: Final = AuthCacheStore(None, AuthCacheSettings(200, 60), redis_ttl=60, handle=fake.factory)
 
-    with request_redis_batch_scope(native_factory=FakeNatives()) as request:  # pyright: ignore[reportArgumentType]  # test double
-        found = await store.read_missing(["team_id:absent", "team_id:hit"])
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        found = await store.read_missing(["team_id:absent", "team_id:hit"], batch=Batch.PRE_CALL)
         absent = await store.get("team_id:absent")
         await store.set("team_id:absent", {"team_id": "now"}, None)
         store.delete_local("team_id:absent")
         refilled = await store.get("team_id:absent")
-        store.delete_pre_call("team_id:hit")
+        store.declare_delete("team_id:hit")
         deleted = await store.get("team_id:hit")
         await request.flush_all()
 
@@ -146,11 +146,11 @@ async def test_outside_a_request_a_read_is_a_round_trip_of_its_own() -> None:
     fake: Final = FakeAuthCache(redis={"team_id:t1": {"team_id": "t1"}})
     store: Final = AuthCacheStore(None, AuthCacheSettings(200, 60), redis_ttl=60, handle=fake.factory)
 
-    assert await store.read_missing(["team_id:t1", "team_id:t2"]) == {
+    assert await store.read_missing(["team_id:t1", "team_id:t2"], batch=Batch.PRE_CALL) == {
         "team_id:t1": {"team_id": "t1"},
         "team_id:t2": None,
     }
-    assert store.set_pre_call("team_id:t3", {}, None) is None
+    assert store.declare_set("team_id:t3", {}, None) is None
     assert fake.commands == [("MGET", ("team_id:t1", "team_id:t2"))]
 
 

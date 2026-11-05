@@ -1,53 +1,27 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use litellm_redis_store::spend_counters::{Error, LostSeed, SpendCounter, SpendCounters};
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use litellm_redis_store::{
+    Number,
+    spend_counters::{LostSeed, SpendCounter, SpendCounters},
+};
+use pyo3::{prelude::*, types::PyDict};
 
 use super::{
-    NativePending, PyNumber, kind_error, redis_async, request::NativeRequestRedis, store_error, ttl,
+    NativePending, PyData, PyNumber, kind_error, pending, redis_async, remote,
+    request::{NativeRequestRedis, NativeSend},
+    ttl, unwrap_all,
 };
 use crate::redis::client::NativeRedisClient;
 
-fn spend_error(error: Error) -> PyErr {
-    kind_error(error.kind(), &error)
-}
-
-fn infallible(error: Infallible) -> PyErr {
-    match error {}
-}
-
-/// A `spend:*` key, refused when it names anything outside the spend counter keyspace.
-pub(crate) struct PySpendCounter(SpendCounter);
-
-impl<'a, 'py> FromPyObject<'a, 'py> for PySpendCounter {
-    type Error = PyErr;
-
-    fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let key: String = value.extract()?;
-        SpendCounter::parse(&key)
-            .map(Self)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
-    }
-}
-
-fn counters(counters: Vec<PySpendCounter>) -> Vec<SpendCounter> {
-    counters.into_iter().map(|counter| counter.0).collect()
-}
-
-fn increments(
-    increments: Vec<(PySpendCounter, PyNumber)>,
-) -> Vec<(SpendCounter, litellm_redis_store::Number)> {
+fn increments(increments: Vec<(PyData<SpendCounter>, PyNumber)>) -> Vec<(SpendCounter, Number)> {
     increments
         .into_iter()
         .map(|(counter, amount)| (counter.0, amount.0))
         .collect()
 }
 
-fn numbers(values: Vec<Option<litellm_redis_store::Number>>) -> Vec<Option<PyNumber>> {
-    values
-        .into_iter()
-        .map(|value| value.map(PyNumber))
-        .collect()
+fn numbers(values: Option<Vec<Option<Number>>>) -> Option<Vec<Option<PyNumber>>> {
+    values.map(|values| values.into_iter().map(|value| value.map(PyNumber)).collect())
 }
 
 /// The proxy's spend counters, Redis first with this worker's memory copy behind it.
@@ -60,55 +34,41 @@ impl NativeSpendCounters {
     #[pyo3(signature = (client, redis_ttl_seconds = 60))]
     fn new(client: Option<PyRef<'_, NativeRedisClient>>, redis_ttl_seconds: u64) -> Self {
         Self(Arc::new(SpendCounters::new(
-            client.map(|client| client.0.clone()),
-            Duration::from_secs(redis_ttl_seconds),
+            client.map(|client| remote(&client, redis_ttl_seconds)),
         )))
     }
 
+    /// Adds the Redis tier and keeps memory; `false` when one was already attached.
+    #[pyo3(signature = (client, redis_ttl_seconds = 60))]
+    fn attach(&self, client: PyRef<'_, NativeRedisClient>, redis_ttl_seconds: u64) -> bool {
+        self.0.attach(remote(&client, redis_ttl_seconds))
+    }
+
     /// `("redis" | "memory", value)`: where the answer came from, a Redis miss included.
-    fn read<'py>(&self, py: Python<'py>, counter: PySpendCounter) -> PyResult<Bound<'py, PyAny>> {
+    fn read<'py>(&self, py: Python<'py>, counter: PyData<SpendCounter>) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        redis_async(py, "async_get_cache", store_error, async move {
+        redis_async(py, "async_get_cache", kind_error, async move {
             let reading = store.read(&counter.0).await?;
             let source: &'static str = reading.into();
             Ok((source, reading.value().map(PyNumber)))
         })
     }
 
-    fn read_many<'py>(
-        &self,
-        py: Python<'py>,
-        counters: Vec<PySpendCounter>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        let counters = self::counters(counters);
-        redis_async(py, "async_batch_get_cache", infallible, async move {
-            Ok(store.read_many(&counters).await.map(numbers))
-        })
-    }
-
-    fn declare_read_many(
-        &self,
-        request: &NativeRequestRedis,
-        counters: Vec<PySpendCounter>,
-    ) -> Option<NativePending> {
-        self.0
-            .declare_read_many_pre_call(&request.0, &self::counters(counters))
-            .map(|declared| {
-                NativePending::new("async_batch_get_cache", infallible, async move {
-                    Ok(declared.resolve().await.map(numbers))
-                })
-            })
+    /// One `MGET` on the batch `send` picks; `None` without Redis. It resolves to `None` when the
+    /// read failed, so each caller reads on its own.
+    fn read_many(&self, counters: Vec<PyData<SpendCounter>>, send: &NativeSend) -> Option<NativePending> {
+        let read = self.0.read_many(send.send(), &unwrap_all(counters))?;
+        Some(pending("async_batch_get_cache", kind_error, read, numbers))
     }
 
     fn increment<'py>(
         &self,
         py: Python<'py>,
-        counter: PySpendCounter,
+        counter: PyData<SpendCounter>,
         amount: PyNumber,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        redis_async(py, "async_increment", spend_error, async move {
+        redis_async(py, "async_increment", kind_error, async move {
             store.increment(&counter.0, amount.0).await.map(PyNumber)
         })
     }
@@ -116,11 +76,11 @@ impl NativeSpendCounters {
     fn increment_many<'py>(
         &self,
         py: Python<'py>,
-        increments: Vec<(PySpendCounter, PyNumber)>,
+        increments: Vec<(PyData<SpendCounter>, PyNumber)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
         let increments = self::increments(increments);
-        redis_async(py, "async_increment_pipeline", spend_error, async move {
+        redis_async(py, "async_increment_pipeline", kind_error, async move {
             let totals = store.increment_many(&increments).await?;
             Ok(totals.into_iter().map(PyNumber).collect::<Vec<_>>())
         })
@@ -130,7 +90,7 @@ impl NativeSpendCounters {
     fn increment_many_post_call(
         &self,
         request: &NativeRequestRedis,
-        increments: Vec<(PySpendCounter, PyNumber)>,
+        increments: Vec<(PyData<SpendCounter>, PyNumber)>,
     ) -> bool {
         self.0
             .increment_many_post_call(&request.0, &self::increments(increments))
@@ -139,11 +99,11 @@ impl NativeSpendCounters {
     fn set_max<'py>(
         &self,
         py: Python<'py>,
-        counter: PySpendCounter,
+        counter: PyData<SpendCounter>,
         spend: PyNumber,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        redis_async(py, "async_set_max", spend_error, async move {
+        redis_async(py, "async_set_max", kind_error, async move {
             store
                 .set_max(&counter.0, spend.0)
                 .await
@@ -155,7 +115,7 @@ impl NativeSpendCounters {
     fn seed<'py>(
         &self,
         py: Python<'py>,
-        counter: PySpendCounter,
+        counter: PyData<SpendCounter>,
         spend: PyNumber,
         increment_if_lost: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -165,7 +125,7 @@ impl NativeSpendCounters {
         } else {
             LostSeed::Answer
         };
-        redis_async(py, "async_set_cache", spend_error, async move {
+        redis_async(py, "async_set_cache", kind_error, async move {
             store.seed(&counter.0, spend.0, lost).await.map(PyNumber)
         })
     }
@@ -174,12 +134,12 @@ impl NativeSpendCounters {
     fn set<'py>(
         &self,
         py: Python<'py>,
-        counter: PySpendCounter,
+        counter: PyData<SpendCounter>,
         spend: PyNumber,
         ttl_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        redis_async(py, "async_set_cache", spend_error, async move {
+        redis_async(py, "async_set_cache", kind_error, async move {
             store.set(&counter.0, spend.0, ttl(ttl_seconds)).await
         })
     }
@@ -187,11 +147,11 @@ impl NativeSpendCounters {
     fn delete<'py>(
         &self,
         py: Python<'py>,
-        counters: Vec<PySpendCounter>,
+        counters: Vec<PyData<SpendCounter>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        let counters = self::counters(counters);
-        redis_async(py, "async_delete_cache", spend_error, async move {
+        let counters = unwrap_all(counters);
+        redis_async(py, "async_delete_cache", kind_error, async move {
             store.delete(&counters).await
         })
     }
@@ -199,52 +159,52 @@ impl NativeSpendCounters {
     fn refresh_ttl<'py>(
         &self,
         py: Python<'py>,
-        counter: PySpendCounter,
+        counter: PyData<SpendCounter>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let store = self.0.clone();
-        redis_async(py, "async_refresh_ttl", spend_error, async move {
+        redis_async(py, "async_refresh_ttl", kind_error, async move {
             store.refresh_ttl(&counter.0).await
         })
     }
 
-    fn get_local(&self, counter: PySpendCounter) -> PyResult<Option<PyNumber>> {
+    fn get_local(&self, counter: PyData<SpendCounter>) -> PyResult<Option<PyNumber>> {
         Ok(self
             .0
             .get_local(&counter.0)
-            .map_err(store_error)?
+            .map_err(kind_error)?
             .map(PyNumber))
     }
 
     #[pyo3(signature = (counter, spend, ttl_seconds = None))]
     fn set_local(
         &self,
-        counter: PySpendCounter,
+        counter: PyData<SpendCounter>,
         spend: PyNumber,
         ttl_seconds: Option<f64>,
     ) -> PyResult<()> {
         self.0
             .set_local(&counter.0, spend.0, ttl(ttl_seconds))
-            .map_err(store_error)
+            .map_err(kind_error)
     }
 
-    fn delete_local(&self, counter: PySpendCounter) -> PyResult<()> {
-        self.0.delete_local(&counter.0).map_err(store_error)
+    fn delete_local(&self, counter: PyData<SpendCounter>) -> PyResult<()> {
+        self.0.delete_local(&counter.0).map_err(kind_error)
     }
 
-    fn increment_local(&self, counter: PySpendCounter, amount: PyNumber) -> PyResult<PyNumber> {
+    fn increment_local(&self, counter: PyData<SpendCounter>, amount: PyNumber) -> PyResult<PyNumber> {
         self.0
             .increment_local(&counter.0, amount.0)
             .map(PyNumber)
-            .map_err(store_error)
+            .map_err(kind_error)
     }
 
     fn flush_local(&self) -> PyResult<()> {
-        self.0.flush_local().map_err(store_error)
+        self.0.flush_local().map_err(kind_error)
     }
 
     fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let snapshot = PyDict::new(py);
-        for (key, spend) in self.0.snapshot().map_err(store_error)? {
+        for (key, spend) in self.0.snapshot().map_err(kind_error)? {
             snapshot.set_item(key, PyNumber(spend))?;
         }
         Ok(snapshot)

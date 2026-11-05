@@ -1,5 +1,4 @@
 import ast
-import asyncio
 import json
 import logging
 import time
@@ -11,7 +10,7 @@ import pytest
 
 import litellm
 from litellm._internal_context import current_service_target
-from litellm.caching.redis_batch import RequestRedisBatches
+from litellm.caching.redis_batch import Batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache, redis_breaker_state_counts
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.redis.stores._connection import native_client
@@ -19,7 +18,13 @@ from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCool
 from litellm.rust_bridge._native import NativeRedisClient, NativeRouterCooldowns
 from litellm.rust_bridge.host import settings
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
-from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNativeRequest, FakeNatives
+from tests.unit.caching.test_redis_batch import (
+    FakeNativePending,
+    FakeNatives,
+    ReadyPending,
+    fake_pending,
+    fake_send,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +81,11 @@ class FakeCooldowns:
     smallest: float | None = None
     declared: list[tuple[str, ...]] = field(default_factory=list)
 
+    def attach(self, client: NativeRedisClient, redis_ttl_seconds: int = 60, /) -> bool:
+        attached: Final = self.client is None
+        self.client = self.client or client
+        return attached
+
     def put(self, model_id: str, cooldown: Mapping[str, object], ttl_seconds: float) -> None:
         self.targets.append(current_service_target())
         self.stored[model_id] = CooldownCacheValue(**cooldown)  # pyright: ignore[reportArgumentType]  # test double
@@ -85,26 +95,21 @@ class FakeCooldowns:
         self.fails[model_id] = self.fails.get(model_id, 0) + 1
         return self.fails[model_id]
 
-    def active(self, model_ids: Sequence[str]) -> list[tuple[str, CooldownCacheValue]]:
+    def active_sync(self, model_ids: Sequence[str]) -> list[tuple[str, CooldownCacheValue]]:
         self.targets.append(current_service_target())
         return [(model_id, self.stored[model_id]) for model_id in model_ids if model_id in self.stored]
 
-    def aactive(self, model_ids: Sequence[str]) -> "asyncio.Future[list[tuple[str, CooldownCacheValue]]]":
-        future: Final[asyncio.Future[list[tuple[str, CooldownCacheValue]]]] = asyncio.get_running_loop().create_future()
-        future.set_result(self.active(model_ids))
-        return future
-
-    def declare_active(
-        self, request: FakeNativeRequest, model_ids: Sequence[str]
-    ) -> FakeNativePending[list[tuple[str, CooldownCacheValue]]]:
+    def active(
+        self, model_ids: Sequence[str], send: object
+    ) -> FakeNativePending[list[tuple[str, CooldownCacheValue]]] | ReadyPending[list[tuple[str, CooldownCacheValue]]]:
         self.targets.append(current_service_target())
         self.declared.append(tuple(model_ids))
-        return FakeNativePending(request, lambda: self.active(model_ids))
+        return fake_pending(send, lambda: self.active_sync(model_ids))
 
     def minimum(self, model_ids: Sequence[str]) -> float | None:
         return self.smallest
 
-    def evict_local(self, model_id: str) -> None:
+    def delete_local(self, model_id: str) -> None:
         self.stored.pop(model_id, None)
 
     def flush_local_counters(self) -> None:
@@ -130,16 +135,18 @@ def _client(namespace: str | None = None) -> NativeRedisClient:
     return client
 
 
-def test_late_attach_rebuilds_once_and_later_attaches_are_ignored() -> None:
-    handles: Final = Handles()
-    store: Final = RouterCooldownStore(None, handle=handles)
-    store.put("dep", _entry(), 60.0)
-    first: Final = _client()
+def test_late_attach_keeps_the_cooldowns_this_router_already_holds() -> None:
+    store: Final = RouterCooldownStore(None)
+    entry: Final[CooldownCacheValue] = {
+        "exception_received": "dep",
+        "status_code": "429",
+        "timestamp": time.time(),
+        "cooldown_time": 120.0,
+    }
+    store.put("dep", entry, 60.0)
     store.attach_redis(None)
-    store.attach_redis(first)
-    store.attach_redis(_client("other"))
-    assert [handle.client for handle in handles.built] == [None, first]
-    assert store.active_sync(["dep"], None) == ()
+    store.attach_redis(_client())
+    assert store.active_sync(["dep"], None) == (("dep", entry),)
 
 
 def test_writes_and_reads_carry_the_router_cooldowns_service_target() -> None:
@@ -239,22 +246,23 @@ async def test_a_declared_active_read_answers_after_the_native_pre_flush_under_t
     handles: Final = Handles()
     store: Final = RouterCooldownStore(_client(), handle=handles)
     natives: Final = FakeNatives()
-    request: Final = RequestRedisBatches(native_factory=natives)  # pyright: ignore[reportArgumentType]  # test double
     store.put("dep", _entry(), 60.0)
 
-    declared: Final = store.declare_active(request, ["dep", "other"])
-    assert declared is not None
-    assert natives.built[0].events == []
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        declared: Final = store.active(["dep", "other"], batch=Batch.PRE_CALL)
+        assert natives.built[0].events == []
+        answer: Final = tuple(await declared)
 
-    assert tuple(await declared) == (("dep", _entry()),)
+    assert answer == (("dep", _entry()),)
     assert natives.built[0].events == ["flush_pre", "resolve"]
     assert handles.built[0].declared == [("dep", "other")]
     assert handles.built[0].targets[1] == "router_cooldowns"
 
 
-def test_a_store_without_redis_declares_nothing_on_the_request() -> None:
-    natives: Final = FakeNatives()
-    request: Final = RequestRedisBatches(native_factory=natives)  # pyright: ignore[reportArgumentType]  # test double
+@pytest.mark.asyncio
+async def test_an_active_read_outside_a_request_goes_out_on_its_own() -> None:
+    handles: Final = Handles()
+    store: Final = RouterCooldownStore(_client(), handle=handles)
+    store.put("dep", _entry(), 60.0)
 
-    assert RouterCooldownStore(None, handle=Handles()).declare_active(request, ["dep"]) is None
-    assert natives.built == []
+    assert await store.active(["dep", "other"], batch=Batch.NONE) == (("dep", _entry()),)

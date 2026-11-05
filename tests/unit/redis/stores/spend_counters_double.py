@@ -79,6 +79,13 @@ class FakeSpendCounters:
         client: Final = None if self.redis is None else NativeRedisClient.connect({"host": "127.0.0.1", "port": 1})
         return SpendCounterStore(client, redis_ttl=self.redis_ttl, handle=lambda _, __: self)
 
+    def attach(self, client: NativeRedisClient, redis_ttl_seconds: int = 60, /) -> bool:
+        if self.redis is not None:
+            return False
+        self.redis = {}
+        self.redis_ttl = redis_ttl_seconds
+        return True
+
     def mget(self, counters: Sequence[str]) -> list[float | None] | None:
         if self.redis is None or self.fail or not self.batch_reads:
             return None
@@ -97,16 +104,13 @@ class FakeSpendCounters:
                 return "redis", value
         return "memory", self.memory.get(counter)
 
-    def read_many(self, counters: Sequence[str]) -> asyncio.Future[Sequence[float | None] | None]:
-        return _done(self.mget(counters))
-
-    def declare_read_many(self, request: object, counters: Sequence[str]) -> DeclaredRead | None:
-        if self.redis is None or not self.batch_reads:
+    def read_many(self, counters: Sequence[str], send: object) -> DeclaredRead | None:
+        if self.redis is None:
             return None
-        declared: Final = DeclaredRead(tuple(counters), self, request)
-        self.declared.append(declared)
-        events: Final = getattr(request, "events", None)
+        declared: Final = DeclaredRead(tuple(counters), self, send)
+        events: Final = getattr(send, "events", None)
         if isinstance(events, list):
+            self.declared.append(declared)
             events.append("declare spend_counters")
         return declared
 

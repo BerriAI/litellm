@@ -2,14 +2,15 @@ mod support;
 
 use std::time::Duration;
 
-use litellm_redis_client::{Amount, Operation};
+use litellm_redis_client::{Amount, Expiry, Operation};
+use litellm_redis_client::commands;
 use litellm_redis_store::RequestRedis;
 use litellm_redis_testing::{RedisDeployment, Topology};
 use rstest::rstest;
 use support::{connect, connect_observed};
 use tokio::{runtime::Handle, sync::oneshot};
 
-const TTL: Option<Duration> = Some(Duration::from_secs(60));
+const TTL: Option<Expiry> = Some(Expiry::KeepExisting(Duration::from_secs(60)));
 
 // A batch is one pipeline on a standalone Redis and one call per increment on a cluster, like RedisBatch
 fn increments(topology: Topology, count: usize) -> Vec<Operation> {
@@ -30,11 +31,11 @@ async fn pre_declarations_on_one_client_share_one_pipeline_and_another_client_ge
     let (other, other_trips) = connect_observed(&deployment);
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
 
-    let first = request.pre(&client).incr_by_float("a", Amount::Int(1), TTL);
+    let first = request.pre(&client).add(commands::incr_by_float("a", Amount::Int(1), TTL));
     let second = request
         .pre(&client.clone())
-        .incr_by_float("b", Amount::Int(2), TTL);
-    let third = request.pre(&other).incr_by_float("c", Amount::Int(3), TTL);
+        .add(commands::incr_by_float("b", Amount::Int(2), TTL));
+    let third = request.pre(&other).add(commands::incr_by_float("c", Amount::Int(3), TTL));
     request.flush_pre().await;
 
     assert_eq!(trips.seen(), increments(topology, 2));
@@ -63,7 +64,7 @@ async fn a_post_declaration_waits_for_flush_post_and_flush_pre_leaves_it_alone(
     let total = tokio::spawn(
         request
             .post(&client)
-            .incr_by_float("spend", Amount::Float(2.5), TTL)
+            .add(commands::incr_by_float("spend", Amount::Float(2.5), TTL))
             .settled(),
     );
     request.flush_pre().await;
@@ -71,7 +72,7 @@ async fn a_post_declaration_waits_for_flush_post_and_flush_pre_leaves_it_alone(
 
     assert!(!total.is_finished());
     assert!(trips.seen().is_empty());
-    assert_eq!(raw.get::<String>("spend").await.unwrap(), None);
+    assert_eq!(raw.send(commands::get::<String>("spend")).await.unwrap(), None);
 
     request.flush_post().await;
 
@@ -89,7 +90,7 @@ async fn flush_post_returns_after_the_follow_ups_of_the_ops_it_sent(
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
     let total = request
         .post(&client)
-        .incr_by_float("spend", Amount::Float(2.5), TTL);
+        .add(commands::incr_by_float("spend", Amount::Float(2.5), TTL));
     let (mirror, mut mirrored) = oneshot::channel();
     request.spawn(async move {
         mirror.send(total.settled().await.unwrap()).unwrap();
@@ -111,10 +112,10 @@ async fn a_post_batch_nobody_flushes_goes_out_at_the_deadline(
 
     let first = request
         .post(&client)
-        .incr_by_float("a", Amount::Int(1), TTL);
+        .add(commands::incr_by_float("a", Amount::Int(1), TTL));
     let second = request
         .post(&client)
-        .incr_by_float("b", Amount::Int(2), TTL);
+        .add(commands::incr_by_float("b", Amount::Int(2), TTL));
     let settled = tokio::time::timeout(Duration::from_secs(5), async {
         (first.settled().await, second.settled().await)
     })
@@ -139,7 +140,7 @@ async fn a_post_declaration_from_a_thread_without_a_runtime_goes_out_at_the_dead
         move || {
             request
                 .post(&client)
-                .incr_by_float("spend", Amount::Float(2.5), TTL)
+                .add(commands::incr_by_float("spend", Amount::Float(2.5), TTL))
         }
     })
     .join()
@@ -163,12 +164,12 @@ async fn a_post_declaration_after_a_flush_arms_a_new_deadline(
 
     let early = request
         .post(&client)
-        .incr_by_float("a", Amount::Int(1), TTL);
+        .add(commands::incr_by_float("a", Amount::Int(1), TTL));
     request.flush_post().await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     let late = request
         .post(&client)
-        .incr_by_float("a", Amount::Int(1), TTL);
+        .add(commands::incr_by_float("a", Amount::Int(1), TTL));
     tokio::time::sleep(Duration::from_millis(200)).await;
     let flushed_before_its_deadline = trips.seen().len() > 1;
     let late = tokio::time::timeout(Duration::from_secs(5), late.settled())

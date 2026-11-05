@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
+from litellm.caching.redis_batch import Batch, BatchResult, active_request_redis_batches
 from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET, ActiveCooldowns, RouterCooldowns
 
 _PREFETCH_SLOT: Final = "routing_read"
@@ -86,9 +86,8 @@ def arm_cooldowns(store: RouterCooldowns, model_ids: Sequence[str]) -> None:
     request: Final = active_request_redis_batches()
     if request is None or _COOLDOWNS_SLOT in request.prefetched:
         return
-    result: Final = store.declare_active(request, model_ids)
-    if result is not None:
-        request.prefetched[_COOLDOWNS_SLOT] = ArmedCooldowns(frozenset(model_ids), result)
+    result: Final = store.active(model_ids, batch=Batch.PRE_CALL)
+    request.prefetched[_COOLDOWNS_SLOT] = ArmedCooldowns(frozenset(model_ids), result)
 
 
 def armed() -> bool:
@@ -120,7 +119,7 @@ async def read_cooldowns(
         prefetched: Final = await _armed_cooldowns(model_ids)
     if prefetched is not None:
         return prefetched
-    return await store.active(model_ids, parent_otel_span)
+    return await store.active(model_ids, batch=Batch.NONE)
 
 
 def _take(read: TierRead) -> ArmedRead | None:

@@ -12,7 +12,7 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.redis.stores._connection import native_client
 from litellm.redis.stores.router_usage import NativeCounter, RouterUsageStore, UsageCounter
 from litellm.rust_bridge._native import NativeRedisClient
-from tests.unit.caching.test_redis_batch import FakeNatives
+from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
 
 T = TypeVar("T")
 
@@ -28,6 +28,11 @@ class FakeUsage:
     connected: bool
     counts: dict[NativeCounter, float] = field(default_factory=dict)
     calls: list[tuple[str, object, str | None]] = field(default_factory=list)
+
+    def attach(self, client: NativeRedisClient, redis_ttl_seconds: int = 60, /) -> bool:
+        attached: Final = not self.connected
+        self.connected = True
+        return attached
 
     def increment(self, counter: NativeCounter, value: float, ttl_seconds: int) -> "asyncio.Future[float]":
         self.calls.append(("increment", (counter, value, ttl_seconds), current_service_target()))
@@ -83,12 +88,13 @@ async def test_counters_cross_the_bridge_as_domain_tuples_under_the_router_usage
     assert await store.async_batch_get((counter, UsageCounter("dep", "model", "12-34", "tpm"))) == [1, 7.5]
 
 
-def test_late_attach_rebuilds_the_handle_once() -> None:
-    handles: Final = Handles()
-    store: Final = RouterUsageStore(None, handle=handles)
+@pytest.mark.asyncio
+async def test_late_attach_keeps_the_counts_this_router_already_holds() -> None:
+    store: Final = RouterUsageStore(None)
+    counters: Final = (UsageCounter("dep", "model", "12-34", "tpm"), UsageCounter("dep", "model", "12-34", "rpm"))
+    await store.increment_deployment("dep", "model", "12-34", 7.5, 1, None)
     store.attach_redis(native_client(RedisCache(host="redis.internal").native_settings))
-    store.attach_redis(native_client(RedisCache(host="other").native_settings))
-    assert [handle.connected for handle in handles.built] == [False, True]
+    assert await store.async_batch_get(counters) == [7.5, 1]
 
 
 @pytest.mark.asyncio
@@ -113,7 +119,7 @@ async def test_inside_a_request_deployment_increments_go_out_on_their_own_trip_l
     natives: Final = FakeNatives()
 
     await store.increment_deployment("dep", "model", "12-34", 7.5, 1, None)
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives):  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await store.increment_deployment("dep", "model", "12-34", 2, 1, None)
     await drain_post_call_redis_batches()
 

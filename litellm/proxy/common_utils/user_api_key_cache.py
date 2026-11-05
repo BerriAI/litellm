@@ -353,7 +353,7 @@ class UserApiKeyCache(DualCache):
             ttl: Final = _ttl(kwargs)
             if local_only:
                 shared.set_local(key, payload, ttl)
-            elif not pipelined or shared.set_pre_call(key, payload, ttl) is None:
+            elif not pipelined or shared.declare_set(key, payload, ttl) is None:
                 await shared.set(key, payload, ttl)
         except Exception as e:  # noqa: BLE001  # DualCache.async_set_cache swallows a failed write
             verbose_proxy_logger.error("UserApiKeyCache.async_set_cache failed for key=%r: %s", key, e)
@@ -378,7 +378,7 @@ class UserApiKeyCache(DualCache):
 
     async def async_delete_cache_pre_call(self, key: str) -> Awaitable[None] | None:
         if self._shared is not None:
-            return self._shared.delete_pre_call(key)
+            return self._shared.declare_delete(key)
         if is_user_key_cache_key(key):
             return await self.key_object_cache.async_delete_cache_pre_call(key)
         return await super().async_delete_cache_pre_call(key)

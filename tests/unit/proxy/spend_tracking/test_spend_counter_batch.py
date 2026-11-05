@@ -24,7 +24,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
 )
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.caching.redis_batch import request_redis_batch_scope
-from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNatives
+from tests.unit.caching.test_redis_batch import FakeNativePending, FakeNatives, fake_send
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 TOKEN = UserAPIKeyAuth(token="hashed", team_id="team", user_id="user", org_id="org")
@@ -92,7 +92,7 @@ async def test_counters_bound_at_auth_join_the_native_pipeline_the_armed_cooldow
     spend = FakeSpendCounters(redis={"spend:key:hashed": 3.0})
 
     with (
-        request_redis_batch_scope(native_factory=natives) as request,  # pyright: ignore[reportArgumentType]  # test double
+        request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request,  # pyright: ignore[reportArgumentType]  # test double
         spend_counter_batch_scope(spend.store()),
     ):
         bind_admission_counter_keys(TOKEN, end_user_id=None)
@@ -118,7 +118,7 @@ async def test_counters_bound_after_the_native_batch_went_out_ride_the_next_one(
     spend = FakeSpendCounters(redis={"spend:key:hashed": 3.0, "spend:org:org": 4.0})
 
     with (
-        request_redis_batch_scope(native_factory=natives),  # pyright: ignore[reportArgumentType]  # test double
+        request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send),  # pyright: ignore[reportArgumentType]  # test double
         spend_counter_batch_scope(spend.store(), counter_keys=frozenset({"spend:key:hashed"})),
     ):
         batch = active_spend_counter_batch()
