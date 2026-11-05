@@ -22,18 +22,20 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
-    drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
-    flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
     system_messages_first,
-    tool_with_sanitized_parameters,
     without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_non_python_regex_patterns,
+    flatten_combinators_and_drop_non_python_regex_patterns,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
