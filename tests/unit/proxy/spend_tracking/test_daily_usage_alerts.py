@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Final
 
@@ -42,7 +43,7 @@ def test_low_volume_is_insufficient_and_recorded_zero_baseline_uses_absolute_flo
     rule: Final = UsageAlertRuleInput(name="spike", scope_type="key", metric="spend", direction="increase")
     history: Final = tuple(_row(_DAY - timedelta(days=days), requests=10, spend=0) for days in (1, 2, 3))
     assert compare_daily_usage(rule, (*history, _row(_DAY, spend=100)), _DAY) is None
-    enough_requests: Final = tuple(row.model_copy(update={"requests": 200}) for row in history)
+    enough_requests: Final = tuple(replace(row, requests=200) for row in history)
     assert compare_daily_usage(rule, (*enough_requests, _row(_DAY, spend=100)), _DAY) == DailyComparison(
         3, 100, 0, 0, True
     )
@@ -83,7 +84,7 @@ def test_errors_are_failed_request_count_and_require_absolute_change_floor() -> 
         name="errors", scope_type="key", metric="errors", direction="increase", min_value=10
     )
     history: Final = tuple(_row(_DAY - timedelta(days=days)) for days in (1, 2, 3))
-    current: Final = _row(_DAY).model_copy(update={"errors": 40})
+    current: Final = replace(_row(_DAY), errors=40)
     assert compare_daily_usage(rule, (*history, current), _DAY) == DailyComparison(3, 40, 10, 30, True)
 
 
@@ -124,10 +125,8 @@ def test_sentinel_entities_cannot_create_alerts_with_unusable_activity_links(sco
             "created_by": None,
         }
     )
-    history: Final = tuple(
-        _row(_DAY - timedelta(days=days)).model_copy(update={"entity_id": entity}) for days in (1, 2, 3)
-    )
-    current: Final = _row(_DAY, spend=100).model_copy(update={"entity_id": entity})
+    history: Final = tuple(replace(_row(_DAY - timedelta(days=days)), entity_id=entity) for days in (1, 2, 3))
+    current: Final = replace(_row(_DAY, spend=100), entity_id=entity)
     assert _observations(rule, (*history, current), _DAY) == ()
 
 
@@ -153,3 +152,32 @@ def test_custom_entity_rule_replaces_only_the_matching_default() -> None:
     assert _suppressed_entities(custom, (default, custom, other_metric)) == frozenset()
     wildcard: Final = custom.model_copy(update={"scope_id": None})
     assert _suppressed_entities(default, (default, wildcard)) == frozenset({None})
+
+
+def test_database_metric_rows_preserve_numeric_and_date_validation() -> None:
+    from pydantic import TypeAdapter, ValidationError
+
+    adapter: Final = TypeAdapter(tuple[DailyAlertMetrics, ...])
+    record: Final = {
+        "entity_id": "key-a",
+        "day": "2026-10-20",
+        "spend": "20",
+        "requests": "200",
+        "errors": "10",
+        "response_time_ms": "100000",
+        "timed_requests": "200",
+    }
+    assert adapter.validate_python([record]) == (_row(_DAY),)
+    with pytest.raises(ValidationError):
+        adapter.validate_python([{**record, "requests": "invalid"}])
+
+
+def test_reporting_identity_preserves_canonical_rows_and_distinct_raw_buckets() -> None:
+    from litellm.repositories.usage_alert_metrics import _reporting_id
+
+    canonical: Final = _row(_DAY)
+    assert _reporting_id("key", canonical) is canonical
+    assert _reporting_id("model", canonical) is canonical
+    assert _reporting_id("key", replace(canonical, entity_id="")).entity_id == "unattributed"
+    assert _reporting_id("key", replace(canonical, entity_id="unattributed")).entity_id == "raw:unattributed"
+    assert _reporting_id("key", replace(canonical, entity_id="raw:key")).entity_id == "raw:raw:key"

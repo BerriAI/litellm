@@ -1,19 +1,19 @@
 """Bounded reads of the daily rollups used by the Usage dashboard."""
 
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm.repositories.daily_activity_buckets import api_key_bucket, model_bucket
 
 Scope: TypeAlias = Literal["deployment", "key", "user", "team", "model"]
 
 
-class DailyAlertMetrics(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+@dataclass(frozen=True, slots=True)
+class DailyAlertMetrics:
     entity_id: str
     day: date
     spend: float
@@ -67,9 +67,11 @@ ORDER BY entities.entity_id, activity.date
 
 def _reporting_id(scope: Scope, row: DailyAlertMetrics) -> DailyAlertMetrics:
     if scope == "key":
-        return row.model_copy(update={"entity_id": api_key_bucket(row.entity_id)})
+        key: Final = api_key_bucket(row.entity_id)
+        return row if key == row.entity_id else replace(row, entity_id=key)
     if scope == "model":
-        return row.model_copy(update={"entity_id": model_bucket(row.entity_id)})
+        model: Final = model_bucket(row.entity_id)
+        return row if model == row.entity_id else replace(row, entity_id=model)
     return row
 
 
