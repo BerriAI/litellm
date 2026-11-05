@@ -1,6 +1,7 @@
 """Bounded settings for the built-in performance policies."""
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from itertools import chain, product
 from typing import Final
@@ -21,7 +22,7 @@ from litellm.types.proxy.usage_alert_defaults import (
     PerformanceIssueFamily,
     default_usage_rule_id,
 )
-from litellm.types.proxy.usage_alerts import UsageAlertRule
+from litellm.types.proxy.usage_alerts import UsageAlertEvaluationCounts, UsageAlertRule
 
 
 class _RuleRow(BaseModel, frozen=True):
@@ -30,6 +31,10 @@ class _RuleRow(BaseModel, frozen=True):
 
 class _Count(BaseModel, frozen=True):
     count: int
+
+
+class _ProjectionState(BaseModel, frozen=True):
+    pending: bool
 
 
 def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) -> IssueFamilySetting:
@@ -70,6 +75,9 @@ def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) 
         total_rules=len(family_rules),
         enabled_rules=sum(rule.enabled for rule in family_rules),
         policies=values,
+        evaluation_status_counts=UsageAlertEvaluationCounts.model_validate(
+            Counter(rule.evaluation_status for rule in family_rules if rule.enabled)
+        ),
     )
 
 
@@ -80,11 +88,18 @@ async def family_settings(database: AlertDatabase) -> IssueFamilyList:
             list(DEFAULT_USAGE_RULE_IDS),
         )
     )
+    projection: Final = TypeAdapter(tuple[_ProjectionState, ...]).validate_python(
+        await database.query_raw(
+            """SELECT EXISTS(SELECT 1 FROM "LiteLLM_UsageAlertCheckpoint"
+                WHERE id LIKE 'performance-dirty:%' AND NOT completed LIMIT 1) AS pending"""
+        )
+    )
     return IssueFamilyList(
         data=tuple(
             _setting(family, tuple(row.record for row in rows))
             for family in ("spend", "latency", "reliability", "traffic")
-        )
+        ),
+        projection_pending=projection[0].pending,
     )
 
 

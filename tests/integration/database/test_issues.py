@@ -605,14 +605,16 @@ async def _family_database(db: ManagementDatabase) -> AsyncGenerator[Prisma]:
     with psycopg.connect(url, autocommit=True) as setup:
         setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         try:
-            setup.execute(
-                sql.SQL('CREATE TABLE {} (LIKE "LiteLLM_UsageAlertRule" INCLUDING ALL)').format(
-                    sql.Identifier(schema, "LiteLLM_UsageAlertRule")
+            for table in ("LiteLLM_UsageAlertRule", "LiteLLM_UsageAlertCheckpoint", "LiteLLM_Config"):
+                setup.execute(
+                    sql.SQL("CREATE TABLE {} (LIKE {} INCLUDING ALL)").format(
+                        sql.Identifier(schema, table), sql.Identifier(table)
+                    )
                 )
-            )
             database: Final = Prisma(datasource=DatasourceOverride(url=scoped))
             await database.connect()
             try:
+                assert await database.query_raw("SELECT current_schema() AS name") == [{"name": schema}]
                 yield database
             finally:
                 await database.disconnect()
@@ -1049,3 +1051,22 @@ async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: M
         for rule in (first, second):
             await alerts.delete_rule(rule.id)
             await _query(db, 'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id', rule.id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_family_settings_expose_projection_backlog_without_delayed_rules(db: ManagementDatabase) -> None:
+    async with _family_database(db) as database:
+        borrowed: Final = cast(AlertDatabase, database)  # cast-ok: real generated Prisma query delegate
+        store: Final = IssuesRepository(borrowed)
+        assert not (await store.family_settings()).projection_pending
+        await borrowed.query_raw(
+            """INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,completed,owner)
+                VALUES ('performance-dirty:2026-11-04',false,'fixture') RETURNING id"""
+        )
+        pending: Final = await store.family_settings()
+        assert pending.projection_pending and all(item.total_rules == 0 for item in pending.data)
+        await borrowed.query_raw(
+            """UPDATE "LiteLLM_UsageAlertCheckpoint" SET completed=true
+                WHERE id='performance-dirty:2026-11-04' RETURNING id"""
+        )
+        assert not (await store.family_settings()).projection_pending

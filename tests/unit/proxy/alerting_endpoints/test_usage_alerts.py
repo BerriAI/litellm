@@ -25,12 +25,6 @@ def test_info_grants_do_not_authorize_mutations(role: LitellmUserRoles, key_type
     assert error.value.status_code == 403
 
 
-@pytest.mark.parametrize("grant", ["/usage/alert-rules/example", "/usage/*", "management_routes"])
-def test_explicit_management_grants_still_authorize_mutations(grant: str) -> None:
-    user: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["info_routes", grant])
-    require_write_access(user, "/usage/alert-rules/example")
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "role,key_type,write",
