@@ -95,8 +95,9 @@ class TestGetOrderFilteredDeployments:
         assert len(result) == 2
 
 
-def test_get_deployment_order_returns_unvalidated_order():
-    assert get_deployment_order({"litellm_params": {"order": "first"}}) == "first"
+def test_get_deployment_order_reads_a_non_number_as_unordered():
+    assert get_deployment_order({"litellm_params": {"order": "first"}}) is None
+    assert get_deployment_order({"litellm_params": {"order": "2"}}) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +645,6 @@ async def test_text_completion_order_fallback_hop_does_not_send_target_order_ups
     assert response._hidden_params["model_id"] == "2"
     assert upstream_bodies
     assert all("_target_order" not in body for body in upstream_bodies)
-
 
 
 _OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"

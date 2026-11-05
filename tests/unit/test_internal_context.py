@@ -25,7 +25,7 @@ _REPO: Final = Path(__file__).resolve().parents[2]
 
 _REDIS_PRODUCER_ROOTS: Final = ("litellm", "enterprise")
 # The cache implementations and facades: they emit the service events, their callers declare the family.
-_CACHE_LAYER_DIRS: Final = ("litellm/caching", "litellm/_v2/cache")
+_CACHE_LAYER_DIRS: Final = ("litellm/caching",)
 # Helpers that act on a cache handed in by the declaring caller, or forward to the response-cache facade.
 _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
@@ -57,6 +57,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/github_copilot/per_user_auth.py",
+        "litellm/llms/github_copilot/authenticator.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",
