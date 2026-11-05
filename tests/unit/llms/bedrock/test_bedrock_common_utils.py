@@ -13,6 +13,7 @@ from litellm.llms.bedrock.common_utils import(
     bedrock_strict_tools_fallback,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
+    for_bedrock_json_tool_retry,
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
     is_bedrock_native_output_rejection,
@@ -2389,8 +2390,42 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
         "us.anthropic.claude-opus-4-8", model_info=deployment_model_info(turned_off)
     )
     assert turned_off["api_base"] == "https://bedrock.example"
-    assert deployment_model_info(turned_off)["id"] == "deployment-1"
+    assert deployment_model_info(turned_off) == {
+        "id": "deployment-1",
+        "supports_bedrock_native_structured_output": False,
+    }
     assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+    native_default: Final = without_bedrock_native_output_opt_in(
+        {"model_info": {"supports_native_structured_output": True}}
+    )
+    assert deployment_model_info(native_default) == {
+        "supports_native_structured_output": True,
+        "supports_bedrock_native_structured_output": False,
+    }
+
+
+def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_model_cost_map):
+    litellm_params: Final = {
+        "model_info": {
+            "id": "deployment-1",
+            "supports_native_structured_output": True,
+            "supports_bedrock_native_structured_output": True,
+        }
+    }
+
+    retry_params: Final = for_bedrock_json_tool_retry(litellm_params)
+
+    assert deployment_model_info(retry_params) == {
+        "id": "deployment-1",
+        "supports_native_structured_output": False,
+        "supports_bedrock_native_structured_output": False,
+    }
+    assert litellm_params["model_info"] == {
+        "id": "deployment-1",
+        "supports_native_structured_output": True,
+        "supports_bedrock_native_structured_output": True,
+    }
 
 
 def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():

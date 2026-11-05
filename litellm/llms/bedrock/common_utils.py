@@ -398,8 +398,18 @@ def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -
         **litellm_params,
         "model_info": {
             **deployment_model_info(litellm_params),
-            "supports_native_structured_output": False,
             "supports_bedrock_native_structured_output": False,
+        },
+    }
+
+
+def for_bedrock_json_tool_retry(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    opt_in_disabled: Final = without_bedrock_native_output_opt_in(litellm_params)
+    return {
+        **opt_in_disabled,
+        "model_info": {
+            **deployment_model_info(opt_in_disabled),
+            "supports_native_structured_output": False,
         },
     }
 

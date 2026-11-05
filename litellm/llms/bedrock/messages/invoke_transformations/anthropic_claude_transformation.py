@@ -44,6 +44,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
+    for_bedrock_json_tool_retry,
     get_anthropic_beta_from_headers,
     is_bedrock_native_output_rejection,
     json_object_or_none,
@@ -55,7 +56,6 @@ from litellm.llms.bedrock.common_utils import (
     supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
     warn_bedrock_native_output_rejected,
-    without_bedrock_native_output_opt_in,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -150,7 +150,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         output_format: Final = legacy_output_format if legacy_output_format is not None else output_config_format
         if output_format is None or (bedrock_native_output_format(model, output_format, model_info=model_info) is None):
             return None
-        retry_params: Final = without_bedrock_native_output_opt_in({"model_info": model_info})
+        retry_params: Final = for_bedrock_json_tool_retry({"model_info": model_info})
         retry_model_info: Final = _MODEL_INFO.validate_python(retry_params.get("model_info"))
         return litellm_params.model_copy(update={"model_info": retry_model_info})
 

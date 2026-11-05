@@ -2047,7 +2047,7 @@ class TestBedrockBatchAnthropicRowParams:
 
     @pytest.mark.parametrize(
         ("model", "native_output"),
-        [("bedrock/us.anthropic.claude-opus-4-8", False), (MODEL, True)],
+        [("bedrock/us.anthropic.claude-sonnet-5-5", False), (MODEL, True)],
         ids=["opt_in_native_output_model", "native_output_model"],
     )
     def test_thinking_json_schema_rows_use_native_output_only_on_models_that_always_take_it(
