@@ -8716,6 +8716,9 @@
       "sheetDescription": "Conversations and chat workspace navigation"
     },
     "conversationList": {
+      "yesterday": "Yesterday",
+      "lastSevenDays": "Last 7 Days",
+      "older": "Older",
       "conversationTitle": "Conversation title",
       "renameConversation": "Rename {{title}}",
       "rename": "Rename",
@@ -9424,6 +9427,10 @@
     },
     "compliance": {
       "library": {
+        "customFramework": "Custom",
+        "customCategory": "Custom Prompts",
+        "csvFramework": "CSV Upload",
+        "csvCategory": "Uploaded Prompts",
         "customCategoryDescription": "Custom prompts added this session.",
         "title": "Test Prompts",
         "searchPlaceholder": "Search prompts...",
@@ -9537,6 +9544,22 @@
       }
     },
     "compare": {
+      "endpoints": {
+        "chatCompletions": {
+          "selectorLabel": "Model",
+          "selectorPlaceholder": "Select a model",
+          "inputPlaceholder": "Send a prompt to compare models",
+          "loadingMessage": "Gathering responses from all models...",
+          "validationMessage": "Select a model before sending a message."
+        },
+        "a2aAgents": {
+          "selectorLabel": "Agent",
+          "selectorPlaceholder": "Select an agent",
+          "inputPlaceholder": "Send a message to compare agents",
+          "loadingMessage": "Gathering responses from all agents...",
+          "validationMessage": "Select an agent before sending a message."
+        }
+      },
       "selector": {
         "loading": "Loading {{noun}}s...",
         "empty": "No {{noun}}s available"
@@ -9946,6 +9969,20 @@
       }
     },
     "systemOne": {
+      "presets": {
+        "bugTriage": "Triage a bug report",
+        "supportRouting": "Route a support ticket",
+        "moderation": "Moderate a forum comment",
+        "leadScoring": "Score a sales lead"
+      },
+      "schemas": {
+        "questionType": "Question type must be choice, noul, or score.",
+        "questionObject": "Question must be an object."
+      },
+      "openAIDecisions": {
+        "uniqueChoices": "Choice values must be unique, including their string representations.",
+        "modelRequired": "Model must be a non-empty string."
+      },
       "curlPreview": {
         "title": "cURL request",
         "fixIssues_one": "Fix {{count}} issue on the Form tab before copying",
@@ -10143,12 +10180,129 @@
       }
     }
   },
+  "compliancePrompts": {
+    "frameworks": {
+      "euAiAct": "EU AI Act",
+      "gdpr": "GDPR",
+      "airlineBrandProtection": "Airline Brand Protection"
+    },
+    "categories": {
+      "subliminalTechniques": {
+        "name": "Subliminal or Manipulative Techniques",
+        "description": "AI that tries to subtly influence decisions or behaviour beyond a person's conscious awareness is prohibited."
+      },
+      "exploitingVulnerabilities": {
+        "name": "Exploiting Vulnerabilities",
+        "description": "AI must not take advantage of vulnerabilities due to age, disability, economic or social status in ways that distort behaviour and cause harm."
+      },
+      "socialScoring": {
+        "name": "Social Scoring & Classification",
+        "description": "AI systems that evaluate or score people based on social behaviour or personal traits — leading to unfavourable treatment — are prohibited."
+      },
+      "criminalityRiskAssessment": {
+        "name": "Risk Assessment for Predicting Criminality",
+        "description": "AI cannot make risk predictions about whether a person might commit a crime based solely on profiling or personality traits."
+      },
+      "facialImageScraping": {
+        "name": "Facial Image Scraping for Databases",
+        "description": "AI may not create or expand biometric databases by scraping images from the internet or CCTV footage."
+      },
+      "emotionRecognition": {
+        "name": "Emotion Recognition in Workplace & Education",
+        "description": "AI systems that infer people's emotions in workplaces or schools are forbidden (except medical/safety cases)."
+      },
+      "biometricCategorisation": {
+        "name": "Biometric Categorisation of Sensitive Traits",
+        "description": "AI must not categorise individuals based on race, religion, sexual orientation, etc., from biometric data."
+      },
+      "rightToErasure": {
+        "name": "Right to Erasure",
+        "description": "Individuals have the right to request deletion of their personal data when it is no longer necessary for the purpose it was collected."
+      },
+      "consentLawfulBasis": {
+        "name": "Consent & Lawful Basis",
+        "description": "Processing personal data requires a lawful basis such as consent, which must be freely given, specific, informed, and unambiguous."
+      },
+      "dataMinimisation": {
+        "name": "Data Minimisation",
+        "description": "Personal data collected must be adequate, relevant, and limited to what is necessary for the stated purpose."
+      },
+      "automatedDecisionMaking": {
+        "name": "Automated Decision-Making",
+        "description": "Individuals have the right not to be subject to decisions based solely on automated processing that produce legal or similarly significant effects."
+      },
+      "destinationIntent": {
+        "name": "Destination Intent",
+        "description": "User is asking about a travel destination, not a competitor airline."
+      },
+      "competitorComparison": {
+        "name": "Competitor Comparison",
+        "description": "Direct comparison between airlines."
+      },
+      "ambiguousEntity": {
+        "name": "Ambiguous Entity",
+        "description": "Could refer to airline or country."
+      }
+    }
+  },
+  "chatUi": {
+    "responseMetrics": {
+      "labels": {
+        "totalLatency": "Total Latency",
+        "in": "In",
+        "out": "Out",
+        "reasoning": "Reasoning",
+        "total": "Total",
+        "cost": "Cost",
+        "tool": "Tool"
+      },
+      "tooltips": {
+        "timeToFirstToken": "Time to first token",
+        "totalLatency": "Total latency",
+        "promptTokens": "Prompt tokens",
+        "completionTokens": "Completion tokens",
+        "reasoningTokens": "Reasoning tokens",
+        "totalTokens": "Total tokens",
+        "cost": "Cost",
+        "toolUsed": "Tool used"
+      }
+    },
+    "mcpEvents": {
+      "listTools": "List tools",
+      "toolCall": "Tool call",
+      "request": "Request",
+      "approved": "Approved",
+      "response": "Response"
+    },
+    "reasoning": {
+      "hide": "Hide reasoning",
+      "show": "Show reasoning"
+    }
+  },
+  "modelFilters": {
+    "searchLabel": "Search models",
+    "searchPlaceholder": "Search model names...",
+    "modelType": "Model type",
+    "allTypes": "All types",
+    "modelCapability": "Model capability",
+    "allCapabilities": "All capabilities",
+    "clearFilters": "Clear Filters",
+    "searchModels": "Search Models:",
+    "provider": "Provider:",
+    "allProviders": "All Providers",
+    "mode": "Mode:",
+    "allModes": "All Modes",
+    "features": "Features:",
+    "allFeatures": "All Features"
+  },
   "llmCalls": {
     "responsesApi": {
       "requestFailed": "Error occurred while generating model response. Please try again. Error: {{error}}"
     }
   },
   "mcpToolArguments": {
+    "booleanTrue": "True",
+    "booleanFalse": "False",
     "stringSchemaRequired": "Please enter input for this tool",
     "enterJsonObject": "Please enter a JSON object",
     "enterJsonArray": "Please enter a JSON array",
