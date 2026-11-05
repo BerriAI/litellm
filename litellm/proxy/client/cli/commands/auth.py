@@ -236,11 +236,7 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
 
 
 def _login_left_in_keychain(vault: SecretVault) -> Mapping[str, object] | None:
-    """The login an earlier logout left in a keychain it could not reach.
-
-    Read it before `load_token`, which moves a secret a locked-keychain login kept on disk over
-    that keychain entry.
-    """
+    """The login an earlier logout left in a keychain it could not reach"""
     left: Final = load_cli_token_left_in_keychain(vault=vault)
     return None if left is None else left.model_dump(exclude_none=True)
 
@@ -262,17 +258,22 @@ def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> 
     return save_cli_token(CliTokenRecord(**record), vault=vault)
 
 
-def _renewal_saver(vault: SecretVault) -> Callable[[CliTokenData], None]:
+def _renewal_saver(vault: SecretVault, http: Http) -> Callable[[CliTokenData], None]:
     """Persist a silently renewed credential, and say on stderr when no store would keep it.
 
     A renewal rotates the refresh token, so a rotation that is never stored logs this
-    machine out on the next command; the user hears about it rather than guessing.
+    machine out on the next command; the user hears about it rather than guessing. The save
+    can take the keychain entry of a login an earlier logout could not end, which leaves no
+    other record of that login's refresh token, so it is revoked the way a login revokes it.
     """
 
     def save(record: CliTokenData) -> None:
+        left: Final = _login_left_in_keychain(vault)
         outcome: Final = save_token(record, vault=vault)
         if isinstance(outcome, (CredentialNotSaved, CredentialNotRecorded)):
             _warn(storage_notice(outcome))
+        if left is not None:
+            _revoke_the_replaced_login(left, http, _warn)
 
     return save
 
@@ -303,10 +304,11 @@ def get_stored_api_key(
         return None
     if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
         return None
+    http: Final = requests.Session()
     return fresh_api_key(
         token_data,
-        _renewal_saver(vault),
-        requests.Session(),
+        _renewal_saver(vault, http),
+        http,
         reload=_renewal_reader(vault),
         warn=_warn,
     )
@@ -881,14 +883,14 @@ def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) 
     if isinstance(stored, CredentialNotSaved):
         return stored
     for login in previous:
-        _revoke_the_replaced_login(login, http)
+        _revoke_the_replaced_login(login, http, click.echo)
     return stored
 
 
-def _revoke_the_replaced_login(login: Mapping[str, object], http: Http) -> None:
+def _revoke_the_replaced_login(login: Mapping[str, object], http: Http, report: Callable[[str], None]) -> None:
     revocation: Final = revoke_stored_credential(login, http)
     if revocation is not None:
-        click.echo(
+        report(
             f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
             "it expires on its own."
         )
@@ -1102,13 +1104,14 @@ def print_token(ctx: click.Context):
         click.echo(keychain_unreadable_notice(vault), err=True)
         sys.exit(1)
 
+    http: Final = requests.Session()
     api_key: Final = (
         ctx_obj.get("api_key")
         if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
         else fresh_api_key(
             token_data,
-            _renewal_saver(vault),
-            requests.Session(),
+            _renewal_saver(vault, http),
+            http,
             reload=_renewal_reader(vault),
             warn=_warn,
         )

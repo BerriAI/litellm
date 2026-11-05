@@ -295,6 +295,15 @@ def load_cli_token_left_in_keychain(*, vault: SecretVault = SYSTEM_KEYRING) -> C
     )
 
 
+def _holds_the_noted_login(blob: str) -> bool:
+    """Whether the keychain entry is the login an earlier logout could not end, which only it can revoke"""
+    note: Final = _read_keychain_not_cleared_note()
+    if note is None:
+        return False
+    secret: Final = _decode_secret(blob, note.base_url)
+    return secret is not None and secret.timestamp == note.timestamp
+
+
 def _read_keychain_not_cleared_note() -> CliTokenRecord | None:
     try:
         return CliTokenRecord.model_validate_json(_keychain_not_cleared_note_path().read_bytes())
@@ -464,7 +473,14 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
     than counting as a clean sweep. Rolling the vault back the way a migration does is not the
     answer here, because the two stores hold different credentials and the rollback would hand the
     superseded one back out.
+
+    A keychain entry an earlier logout could not end is left alone whatever the stamps say. Its note
+    pairs only with that entry, so the next login or logout can still revoke it, while serving it
+    would sign an ended login back in and moving the file's secret over it would leave its refresh
+    token live with nothing on this machine able to revoke it.
     """
+    if _holds_a_secret(record) and _holds_the_noted_login(blob):
+        return record
     secret: Final = _decode_secret(blob, record.base_url)
     if secret is None or (_holds_a_secret(record) and secret.timestamp <= record.timestamp):
         return _migrate_file_secret(_rejoined(record, secret), vault, replacing=secret)
