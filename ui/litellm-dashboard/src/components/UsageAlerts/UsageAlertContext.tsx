@@ -14,10 +14,10 @@ export default function UsageAlertContext({
   scope: UsageAlert["scope_type"];
   entityId: string | null;
 }) {
-  const { accessToken, userId } = useAuthorized();
+  const { accessToken, userId, userRole, isAuthorized } = useAuthorized();
   const options: UseQueryOptions<UsageAlert> = {
-    queryKey: ["usageAlert", getProxyBaseUrl(), userId, alertId],
-    enabled: Boolean(accessToken && alertId),
+    queryKey: ["usageAlert", getProxyBaseUrl(), userId, userRole, alertId],
+    enabled: Boolean(isAuthorized && accessToken && alertId),
     queryFn: async ({ signal }) => {
       const { data } = await backgroundFetchClient.GET("/usage/alerts/{alert_id}", {
         params: { path: { alert_id: alertId } },
@@ -30,6 +30,7 @@ export default function UsageAlertContext({
     retry: false,
   };
   const query = useQuery(options);
+  if (!isAuthorized) return null;
   if (query.isPending) return <p className="text-sm text-muted-foreground">Loading alert…</p>;
   if (query.isError)
     return (

@@ -23,7 +23,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
   const [offset, setOffset] = useState(0);
   const queryClient = useQueryClient();
   const query = useQuery({
-    queryKey: ["usageAlertRules", getProxyBaseUrl(), user?.user_id, offset],
+    queryKey: ["usageAlertRules", getProxyBaseUrl(), user?.user_id, user?.user_role, offset],
     enabled: open && Boolean(accessToken && user?.user_id),
     queryFn: async ({ signal }) => {
       const { data } = await backgroundFetchClient.GET("/usage/alert-rules", {
@@ -49,6 +49,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
       backgroundFetchClient.DELETE("/usage/alert-rules/{rule_id}", { params: { path: { rule_id: id } } }),
     onSuccess: async () => {
       setDeleting(null);
+      if (query.data?.data.length === 1) setOffset(Math.max(0, offset - 20));
       await queryClient.invalidateQueries({ queryKey: ["usageAlertRules"] });
     },
   });

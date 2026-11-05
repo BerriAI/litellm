@@ -24,6 +24,13 @@ export default function UsageRuleForm({
   const initial = rule ?? DEFAULT_RULE;
   const [scope, setScope] = useState<RuleInput["scope_type"]>(initial.scope_type);
   const [metric, setMetric] = useState<RuleInput["metric"]>(initial.metric);
+  const [baselineDays, setBaselineDays] = useState(initial.baseline_days ?? 7);
+  const [historyDays, setHistoryDays] = useState(initial.min_history_days ?? 3);
+  const changeBaselineDays = (value: string) => {
+    const days = Number(value);
+    setBaselineDays(days);
+    if (days >= 1) setHistoryDays(Math.min(historyDays, days));
+  };
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     onSave(ruleInputFromForm(new FormData(event.currentTarget), scope, metric));
@@ -53,10 +60,11 @@ export default function UsageRuleForm({
         <div className="space-y-1">
           <Label htmlFor="rule-scope-id">Entity ID</Label>
           <Input
+            key={scope}
             id="rule-scope-id"
             name="scope_id"
             disabled={scope === "deployment"}
-            defaultValue={initial.scope_id ?? ""}
+            defaultValue={scope === initial.scope_type ? initial.scope_id ?? "" : ""}
             placeholder={scope === "deployment" ? "Entire deployment" : "All entities"}
           />
         </div>
@@ -90,6 +98,7 @@ export default function UsageRuleForm({
             type="number"
             required
             min="1.01"
+            max={1000}
             step="0.01"
             defaultValue={initial.multiplier}
           />
@@ -103,7 +112,8 @@ export default function UsageRuleForm({
             required
             min={1}
             max={30}
-            defaultValue={initial.baseline_days}
+            value={baselineDays}
+            onChange={(event) => changeBaselineDays(event.target.value)}
           />
         </div>
         <div className="space-y-1">
@@ -114,8 +124,9 @@ export default function UsageRuleForm({
             type="number"
             required
             min={1}
-            max={30}
-            defaultValue={initial.min_history_days}
+            max={baselineDays}
+            value={historyDays}
+            onChange={(event) => setHistoryDays(Number(event.target.value))}
           />
         </div>
         <div className="space-y-1">

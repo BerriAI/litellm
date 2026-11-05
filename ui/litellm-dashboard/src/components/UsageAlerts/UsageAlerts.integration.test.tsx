@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import UsageAlertsPanel from "./UsageAlertsPanel";
 import UsageAlertContext from "./UsageAlertContext";
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    accessToken: "test-access-token",
+    userId: "test-admin",
+    userRole: "Admin",
+    isAuthorized: true,
+    isViewOnly: false,
+  }),
+}));
 
 const observation = {
   id: "incident-test",
@@ -78,6 +88,18 @@ describe("usage alerts API integration", () => {
     expect(calls.find((call) => call.method === "PATCH")?.path).toBe("/usage/alerts/incident-test");
   });
 
+  it("hides cached global incidents when the viewer loses global spend access", async () => {
+    renderWithProviders(<UsageAlertsPanel />);
+    expect(await screen.findByRole("link", { name: "reporting-test-id" })).toBeInTheDocument();
+    await act(async () => {
+      testQueryClient.setQueriesData(
+        { queryKey: ["currentUser"] },
+        { user_id: "test-admin", user_role: "internal_user_viewer" },
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole("link", { name: "reporting-test-id" })).not.toBeInTheDocument());
+  });
+
   it("shows saved evidence on the matching entity without recomputing from a current rule", async () => {
     renderWithProviders(<UsageAlertContext alertId="incident-test" scope="key" entityId="reporting-test-id" />);
     expect(await screen.findByText(/Spend was \$120.00 on 2026-11-04 UTC/)).toHaveTextContent(
@@ -103,6 +125,8 @@ describe("usage alerts API integration", () => {
     fireEvent.change(screen.getByLabelText("Metric"), { target: { value: "requests" } });
     fireEvent.change(screen.getByLabelText("Change"), { target: { value: "decrease" } });
     fireEvent.change(screen.getByLabelText("Multiplier"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Baseline days"), { target: { value: "1" } });
+    expect(screen.getByLabelText("Minimum history days")).toHaveValue(1);
     await user.click(screen.getByRole("checkbox", { name: "Email", exact: true }));
     fireEvent.change(screen.getByLabelText("Email recipients"), { target: { value: "oncall@example.com" } });
     await user.click(screen.getByRole("button", { name: "Save rule" }));
@@ -113,6 +137,8 @@ describe("usage alerts API integration", () => {
       metric: "requests",
       direction: "decrease",
       multiplier: 2,
+      baseline_days: 1,
+      min_history_days: 1,
       notification_channels: ["email"],
       email_recipients: ["oncall@example.com"],
     };

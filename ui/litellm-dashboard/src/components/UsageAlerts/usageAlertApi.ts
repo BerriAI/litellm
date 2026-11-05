@@ -30,7 +30,7 @@ export function useUsageAlerts(accessToken: string | null, status: AlertStatus =
   const { data: user } = useCurrentUser(accessToken);
   const enabled = Boolean(accessToken && user?.user_id && hasCapability(user.user_role, "viewGlobalSpend"));
   const options: UseQueryOptions<AlertPage> = {
-    queryKey: ["usageAlerts", getProxyBaseUrl(), user?.user_id, status, offset, limit],
+    queryKey: ["usageAlerts", getProxyBaseUrl(), user?.user_id, user?.user_role, status, offset, limit],
     enabled,
     queryFn: async ({ signal }) => {
       const { data } = await backgroundFetchClient.GET("/usage/alerts", {
@@ -44,7 +44,8 @@ export function useUsageAlerts(accessToken: string | null, status: AlertStatus =
     refetchInterval: 5 * 60_000,
     retry: false,
   };
-  return useQuery(options);
+  const query = useQuery(options);
+  return { ...query, data: enabled ? query.data : undefined };
 }
 
 export async function updateAlertStatus(id: string, status: AlertStatus) {
