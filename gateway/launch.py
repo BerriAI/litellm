@@ -132,16 +132,20 @@ def configure_database() -> None:
 
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
     from litellm.proxy.rust_forward.mode import Disabled, Supervised, Supervisor, rust_forward_mode, uvicorn_flags
-    from litellm.proxy.rust_forward.supervisor import supervise
+    from litellm.proxy.rust_forward.supervisor import StartupError, supervise
 
     mode: Final = rust_forward_mode(os.environ)
     match mode:
-        case Disabled():
+        case Supervisor() if not isinstance(
+            exit_code := supervise(
+                python_server(argv), (sys.executable, "-m", "gateway.launch", *argv), before_start=configure_database
+            ),
+            StartupError,
+        ):
+            sys.exit(exit_code)
+        case Disabled() | Supervisor():
             configure_database()
             serve(uvicorn_argv(argv, os.environ))
-        case Supervisor():
-            command: Final = (sys.executable, "-m", "gateway.launch", *argv)
-            sys.exit(supervise(python_server(argv), command, before_start=configure_database))
         case Supervised():
             serve((*uvicorn_argv(argv, os.environ), *uvicorn_flags(mode)))
         case _:

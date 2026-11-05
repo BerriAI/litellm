@@ -134,18 +134,6 @@ class TestUvicornArgv:
     ) -> None:
         assert python_server(arguments).listener is listener
 
-    def test_an_unsupported_listener_stops_forwarding_before_the_database_is_prepared(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        monkeypatch.setenv("LITELLM_RUST", "true")
-        monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
-        monkeypatch.setenv("LITELLM_PGBOUNCER_ENABLED", "true")
-        monkeypatch.setenv("LITELLM_PGBOUNCER_BINARY", "/nonexistent/pgbouncer")
-        with pytest.raises(SystemExit) as stopped:
-            main(("--uds", "/tmp/gateway.sock"), serve=lambda argv: None)
-        assert stopped.value.code == 1
-        assert capsys.readouterr().err == "LITELLM_RUST does not support a Unix socket on the public port\n"
-
     @pytest.mark.parametrize(
         ("argv", "trust"),
         [
@@ -327,15 +315,32 @@ class TestMain:
             DatabaseURLSettings.from_env().apply_to_env()
         assert os.environ["DATABASE_URL"] == pooled
 
-    def test_forwarding_disabled_keeps_uvicorn_socket_options(
-        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("rust", "warning"),
+        [
+            ("false", ""),
+            (
+                "true",
+                "LITELLM_RUST does not support a Unix socket on the public port, "
+                "so Python serves the public port without Rust forwarding\n",
+            ),
+        ],
+    )
+    def test_python_alone_keeps_uvicorn_socket_options(
+        self,
+        rust: str,
+        warning: str,
+        password_env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        monkeypatch.setenv("LITELLM_RUST", "false")
+        monkeypatch.setenv("LITELLM_RUST", rust)
         monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
         monkeypatch.delenv("LITELLM_PGBOUNCER_ENABLED", raising=False)
         served: Final[list[tuple[str, ...]]] = []
         main(("--uds", "/tmp/gateway.sock"), serve=lambda argv: served.append(tuple(argv)))
         assert _uvicorn_params(served[0])["uds"] == "/tmp/gateway.sock"
+        assert capsys.readouterr().err == warning
 
     def test_a_pooler_that_cannot_start_stops_the_gateway_before_uvicorn(
         self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
