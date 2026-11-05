@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { SheetClose } from "@/components/ui/sheet";
@@ -25,6 +26,7 @@ export function InspectorHeader({
   status?: React.ReactNode;
   description?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   const inSheet = React.useContext(InSheet);
   return (
     <div className="flex flex-col gap-1.5">
@@ -36,7 +38,14 @@ export function InspectorHeader({
         {status && <span className="hidden sm:flex">{status}</span>}
         {inSheet && (
           <SheetClose
-            render={<Button variant="ghost" size="icon-sm" aria-label="Close" className="text-muted-foreground" />}
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("publicModelHub.inspectorHeader.close")}
+                className="text-muted-foreground"
+              />
+            }
           >
             <X />
           </SheetClose>

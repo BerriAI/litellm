@@ -1,6 +1,7 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
@@ -44,6 +45,7 @@ function PluginModeProviderWithAuth({ children }: { children: React.ReactNode })
 }
 
 export function AgentControlPlaneView() {
+  const { t } = useTranslation();
   const { activePlugin } = usePluginMode();
   const activePluginName = activePlugin?.name;
   const agentPlatformUrl = activePlugin?.url ?? "";
@@ -88,8 +90,8 @@ export function AgentControlPlaneView() {
     return (
       <div className="flex flex-1 items-center justify-center text-muted-foreground">
         <div className="text-center">
-          <p className="text-lg font-medium mb-2">Plugin</p>
-          <p className="text-sm">Configure the plugin URL in settings</p>
+          <p className="text-lg font-medium mb-2">{t("shell.agentControlPlane.plugin")}</p>
+          <p className="text-sm">{t("shell.agentControlPlane.configure")}</p>
         </div>
       </div>
     );
@@ -107,7 +109,7 @@ export function AgentControlPlaneView() {
         flex: 1,
         minHeight: "calc(100vh - 56px)",
       }}
-      title={activePlugin?.display_name ?? "Plugin"}
+      title={activePlugin?.display_name ?? t("shell.agentControlPlane.plugin")}
       allow="clipboard-write"
     />
   );
@@ -116,6 +118,7 @@ export function AgentControlPlaneView() {
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const { accessToken } = useAuth();
   const { mode } = usePluginMode();
   const pathname = usePathname();
@@ -186,7 +189,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
               if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
             }}
           >
-            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <SheetTitle className="sr-only">{t("shell.dashboardShell.navigation")}</SheetTitle>
             <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
           </SheetContent>
         </Sheet>
@@ -198,7 +201,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                 <SheetTrigger
                   handle={mobileNavigationHandle}
                   render={
-                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-11 md:hidden"
+                      aria-label={t("shell.dashboardShell.openNavigation")}
+                    />
                   }
                 >
                   <Menu />

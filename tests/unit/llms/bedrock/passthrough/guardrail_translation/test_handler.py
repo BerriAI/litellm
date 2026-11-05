@@ -1394,6 +1394,7 @@ class _ScriptedGuardrail(CustomGuardrail):
         self.skip_system_message_in_guardrail = skip_system
         self.scan_only_tool_results = scan_only_tool_results
         self.received: tuple[GenericGuardrailAPIInputs, ...] = ()
+        self.request_data: tuple[Mapping[str, object], ...] = ()
 
     async def apply_guardrail(
         self,
@@ -1403,6 +1404,7 @@ class _ScriptedGuardrail(CustomGuardrail):
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> Mapping[str, object]:
         self.received = (*self.received, copy.deepcopy(inputs))
+        self.request_data = (*self.request_data, request_data)
         return self.reply(inputs)
 
 
@@ -1429,16 +1431,30 @@ def _converse_request(body: dict) -> dict:
 
 
 async def _sent_to_bedrock(data: dict) -> dict:
-    """The Converse body Bedrock receives when the passthrough route sends ``data``."""
+    """The body Bedrock receives when the passthrough route sends ``data``."""
     received: list[httpx.Request] = []
+
+    action: Final = data["endpoint"].rsplit("/", 1)[-1]
 
     def respond(request: httpx.Request) -> httpx.Response:
         received.append(request)
-        reply = {
-            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
-            "stopReason": "end_turn",
-            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-        }
+        reply: Final = (
+            {
+                "id": "msg_bdrk_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+            if action == "invoke"
+            else {
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+        )
         return httpx.Response(200, json=reply, request=request)
 
     router = litellm.Router(
@@ -1457,7 +1473,7 @@ async def _sent_to_bedrock(data: dict) -> dict:
     await router.allm_passthrough_route(
         model="bedrock-model",
         method="POST",
-        endpoint="/model/bedrock-model/converse",
+        endpoint=f"/model/bedrock-model/{action}",
         data=data["data"],
         client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
     )
@@ -3841,6 +3857,260 @@ class TestInvokeStreamGuardrailRelay:
 
         assert received_key is not None and received_key.texts == ("In Paris",)
         assert rewritten_key == received_key
+
+
+def _anthropic_invoke_data(
+    action: str = "invoke",
+) -> dict[str, object]:  # mutable-ok: tests write into the request the handler gets
+    return {
+        "endpoint": f"model/anthropic.claude-sonnet/{action}",
+        "custom_llm_provider": "bedrock",
+        "model": "anthropic.claude-sonnet",
+        "litellm_call_id": "call-1",
+        "data": {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 512,
+            "system": "You are a travel assistant. Card on file 4111 1111 1111 1111",
+            "tools": [
+                {
+                    "name": "find_trips",
+                    "description": "Search trips",
+                    "input_schema": {"type": "object", "properties": {"port": {"type": "string"}}},
+                }
+            ],
+            "messages": [
+                {"role": "user", "content": "Pay with 4111 1111 1111 1111"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "find_trips", "input": {"port": "Miami"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Card 4111 1111 1111 1111 charged"}
+                    ],
+                },
+            ],
+        },
+    }
+
+
+def _masked_anthropic_invoke_body() -> Mapping[str, object]:
+    body: Final = _anthropic_invoke_data()["data"]
+    return {
+        **body,
+        "system": "You are a travel assistant. Card on file [CARD] 1111 1111 1111",
+        "messages": [
+            {"role": "user", "content": "Pay with [CARD] 1111 1111 1111"},
+            body["messages"][1],
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Card [CARD] 1111 1111 1111 charged"}
+                ],
+            },
+        ],
+    }
+
+
+def _rows_masked(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+    rows = [
+        {**row, "content": row["content"].replace("4111", "[CARD]")} if isinstance(row.get("content"), str) else row
+        for row in inputs["structured_messages"]
+    ]
+    return {"structured_messages": rows}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_anthropic_invoke_masks_are_written_back_into_the_body(action: str) -> None:
+    guardrail = _ScriptedGuardrail(lambda inputs: {"texts": _masked_texts(inputs)})
+
+    result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+        _anthropic_invoke_data(action), guardrail
+    )
+
+    assert result["data"] == _masked_anthropic_invoke_body()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_invoke_masks_reach_bedrock() -> None:
+    data: Final = _anthropic_invoke_data()
+
+    await BedrockPassthroughGuardrailHandler().process_input_messages(
+        data, _ScriptedGuardrail(lambda inputs: {"texts": _masked_texts(inputs)})
+    )
+
+    assert await _sent_to_bedrock(data) == _masked_anthropic_invoke_body()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_invoke_guardrail_gets_roles_tools_and_the_body_at_the_top_level_of_request_data() -> None:
+    data: Final = _anthropic_invoke_data()
+    guardrail = _replying({})
+
+    await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+    inputs = guardrail.received[-1]
+    assert [row["role"] for row in inputs["structured_messages"]] == ["system", "user", "assistant", "tool"]
+    assert [tool["function"]["name"] for tool in inputs["tools"]] == ["find_trips"]
+    assert inputs["model"] == data["model"]
+    request_data: Final = guardrail.request_data[-1]
+    assert request_data["messages"] is data["data"]["messages"]
+    assert request_data["endpoint"] == data["endpoint"]
+    assert request_data["litellm_call_id"] == data["litellm_call_id"]
+    assert "data" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_anthropic_invoke_structured_message_rewrites_are_written_back() -> None:
+    result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+        _anthropic_invoke_data(), _ScriptedGuardrail(_rows_masked)
+    )
+
+    assert result["data"]["messages"][0] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "Pay with [CARD] 1111 1111 1111"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["anthropic.claude-sonnet", "prod-model", ""])
+async def test_anthropic_invoke_structured_rewrite_keeps_cache_control_whatever_the_model_is_called(
+    model: str,
+) -> None:
+    cached: Final = {"type": "ephemeral"}
+    data: Final = _anthropic_invoke_data()
+    data["model"] = model
+    data["data"]["system"] = [{"type": "text", "text": "Card on file 4111 1111 1111 1111", "cache_control": cached}]
+    data["data"]["tools"] = [
+        {
+            "name": "find_trips",
+            "description": "Search trips",
+            "input_schema": {"type": "object", "properties": {}},
+            "cache_control": cached,
+        }
+    ]
+    data["data"]["messages"] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Pay with 4111 1111 1111 1111", "cache_control": {**cached, "ttl": "1h"}}
+            ],
+        }
+    ]
+
+    result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+        data,
+        _ScriptedGuardrail(
+            lambda inputs: {
+                "structured_messages": json.loads(json.dumps(inputs["structured_messages"]).replace("4111", "[CARD]")),
+                "tools": json.loads(json.dumps(inputs["tools"])),
+            }
+        ),
+    )
+
+    assert result["data"]["system"] == [
+        {"type": "text", "text": "Card on file [CARD] 1111 1111 1111", "cache_control": cached}
+    ]
+    assert result["data"]["messages"][0]["content"] == [
+        {"type": "text", "text": "Pay with [CARD] 1111 1111 1111", "cache_control": {**cached, "ttl": "1h"}}
+    ]
+    assert result["data"]["tools"][0]["cache_control"] == cached
+
+
+@pytest.mark.asyncio
+async def test_invoke_body_without_anthropic_version_is_scanned_whole() -> None:
+    data: Final = {**_anthropic_invoke_data(), "data": {"messages": [{"role": "user", "content": "hello"}]}}
+    guardrail = _replying({})
+
+    await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+    assert json.loads(guardrail.received[-1]["texts"][0])["data"] == data["data"]
+    assert "structured_messages" not in guardrail.received[-1]
+
+
+_PLAIN_TEXT_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "text", "media_type": "text/plain", "data": "Card 4111 1111 1111 1111"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param([{"type": "text", "text": "Summarize this"}, _PLAIN_TEXT_DOCUMENT], id="document"),
+        pytest.param(
+            [
+                {
+                    "type": "search_result",
+                    "source": "https://example.com/cards",
+                    "title": "Cards",
+                    "content": [{"type": "text", "text": "Card 4111 1111 1111 1111"}],
+                }
+            ],
+            id="search_result",
+        ),
+        pytest.param(
+            [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [_PLAIN_TEXT_DOCUMENT]}],
+            id="document_in_tool_result",
+        ),
+    ],
+)
+async def test_anthropic_invoke_body_with_blocks_the_messages_handler_does_not_scan_is_scanned_whole(content: Sequence[object]) -> None:
+    invoke: Final = _anthropic_invoke_data()
+    data: Final = {**invoke, "data": {**invoke["data"], "messages": [{"role": "user", "content": content}]}}
+    guardrail = _replying({})
+
+    await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+    assert json.loads(guardrail.received[-1]["texts"][0])["data"] == data["data"]
+    assert "structured_messages" not in guardrail.received[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"content": "hi"}], id="message_without_role"),
+        pytest.param([{"role": "user", "content": ["hi"]}], id="bare_string_in_content"),
+        pytest.param([{"role": "user", "content": None}], id="null_content"),
+        pytest.param(["hi"], id="message_is_a_string"),
+    ],
+)
+async def test_anthropic_invoke_malformed_messages_are_scanned_whole_and_left_for_bedrock_to_reject(
+    messages: Sequence[object],
+) -> None:
+    invoke: Final = _anthropic_invoke_data()
+    data: Final = {**invoke, "data": {**invoke["data"], "messages": messages}}
+    guardrail = _replying({})
+
+    result: Final = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+    assert json.loads(guardrail.received[-1]["texts"][0])["data"] == data["data"]
+    assert result["data"]["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_anthropic_invoke_response_masks_are_written_back() -> None:
+    response = {
+        "id": "msg_bdrk_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Charged 4111 1111 1111 1111"}],
+        "stop_reason": "end_turn",
+    }
+
+    result: Final = await BedrockPassthroughGuardrailHandler().process_output_response(
+        response=response,
+        guardrail_to_apply=_ScriptedGuardrail(lambda inputs: {"texts": _masked_texts(inputs)}),
+        request_data=_anthropic_invoke_data(),
+    )
+
+    assert result == {**response, "content": [{"type": "text", "text": "Charged [CARD] 1111 1111 1111"}]}
 
 
 def test_sse_events_keeps_a_data_line_whose_json_holds_unicode_line_separators() -> None:

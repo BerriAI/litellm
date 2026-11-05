@@ -3389,15 +3389,19 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
+ "aws-runtime",
  "aws-sdk-sts",
  "aws-sigv4",
  "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "aws-types",
  "bytes",
  "futures-util",
  "litellm-auth-types",
  "litellm-error",
  "litellm-http",
+ "litellm-secret-value",
+ "litellm-secrets",
  "moka",
  "reqwest",
  "rstest",
@@ -3406,6 +3410,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "url",
  "veil",
 ]
 
@@ -3418,6 +3423,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-error",
  "litellm-secret-value",
+ "litellm-secrets",
  "moka",
  "rstest",
  "serde_json",
@@ -3431,6 +3437,7 @@ dependencies = [
 name = "litellm-auth-gcp"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "gcp_auth",
  "google-cloud-auth",
@@ -3440,10 +3447,12 @@ dependencies = [
  "litellm-secret-value",
  "moka",
  "rstest",
+ "rustls 0.23.42",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "time",
  "tokio",
  "veil",
 ]

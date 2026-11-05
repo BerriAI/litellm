@@ -38,7 +38,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm._uuid import uuid
-from litellm.batches.batch_utils import batch_cost_is_final, handle_completed_batch
+from litellm.batches.batch_utils import handle_completed_batch
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.caching.redis_batch import flush_post_call_redis_batches
@@ -79,6 +79,11 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import ServedRound
+from litellm.litellm_core_utils.batch_utils import (
+    POLLED_BATCH_COST_IS_FINAL_KWARG,
+    POLLED_BATCH_ID_KWARG,
+    batch_cost_is_final,
+)
 from litellm.litellm_core_utils.classifier_logging import (
     classifier_audit_fields,
     classifier_input_snapshot,
@@ -220,6 +225,7 @@ from litellm.types.utils import (
     batch_chat_usage,
 )
 from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 from litellm.utils import (
     get_base_model_from_metadata,
     print_verbose,
@@ -3308,6 +3314,11 @@ class Logging(LiteLLMLoggingBaseClass):
             result = self.normalize_endpoint_logging_result(result)
             if self.stream is not True:
                 result = self._as_served_response(result)  # rebind-ok: bridged chat calls log the served response
+            if isinstance(result, VideoObject):
+                self.model_call_details[POLLED_VIDEO_STATUS_KWARG] = result.status
+            if isinstance(result, LiteLLMBatch):
+                self.model_call_details[POLLED_BATCH_ID_KWARG] = result.id
+                self.model_call_details[POLLED_BATCH_COST_IS_FINAL_KWARG] = batch_cost_is_final(result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
             if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
@@ -7132,6 +7143,7 @@ class StandardLoggingPayloadSetup:
         init_response_obj: object,
         api_base: str | None = None,
         router_model_id: str | None = None,
+        custom_model_info: ModelInfo | None = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name: Final = select_model_name_for_cost_calc(
             model=base_model if custom_pricing else None,
@@ -7150,6 +7162,8 @@ class StandardLoggingPayloadSetup:
             if router_model_id is not None
             else model_cost_name
         )
+        if model_cost_name is not None and custom_model_info is not None:
+            return StandardLoggingModelInformation(model_map_key=model_cost_name, model_map_value=custom_model_info)
         if model_cost_name is None:
             model_cost_information = StandardLoggingModelInformation(model_map_key="", model_map_value=None)
         else:
@@ -7900,6 +7914,7 @@ def get_standard_logging_object_payload(
             init_response_obj=init_response_obj,
             api_base=litellm_params.get("api_base"),
             router_model_id=logging_obj.get_router_model_id(),
+            custom_model_info=logging_obj.custom_model_info if custom_pricing else None,
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(

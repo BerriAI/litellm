@@ -86,6 +86,7 @@ export const getAutoRouterAssembledPromptCall = async (
 /**
  * Helper file for calls being made to proxy
  */
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
@@ -436,7 +437,7 @@ export const handleError = async (errorData: string | any) => {
     // Convert errorData to string if it isn't already
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (errorString.includes("Authentication Error - Expired Key")) {
-      toast.info("UI Session Expired. Logging out.");
+      toast.info(i18n.t("networking.sessionExpired"));
       lastErrorTime = currentTime;
       clearTokenCookies();
       const browserLocation = getWindowLocation();
@@ -748,7 +749,7 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     toast.dismiss();
 
     // Sequential success messages
-    toast.success(`Model ${formValues.model_name} created successfully`);
+    toast.success(i18n.t("networking.modelCreated", { modelName: formValues.model_name }));
 
     return data;
   } catch (error) {
@@ -1692,7 +1693,7 @@ export const modelInfoCall = async (
       errorData += `error shown=${ModelListerrorShown}`;
       if (!ModelListerrorShown) {
         if (errorData.includes("No model list passed")) {
-          errorData = "No Models Exist. Click Add Model to get started.";
+          errorData = i18n.t("networking.noModelsExist");
         }
         toast.info(errorData);
         ModelListerrorShown = true;
@@ -2154,7 +2155,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      toast.fromError("Failed to fetch key info - " + errorData);
+      toast.fromError(i18n.t("networking.keyInfoFetchFailed", { error: errorData }));
     }
 
     const data = await response.json();
@@ -2556,7 +2557,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      toast.fromError("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
+      toast.fromError(i18n.t("networking.teamUpdateFailed", { error: unwrapProxyErrorMessage(errorData) }));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -3209,7 +3210,7 @@ export const updateConfigFieldSetting = async (accessToken: string, fieldName: s
       config_type: "general_settings",
     };
     const data = await apiClient.post(`/config/field/update`, { accessToken, body: formData });
-    toast.success("Successfully updated value!");
+    toast.success(i18n.t("networking.configValueUpdated"));
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3225,7 +3226,7 @@ export const deleteConfigFieldSetting = async (accessToken: string, fieldName: s
       config_type: "general_settings",
     };
     const data = await apiClient.post(`/config/field/delete`, { accessToken, body: formData });
-    toast.success("Field reset on proxy");
+    toast.success(i18n.t("networking.configFieldReset"));
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -6258,7 +6259,7 @@ export const updatePassThroughEndpoint = async (
     }
 
     const data = await response.json();
-    toast.success("Pass through endpoint updated successfully");
+    toast.success(i18n.t("networking.passThroughEndpointUpdated"));
     return data;
   } catch (error) {
     console.error("Failed to update pass through endpoint:", error);

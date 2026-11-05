@@ -847,6 +847,45 @@ def is_stream_stall(exception: BaseException) -> bool:
     return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
 
 
+def is_caller_entra_credential_failure(
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    exception: BaseException,
+) -> bool:
+    if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
+        return False
+
+    from litellm.llms.azure.common_utils import caused_by_entra_rejection
+
+    if not caused_by_entra_rejection(exception):
+        return False
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, azure_entra_environment_defaults
+
+    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
+
+    credential_name: Final = deployment.litellm_params.litellm_credential_name
+    configured_by_precedence: Final[tuple[Mapping[str, object], ...]] = (
+        router_defaults,
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        ),
+    )
+    environment: Final = azure_entra_environment_defaults()
+    return any(
+        call_params.get(key) is not None
+        and (call_params.get(key) or environment.get(key))
+        != (_first_configured(configured_by_precedence, key) or environment.get(key))
+        for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
+    )
+
+
+def _first_configured(sources: tuple[Mapping[str, object], ...], key: str) -> object:
+    return next((value for source in sources if (value := source.get(key)) is not None), None)
+
+
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:
     if cast_exception_status_to_int(exception_status) not in (401, 403) or deployment is None:
         return False
