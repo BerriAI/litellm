@@ -44,56 +44,6 @@ from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpush
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
-class _UnavailableWindowQueue(asyncio.Queue):
-    async def put(self, item):
-        raise RuntimeError("Window queue unavailable")
-
-
-@pytest.mark.asyncio
-async def test_window_recovery_failure_does_not_fail_the_request(monkeypatch):
-    from litellm.proxy import proxy_server
-    from litellm.proxy.hooks.model_budget_shared_windows import CapturedModelWindows
-
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    writer = DBSpendUpdateWriter()
-    writer.window_spend_update_queue.update_queue = _UnavailableWindowQueue()
-    now = datetime(2026, 11, 2, tzinfo=timezone.utc)
-    window = build_window_spend_transaction(
-        entity_type="model_max_budget", entity_id="key:model:1d", window_duration="1d",
-        window_start=now, spend=0.25,
-    )
-    assert await writer.update_database(
-        token="key", user_id=None, end_user_id=None, team_id=None, org_id=None,
-        kwargs={"accounting_model_windows": CapturedModelWindows((window,)), "standard_logging_object": {}},
-        completion_response=None, start_time=now, end_time=now, response_cost=0.25,
-    ) is True
-    assert writer.window_spend_update_queue.update_queue.empty()
-
-
-@pytest.mark.parametrize(("use_ledger", "expected"), [(False, (0.25,)), (True, ())])
-@pytest.mark.asyncio
-async def test_failed_spend_write_queues_model_windows_only_for_legacy_requests(monkeypatch, use_ledger, expected):
-    from litellm.proxy import proxy_server
-    from litellm.proxy.hooks.model_budget_shared_windows import CapturedModelWindows
-
-    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": use_ledger})
-    monkeypatch.setattr(proxy_server, "accounting_window_keys", AsyncMock(return_value=()))
-    writer = DBSpendUpdateWriter()
-    monkeypatch.setattr(writer, "_record_spend_log", AsyncMock(side_effect=RuntimeError("spend log write failed")))
-    now = datetime(2026, 11, 2, tzinfo=timezone.utc)
-    window = build_window_spend_transaction(
-        entity_type="model_max_budget", entity_id="key:model:1d", window_duration="1d", window_start=now, spend=0.25,
-    )
-    assert await writer.update_database(
-        token="key", user_id=None, end_user_id=None, team_id=None, org_id=None,
-        kwargs={"accounting_model_windows": CapturedModelWindows((window,)), "standard_logging_object": {}},
-        completion_response=None, start_time=now, end_time=now, response_cost=0.25,
-    ) is True
-    charges = await writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
-    assert tuple(charge["spend"] for charge in charges) == expected
-
-
-
 @pytest.mark.asyncio
 async def test_daily_spend_tracking_with_disabled_spend_logs():
     """

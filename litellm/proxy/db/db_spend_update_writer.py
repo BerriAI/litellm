@@ -700,7 +700,6 @@ class DBSpendUpdateWriter:
         False only for a batch or video poll whose cost row another poll already wrote,
         so the caller leaves the key, team, and user counters alone (LIT-7048).
         """
-        from litellm.proxy.hooks.model_budget_shared_windows import captured_model_windows
         from litellm.proxy.proxy_server import (
             accounting_window_keys,
             disable_spend_logs,
@@ -715,8 +714,6 @@ class DBSpendUpdateWriter:
         )
         use_ledger: Final = proxy_settings.get("use_spend_logs_ledger") is True
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
-        model_windows: Final = captured_model_windows(request_fields)
-        windows_queued = False  # rebind-ok: recovery must not enqueue a legacy window twice
         if kwargs is not None:
             kwargs[ACCOUNTING_LEDGER_KWARG] = use_ledger  # rebind-ok: spend counters leave ledger windows to the worker
         try:
@@ -776,10 +773,7 @@ class DBSpendUpdateWriter:
                     model_access_groups=debitable_model_access_groups(
                         get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                     ),
-                    windows=(
-                        *(await accounting_window_keys(hashed_token, team_id) if billable_cost else ()),
-                        *model_windows,
-                    ),
+                    windows=await accounting_window_keys(hashed_token, team_id) if billable_cost else (),
                     router=get_llm_router,
                 )
             keep_spend_logs: Final = disable_spend_logs is False and not (
@@ -815,8 +809,6 @@ class DBSpendUpdateWriter:
                 )
 
             if not use_ledger:
-                windows_queued = True  # rebind-ok: an attempted queue write must not be repeated after a later failure
-                await self._queue_model_windows_safely(model_windows)
                 spawn_logging_task(
                     asyncio.get_running_loop(),
                     self._batch_database_updates(
@@ -846,8 +838,6 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("Runs spend update on all tables")
             return True
         except Exception:
-            if not use_ledger and not windows_queued:
-                await self._queue_model_windows_safely(model_windows)
             spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
                 "may not have completed for this request. "
@@ -860,12 +850,6 @@ class DBSpendUpdateWriter:
                 end_user_id,
             )
             return True
-
-    async def _queue_model_windows_safely(self, windows: tuple[WindowSpendTransaction, ...]) -> None:
-        try:
-            await asyncio.gather(*(self.window_spend_update_queue.add_update(window) for window in windows))
-        except Exception:
-            verbose_proxy_logger.debug("Unable to queue shared model budget spend", exc_info=True)
 
     async def _record_spend_log(
         self,

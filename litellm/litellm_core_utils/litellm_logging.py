@@ -929,11 +929,7 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.start_time = start_time
         new_call.litellm_params = litellm_params
         new_call.model_call_details = {
-            **{
-                key: value
-                for key, value in self.model_call_details.items()
-                if not key.startswith("_accounting_") and key != "accounting_model_windows"
-            },
+            **{key: value for key, value in self.model_call_details.items() if not key.startswith("_accounting_")},
             "litellm_call_id": litellm_call_id,
             "start_time": start_time,
             "first_api_call_start_time": None,
@@ -953,11 +949,6 @@ class Logging(LiteLLMLoggingBaseClass):
     def reset_caching_details(self) -> None:
         """Forget an earlier cache lookup's result, so a call that looks up again reports only its latest."""
         self.caching_details = None
-
-    def _retain_accounting_model_windows(self, callback_details: Mapping[str, object]) -> None:
-        captured: Final = callback_details.get("accounting_model_windows")
-        if captured is not None:
-            self.model_call_details["accounting_model_windows"] = captured
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -4459,8 +4450,6 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                         )
-                    # Redaction gives each callback its own copy; retain captured charges for the later DB callback.
-                    self._retain_accounting_model_windows(model_call_details)
                 if callable(callback):  # custom logger functions
                     global customLogger
                     if customLogger is None:

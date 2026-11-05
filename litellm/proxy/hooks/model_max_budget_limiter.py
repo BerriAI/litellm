@@ -34,8 +34,6 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
     LocalTTLCache,
     SharedWindow,
     SharedWindows,
-    capture_model_windows,
-    capturing_model_windows,
 )
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.types.llms.openai import AllMessageValues
@@ -847,13 +845,11 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         clock: Callable[[], float] = time.time,
         model_access_groups: ModelAccessGroups = proxy_model_access_groups,
         shared_windows: SharedWindows = PROXY_SHARED_WINDOWS,
-        defer_window_spend: bool = False,
     ):
         self.dual_cache = dual_cache
         self._clock = clock
         self._model_access_groups = model_access_groups
         self._shared_windows = shared_windows
-        self.defer_window_spend = defer_window_spend
         self.redis_increment_operation_queue = []
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
@@ -1221,20 +1217,14 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         job: Final = job_to_charge_once(kwargs=kwargs, response_obj=response_obj, response_cost=response_cost)
-        from litellm.proxy.utils import ProxyUpdateSpend
-
-        defer_windows: Final = self.defer_window_spend and not ProxyUpdateSpend.disable_spend_updates()
-        with capture_model_windows(defer_windows) as captured:
-            for entity_type, entity_id, resolved in resolved_budgets:
-                await self._charge_entity(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    resolved=resolved,
-                    response_cost=response_cost,
-                    job=job,
-                )
-            if defer_windows:
-                kwargs["accounting_model_windows"] = captured()  # rebind-ok: forward windows to DB callback
+        for entity_type, entity_id, resolved in resolved_budgets:
+            await self._charge_entity(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                resolved=resolved,
+                response_cost=response_cost,
+                job=job,
+            )
 
         if self.dual_cache.redis_cache is not None:
             await self._push_in_memory_increments_to_redis()
@@ -1266,14 +1256,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             job=job,
             ttl_seconds=duration_in_seconds(budget_duration),
         ):
-            if capturing_model_windows() and self._shares_windows_in_database(entity_type):
-                await self._capture_job_window(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    resolved=resolved,
-                    spend_key=spend_key,
-                    response_cost=response_cost,
-                )
             if job.repeat_poll_cost > 0:
                 await self._charge_entity(
                     entity_type=entity_type,
@@ -1307,39 +1289,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 budget_duration=budget_duration,
                 response_cost=response_cost,
             )
-
-    async def _capture_job_window(
-        self,
-        entity_type: Litellm_EntityType,
-        entity_id: str | None,
-        resolved: ResolvedModelBudget,
-        spend_key: str,
-        response_cost: float,
-    ) -> None:
-        """The ledger keeps only the poll whose delivery claims the job, which need not be the poll that won this
-        limiter's charge, so every completed poll carries the job's window and the ledger applies it once."""
-        budget_duration: Final = resolved.budget_config.budget_duration
-        if budget_duration is None:
-            return
-        start_time_key: Final = model_budget_start_time_cache_key(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            budget_model=resolved.budget_model,
-            budget_duration=budget_duration,
-        )
-        if _local_windows(self.dual_cache).get_cache(key=_unshared_spend_key(start_time_key)) is not None:
-            return
-        now: Final = self._clock()
-        await self._shared_windows.add(
-            spend_key=spend_key,
-            budget_duration=budget_duration,
-            started_at=await self._get_or_set_budget_start_time(
-                start_time_key=start_time_key,
-                current_time=now,
-                ttl_seconds=budget_window_seconds(now, budget_duration),
-            ),
-            spend=response_cost,
-        )
 
     def _shares_windows_in_database(self, entity_type: Litellm_EntityType) -> bool:
         """End-user ids are whatever the client sends, so their windows stay on each replica rather than adding a

@@ -945,26 +945,3 @@ async def test_concurrent_first_charges_on_one_replica_both_count():
         shared_windows=_WindowSpendDatabase().replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
-
-
-@pytest.mark.asyncio
-async def test_every_completed_poll_of_a_job_carries_its_window_for_the_ledger():
-    from litellm.proxy.hooks.model_budget_shared_windows import captured_model_windows
-
-    database: Final = _WindowSpendDatabase()
-    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(
-        dual_cache=DualCache(),
-        shared_windows=DatabaseSharedWindows(
-            prisma_client_source=lambda: SimpleNamespace(db=database, writer_db=database),  # pyright: ignore[reportArgumentType]  # duck-typed prisma double
-        ),
-        defer_window_spend=True,
-    )
-    polls: Final = tuple({**_event("avideo_status", BATCH_COST), POLLED_VIDEO_STATUS_KWARG: "completed"} for _ in "ab")
-    for poll in polls:
-        await _log_success(limiter, poll, response_obj=VideoObject(id="video_first", object="video", status="completed"))
-
-    carried: Final = tuple(
-        sorted((window["entity_id"], window["spend"]) for window in captured_model_windows(poll)) for poll in polls
-    )
-    assert carried[0] and carried[0] == carried[1]
-    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
