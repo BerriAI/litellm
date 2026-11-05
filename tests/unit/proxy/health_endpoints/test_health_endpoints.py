@@ -4388,3 +4388,39 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.status_code == 403
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_team_admin_probe_cannot_name_another_chatgpt_auth_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import ModelManagementAuthChecks
+
+    auth_file: Final = tmp_path / "other-account" / "auth.json"
+    auth_file.parent.mkdir()
+    auth_file.write_text(json.dumps({"access_token": "token-other", "account_id": "acct-other", "expires_at": 4102444800}))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(  # test-quality-ok: the team-membership check needs a live DB; this test isolates the auth file check
+        ModelManagementAuthChecks, "can_user_make_model_call", AsyncMock(return_value=True)
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route(host="chatgpt.com").respond(500)
+        with pytest.raises(HTTPException) as error:
+            await health_test_model_connection(
+                request=Request({"type": "http", "headers": []}),
+                mode="responses",
+                litellm_params={"model": "chatgpt/gpt-6.1-sol", "chatgpt_auth_file": str(auth_file)},
+                model_info={"team_id": "test_team"},
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, team_id="test_team", token="test-key"
+                ),
+            )
+
+    assert error.value.status_code == 403
+    assert "chatgpt_auth_file" in str(error.value.detail)
+    assert len(upstream.calls) == 0

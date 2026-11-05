@@ -73,6 +73,7 @@ from litellm.router_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.router import GenericLiteLLMParams
 
 #### Health ENDPOINTS ####
 
@@ -171,6 +172,19 @@ def _config_base_for_health_check(
     if _request_inherits_config_credentials(config_params, request_params, allow_client_side_credentials):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
+
+
+def _reject_unauthorized_chatgpt_auth_file(
+    requested: GenericLiteLLMParams, configured: GenericLiteLLMParams, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import ModelManagementAuthChecks
+
+    try:
+        ModelManagementAuthChecks.can_user_set_chatgpt_auth_file(
+            litellm_params=requested, user_api_key_dict=user_api_key_dict, existing_litellm_params=configured
+        )
+    except ProxyException as auth_file_error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": auth_file_error.message})
 
 
 def get_callback_identifier(callback):
@@ -2191,6 +2205,16 @@ async def test_model_connection(
         litellm_params = _update_litellm_params_for_health_check(
             model_info=resolved_model_info or {},
             litellm_params=litellm_params,
+        )
+
+        _reject_unauthorized_chatgpt_auth_file(
+            requested=GenericLiteLLMParams.model_validate(
+                {"chatgpt_auth_file": request_litellm_params.get("chatgpt_auth_file")}
+            ),
+            configured=GenericLiteLLMParams.model_validate(
+                {"chatgpt_auth_file": config_litellm_params.get("chatgpt_auth_file")}
+            ),
+            user_api_key_dict=user_api_key_dict,
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
