@@ -1391,6 +1391,37 @@ def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking()
     assert "123-45-6789" not in json.dumps(refreshed_body)
 
 
+def test_redact_proxy_server_request_body_on_guardrail_block():
+    """
+    Regression: When a pre-call guardrail blocks a request (e.g. secret or PII detected),
+    pre_call_hook raises an exception. The raw snapshot in proxy_server_request['body']
+    must be redacted so raw blocked text is not written into SpendLogs in plain text (#50127).
+    """
+    from litellm.proxy.litellm_pre_call_utils import (
+        redact_proxy_server_request_body_on_guardrail_block,
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "secret password is supersecret"}],
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "body": {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "secret password is supersecret"}],
+                "prompt": "supersecret prompt",
+            },
+        },
+    }
+
+    redact_proxy_server_request_body_on_guardrail_block(data)
+
+    body = data["proxy_server_request"]["body"]
+    assert body["messages"] == "[REDACTED - BLOCKED BY GUARDRAIL]"
+    assert body["prompt"] == "[REDACTED - BLOCKED BY GUARDRAIL]"
+    assert "supersecret" not in json.dumps(body)
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
