@@ -393,6 +393,16 @@ class IssuesRepository:
             )
         )
 
+    async def active_resource_issue_ids(self, cursor: str | None = None) -> tuple[str, ...]:
+        rows: Final = TypeAdapter(tuple[_Identifier, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT id FROM "LiteLLM_Issue" WHERE kind='performance' AND active AND scope_type<>'provider'
+                    AND ($1::text IS NULL OR id>$1) ORDER BY id LIMIT 10""",
+                cursor,
+            )
+        )
+        return tuple(row.id for row in rows)
+
     async def recover_issues(self, day: date, issue_ids: tuple[str, ...] | None = None) -> int:
         if issue_ids == ():
             return 0

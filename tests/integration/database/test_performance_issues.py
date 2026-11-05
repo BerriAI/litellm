@@ -415,6 +415,13 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
             rule.id,
         )
         assert count == [{"count": 31}]
+        issues: Final = IssuesRepository.from_prisma(prisma)
+        first_page: Final = await issues.active_resource_issue_ids()
+        second_page: Final = await issues.active_resource_issue_ids(first_page[-1])
+        assert len(first_page) == len(second_page) == 10
+        assert set(first_page).isdisjoint(second_page)
+        with pytest.raises(ValueError, match="at most 10"):
+            await issues.recover_issues(_DAY, issue_ids=first_page + second_page[:1])
         resumed: Final = await job._store.get_rule(rule.id)
         assert resumed is not None and resumed.evaluation_progress is None
         edited: Final = await job._store.save_rule(

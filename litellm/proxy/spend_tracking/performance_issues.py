@@ -228,7 +228,6 @@ class PerformanceIssueProjector:
         projection_deadline: Final = deadline - min(2, max(0, deadline - asyncio.get_running_loop().time()) / 4)
         while asyncio.get_running_loop().time() < projection_deadline:
             if (next_position := await self._projection_page(position, work, observed_at)) is None:
-                await self._store.recover_issues(work.day, completed_only=True)
                 await self._store.complete_projection(work.day, work.version)
                 await self._notify(deadline)
                 await self._store.prune()
@@ -250,6 +249,12 @@ class PerformanceIssueProjector:
                 return UsageAlertProjectionCursor(version=work.version, after_id=prior[-1].id)
             return UsageAlertProjectionCursor(version=work.version, step=1)
         if position.step > len(_SCOPES) * len(_METRICS):
+            identities: Final = await self._store.active_resource_issue_ids(position.after_id)
+            if identities:
+                await self._store.recover_issues(work.day, completed_only=True, issue_ids=identities)
+                return UsageAlertProjectionCursor(
+                    version=work.version, step=position.step, after_id=identities[-1]
+                )
             return None
         metric: Final = _METRICS[(position.step - 1) // len(_SCOPES)]
         scope: Final = _SCOPES[(position.step - 1) % len(_SCOPES)]
