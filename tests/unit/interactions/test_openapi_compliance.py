@@ -50,7 +50,7 @@ def _load_openapi_spec(live_url: str | None) -> LoadedSpec:
     with httpx.Client(transport=httpx.HTTPTransport(retries=3), timeout=30.0, follow_redirects=True) as client:
         response: Final = client.get(live_url)
     response.raise_for_status()
-    return LoadedSpec(source=str(response.url), spec=response.json())
+    return LoadedSpec(source=live_url, spec=response.json())
 
 
 def _model_create_request_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:

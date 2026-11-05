@@ -85,6 +85,23 @@ def test_merged_usage_sums_every_hop_and_keeps_the_first_prompt_size() -> None:
     }
 
 
+def test_merged_usage_adds_grounding_tool_counts_per_tool_type() -> None:
+    merged: Final = sum_usage(
+        (
+            {"total_tokens": 10, "grounding_tool_count": [{"type": "google_search", "count": 3}]},
+            {
+                "total_tokens": 20,
+                "grounding_tool_count": [{"type": "google_search", "count": 2}, {"type": "url_context", "count": 1}],
+            },
+        )
+    )
+    assert merged["grounding_tool_count"] == [
+        {"type": "google_search", "count": 5},
+        {"type": "url_context", "count": 1},
+    ]
+    assert merged["total_tokens"] == 30
+
+
 def test_merged_interaction_has_the_last_id_and_status_and_every_hops_steps() -> None:
     merged: Final = merge_hops(
         (
@@ -157,6 +174,22 @@ def test_a_hop_that_repeats_its_token_stops_the_loop() -> None:
 
     assert len(calls) == 1
     assert len(hops) == 2
+
+
+def test_a_token_already_seen_on_an_earlier_hop_stops_the_loop() -> None:
+    replies: Final = iter(
+        (
+            _hop("h2", "requires_continuation", "b", "tok-2"),
+            _hop("h3", "requires_continuation", "c", "tok-1"),
+            _hop("h4", "requires_continuation", "d", "tok-2"),
+        )
+    )
+
+    hops: Final = collect_hops_sync(
+        _hop("h1", "requires_continuation", "a", "tok-1"), _REQUEST, lambda body: _response(next(replies))
+    )
+
+    assert [hop["id"] for hop in hops] == ["h1", "h2", "h3"]
 
 
 @pytest.mark.asyncio

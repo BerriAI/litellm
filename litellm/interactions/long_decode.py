@@ -11,6 +11,7 @@ stored) continues the same answer, and the hops merge into one interaction whose
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from itertools import chain
+from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import httpx
@@ -29,7 +30,7 @@ HOP_FAILURES: Final = (httpx.HTTPError, Timeout, ValidationError, ValueError)
 
 _BODY: Final = TypeAdapter(dict[str, object])
 _USAGE: Final = TypeAdapter(dict[str, object])
-_MODALITY_ROWS: Final = TypeAdapter(list[dict[str, object]])
+_USAGE_ROWS: Final = TypeAdapter(list[dict[str, object]])
 _STEPS: Final = TypeAdapter(list[object])
 _INTERACTION: Final = TypeAdapter(dict[str, object])
 _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
@@ -41,13 +42,15 @@ _SUMMED_USAGE_KEYS: Final = (
     "total_reasoning_tokens",
     "total_thought_tokens",
     "total_tokens",
-    "grounding_tool_count",
 )
-_MODALITY_USAGE_KEYS: Final = (
-    "input_tokens_by_modality",
-    "cached_tokens_by_modality",
-    "output_tokens_by_modality",
-    "tool_use_tokens_by_modality",
+_ROW_USAGE_KEYS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {
+        "input_tokens_by_modality": ("modality", "tokens"),
+        "cached_tokens_by_modality": ("modality", "tokens"),
+        "output_tokens_by_modality": ("modality", "tokens"),
+        "tool_use_tokens_by_modality": ("modality", "tokens"),
+        "grounding_tool_count": ("type", "count"),
+    }
 )
 
 
@@ -90,22 +93,17 @@ def _int(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _modality_rows(value: object) -> Sequence[Mapping[str, object]]:
+def _usage_rows(value: object) -> Sequence[Mapping[str, object]]:
     try:
-        return _MODALITY_ROWS.validate_python(value) if value is not None else []
+        return _USAGE_ROWS.validate_python(value) if value is not None else []
     except ValidationError:
         return []
 
 
-def _sum_modality_rows(rows: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
-    modalities: Final = tuple(dict.fromkeys(row.get("modality") for row in rows))
-    return [
-        {
-            "modality": modality,
-            "tokens": sum(_int(row.get("tokens")) for row in rows if row.get("modality") == modality),
-        }
-        for modality in modalities
-    ]
+def _sum_rows(rows: Sequence[Mapping[str, object]], group: str, count: str) -> Sequence[Mapping[str, object]]:
+    """Rows keyed by a modality or a grounding tool type add up per key, e.g. two hops with 3 and 2 searches give 5."""
+    groups: Final = tuple(dict.fromkeys(row.get(group) for row in rows))
+    return [{group: key, count: sum(_int(row.get(count)) for row in rows if row.get(group) == key)} for key in groups]
 
 
 def usage_of(hop: InteractionBody | None) -> Mapping[str, object] | None:
@@ -125,15 +123,15 @@ def sum_usage(usages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
         for key in _SUMMED_USAGE_KEYS
         if any(key in u for u in usages)
     }
-    by_modality: Final = {
-        key: _sum_modality_rows(tuple(chain.from_iterable(_modality_rows(usage.get(key)) for usage in usages)))
-        for key in _MODALITY_USAGE_KEYS
+    by_row: Final = {
+        key: _sum_rows(tuple(chain.from_iterable(_usage_rows(usage.get(key)) for usage in usages)), group, count)
+        for key, (group, count) in _ROW_USAGE_KEYS.items()
         if any(key in u for u in usages)
     }
     return {
         **first,
         **summed,
-        **by_modality,
+        **by_row,
         "initial_input_tokens": first.get("initial_input_tokens", first.get("total_input_tokens")),
     }
 
@@ -171,7 +169,7 @@ def log_failed_hop(error: Exception | str) -> None:
 
 def _next_hop_token(hops: LongDecodeHops) -> str | None:
     token: Final = continuation_token_of(hops[-1])
-    if token is None or (len(hops) > 1 and token == hops[-2].get("continuation_token")):
+    if token is None or any(token == hop.get("continuation_token") for hop in hops[:-1]):
         return None
     return token
 

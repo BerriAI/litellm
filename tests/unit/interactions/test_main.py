@@ -1093,3 +1093,36 @@ def test_a_stream_stops_hopping_when_the_provider_repeats_the_continuation_token
     assert chunks[-1]["interaction"]["id"] == "hop-2"
     assert chunks[-1]["interaction"]["status"] == "requires_continuation"
     assert chunks[-1]["interaction"]["continuation_token"] == "tok-1"
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_a_done_frame_after_a_requires_continuation_event_does_not_stop_the_stream_before_the_next_hop() -> None:
+    with MockRouter(assert_all_called=True) as respx_mock:
+        respx_mock.post(_GEMINI_STREAM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    text=_hop_stream(_LONG_DECODE_HOPS[0], "Lemma 1.") + "data: [DONE]\n\n",
+                    headers={"content-type": "text/event-stream"},
+                ),
+                httpx.Response(
+                    200,
+                    text=_hop_stream(_LONG_DECODE_HOPS[1], " Lemma 2.") + "data: [DONE]\n\n",
+                    headers={"content-type": "text/event-stream"},
+                ),
+            ]
+        )
+
+        chunks: Final = [
+            chunk.model_dump(exclude_none=True)
+            for chunk in interactions.create(**_LONG_DECODE_REQUEST, stream=True, api_key="gemini-offline")
+        ]
+
+    assert [chunk["event_type"] for chunk in chunks] == [
+        "interaction.created",
+        "step.delta",
+        "step.delta",
+        "interaction.completed",
+    ]
+    assert chunks[-1]["interaction"]["status"] == "completed"
+    assert chunks[-1]["interaction"]["continuation_token"] is None
