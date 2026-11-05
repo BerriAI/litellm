@@ -3,8 +3,10 @@ Tests for access group management endpoints.
 """
 
 import types
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +24,9 @@ from litellm.proxy.proxy_server import app
 from litellm.types.agents import AgentResponse
 
 
+_ClientAndMocks: TypeAlias = tuple[TestClient, MagicMock, MagicMock, MagicMock, MagicMock]
+
+
 def _make_access_group_record(
     access_group_id: str = "ag-123",
     access_group_name: str = "test-group",
@@ -30,12 +35,13 @@ def _make_access_group_record(
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
     access_skill_names: list | None = None,
+    access_vector_store_ids: Sequence[str] = (),
     assigned_team_ids: list | None = None,
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
     updated_by: str | None = "admin-user",
     created_at: datetime | None = None,
-):
+) -> MagicMock:
     created_at_val = created_at or datetime.now()
     updated_at_val = datetime.now()
     data = {
@@ -46,6 +52,7 @@ def _make_access_group_record(
         "access_mcp_server_ids": access_mcp_server_ids or [],
         "access_agent_ids": access_agent_ids or [],
         "access_skill_names": access_skill_names or [],
+        "access_vector_store_ids": list(access_vector_store_ids),
         "assigned_team_ids": assigned_team_ids or [],
         "assigned_key_ids": assigned_key_ids or [],
         "created_at": created_at_val,
@@ -78,12 +85,12 @@ def _make_key_record(token: str, key_alias: str | None = None):
 
 
 @pytest.fixture
-def client_and_mocks(monkeypatch):
+def client_and_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ClientAndMocks]:
     """Setup mock prisma and admin auth for access group endpoints."""
     mock_access_group_table = MagicMock()
     mock_prisma = MagicMock()
 
-    def _create_side_effect(*, data):
+    def _create_side_effect(*, data: Mapping[str, object]) -> MagicMock:
         return _make_access_group_record(
             access_group_id="ag-new",
             access_group_name=data.get("access_group_name", "new"),
@@ -92,6 +99,7 @@ def client_and_mocks(monkeypatch):
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
             access_skill_names=data.get("access_skill_names", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             created_by=data.get("created_by"),
@@ -110,6 +118,7 @@ def client_and_mocks(monkeypatch):
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
             access_skill_names=data.get("access_skill_names", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             updated_by=data.get("updated_by"),
@@ -1712,6 +1721,41 @@ def test_update_access_group_writes_skill_names(client_and_mocks, update_payload
     assert resp.status_code == 200
     assert resp.json()["access_skill_names"] == expected_skills
     assert mock_table.update.await_args.kwargs["data"]["access_skill_names"] == expected_skills
+
+
+def test_create_access_group_persists_and_returns_vector_store_ids(client_and_mocks: _ClientAndMocks) -> None:
+    client, _, mock_table, *_ = client_and_mocks
+
+    resp: Final = client.post(
+        "/v1/access_group", json={"access_group_name": "stores", "access_vector_store_ids": ["store-a"]}
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["access_vector_store_ids"] == ["store-a"]
+    assert mock_table.create.await_args.kwargs["data"]["access_vector_store_ids"] == ["store-a"]
+
+
+@pytest.mark.parametrize(
+    ("update_payload", "expected_stores"),
+    [
+        ({"access_vector_store_ids": ["store-a"]}, ["store-a"]),
+        ({"access_vector_store_ids": []}, []),
+        ({"access_vector_store_ids": None}, []),
+    ],
+)
+def test_update_access_group_writes_vector_store_ids(
+    client_and_mocks: _ClientAndMocks, update_payload: Mapping[str, object], expected_stores: Sequence[str]
+) -> None:
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-stores", access_vector_store_ids=["old-store"])
+    )
+
+    resp: Final = client.put("/v1/access_group/ag-stores", json=update_payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["access_vector_store_ids"] == expected_stores
+    assert mock_table.update.await_args.kwargs["data"]["access_vector_store_ids"] == expected_stores
 
 
 def test_update_access_group_without_skill_field_leaves_skills_untouched(client_and_mocks):

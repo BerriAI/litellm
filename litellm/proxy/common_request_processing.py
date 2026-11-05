@@ -871,11 +871,11 @@ async def _authorize_response_file_search_vector_stores(
         return
 
     from litellm.proxy.vector_store_endpoints.utils import (
-        assert_user_can_access_vector_store_id,
+        assert_user_can_read_vector_store_id,
     )
 
     for vector_store_id in sorted(vector_store_ids):
-        await assert_user_can_access_vector_store_id(
+        await assert_user_can_read_vector_store_id(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
         )

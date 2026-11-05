@@ -26,6 +26,7 @@ from litellm.proxy.vector_store_endpoints.management_endpoints import (
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store,
     check_vector_store_permission,
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
@@ -659,7 +660,7 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
     # Test with vector store registry
     with patch.object(litellm, "vector_store_registry", mock_registry):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data=data, vector_store_id=vector_store_id
+            data=data, vector_store_id=vector_store_id, authorize=assert_user_can_access_vector_store
         )
 
         # Verify the data was updated correctly
@@ -681,7 +682,7 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
     ):
         original_data = {"existing_key": "existing_value"}
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data=original_data, vector_store_id=vector_store_id
+            data=original_data, vector_store_id=vector_store_id, authorize=assert_user_can_access_vector_store
         )
 
         # Verify data remains unchanged when no registry
@@ -706,6 +707,7 @@ async def test_managed_vector_store_keeps_embedding_reference_and_explicit_confi
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data={},
             vector_store_id="test_store",
+            authorize=assert_user_can_access_vector_store,
         )
 
     assert result["litellm_embedding_model"] == "team-embedding-alias"

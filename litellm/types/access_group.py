@@ -12,6 +12,7 @@ class AccessGroupCreateRequest(LiteLLMBaseModel):
     mcp_tool_permissions: Mapping[str, Sequence[str]] | None = None
     access_agent_ids: list[str] | None = None
     access_skill_names: tuple[str, ...] | None = None
+    access_vector_store_ids: tuple[str, ...] | None = None
     assigned_team_ids: list[str] | None = None
     assigned_key_ids: list[str] | None = None
 
@@ -24,6 +25,7 @@ class AccessGroupUpdateRequest(LiteLLMBaseModel):
     mcp_tool_permissions: Mapping[str, Sequence[str]] | None = None
     access_agent_ids: list[str] | None = None
     access_skill_names: tuple[str, ...] | None = None
+    access_vector_store_ids: tuple[str, ...] | None = None
     assigned_team_ids: list[str] | None = None
     assigned_key_ids: list[str] | None = None
 
@@ -44,6 +46,7 @@ class AccessGroupResponse(LiteLLMBaseModel):
     mcp_tool_permissions: Mapping[str, Sequence[str]] | None = None
     access_agent_ids: list[str]
     access_skill_names: tuple[str, ...] = ()
+    access_vector_store_ids: tuple[str, ...] = ()
     assigned_team_ids: list[str]
     assigned_key_ids: list[str]
     access_mcp_servers: tuple[AccessGroupResource, ...]
