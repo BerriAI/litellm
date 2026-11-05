@@ -33,6 +33,22 @@
     }
   },
   "providers": {
+    "popnow": {
+      "display_name": "PopNow (`popnow`)",
+      "url": "https://docs.litellm.ai/docs/providers/popnow",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "refuseless": {
       "display_name": "Refuseless (`refuseless`)",
       "url": "https://docs.litellm.ai/docs/providers/refuseless",
