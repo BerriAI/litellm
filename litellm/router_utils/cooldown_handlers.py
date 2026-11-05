@@ -125,12 +125,13 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
-    are checked in order from most to least specific to that setting."""
+    are checked in order from most to least specific to that setting. Only a number
+    counts: a bool or a string is skipped, so the router default applies."""
     for source in sources:
         if source is None:
             continue
         value = source.get(key)
-        if value is not None:
+        if isinstance(value, int | float) and not isinstance(value, bool):
             return value
     return None
 
@@ -811,7 +812,7 @@ def _is_allowed_fails_set_on_router(
     return False
 
 
-def cast_exception_status_to_int(exception_status: str | int) -> int:
+def cast_exception_status_to_int(exception_status: object) -> int:
     if isinstance(exception_status, str):
         try:
             exception_status = int(exception_status)
@@ -820,6 +821,13 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
                 "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
+    # A bool or a number no HTTP status can be is read as a 500, as the Rust router core reads it.
+    if (
+        isinstance(exception_status, bool)
+        or not isinstance(exception_status, int)
+        or not 0 <= exception_status <= 65535
+    ):
+        return 500
     return exception_status
 
 
@@ -845,6 +853,45 @@ def is_caller_timeout_408(
 
 def is_stream_stall(exception: BaseException) -> bool:
     return isinstance(exception, litellm.Timeout) and isinstance(exception.__cause__, MidStreamFallbackError)
+
+
+def is_caller_entra_credential_failure(
+    deployment: Deployment | None,
+    router_defaults: Mapping[str, object],
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    exception: BaseException,
+) -> bool:
+    if cast_exception_status_to_int(exception_status) != 401 or deployment is None:
+        return False
+
+    from litellm.llms.azure.common_utils import caused_by_entra_rejection
+
+    if not caused_by_entra_rejection(exception):
+        return False
+    from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, azure_entra_environment_defaults
+
+    call_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(model_call_details.get("litellm_params") or {})
+
+    credential_name: Final = deployment.litellm_params.litellm_credential_name
+    configured_by_precedence: Final[tuple[Mapping[str, object], ...]] = (
+        router_defaults,
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True)),
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        ),
+    )
+    environment: Final = azure_entra_environment_defaults()
+    return any(
+        call_params.get(key) is not None
+        and (call_params.get(key) or environment.get(key))
+        != (_first_configured(configured_by_precedence, key) or environment.get(key))
+        for key in AZURE_ENTRA_LITELLM_PARAM_KEYS
+    )
+
+
+def _first_configured(sources: tuple[Mapping[str, object], ...], key: str) -> object:
+    return next((value for source in sources if (value := source.get(key)) is not None), None)
 
 
 def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:

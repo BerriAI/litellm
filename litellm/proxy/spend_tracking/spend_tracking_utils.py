@@ -20,7 +20,6 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
-    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -30,7 +29,6 @@ from litellm.constants import (
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
-    NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -40,6 +38,12 @@ from litellm.constants import (
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.litellm_core_utils.batch_utils import (
+    BATCH_COST_REQUEST_ID_SUFFIX,
+    charged_poll_cost,
+    charged_video_id,
+    pays_only_its_guardrail,
+)
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
     classifier_audit_fields,
@@ -53,8 +57,13 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.hidden_params import served_from_cache
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.internal_call_metadata import (
+    BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    is_unbilled_non_inference_call,
+    settles_background_response,
+)
 from litellm.litellm_core_utils.litellm_logging import (
+    StandardLoggingPayloadSetup,
     coerce_model_access_groups,
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
@@ -71,19 +80,14 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
-from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.proxy.utils import PrismaClient, hash_token, query_raw_within_statement_timeout
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     summary_only_compaction_content,
     with_compaction_summary,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    SETTLES_BACKGROUND_RESPONSE_KWARG,
-    BackgroundResponseSettlement,
-)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
-    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     AzureSpillover,
     CallTypes,
@@ -100,6 +104,7 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
     batch_chat_usage,
 )
+from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
@@ -156,9 +161,7 @@ def _is_non_secret_key_value(value: str, *, key_alias: object = None) -> bool:
     )
 
 
-def _redact_logged_api_key(
-    value: str | None, *, already_redacted: bool = False, key_alias: object = None
-) -> str | None:
+def redact_logged_api_key(value: str | None, *, already_redacted: bool = False, key_alias: object = None) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     stripped: Final = re.sub(r"(?i)^bearer ", "", value)
@@ -322,7 +325,7 @@ def _get_spend_logs_metadata(
         and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
         and _trusted_hash == _raw_key
     )
-    clean_metadata["user_api_key"] = _redact_logged_api_key(
+    clean_metadata["user_api_key"] = redact_logged_api_key(
         _raw_key, already_redacted=_already_redacted, key_alias=_key_alias
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -344,25 +347,22 @@ def _get_spend_logs_metadata(
     return clean_metadata
 
 
-BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
-BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX: Final = "_background_cost"
+JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX: Final = "_guardrail_cost"
 
 
-def _cost_row_request_id_suffix(
-    call_type: str, metadata: Mapping[str, object], settles_background_response: bool
-) -> str:
+def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> str:
     if call_type == CallTypes.aretrieve_batch.value:
         return BATCH_COST_REQUEST_ID_SUFFIX
-    if settles_background_response or (
-        call_type in NON_INFERENCE_CALL_TYPES
-        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-    ):
+    if settles_background_response(call_type, metadata, kwargs):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: Mapping[str, object], metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str,
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -375,10 +375,14 @@ def get_spend_logs_id(
     )
     if resolved_id is None:
         return None
-    settles_background_response: Final = (
-        kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is BackgroundResponseSettlement.SETTLES
-    )
-    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, settles_background_response)}"
+    response_cost: Final = charged_poll_cost(kwargs)
+    charged_video: Final = charged_video_id(call_type, kwargs, resolved_id, response_cost)
+    if charged_video is not None:
+        return f"{charged_video}{VIDEO_COST_REQUEST_ID_SUFFIX}"
+    call_id: Final = kwargs.get("litellm_call_id")
+    if pays_only_its_guardrail(call_type, kwargs, response_cost) and isinstance(call_id, str) and call_id:
+        return f"{call_id}{JOB_POLL_GUARDRAIL_COST_REQUEST_ID_SUFFIX}"
+    return f"{resolved_id}{_cost_row_request_id_suffix(call_type, metadata, kwargs)}"
 
 
 _MISSING_ATTRIBUTE: Final = object()
@@ -604,6 +608,7 @@ def get_logging_payload(
         kwargs = {}
 
     rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
+    failure_exception: Final = response_obj if isinstance(response_obj, BaseException) else None
     response_served_from_cache: Final = served_from_cache(response_obj)
     if response_obj is None:
         response_obj = {}
@@ -622,7 +627,9 @@ def get_logging_payload(
         routing_metadata,
         routing_litellm_params,
     )
-    completion_start_time: Final = kwargs.get("completion_start_time", end_time)
+    completion_start_time: Final = TypeAdapter[datetime | None](datetime | None).validate_python(
+        kwargs.get("completion_start_time", end_time)
+    )
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
 
@@ -644,7 +651,7 @@ def get_logging_payload(
         _usage: Final = (
             chat_usage_of_batch.model_dump()
             if chat_usage_of_batch is not None
-            else response_obj_dict.get("usage", None) or {}
+            else StandardLoggingPayloadSetup.get_usage_as_dict(response_obj_dict)
         )
         if isinstance(_usage, litellm.Usage):
             usage = dict(_usage)
@@ -652,10 +659,12 @@ def get_logging_payload(
             usage = _usage
 
     # A request that failed mid-stream has no usable response_obj usage, and a stream
-    # continued on a fallback only has the fallback's. combined_usage_object holds the
-    # usage of every call the client's answer took, so it wins in both cases.
+    # continued on a fallback or a success that bills a failed follow-up only has its own.
+    # combined_usage_object holds the usage of every call the row bills, so it wins in each case.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if (not usage or "continued_partial_usage" in kwargs) and isinstance(_combined_usage, litellm.Usage):
+    if (
+        not usage or "continued_partial_usage" in kwargs or "failed_attempts_billed_on_success" in kwargs
+    ) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
@@ -681,14 +690,14 @@ def get_logging_payload(
         and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
         and _trusted_hash == api_key
     )
-    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted, key_alias=_key_alias) or ""
+    api_key = redact_logged_api_key(api_key, already_redacted=_key_already_redacted, key_alias=_key_alias) or ""
 
     if (
         standard_logging_payload is not None
     ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
         api_key = (
             api_key
-            or _redact_logged_api_key(
+            or redact_logged_api_key(
                 standard_logging_payload["metadata"].get("user_api_key_hash"),
                 already_redacted=True,
                 key_alias=standard_logging_payload["metadata"].get("user_api_key_alias"),
@@ -892,14 +901,11 @@ def get_logging_payload(
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
     drop_requester_ip_address: Final = requester_ip_address_logging_disabled()
-    error_information: Final = clean_metadata["error_information"]
     if drop_requester_ip_address:
         clean_metadata["requester_ip_address"] = None
-    if drop_requester_ip_address and isinstance(error_information, Mapping):
-        clean_metadata["error_information"] = cast(  # cast-ok: same keys, only the str values are masked
-            StandardLoggingPayloadErrorInformation,
-            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(error_information)),
-        )
+    clean_metadata["error_information"] = sanitize_error_information_for_spend_logs(
+        clean_metadata["error_information"], original_exception=failure_exception
+    )
 
     if litellm.cache is None:
         cache_key = "Cache OFF"
@@ -928,7 +934,9 @@ def get_logging_payload(
             cache_hit=str(cache_hit),
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
-            completionStartTime=_ensure_datetime_utc(completion_start_time),
+            completionStartTime=(
+                _ensure_datetime_utc(completion_start_time) if completion_start_time is not None else None
+            ),
             model=model_name,
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
@@ -1088,7 +1096,7 @@ async def _query_raw_rows(
     sql_query: str,
     *args: object,
 ) -> Sequence[Mapping[str, object]] | None:
-    return await prisma_client.db.query_raw(sql_query, *args)
+    return await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
 
 
 async def get_spend_by_team(

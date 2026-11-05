@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from functools import partial
+from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
 from types import MappingProxyType
@@ -66,8 +66,10 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
     SPEND_LOG_QUEUE_MAX_BYTES,
+    SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
+    VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.litellm_core_utils.bug_report import (
@@ -163,8 +165,13 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, Logging, deployment_pricing_model_info
+from litellm.litellm_core_utils.litellm_logging import (
+    BilledRoundsDispatch,
+    Logging,
+    deployment_pricing_model_info,
+)
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -174,6 +181,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -205,6 +213,7 @@ from litellm.proxy.db.db_url_settings import (
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
+    db_write_never_sent,
 )
 from litellm.proxy.db.health_check_latest import (
     LatestHealthCheckRow,
@@ -269,6 +278,7 @@ from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.spend_log_insert import RejectedSpendLogRow
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     HealthCheckRepository,
@@ -700,6 +710,56 @@ def _pipeline_step_streams_live(step: "PipelineStep") -> bool:
     if callback is None or callback.mask_response_content:
         return False
     return not unified_guardrail.resolve_streaming_flag(callback, "streaming_buffer_until_moderated", True)
+
+
+def _drop_stream_chunk_token_ids(chunk: object) -> None:
+    for choice in stream_item_items(chunk, "choices"):
+        drop_token_ids(choice)
+
+
+def _drop_built_stream_token_ids(request_data: Mapping[str, object]) -> None:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.drops_stream_token_ids = True
+
+
+def _drop_token_ids_ahead_of_chunk_check(
+    callback: CustomLogger, chunk: object, request_data: Mapping[str, object]
+) -> None:
+    if _overrides_hook(callback, "async_post_call_streaming_hook"):
+        _drop_stream_chunk_token_ids(chunk)
+        _drop_built_stream_token_ids(request_data)
+
+
+_PLAIN_STREAM_FIELDS: Final = TypeAdapter(dict[str, object])
+_EMPTY_STREAM_VALUES: Final[tuple[object, ...]] = (None, "", [], {})
+
+
+def _holds_stream_payload(value: object) -> bool:
+    if isinstance(value, dict):
+        nested: Final = _PLAIN_STREAM_FIELDS.validate_python(value).values()
+        return any(item not in _EMPTY_STREAM_VALUES for item in nested)
+    return value not in _EMPTY_STREAM_VALUES
+
+
+def _choice_carries_only_token_ids(choice: object) -> bool:
+    if stream_item_field(choice, "token_ids") is None or not isinstance(choice, BaseModel):
+        return False
+    fields: Final = _PLAIN_STREAM_FIELDS.validate_python(choice.model_dump())
+    return not any(_holds_stream_payload(value) for key, value in fields.items() if key not in ("index", "token_ids"))
+
+
+def _is_token_id_only_chunk(chunk: object) -> bool:
+    choices: Final = stream_item_items(chunk, "choices")
+    return bool(choices) and all(_choice_carries_only_token_ids(choice) for choice in choices)
+
+
+async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+    async for chunk in response:
+        if _is_token_id_only_chunk(chunk):
+            _drop_stream_chunk_token_ids(chunk)
+            continue
+        yield chunk
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -1622,14 +1682,17 @@ _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "updat
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 
+def _extended_exception_chain(chain: tuple[BaseException, ...], iteration: int) -> tuple[BaseException, ...]:
+    if len(chain) != iteration + 1:
+        return chain
+    following: Final = chain[-1].__cause__ or chain[-1].__context__
+    if following is None or following in chain:
+        return chain
+    return (*chain, following)
+
+
 def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
-    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
-    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
-        following = chain[-1].__cause__ or chain[-1].__context__
-        if following is None or following in chain:
-            break
-        chain.append(following)
-    return tuple(chain)
+    return reduce(_extended_exception_chain, range(_EXCEPTION_CHAIN_MAX_DEPTH), (exception,))
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:
@@ -1702,7 +1765,10 @@ def _proxy_only_error_log_fields(
 
 
 def _failure_fields_to_lift(
-    request_data: Mapping[str, object], provider_billed: bool = False, dispatched_call_type: str | None = None
+    request_data: Mapping[str, object],
+    provider_billed: bool = False,
+    dispatched_call_type: str | None = None,
+    route_call_type: str | None = None,
 ) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -1712,7 +1778,8 @@ def _failure_fields_to_lift(
     attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
-        return _EMPTY_LIFT
+        return _EMPTY_LIFT if dispatched_call_type is None else MappingProxyType({"call_type": dispatched_call_type})
+    _estimate_call_type: Final = dispatched_call_type or route_call_type
     _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
     _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
     _litellm_params: Final = getattr(_logging_obj, "litellm_params", None)
@@ -1727,10 +1794,10 @@ def _failure_fields_to_lift(
         provider_billed=_billed,
         deployment_id=_deployment_id,
         base_model=_base_model,
-        dispatched_call_type=dispatched_call_type,
+        dispatched_call_type=_estimate_call_type,
     )
     _prompt_estimate: Final = (
-        _estimated_prompt_usage(_model_call_details, request_data, dispatched_call_type)
+        _estimated_prompt_usage(_model_call_details, request_data, _estimate_call_type)
         if _billed and _first_handoff is not None and not _model_call_details.get("failed_attempts_usage")
         else None
     )
@@ -1747,6 +1814,12 @@ def _failure_fields_to_lift(
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        ("_accounting_pricing_snapshot", _model_call_details.get("_accounting_pricing_snapshot")),
+        ("_accounting_finalized_cost", _logging_obj.finalized_cost if isinstance(_logging_obj, Logging) else None),
+        (
+            "_accounting_allocation",
+            _logging_obj.cost_allowance_allocation if isinstance(_logging_obj, Logging) else None,
+        ),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
@@ -3031,14 +3104,21 @@ class ProxyLogging:
         hook to consult, but it judges the payload the same way, so a proxy configured only with
         one of those still has something to say about every record.
         """
-        if request_metadata.get("_guardrail_pipelines"):
+        return self.request_has_pre_call_guardrails({"metadata": dict(request_metadata)}, event_type)
+
+    def request_has_pre_call_guardrails(
+        self,
+        request_data: Mapping[str, object],
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+    ) -> bool:
+        if _policy_state_metadata(request_data).get("_guardrail_pipelines"):
             return True
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
         return any(
-            isinstance(callback, CustomGuardrail) and callback.should_run_guardrail(data=probe, event_type=event_type)
+            isinstance(callback, CustomGuardrail)
+            and callback.should_run_guardrail(data=request_data, event_type=event_type)
             for callback in caps.resolved_callbacks
         )
 
@@ -3996,13 +4076,15 @@ class ProxyLogging:
                 route=route,
                 original_exception=original_exception,
                 error_type=error_type,
+                dispatched_call_type=dispatched_call_type,
             )
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
                 request_data,
                 provider_billed=_provider_billed_the_failure(original_exception),
-                dispatched_call_type=dispatched_call_type or _call_type_for_route(user_api_key_dict.request_route),
+                dispatched_call_type=dispatched_call_type,
+                route_call_type=_call_type_for_route(user_api_key_dict.request_route),
             )
         )
 
@@ -4091,6 +4173,7 @@ class ProxyLogging:
         route: str | None = None,
         original_exception: Exception | None = None,
         error_type: ProxyErrorTypes | None = None,
+        dispatched_call_type: str | None = None,
     ):
         """
         Handle logging for proxy only errors by calling `litellm_logging_obj.async_failure_handler`
@@ -4190,7 +4273,7 @@ class ProxyLogging:
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
             resolved_call_type: Final = _call_type_for_route(route) or (
-                None if set_up_by_request else body_shape_call_type
+                None if set_up_by_request else dispatched_call_type or body_shape_call_type
             )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
@@ -4655,6 +4738,7 @@ class ProxyLogging:
                     else:
                         _callback = callback
                     if _callback is not None and isinstance(_callback, CustomLogger):
+                        _drop_token_ids_ahead_of_chunk_check(_callback, response, data)
                         if str_so_far is not None:
                             complete_response = str_so_far + response_str
                         else:
@@ -4676,7 +4760,7 @@ class ProxyLogging:
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, object],
     ):
         """
         Allow user to modify outgoing streaming data -> Given a whole response iterator.
@@ -4710,20 +4794,26 @@ class ProxyLogging:
         # Merge model-level guardrails before checking which guardrails to run
         request_data = check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
-        current_response = response
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        running_overrides: Final = tuple(
+            (callback, kind)
+            for callback, kind in caps.iterator_overrides
+            if not isinstance(callback, CustomGuardrail)
+            or (
+                callback.guardrail_name not in pipeline_gated_names
+                and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+            )
+        )
+        drops_token_ids: Final = bool(post_call_pipelines) or any(
+            isinstance(callback, CustomGuardrail) for callback, _ in running_overrides
+        )
+        if drops_token_ids:
+            _drop_built_stream_token_ids(request_data)
+        current_response = _without_token_id_only_chunks(response) if drops_token_ids else response
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
-        for resolved_callback, kind in caps.iterator_overrides:
-            if isinstance(resolved_callback, CustomGuardrail):
-                if resolved_callback.guardrail_name in pipeline_gated_names:
-                    continue
-                if (
-                    resolved_callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call)
-                    is not True
-                ):
-                    continue
+        for resolved_callback, kind in running_overrides:
             effective_kind = (
                 "apply_guardrail"
                 if (
@@ -4781,6 +4871,8 @@ class ProxyLogging:
         try:
             async for chunk in current_response:
                 served_chunks.append(chunk)
+                if drops_token_ids:
+                    _drop_stream_chunk_token_ids(served_chunks[-1])
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
             await ProxyLogging._close_guarded_layers(guarded_layers)
@@ -5185,6 +5277,39 @@ _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(ma
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+_SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
+_STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
+
+
+class _ReadTransactionClient(Protocol):
+    @property
+    def read_db(self) -> PrismaWrapper: ...
+
+
+async def query_raw_within_statement_timeout(
+    prisma_client: _ReadTransactionClient,
+    sql: str,
+    *params: object,
+    what: str = "Spend logs",
+    timeout: timedelta = _SPEND_LOG_READ_STATEMENT_TIMEOUT,
+) -> Sequence[Mapping[str, object]]:
+    """One raw read on the read target that Postgres cancels at ``timeout``.
+
+    Prisma's HTTP client gives up on a statement after 30s anyway, so without
+    this the Admin UI's error is the same but Postgres keeps running the scan.
+    A cancelled read surfaces as a 503 asking for a narrower date range.
+    """
+    try:
+        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
+            await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
+            return await transaction.query_raw(sql, *params)
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_statement_timeout_error(e):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
+        ) from e
 
 
 async def _lookup_deprecated_key(
@@ -8294,14 +8419,17 @@ async def enqueue_spend_logs(
     """
     added: Final = sum(spend_log_row_bytes(row) for row in logs)
     async with prisma_client._spend_log_transactions_lock:
-        queued: Final = (
+        queued: Final[tuple[Mapping[str, object], ...]] = (
             tuple(logs) + tuple(prisma_client.spend_log_transactions)
             if at_head
             else tuple(prisma_client.spend_log_transactions) + tuple(logs)
         )
         kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient.spend_log_queue_bytes + added, max_bytes)
-        prisma_client.spend_log_transactions[:] = kept
-        PrismaClient.spend_log_queue_bytes = kept_bytes
+        rescued: Final = tuple(
+            accounting_only_spend_log(row) for row in queued[: len(queued) - len(kept)] if _carries_a_charge(row)
+        )
+        prisma_client.spend_log_transactions[:] = (*rescued, *kept)
+        PrismaClient.spend_log_queue_bytes = kept_bytes + sum(spend_log_row_bytes(row) for row in rescued)
     if len(kept) < len(queued):
         verbose_proxy_logger.error(
             "Spend tracking - spend log queue is at its %d byte budget; dropped the %d oldest spend logs",
@@ -8356,13 +8484,18 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
         end_user_list_transactions: dict[str, float],
+        outer_transaction: _EndUserSpendTransaction | None = None,
     ):
         for i in range(n_retry_times + 1):
             start_time = time.time()
             try:
                 async with (
                     db_span("update_end_user_spend", "LiteLLM_EndUserTable"),
-                    _end_user_spend_transaction(prisma_client.db, timedelta(seconds=60)) as transaction,
+                    (
+                        contextlib.nullcontext(outer_transaction)
+                        if outer_transaction is not None
+                        else _end_user_spend_transaction(prisma_client.db, timedelta(seconds=60))
+                    ) as transaction,
                 ):
                     batcher: _EndUserSpendBatch
                     async with transaction.batch_() as batcher:
@@ -8384,6 +8517,8 @@ class ProxyUpdateSpend:
 
                 break
             except Exception as e:
+                if outer_transaction is not None:
+                    raise
                 await DBSpendUpdateWriter.handle_spend_update_failure(
                     e=e,
                     attempt=i,
@@ -8423,11 +8558,18 @@ class ProxyUpdateSpend:
             for i in range(n_retry_times + 1):
                 try:
                     base_url = os.getenv("SPEND_LOGS_URL", None)
-                    if len(logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
+                    await _commit_export_accounting(
+                        prisma_client, rows_to_write, base_url if db_writer_client is not None else None
+                    )
+                    if (
+                        base_url is not None
+                        and db_writer_client is not None
+                        and any(row.get("accounting_log_disabled") is not True for row in rows_to_write)
+                    ):
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: %s", base_url)
-                        json_data = json.dumps(rows_to_write)
+                        json_data = json.dumps(_spend_log_export_rows(rows_to_write))
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -8503,6 +8645,28 @@ class ProxyUpdateSpend:
         if general_settings.get("disable_spend_updates") is True:
             return True
         return False
+
+
+def _spend_log_export_rows(rows: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"accounting_payload", "accounting_log_disabled", "accounting_delivery_id"}
+        }
+        for row in rows
+        if row.get("accounting_log_disabled") is not True
+    )
+
+
+async def _commit_export_accounting(
+    prisma_client: PrismaClient, rows: Sequence[Mapping[str, object]], base_url: str | None
+) -> None:
+    if base_url is None:
+        return
+    await SpendLogsRepository(prisma_client).insert_with_deliveries(
+        tuple(row for row in rows if "accounting_payload" in row), write_spend_logs=False
+    )
 
 
 async def commit_tool_discoveries(prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging) -> None:
@@ -8680,9 +8844,20 @@ async def update_daily_tag_spend(
 
 def _rollup_batch_never_applied(e: Exception) -> bool:
     """True when a drained rollup batch provably never reached its rows: Postgres had no
-    connection for it (53300) or cancelled it under ``lock_timeout`` before it took the row
-    lock (55P03). Either way re-sending the batch cannot double-count, so it is requeued."""
-    return PrismaDBExceptionHandler.is_database_capacity_error(e) or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+    connection for it (53300), was unreachable or refusing connections (P1001, 57P03), or
+    cancelled it under ``lock_timeout`` before it took the row lock (55P03). In each case
+    re-sending the batch cannot double-count, so it is requeued."""
+    return (
+        PrismaDBExceptionHandler.is_database_capacity_error(e)
+        or db_write_never_sent(e)
+        or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+    )
+
+
+def _rollup_failure_stops_job(e: Exception) -> bool:
+    """True when the database cannot take any write, so the job stops instead of draining
+    the queues after this one into the same failure."""
+    return PrismaDBExceptionHandler.is_database_capacity_error(e) or db_write_never_sent(e)
 
 
 async def update_spend_logs_job(
@@ -8773,12 +8948,12 @@ async def _run_spend_logs_job(
                     *prisma_client.tool_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections or rollup row lock timed out during tool usage "
+                "Spend tracking - database unavailable or rollup row lock timed out during tool usage "
                 "flush, requeued %s tool usage transactions for the next flush: %s",
                 len(tool_usage_to_process),
                 tool_tracking_err,
             )
-            if PrismaDBExceptionHandler.is_database_capacity_error(tool_tracking_err):
+            if _rollup_failure_stops_job(tool_tracking_err):
                 raise
         else:
             verbose_proxy_logger.error(
@@ -8805,12 +8980,12 @@ async def _run_spend_logs_job(
                     *prisma_client.model_usage_transactions,
                 ]
             verbose_proxy_logger.warning(
-                "Spend tracking - database out of connections or rollup row lock timed out during model usage "
+                "Spend tracking - database unavailable or rollup row lock timed out during model usage "
                 "flush, requeued %s model usage transactions for the next flush: %s",
                 len(model_usage_to_process),
                 model_usage_err,
             )
-            if PrismaDBExceptionHandler.is_database_capacity_error(model_usage_err):
+            if _rollup_failure_stops_job(model_usage_err):
                 raise
         else:
             verbose_proxy_logger.error(
@@ -8987,8 +9162,43 @@ def _is_transient_spend_log_write_error(e: Exception) -> bool:
     return (
         PrismaDBExceptionHandler.is_database_transport_error(e)
         or PrismaDBExceptionHandler.is_prisma_engine_internal_error(e)
+        or PrismaDBExceptionHandler.is_database_lifecycle_error(e)
         or PrismaDBExceptionHandler.is_deadlock_error(e)
     )
+
+
+_ACCOUNTING_ONLY_KEYS: Final = frozenset({"request_id", "call_type", "accounting_payload", "accounting_delivery_id"})
+
+
+def _carries_a_charge(row: Mapping[str, object]) -> bool:
+    return "accounting_payload" in row
+
+
+def accounting_only_spend_log(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{key: value for key, value in row.items() if key in _ACCOUNTING_ONLY_KEYS},
+        "accounting_log_disabled": True,
+    }
+
+
+async def _keep_charges_of_dropped_logs(repo: SpendLogsRepository, rows: Sequence[Mapping[str, object]]) -> None:
+    charged: Final = tuple(accounting_only_spend_log(row) for row in rows if _carries_a_charge(row))
+    if not charged:
+        return
+    try:
+        await repo.insert_with_deliveries(charged)
+    except Exception as e:  # noqa: BLE001  # the request log is already lost; keep the flush going for other rows
+        if not (
+            PrismaDBExceptionHandler.is_rejected_row_error(e)
+            or isinstance(e, (UnicodeEncodeError, RejectedSpendLogRow))
+        ):
+            raise
+        spend_log_error(
+            "Spend tracking - could not keep the charges of %d dropped spend log rows. error=%s",
+            len(charged),
+            str(e),
+            exc=e,
+        )
 
 
 async def _create_spend_logs_with_poison_isolation(
@@ -9019,10 +9229,13 @@ async def _create_spend_logs_with_poison_isolation(
     persist. Returns the budget left after this subtree.
     """
     try:
-        await repo.table.create_many(data=rows, skip_duplicates=True)
+        await repo.insert_with_deliveries(rows)
         return failure_budget
     except Exception as e:
-        if not (PrismaDBExceptionHandler.is_prisma_data_error(e) or isinstance(e, UnicodeEncodeError)):
+        if not (
+            PrismaDBExceptionHandler.is_rejected_row_error(e)
+            or isinstance(e, (UnicodeEncodeError, RejectedSpendLogRow))
+        ):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
             raise
@@ -9037,6 +9250,7 @@ async def _create_spend_logs_with_poison_isolation(
                 str(e),
                 exc=e,
             )
+            await _keep_charges_of_dropped_logs(repo, rows)
             return budget_left
         if budget_left <= 0:
             spend_log_error(
@@ -9044,6 +9258,7 @@ async def _create_spend_logs_with_poison_isolation(
                 "isolation failure budget exhausted for this flush",
                 len(rows),
             )
+            await _keep_charges_of_dropped_logs(repo, rows)
             return 0
         mid: Final = len(rows) // 2
         remaining: Final = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], budget_left)
@@ -9053,6 +9268,7 @@ async def _create_spend_logs_with_poison_isolation(
                 "isolation failure budget exhausted for this flush",
                 len(rows) - mid,
             )
+            await _keep_charges_of_dropped_logs(repo, rows[mid:])
             return 0
         return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
 
@@ -10148,7 +10364,7 @@ _PRESERVED_NONE_FIELDS: Final[list[tuple[str, str]]] = [
     ("message", "refusal"),
     ("delta", "content"),  # null in streaming chunks
 ]
-_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs",)
+_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs", *VLLM_CHOICE_FIELDS)
 _PRESERVED_NONE_RESPONSE_FIELDS: Final = ("system_fingerprint",)
 
 

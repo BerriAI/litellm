@@ -1,4 +1,5 @@
 import React from "react";
+import { Trans } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import LoggingSettings from "../team/LoggingSettings";
 
@@ -30,12 +31,19 @@ export function PremiumLoggingSettings({
         </div>
         <div className="p-3 bg-muted border border-border rounded-lg">
           <p className="text-sm text-muted-foreground">
-            Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for
-            all free users. Get a trial key{" "}
-            <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
-              here
-            </a>
-            .
+            <Trans
+              i18nKey="premiumLoggingSettings.enterpriseNotice"
+              components={{
+                docs: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  />
+                ),
+              }}
+            />
           </p>
         </div>
       </div>

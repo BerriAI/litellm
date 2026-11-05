@@ -2,19 +2,24 @@
 
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
-from pydantic import ConfigDict, TypeAdapter, with_config
+from fastapi.responses import PlainTextResponse
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -43,7 +48,26 @@ router: Final = APIRouter()
 _REALTIME_TOKEN_VERSION: Final = "realtime_v1"
 _DEFAULT_REALTIME_MODEL: Final = "gpt-4o-realtime-preview"
 _DEFAULT_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
-_ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription")
+_ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription", "translation")
+
+
+@contextmanager
+def _invalid_request_body_answers_400() -> Generator[None, None, None]:
+    try:
+        yield
+    except ValidationError as error:
+        raise ProxyException(message=str(error), type="invalid_request_error", param=None, code=400) from error
+
+
+_TRANSLATION_SECRET_BODY: Final = {
+    "requestBody": inline_request_body(
+        RealtimeClientSecretRequest,
+        {"model": "gpt-realtime-translate", "session": {"type": "translation", "model": "gpt-realtime-translate"}},
+    )
+}
+_TRANSLATION_SDP_BODY: Final = {
+    "requestBody": {"required": True, "content": {"application/sdp": {"schema": {"type": "string"}}}}
+}
 
 
 @with_config(ConfigDict(strict=True, extra="allow"))
@@ -140,19 +164,60 @@ def _set_transcription_model_on_session(
     }
 
 
+def nested_transcription_upstream_model(model: str, team_id: str | None, llm_router: "Router | None") -> str:
+    deployment_model: Final = (
+        llm_router.registry().resolve(model, kind="upstream", team_id=team_id) if llm_router is not None else None
+    )
+    if deployment_model is None:
+        return model
+    try:
+        return litellm.get_llm_provider(model=deployment_model)[0]
+    except litellm.BadRequestError:
+        return deployment_model
+
+
+async def _authorize_and_bind_nested_transcription_models(
+    session_data: dict,  # mutable-ok: session payload is rewritten in place for provider serialization
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_model_list: list | None,  # mutable-ok: inherited auth helper accepts the proxy model list
+    llm_router: "Router | None",
+) -> None:
+    nested_models: Final = tuple(_transcription_model_candidates_from_session(session_data))
+    for nested_model in nested_models:
+        await can_key_call_resolved_model(
+            model=nested_model,
+            valid_token=user_api_key_dict,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
+    if nested_models:
+        _set_transcription_model_on_session(
+            session=session_data,
+            model=nested_transcription_upstream_model(nested_models[0], user_api_key_dict.team_id, llm_router),
+        )
+
+
 async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
     llm_model_list: list | None,
     llm_router: "Router | None",
+    forced_session_type: str | None = None,
 ) -> tuple[str, dict | None, str]:
-    session_type: Final = _coerce_realtime_session_type(req.session.type if req.session else None)
-    session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
+    requested_session_type: Final = req.session.type if req.session else None
+    if forced_session_type is None and requested_session_type == "translation":
+        raise HTTPException(status_code=400, detail="Translation sessions require the translations endpoint")
+    session_type: Final = forced_session_type or _coerce_realtime_session_type(requested_session_type)
+    session_data: Final[dict | None] = (
+        req.session.model_dump(exclude_unset=True) if req.session else ({} if session_type == "translation" else None)
+    )
     if session_data is not None:
         session_data["type"] = session_type
 
     session_model: Final = req.session.model if req.session else None
-    model: str = session_model or req.model or _DEFAULT_REALTIME_MODEL
+    requested_model: Final = session_model or req.model
+    default_model: Final = "gpt-realtime-translate" if session_type == "translation" else _DEFAULT_REALTIME_MODEL
+    model: str = requested_model or default_model
     if session_type != "transcription":
         await can_key_call_resolved_model(
             model=model,
@@ -160,6 +225,15 @@ async def _prepare_client_secret_session(
             llm_model_list=llm_model_list,
             llm_router=llm_router,
         )
+        if session_data is not None and (requested_model or session_type == "translation"):
+            session_data["model"] = model
+            if session_type == "translation":
+                await _authorize_and_bind_nested_transcription_models(
+                    session_data=session_data,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_model_list=llm_model_list,
+                    llm_router=llm_router,
+                )
         return model, session_data, session_type
 
     transcription_model_candidates: Final = _transcription_model_candidates_from_session(session_data or {})
@@ -194,12 +268,13 @@ def _encode_realtime_token_payload(
     team_id: str | None,
     expires_at: int | None,
     session_type: str = "realtime",
+    caller_auth: Mapping[str, object] | None = None,
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Final[dict[str, str | int | None]] = {
+    payload: Final[Mapping[str, object]] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,
@@ -207,8 +282,22 @@ def _encode_realtime_token_payload(
         "team_id": team_id or "",
         "expires_at": expires_at,
         "session_type": session_type,
+        **({} if caller_auth is None else {"caller_auth": caller_auth}),
     }
     return json.dumps(payload, separators=(",", ":"))
+
+
+def _caller_auth_for_token(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    return user_api_key_dict.model_dump(mode="json", exclude_none=True, exclude={"api_key", "parent_otel_span"})
+
+
+def _caller_auth_from_token(
+    decoded_payload: Mapping[str, object] | None, user_id: str | None, team_id: str | None
+) -> UserAPIKeyAuth:
+    caller_auth: Final = None if decoded_payload is None else as_str_mapping(decoded_payload.get("caller_auth"))
+    if caller_auth is None:
+        return UserAPIKeyAuth(user_id=user_id, team_id=team_id)
+    return UserAPIKeyAuth.model_validate({**caller_auth, "api_key": caller_auth.get("token")})
 
 
 def _header_value(headers: Mapping[str, str], name: str, default: str) -> str:
@@ -249,11 +338,24 @@ def _decode_realtime_token_payload(
     dependencies=[Depends(user_api_key_auth)],
     tags=["realtime"],
 )
+@router.post(
+    "/v1/realtime/translations/client_secrets",
+    openapi_extra=_TRANSLATION_SECRET_BODY,
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["realtime"],
+)
+@router.post(
+    "/realtime/translations/client_secrets",
+    openapi_extra=_TRANSLATION_SECRET_BODY,
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["realtime"],
+)
 async def create_realtime_client_secret(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> RealtimeClientSecretResponse:
+    """Create a short-lived client token for a Realtime conversation, transcription, or translation session"""
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -269,13 +371,16 @@ async def create_realtime_client_secret(
     data: dict = {}
     try:
         body: Final = await read_request_body(request=request)
-        req: Final = RealtimeClientSecretRequest(**body)
+        with _invalid_request_body_answers_400():
+            req: Final = RealtimeClientSecretRequest.model_validate(body)
+        is_translation_request: Final = "/realtime/translations/client_secrets" in request.url.path
 
         model, session_data, session_type = await _prepare_client_secret_session(
             req=req,
             user_api_key_dict=user_api_key_dict,
             llm_model_list=llm_model_list,
             llm_router=llm_router,
+            forced_session_type="translation" if is_translation_request else None,
         )
 
         data = {"model": model}
@@ -299,17 +404,20 @@ async def create_realtime_client_secret(
             proxy_config=proxy_config,
         )
 
+        call_type: Final = (
+            "acreate_realtime_translation_client_secret" if is_translation_request else "acreate_realtime_client_secret"
+        )
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=data,
-            call_type="acreate_realtime_client_secret",
+            call_type=call_type,
         )
 
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/client_secrets (model=%s)", model)
 
         llm_call: Final = await route_request(
             data=data,
-            route_type="acreate_realtime_client_secret",
+            route_type=call_type,
             llm_router=llm_router,
             user_model=user_model,
         )
@@ -366,6 +474,7 @@ async def create_realtime_client_secret(
         team_id=getattr(user_api_key_dict, "team_id", None),
         expires_at=expires_at if isinstance(expires_at, int) else None,
         session_type=session_type,
+        caller_auth=_caller_auth_for_token(user_api_key_dict) if session_type == "translation" else None,
     )
     encrypted_token: Final[str] = encrypt_value_helper(token_payload)
     upstream_json["value"] = encrypted_token
@@ -392,10 +501,27 @@ async def create_realtime_client_secret(
     "/openai/v1/realtime/calls",
     tags=["realtime"],
 )
+@router.post(
+    "/v1/realtime/translations/calls",
+    status_code=http_status.HTTP_201_CREATED,
+    response_class=PlainTextResponse,
+    response_description="WebRTC SDP answer",
+    openapi_extra=_TRANSLATION_SDP_BODY,
+    tags=["realtime"],
+)
+@router.post(
+    "/realtime/translations/calls",
+    status_code=http_status.HTTP_201_CREATED,
+    response_class=PlainTextResponse,
+    response_description="WebRTC SDP answer",
+    openapi_extra=_TRANSLATION_SDP_BODY,
+    tags=["realtime"],
+)
 async def proxy_realtime_calls(
     request: Request,
     fastapi_response: Response,
 ) -> Response:
+    """Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets"""
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -417,6 +543,7 @@ async def proxy_realtime_calls(
             media_type="application/json",
         )
 
+    is_translation_request: Final = "/realtime/translations/calls" in request.url.path
     encrypted_token: Final = auth_header.removeprefix("Bearer ").strip()
     decrypted_token_value: Final = decrypt_value_helper(
         value=encrypted_token,
@@ -434,33 +561,39 @@ async def proxy_realtime_calls(
     if decoded_payload is not None:
         # Check token expiry
         expires_at: Final = decoded_payload.get("expires_at")
-        if expires_at is not None and isinstance(expires_at, int):
-            if time.time() > expires_at:
-                return Response(
-                    content=json.dumps({"error": "Token has expired"}),
-                    status_code=http_status.HTTP_401_UNAUTHORIZED,
-                    media_type="application/json",
-                )
+        if isinstance(expires_at, int) and time.time() > expires_at:
+            return Response(
+                content=json.dumps({"error": "Token has expired"}),
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                media_type="application/json",
+            )
 
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
         model = decoded_payload.get("model_id") or request.query_params.get("model") or _DEFAULT_REALTIME_MODEL
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
-        session_type = _coerce_realtime_session_type(decoded_payload.get("session_type"))
+        raw_session_type: Final = decoded_payload.get("session_type")
+        session_type = _coerce_realtime_session_type(raw_session_type)
+        if is_translation_request != (raw_session_type == "translation"):
+            return Response(
+                content=json.dumps({"error": "Token is not valid for this Realtime endpoint"}),
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                media_type="application/json",
+            )
     else:
-        # Backward compatibility: older tokens contained only encrypted upstream key.
+        if is_translation_request:
+            return Response(
+                content=json.dumps({"error": "Token is not valid for this Realtime endpoint"}),
+                status_code=http_status.HTTP_401_UNAUTHORIZED,
+                media_type="application/json",
+            )
         openai_ephemeral_key = decrypted_token_value
         model = request.query_params.get("model", _DEFAULT_REALTIME_MODEL)
         user_id = None
         team_id = None
         session_type = "realtime"
 
-    # Build a minimal UserAPIKeyAuth with user/team IDs from the token
-    # so spend tracking and budget enforcement work correctly.
-    minimal_auth: Final = UserAPIKeyAuth(
-        user_id=user_id,
-        team_id=team_id,
-    )
+    token_caller_auth: Final = _caller_auth_from_token(decoded_payload, user_id, team_id)
 
     data: dict = {}
     try:
@@ -487,22 +620,23 @@ async def proxy_realtime_calls(
             data=data,
             request=request,
             general_settings=general_settings,
-            user_api_key_dict=minimal_auth,
+            user_api_key_dict=token_caller_auth,
             version=version,
             proxy_config=proxy_config,
         )
 
+        call_type: Final = "arealtime_translation_calls" if is_translation_request else "arealtime_calls"
         data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=minimal_auth,
+            user_api_key_dict=token_caller_auth,
             data=data,
-            call_type="arealtime_calls",
+            call_type=call_type,
         )
 
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/calls (model=%s)", model)
 
         llm_call: Final = await route_request(
             data=data,
-            route_type="arealtime_calls",
+            route_type=call_type,
             llm_router=llm_router,
             user_model=user_model,
         )
@@ -510,7 +644,7 @@ async def proxy_realtime_calls(
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=minimal_auth,
+            user_api_key_dict=token_caller_auth,
             original_exception=e,
             request_data=data,
         )
@@ -581,7 +715,8 @@ async def create_realtime_transcription_session(
     data: dict = {}
     try:
         body: Final = await read_request_body(request=request)
-        req: Final = RealtimeTranscriptionSessionRequest(**body)
+        with _invalid_request_body_answers_400():
+            req: Final = RealtimeTranscriptionSessionRequest.model_validate(body)
 
         model: Final[str] = req.resolved_model() or "gpt-realtime-whisper"
         await can_key_call_resolved_model(
@@ -592,6 +727,7 @@ async def create_realtime_transcription_session(
         )
 
         transcription_session: Final = {k: v for k, v in body.items() if k != "model"}
+        _set_transcription_model_on_session(session=transcription_session, model=model, create_if_missing=True)
         data = {"model": model, "transcription_session": transcription_session}
 
         data = await add_litellm_data_to_request(
