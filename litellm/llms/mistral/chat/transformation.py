@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
+import reprlib
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
@@ -84,6 +85,10 @@ _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 _REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
 _NON_LEVEL_EFFORT_REASON: Final = (
     "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
+)
+_UNUSABLE_TOOL_CHOICE_REASON: Final = (
+    "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
+    "or {'type': 'function', 'function': {'name': <tool name>}}."
 )
 _DOCUMENTED_MAGISTRAL_EFFORTS: Final = frozenset({"low", "medium", "high"})
 _REASONING_ON_THINKING_TYPES: Final = frozenset({"enabled", "adaptive"})
@@ -214,15 +219,19 @@ class MistralConfig(OpenAIGPTConfig):
 
     def _tool_choice_to_send(
         self, model: str, tool_choice: object, drop_params: bool
-    ) -> str | ChatCompletionToolChoiceObjectParam | None:
+    ) -> str | ChatCompletionToolChoiceObjectParam | UnsupportedParamsError | None:
         mapped: Final = self._map_tool_choice(tool_choice)
-        if mapped is not None or drop_params or litellm.drop_params is True:
+        if mapped is not None:
             return mapped
-        raise UnsupportedParamsError(
+        if drop_params or litellm.drop_params is True:
+            warn_dropped_reasoning(
+                "tool_choice", tool_choice, model, _UNUSABLE_TOOL_CHOICE_REASON, drop_params_gated=True
+            )
+            return None
+        return UnsupportedParamsError(
             message=(
-                f"{self.custom_llm_provider} does not support tool_choice={tool_choice!r}, for model={model}, "
-                "since the Mistral API takes only 'auto', 'none', 'any', 'required', or "
-                "{'type': 'function', 'function': {'name': <tool name>}}. "
+                f"Unsupported tool_choice={reprlib.repr(tool_choice)} for model={model}, since "
+                f"{_UNUSABLE_TOOL_CHOICE_REASON} "
                 "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
             llm_provider=self.custom_llm_provider,
@@ -273,28 +282,20 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "stop":
-                optional_params["stop"] = value
-            if (
-                param == "tool_choice"
-                and (
-                    mapped_tool_choice := self._tool_choice_to_send(
-                        model,
-                        cast(object, value),  # cast-ok: untyped request params, the match narrows it
-                        drop_params,
-                    )
-                )
-                is not None
-            ):
-                optional_params["tool_choice"] = mapped_tool_choice
+            if param == "tool_choice":
+                match self._tool_choice_to_send(
+                    model,
+                    cast(object, value),  # cast-ok: untyped request params, the match narrows it
+                    drop_params,
+                ):
+                    case UnsupportedParamsError() as unusable_tool_choice:
+                        raise unusable_tool_choice
+                    case None:
+                        pass
+                    case tool_choice:
+                        optional_params["tool_choice"] = tool_choice
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
-            if param == "response_format":
-                optional_params["response_format"] = value
             if (
                 param == "reasoning_effort"
                 and "magistral" not in model.lower()
@@ -310,7 +311,7 @@ class MistralConfig(OpenAIGPTConfig):
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
                 _warn_unless_reasoning_prompt_honors(param, OPAQUE_VALUE.validate_python(value), model)
-            if param in ("parallel_tool_calls", "prompt_cache_key"):
+            if param in ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key"):
                 optional_params[param] = value
         return optional_params
 

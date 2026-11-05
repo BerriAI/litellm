@@ -2154,7 +2154,20 @@ class TestMistralToolChoice:
             self._request_body(tool_choice)
 
     @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
-    def test_unusable_tool_choice_is_dropped_with_drop_params(
-        self, local_model_cost_map: None, tool_choice: str | Mapping[str, object]
+    def test_unusable_tool_choice_is_dropped_with_a_warning_under_drop_params(
+        self, local_model_cost_map: None, tool_choice: str | Mapping[str, object], caplog: pytest.LogCaptureFixture
     ) -> None:
-        assert "tool_choice" not in self._request_body(tool_choice, drop_params=True)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            body: Final = self._request_body(tool_choice, drop_params=True)
+
+        assert "tool_choice" not in body
+        assert len(_warnings_naming(caplog, "tool_choice")) == 1
+
+    def test_unusable_tool_choice_is_dropped_under_proxy_wide_drop_params(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        assert "tool_choice" not in self._request_body({"type": "function", "function": {}})
