@@ -101,7 +101,7 @@ async def test_should_send_only_the_two_milestones_and_keep_receipts_across_rest
     assert "tomorrow" in send.await_args_list[1].kwargs["subject"]
     assert send.await_args_list[0].kwargs["message_id"] != send.await_args_list[1].kwargs["message_id"]
     assert "<html" in send.await_args_list[0].kwargs["html"]
-    assert "Affected keys: 3" in send.await_args_list[0].kwargs["text"]
+    assert "3 keys | 12 requests in the last 30 days" in send.await_args_list[0].kwargs["text"]
 
 
 @pytest.mark.asyncio
@@ -252,7 +252,21 @@ def test_should_render_the_current_ui_logo_safe_model_text_and_actionable_links(
     assert "javascript:" not in rendered.html
     assert "&lt;script&gt;" in rendered.html
     assert "/ui/usage?tab=models&amp;from=2026-10-03&amp;to=2026-11-01" in rendered.html
-    assert "Source: LiteLLM model cost map" in rendered.text
+    assert "Recommendation source: LiteLLM model cost map" in rendered.text
+    assert "Google is deprecating this model on 01 Dec 2026 (UTC)." in rendered.html
+    assert "Google is deprecating this model on 01 Dec 2026 (UTC)." in rendered.text
+    assert "google_pse.png" in rendered.html
+    assert 'alt="Google"' in rendered.html
+    assert "BEFORE &middot; MODEL TO REPLACE" in rendered.html
+    assert "AFTER &middot; RECOMMENDED MODEL" in rendered.html
+    assert "What to do" in rendered.html
+    assert "check that requests to the old model reach zero" in rendered.text
+    missing = render_model_deprecation_email(
+        replace(email, model=model.model_copy(update={"successor_model": None})),
+        base_url="https://gateway.example",
+    )
+    assert "No recommended model listed. Choose a supported replacement." in missing.html
+    assert "Choose a supported replacement and test it with your workload." in missing.text
     tomorrow = render_model_deprecation_email(
         replace(email, milestone=DeprecationEmailMilestone.ONE_DAY),
         base_url="https://gateway.example",
