@@ -20,6 +20,7 @@ _MODEL_BODY: Final = {
     "response_mime_type": "application/json",
     "response_format": {"type": "object", "properties": {"plan": {"type": "string"}}},
     "previous_interaction_id": "interaction-prev-123",
+    "continuation_token": "Y29udGludWUtZnJvbS1oZXJl",
     "store": True,
     "background": True,
 }
@@ -120,6 +121,7 @@ def test_interaction_forwards_native_body_to_gemini(gateway: Gateway, prefix: st
             "store": True,
             "background": True,
             "previous_interaction_id": "interaction-prev-123",
+            "continuation_token": "Y29udGludWUtZnJvbS1oZXJl",
             "generation_config": {"temperature": 0.3},
             "response_format": [
                 {
