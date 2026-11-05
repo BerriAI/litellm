@@ -188,7 +188,6 @@ def test_eu_patterns_have_category():
 def test_credential_patterns_loaded():
     """Verify all added credential patterns are loaded"""
     required_patterns = [
-        "jwt_token",
         "openai_api_key",
         "anthropic_api_key",
         "gemini_api_key",
@@ -200,7 +199,6 @@ def test_credential_patterns_loaded():
 def test_credential_patterns_have_category():
     """Verify credential patterns are in Credential Patterns category"""
     cred_patterns = [
-        "jwt_token",
         "openai_api_key",
         "anthropic_api_key",
         "gemini_api_key",
@@ -208,53 +206,6 @@ def test_credential_patterns_have_category():
     category_patterns = PATTERN_CATEGORIES.get("Credential Patterns", [])
     for pattern_name in cred_patterns:
         assert pattern_name in category_patterns, f"Pattern {pattern_name} not in Credential Patterns category"
-
-
-# ---------------------------------------------------------------------------
-# jwt_token
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        # Standard HS256 JWT
-        (
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-            "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
-            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-        ),
-        # RS256 JWT (longer header)
-        (
-            "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9."
-            "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."
-            "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-        ),
-        # JWT pasted mid-sentence (the common accident)
-        (
-            "Here is my bearer token: eyJhbGciOiJIUzI1NiJ9."
-            "eyJ1c2VyIjoiYWRtaW4ifQ.abc123def456ghi789jkl012mno345pqr678 can you help debug?"
-        ),
-    ],
-)
-def test_jwt_token_detected(text: str) -> None:
-    pat = get_compiled_pattern("jwt_token")
-    assert pat.search(text) is not None, f"Expected JWT match in: {text[:60]}..."
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "eyJhbG",  # too short to be a real JWT
-        "normal sentence with no token at all",
-        "eyJ alone does not make a JWT without three parts",
-        "some.dotted.text that is not base64url encoded properly",
-        "eyJ" * 8000,
-    ],
-)
-def test_jwt_token_not_false_positive(text: str) -> None:
-    pat = get_compiled_pattern("jwt_token")
-    assert pat.search(text) is None, f"Unexpected JWT match in: {text}"
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +332,7 @@ def test_gemini_api_key_not_false_positive(text: str) -> None:
 
 @pytest.mark.parametrize(
     "pattern_name",
-    ["jwt_token", "openai_api_key", "anthropic_api_key", "gemini_api_key"],
+    ["openai_api_key", "anthropic_api_key", "gemini_api_key"],
 )
 def test_new_patterns_are_registered(pattern_name: str) -> None:
     pat = get_compiled_pattern(pattern_name)

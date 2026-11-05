@@ -99,13 +99,6 @@
       "description": "Detects generic API key patterns"
     },
     {
-      "name": "jwt_token",
-      "display_name": "JWT / Bearer Token",
-      "pattern": "(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_\\-]{10,}",
-      "category": "Credential Patterns",
-      "description": "Detects JSON Web Tokens (JWTs) in standard three-part base64url format (header.payload.signature)"
-    },
-    {
       "name": "openai_api_key",
       "display_name": "OpenAI API Key",
       "pattern": "\\b(?:sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\\-]{20,}|sk-[A-Za-z0-9]{32,51})\\b",
