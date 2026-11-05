@@ -53,6 +53,7 @@ _PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
 _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
 _STATEMENT_TIMEOUT_SQLSTATE: Final = "57014"
+_REJECTED_ROW_SQLSTATE_CLASSES: Final = frozenset({"22", "23", "54"})
 _STATEMENT_TIMEOUT_PHRASE: Final = "canceling statement due to statement timeout"
 
 
@@ -220,6 +221,20 @@ class PrismaDBExceptionHandler:
         import prisma
 
         return type(e) is prisma.errors.DataError
+
+    @staticmethod
+    def is_rejected_row_error(e: Exception) -> bool:
+        """True iff Postgres refused the rows themselves: a base ``DataError``, or a raw query failing with a data
+        exception (SQLSTATE class 22), integrity violation (class 23) or a value too large for an index (class 54). Systemic raw failures such as a missing
+        table (42P01) or a deadlock (40P01) stay False so the batch is retried instead of dropped."""
+        import prisma
+
+        if PrismaDBExceptionHandler.is_prisma_data_error(e):
+            return True
+        if not isinstance(e, _exception_types(prisma.errors.RawQueryError)):
+            return False
+        sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
+        return sqlstate is not None and sqlstate[:2] in _REJECTED_ROW_SQLSTATE_CLASSES
 
     @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
