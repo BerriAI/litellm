@@ -1180,11 +1180,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             include_namespace=True,
             replay_openai_history=provider == "openai",
         )
-        # OpenAI's Responses API rejects an empty input. For a system-only
-        # request, carry the system message as a system-role input item instead
-        # of instructions, mirroring how non-string system content is already
-        # handled in convert_chat_completion_messages_to_responses_api.
-        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        # Keep the system text in input instead of instructions when the Responses API needs it there.
+        # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
+        typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
+        system_goes_in_input: Final = converted_instructions is not None and (
+            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+        )
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)
             if _drops_audio_input(model, litellm_params)
@@ -1196,12 +1197,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     "type": "message",
                     "role": "system",
                     "content": [{"type": "input_text", "text": converted_instructions}],
-                }
+                },
+                *target_input_items,
             ]
-            if is_system_only_request
+            if system_goes_in_input
             else target_input_items
         )
-        instructions: Final = None if is_system_only_request else converted_instructions
+        instructions: Final = None if system_goes_in_input else converted_instructions
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()

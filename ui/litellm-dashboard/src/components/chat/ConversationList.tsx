@@ -19,6 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import dayjs from "dayjs";
+import { useTranslation } from "react-i18next";
 import { Conversation } from "./types";
 
 interface Props {
@@ -73,6 +74,7 @@ interface ConversationRowProps {
 }
 
 const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSelect, onDelete, onRename }) => {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(conv.title);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -122,7 +124,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
       {editing ? (
         <Input
           ref={inputRef}
-          aria-label="Conversation title"
+          aria-label={t("chat.conversationList.conversationTitle")}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -162,7 +164,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                       onClick={startEditing}
                       variant="ghost"
                       size="icon-xs"
-                      aria-label={`Rename ${conv.title}`}
+                      aria-label={t("chat.conversationList.renameConversation", { title: conv.title })}
                       className="text-muted-foreground"
                     >
                       <Pencil className="h-3 w-3" />
@@ -170,7 +172,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                   }
                 />
                 <TooltipContent side="bottom">
-                  <p>Rename</p>
+                  <p>{t("chat.conversationList.rename")}</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -185,7 +187,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                           <Button
                             variant="ghost"
                             size="icon-xs"
-                            aria-label={`Delete ${conv.title}`}
+                            aria-label={t("chat.conversationList.deleteConversation", { title: conv.title })}
                             className="text-muted-foreground hover:text-destructive"
                           >
                             <Trash2 className="h-3 w-3" />
@@ -195,22 +197,24 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                     }
                   />
                   <TooltipContent side="bottom">
-                    <p>Delete</p>
+                    <p>{t("chat.conversationList.delete")}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
               <AlertDialogContent className="chat-theme">
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Delete this conversation?</AlertDialogTitle>
-                  <AlertDialogDescription>This action cannot be undone</AlertDialogDescription>
+                  <AlertDialogTitle>{t("chat.conversationList.deleteConfirm.title")}</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {t("chat.conversationList.deleteConfirm.description")}
+                  </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel>{t("chat.conversationList.deleteConfirm.cancel")}</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={() => onDelete(conv.id)}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
-                    Delete
+                    {t("chat.conversationList.deleteConfirm.confirm")}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -230,6 +234,7 @@ interface SearchModalProps {
 }
 
 const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [wasOpen, setWasOpen] = useState(open);
 
@@ -250,13 +255,13 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="chat-theme sm:max-w-[480px] p-4 gap-0">
-        <DialogTitle className="sr-only">Search conversations</DialogTitle>
+        <DialogTitle className="sr-only">{t("chat.conversationList.searchTitle")}</DialogTitle>
         <div className="relative mb-3">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             autoFocus
-            aria-label="Search conversations"
-            placeholder="Search conversations…"
+            aria-label={t("chat.conversationList.searchLabel")}
+            placeholder={t("chat.conversationList.searchPlaceholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -265,7 +270,7 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
 
         <ScrollArea className="h-[320px]">
           {filtered.length === 0 ? (
-            <div className="text-center py-6 text-muted-foreground text-sm">No conversations found</div>
+            <div className="text-center py-6 text-muted-foreground text-sm">{t("chat.conversationList.noResults")}</div>
           ) : (
             filtered.map((conv) => {
               return (
@@ -301,6 +306,7 @@ const ConversationList: React.FC<Props> = ({
   hideSearchButton = false,
   enableSearchShortcut = true,
 }) => {
+  const { t } = useTranslation();
   const [localSearchOpen, setLocalSearchOpen] = useState(false);
   const searchModalOpen = searchOpen ?? localSearchOpen;
   const setSearchModalOpen = onSearchOpenChange ?? setLocalSearchOpen;
@@ -335,7 +341,7 @@ const ConversationList: React.FC<Props> = ({
               className="chat-nav-item w-full justify-start gap-2.5 text-muted-foreground hover:bg-sidebar-accent"
             >
               <Search className="size-4" />
-              Search chats
+              {t("chat.conversationList.searchChats")}
             </Button>
           </div>
         )}
@@ -344,7 +350,7 @@ const ConversationList: React.FC<Props> = ({
             <div key={group} className="mb-2">
               <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
                 <Clock3 className="size-3.5" aria-hidden="true" />
-                {group === "Recents" ? "Recent" : group}
+                {group === "Recents" ? t("chat.conversationList.recent") : group}
               </div>
               {items.map((conv) => (
                 <ConversationRow

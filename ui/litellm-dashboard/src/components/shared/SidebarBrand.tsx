@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import { useState } from "react";
 import Link from "next/link";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
@@ -33,6 +34,7 @@ export function SidebarBrand({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
+  const { t } = useTranslation();
   const { logoUrl, logoUrlDark } = useTheme();
   const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
@@ -71,7 +73,7 @@ export function SidebarBrand({
             size="icon-sm"
             onClick={onToggleCollapsed}
             aria-expanded={!collapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
             className="flex-none text-muted-foreground"
           >
             {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}

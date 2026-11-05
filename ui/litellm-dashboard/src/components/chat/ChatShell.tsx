@@ -17,6 +17,7 @@ import {
   Info,
 } from "lucide-react";
 import { useMediaQuery } from "usehooks-ts";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import {
@@ -86,6 +87,7 @@ function NavItem({ icon, label, onClick, active = false, shortcut }: NavItemProp
 }
 
 const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { t } = useTranslation();
   const router = useRouter();
   const pathname = stripTrailingSlash(usePathname() ?? "");
   const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
@@ -107,10 +109,10 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const routes = getChatRoutes();
   const isChatsRoute = pathname === routes.chats;
   const workspaceItems = [
-    { label: "Credentials", route: routes.credentials, Icon: KeyRound },
-    { label: "API Keys", route: routes.apiKeys, Icon: Lock },
-    { label: "Logs", route: routes.logs, Icon: ScrollText },
-    { label: "Usage", route: routes.usage, Icon: BarChart3 },
+    { label: t("chat.shell.workspaceItems.credentials"), route: routes.credentials, Icon: KeyRound },
+    { label: t("chat.shell.workspaceItems.apiKeys"), route: routes.apiKeys, Icon: Lock },
+    { label: t("chat.shell.workspaceItems.logs"), route: routes.logs, Icon: ScrollText },
+    { label: t("chat.shell.workspaceItems.usage"), route: routes.usage, Icon: BarChart3 },
   ];
   const workspaceActive = workspaceItems.some((item) => item.route === pathname);
   const navigate = (href: string) => {
@@ -124,24 +126,24 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       <SidebarBrand
         accessToken={accessToken}
         homeHref={routes.chats}
-        homeLabel="Chat home"
+        homeLabel={t("chat.shell.home")}
         collapsed={collapsed}
         onToggleCollapsed={() => (isDesktop ? setSidebarCollapsed(!sidebarCollapsed) : setSidebarOpen(false))}
       />
       <div className="space-y-1 px-3 pt-3 pb-2">
         <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
-        <NavItem icon={<Plus />} label="New Chat" onClick={() => navigate(routes.chats)} />
+        <NavItem icon={<Plus />} label={t("chat.shell.newChat")} onClick={() => navigate(routes.chats)} />
       </div>
-      <SidebarContent aria-label="Chat workspace" className="flex-none">
+      <SidebarContent aria-label={t("chat.shell.workspaceNav")} className="flex-none">
         <NavItem
           icon={<Network className="size-4" />}
-          label="Models"
+          label={t("chat.shell.models")}
           onClick={() => navigate(routes.models)}
           active={pathname === routes.models}
         />
         <NavItem
           icon={<LayoutGrid className="size-4" />}
-          label="Integrations"
+          label={t("chat.shell.integrations")}
           onClick={() => navigate(routes.integrations)}
           active={pathname === routes.integrations}
         />
@@ -150,14 +152,16 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             render={
               <SidebarMenuButton
                 isActive={workspaceActive}
-                aria-label="Workspace"
-                title="Workspace"
+                aria-label={t("chat.shell.workspace")}
+                title={t("chat.shell.workspace")}
                 aria-current={workspaceActive ? "page" : undefined}
               />
             }
           >
             <Settings2 className="size-4" />
-            <span className="flex-1 text-left group-data-[collapsed=true]/sidebar:hidden">Workspace</span>
+            <span className="flex-1 text-left group-data-[collapsed=true]/sidebar:hidden">
+              {t("chat.shell.workspace")}
+            </span>
             <ChevronDown className="size-3.5 group-data-[collapsed=true]/sidebar:hidden" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side="right" align="start" className="min-w-44">
@@ -178,11 +182,11 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               }
             >
               <Info className="size-4" />
-              Share feedback
+              {t("chat.shell.shareFeedback")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <NavItem icon={<Search />} label="Search chats" shortcut={shortcut} onClick={openSearch} />
+        <NavItem icon={<Search />} label={t("chat.shell.searchChats")} shortcut={shortcut} onClick={openSearch} />
       </SidebarContent>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 group-data-[collapsed=true]/sidebar:hidden">
         <ConversationList
@@ -211,21 +215,21 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   );
 
   const titles = [
-    { route: routes.chats, label: "Chat" },
-    { route: routes.models, label: "Models" },
-    { route: routes.integrations, label: "Integrations" },
+    { route: routes.chats, label: t("shell.viewSwitcher.chat") },
+    { route: routes.models, label: t("chat.shell.models") },
+    { route: routes.integrations, label: t("chat.shell.integrations") },
     ...workspaceItems,
   ];
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const title =
     isChatsRoute && activeConversation?.messages.length
       ? activeConversation.title
-      : titles.find((item) => item.route === pathname)?.label ?? "Chat";
+      : titles.find((item) => item.route === pathname)?.label ?? t("shell.viewSwitcher.chat");
 
   return (
     <div className="chat-theme flex h-full w-full overflow-hidden bg-background text-foreground">
       {isDesktop && (
-        <Sidebar aria-label="Chat navigation" collapsed={collapsed}>
+        <Sidebar aria-label={t("chat.shell.chatNavigation")} collapsed={collapsed}>
           {sidebar}
         </Sidebar>
       )}
@@ -237,8 +241,8 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>LiteLLM Chat</SheetTitle>
-            <SheetDescription>Conversations and chat workspace navigation</SheetDescription>
+            <SheetTitle>{t("chat.shell.sheetTitle")}</SheetTitle>
+            <SheetDescription>{t("chat.shell.sheetDescription")}</SheetDescription>
           </SheetHeader>
           <Sidebar>{sidebar}</Sidebar>
         </SheetContent>
@@ -252,7 +256,12 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             <SheetTrigger
               handle={mobileNavigationHandle}
               render={
-                <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open chat navigation" />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-11 md:hidden"
+                  aria-label={t("chat.shell.openChatNavigation")}
+                />
               }
             >
               <Menu />

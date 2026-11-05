@@ -1,18 +1,24 @@
 import type { ReactNode } from "react";
-import { Bug, Code2, ListChecks } from "lucide-react";
+import type { ParseKeys } from "i18next";
+import { Bug, Code2, ListChecks, type LucideIcon } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import "./moyai-chat.css";
 
-const starters = [
+const starters: { label: ParseKeys; prompt: ParseKeys; Icon: LucideIcon }[] = [
   {
-    label: "Review code",
-    prompt: "Review my changes for bugs and improvements.",
+    label: "chat.moyaiHome.starters.review.label",
+    prompt: "chat.moyaiHome.starters.review.prompt",
     Icon: Code2,
   },
-  { label: "Fix a bug", prompt: "Help me investigate and fix this bug: ", Icon: Bug },
   {
-    label: "Plan a feature",
-    prompt: "Help me plan and implement this feature: ",
+    label: "chat.moyaiHome.starters.fixBug.label",
+    prompt: "chat.moyaiHome.starters.fixBug.prompt",
+    Icon: Bug,
+  },
+  {
+    label: "chat.moyaiHome.starters.planFeature.label",
+    prompt: "chat.moyaiHome.starters.planFeature.prompt",
     Icon: ListChecks,
   },
 ];
@@ -32,20 +38,21 @@ export default function MoyaiChatHome({
   busy: boolean;
   onPrompt: (prompt: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <section className="moyai-chat-home">
       <div className="moyai-chat-home-content">
         <header className="moyai-chat-home-header">
           <h1>
-            {imageMode && "What are we creating?"}
+            {imageMode && t("chat.moyaiHome.headingImage")}
             {!imageMode && researchMode && (
               <>
-                What should we <span>research?</span>
+                <Trans i18nKey="chat.moyaiHome.headingResearch" components={{ highlight: <span /> }} />
               </>
             )}
             {!imageMode && !researchMode && (
               <>
-                What are we <span>working on?</span>
+                <Trans i18nKey="chat.moyaiHome.headingChat" components={{ highlight: <span /> }} />
               </>
             )}
           </h1>
@@ -55,7 +62,7 @@ export default function MoyaiChatHome({
           <div
             className="moyai-chat-home-starters"
             role="group"
-            aria-label="Start with a prompt"
+            aria-label={t("chat.moyaiHome.startersLabel")}
             aria-hidden={Boolean(draft.trim())}
           >
             {starters.map(({ label, prompt, Icon }) => (
@@ -64,10 +71,10 @@ export default function MoyaiChatHome({
                 variant="outline"
                 className="dark:bg-transparent"
                 disabled={busy || Boolean(draft.trim())}
-                onClick={() => onPrompt(prompt)}
+                onClick={() => onPrompt(t(prompt))}
               >
                 <Icon />
-                <span className="moyai-chat-home-starter-label">{label}</span>
+                <span className="moyai-chat-home-starter-label">{t(label)}</span>
               </Button>
             ))}
           </div>

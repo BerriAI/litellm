@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import { ChevronsUpDown, LogOut, Settings } from "lucide-react";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
@@ -23,6 +24,7 @@ export default function ChatAccountMenu({
   onSettings: () => void;
   onLogout: () => void;
 }) {
+  const { t } = useTranslation();
   const { userEmail, userId } = useChatShell();
   const identity = userEmail || userId;
   const name = navAccountDisplayName(userEmail, userId);
@@ -32,7 +34,7 @@ export default function ChatAccountMenu({
         render={
           <Button
             variant="ghost"
-            aria-label={`Account menu, signed in as ${identity}`}
+            aria-label={t("chat.shell.accountMenu", { identity })}
             className={cn(
               "h-auto w-full gap-2.5 rounded-lg hover:bg-sidebar-accent",
               collapsed ? "justify-center px-0 py-1" : "justify-start px-2 py-1.5",
@@ -59,11 +61,11 @@ export default function ChatAccountMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onSettings}>
           <Settings />
-          Settings
+          {t("chat.shell.settings")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={onLogout}>
           <LogOut />
-          Sign out
+          {t("chat.shell.signOut")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
