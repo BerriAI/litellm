@@ -52,6 +52,9 @@ _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE: Final[Mapping[str, str]] = MappingPro
         "acancel_responses": "response_id",
         "alist_input_items": "response_id",
         "acreate_interaction": "previous_interaction_id",
+        "aget_interaction": "interaction_id",
+        "adelete_interaction": "interaction_id",
+        "acancel_interaction": "interaction_id",
     }
 )
 
@@ -97,6 +100,24 @@ def _rewrite_advertised_id(
     event: _ResponseObjectT,
     rewrite: Callable[[str], str],
 ) -> _ResponseObjectT:
+    if isinstance(event, InteractionsAPIStreamingResponse):
+        interaction_id: Final = event.interaction_id
+        rewritten_interaction_id: Final = rewrite(interaction_id) if isinstance(interaction_id, str) else None
+        interaction: Final = _response_payload(event.interaction)
+        nested_id: Final = None if interaction is None else interaction.get("id")
+        rewritten_interaction: Final = (
+            {**interaction, "id": rewrite(nested_id)}
+            if interaction is not None and isinstance(nested_id, str)
+            else None
+        )
+        if rewritten_interaction_id is not None or rewritten_interaction is not None:
+            return event.model_copy(
+                update={
+                    **({"interaction_id": rewritten_interaction_id} if rewritten_interaction_id is not None else {}),
+                    **({"interaction": rewritten_interaction} if rewritten_interaction is not None else {}),
+                }
+            )
+
     event_id: Final = getattr(event, "id", None)
     if isinstance(event_id, str) and (
         event_id.startswith("resp_") or isinstance(event, InteractionsAPIResponse | InteractionsAPIStreamingResponse)

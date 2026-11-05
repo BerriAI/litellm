@@ -149,8 +149,10 @@ def _raise_if_qca_deployment_selectors_are_overridden(
 ) -> None:
     if not isinstance(model_name, str):
         return
-    deployment: Final = llm_router.registry().deployments(model_name, source="first_in_group")
-    configured_model: Final = deployment.litellm_params.model if deployment is not None else model_name
+    alias_target: Final = llm_router.registry().resolve(model_name, kind="alias")
+    resolved_model: Final = alias_target if isinstance(alias_target, str) else model_name
+    deployment: Final = llm_router.registry().deployments(resolved_model, source="first_in_group")
+    configured_model: Final = deployment.litellm_params.model if deployment is not None else resolved_model
     if not configured_model.startswith("qca/"):
         return
     overridden: Final = tuple(name for name in ("agent", "environment") if request_data.get(name) is not None)
