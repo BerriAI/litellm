@@ -128,6 +128,10 @@ class _MkstempThatNeedsTheOldFileGone:
         return _REAL_MKSTEMP(*args, **kwargs)
 
 
+def _full_disk_mkstemp(*args, **kwargs):
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
 _REAL_REPLACE = os.replace
 
 
@@ -1022,7 +1026,8 @@ class TestClearCliToken:
     ):
         """A read-only `~/.litellm` accepts no removal of the token file and no new file beside it,
         and still lets the one it has be shortened. The secret goes, the file stays because nothing
-        else can, and the logout after it warns again rather than calling the keychain clean.
+        else can, and the logout after it says the file is still there, since a keychain that answers
+        again would sign it back in, rather than calling the machine logged out.
 
         The key is a realistic length so the file genuinely shrinks: a rewrite in place that leaves
         the tail of the old contents behind hands the next run a file it cannot parse."""
@@ -1031,7 +1036,7 @@ class TestClearCliToken:
         path.parent.chmod(0o500)
         try:
             assert clear_cli_token(vault=vault) == KeyringUnreachable()
-            assert clear_cli_token(vault=vault) == KeyringUnreachable()
+            assert isinstance(clear_cli_token(vault=vault), CredentialNotCleared)
         finally:
             path.parent.chmod(0o700)
 
@@ -1052,6 +1057,24 @@ class TestClearCliToken:
 
         assert not path.exists()
         assert "sk-legacy" not in _everything_on_disk(isolated_home)
+
+    def test_a_full_disk_keeps_a_locked_keychain_login_revocable_without_signing_it_back_in(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.tempfile.mkstemp", _full_disk_mkstemp)
+        vault.available = False
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
+        vault.available = True
+        left = load_cli_token_left_in_keychain(vault=vault)
+        assert left is not None
+        assert left.refresh_token == "rt-first"
+        assert load_cli_token(vault=vault) is None
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
     def test_a_metadata_file_that_will_not_go_is_not_worth_alarming_the_user_over(
