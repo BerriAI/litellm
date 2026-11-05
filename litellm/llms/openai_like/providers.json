@@ -314,5 +314,10 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "agentgates": {
+    "base_url": "https://api.agentgates.ai/api/inference/v1",
+    "api_key_env": "AGENTGATES_API_KEY",
+    "api_base_env": "AGENTGATES_API_BASE"
   }
 }
