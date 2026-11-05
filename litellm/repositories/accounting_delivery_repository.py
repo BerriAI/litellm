@@ -85,6 +85,14 @@ WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
 RETURNING delivery_id, attempts, accounting_payload"""
 
 
+def _is_permanent_failure(error: Exception) -> bool:
+    """A delivery whose own data failed fails the same way on every retry, while any other error is the database's
+    and clears once it recovers."""
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+    return isinstance(error, (ValueError, TypeError, KeyError)) or PrismaDBExceptionHandler.is_rejected_row_error(error)
+
+
 class AccountingDeliveryRepository:
     def __init__(self, database: LedgerDatabase) -> None:
         self._database = database
@@ -151,24 +159,27 @@ class AccountingDeliveryRepository:
         except Exception as error:  # noqa: BLE001  # roll back all destinations before recording a retry
             if not claimed:
                 raise
-            return await self._record_failure(claimed, type(error).__name__, max_attempts)
+            return await self._record_failure(claimed, error, max_attempts)
 
     async def _record_failure(
-        self, claimed: tuple[_Delivery, ...], error: str, max_attempts: int
+        self, claimed: tuple[_Delivery, ...], error: Exception, max_attempts: int
     ) -> DeliveryBatchResult:
+        parks: Final = len(claimed) == 1 and _is_permanent_failure(error)
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
             updates: Final = tuple(
                 [
                     await self._record_row_failure(
                         transaction,
                         delivery,
-                        error,
-                        "parked" if len(claimed) == 1 and delivery.attempts + 1 >= max_attempts else "pending",
+                        type(error).__name__,
+                        "parked" if parks and delivery.attempts + 1 >= max_attempts else "pending",
                     )
                     for delivery in claimed
                 ]
             )
-        return DeliveryBatchResult(failed=len(claimed), parked=tuple(chain.from_iterable(updates)), error=error)
+        return DeliveryBatchResult(
+            failed=len(claimed), parked=tuple(chain.from_iterable(updates)), error=type(error).__name__
+        )
 
     @staticmethod
     async def _record_row_failure(

@@ -219,6 +219,32 @@ async def test_worker_rolls_back_destinations_and_parks_only_isolated_failure(
         await client.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_a_locked_database_never_parks_a_valid_delivery(delivery_database, delivery_client):
+    _insert(delivery_database, (_row("valid"),))
+
+    async def apply(transaction, deliveries):
+        await transaction.execute_raw("SET LOCAL lock_timeout = '50ms'")
+        await transaction.execute_raw(
+            "UPDATE totals SET spend = spend + $1::float8", sum(float(row.row["spend"]) for row in deliveries)
+        )
+
+    repository = AccountingDeliveryRepository(delivery_client)
+    with psycopg.connect(
+        urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
+    ) as locker:
+        locker.execute("LOCK TABLE totals IN ACCESS EXCLUSIVE MODE")
+        for _ in range(4):
+            result = await repository.apply_pending(apply, max_attempts=2)
+            assert result.failed == 1 and result.parked == ()
+            delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at = CURRENT_TIMESTAMP')
+    assert delivery_database.execute('SELECT state::text, attempts FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
+        ("pending", 4)
+    ]
+    assert (await repository.apply_pending(apply, max_attempts=2)).applied == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def delivery_client(delivery_database: psycopg.Connection[tuple[object, ...]]) -> AsyncIterator[Prisma]:
     url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{delivery_database.info.dbname}"))
