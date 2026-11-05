@@ -20,6 +20,9 @@ from collections.abc import Mapping
 from typing import Final, cast
 
 from opentelemetry.context import Context, get_value
+
+# TODO: Import ContextData from the public opentelemetry.util.genai.invocation
+# module once exposed in the next opentelemetry-util-genai release.
 from opentelemetry.util.genai._invocation import _ContextData
 from opentelemetry.util.genai.invocation import (
     CLIENT_EMBEDDING_CONTEXT_KEY,
@@ -34,7 +37,7 @@ from opentelemetry.util.genai.invocation import (
 from opentelemetry.util.types import AttributeValue
 
 from litellm.integrations.otel.model.payloads import LLMCallSpanData
-from litellm.integrations.otel.model.semconv import Error, GenAIOperation
+from litellm.integrations.otel.model.semconv import Error, GenAI, GenAIOperation
 
 __all__ = [
     "CLIENT_EMBEDDING_CONTEXT_KEY",
@@ -64,6 +67,31 @@ _FETCH_RESPONSE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         "aget_responses",
     }
 )
+
+
+_CONTENT_ATTRIBUTE_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        GenAI.INPUT_MESSAGES,
+        GenAI.OUTPUT_MESSAGES,
+        "langfuse.observation.input",
+        "langfuse.observation.output",
+        "input.value",
+        "output.value",
+        "gen_ai.prompt",
+        "gen_ai.completion",
+    }
+)
+
+_CONTENT_ATTRIBUTE_PREFIXES: Final[tuple[str, ...]] = (
+    "llm.input_messages.",
+    "llm.output_messages.",
+    "gen_ai.prompt.",
+    "gen_ai.completion.",
+)
+
+
+def _is_content_attribute(key: str) -> bool:
+    return key in _CONTENT_ATTRIBUTE_KEYS or key.startswith(_CONTENT_ATTRIBUTE_PREFIXES)
 
 
 def context_spec_for_operation(
@@ -112,7 +140,10 @@ def publish_to_genai_context(
     metric_attrs: Mapping[str, object] | None = None,
 ) -> None:
     """Publish LiteLLM's mapped span and metric attributes into an outer ``ctx_data``."""
+    allow_content: Final = bool(ctx_data.capture_content)
     for key, val in span_attrs.items():
+        if not allow_content and _is_content_attribute(key):
+            continue
         if val is not None and isinstance(val, (str, bool, int, float, list, tuple)):
             ctx_data.attributes[key] = cast(AttributeValue, val)
 

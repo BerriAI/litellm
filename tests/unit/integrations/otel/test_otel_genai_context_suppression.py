@@ -167,7 +167,10 @@ def test_v2_suppressed_when_outer_inference_context_active():
     suppresses its own client span and metrics and enriches the outer InferenceData."""
     logger, span_exporter, metric_reader, log_exporter, *_ = _make_v2_harness(capture_span_content=True)
 
-    outer_data = InferenceData(request_model="langchain-alias")
+    outer_data = InferenceData(
+        request_model="langchain-alias",
+        capture_content=True,
+    )
     token = attach(set_value(CLIENT_INFERENCE_CONTEXT_KEY, outer_data))
     try:
         call_id = "call-suppressed-v2"
@@ -232,9 +235,58 @@ def test_v2_suppressed_when_outer_inference_context_active():
     assert outer_data.metric_attributes.get(GenAI.PROVIDER_NAME) == "openai"
     assert outer_data.metric_attributes.get(GenAI.REQUEST_MODEL) == "gpt-4o"
 
-    # Content capture attributes published into outer_data.attributes
+    # Content capture attributes published into outer_data.attributes when outer capture_content=True
     assert outer_data.attributes.get(GenAI.INPUT_MESSAGES) is not None
     assert outer_data.attributes.get(GenAI.OUTPUT_MESSAGES) is not None
+
+
+def test_v2_suppressed_respects_outer_content_capture_opt_out():
+    """When LiteLLM has capture_span_content=True but the outer InferenceData has
+    capture_content=False (default), prompt and response content attributes must not be copied."""
+    logger, span_exporter, *_ = _make_v2_harness(capture_span_content=True)
+
+    outer_data = InferenceData(request_model="langchain-alias", capture_content=False)
+    token = attach(set_value(CLIENT_INFERENCE_CONTEXT_KEY, outer_data))
+    try:
+        call_id = "call-suppressed-no-content"
+        payload = _make_payload(call_id=call_id, model="gpt-4o", custom_llm_provider="openai")
+        kwargs = {
+            "litellm_call_id": call_id,
+            "call_type": "completion",
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Secret user prompt"}],
+            "optional_params": {"temperature": 0.5},
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": payload,
+        }
+        response_obj = {
+            "id": "chatcmpl-xyz789",
+            "model": "gpt-4o-2024-08-06",
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Secret reply"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+        }
+        now = datetime.now(timezone.utc)
+
+        logger.log_pre_api_call("gpt-4o", kwargs["messages"], kwargs)
+        asyncio.run(
+            logger.async_log_success_event(
+                kwargs,
+                response_obj,
+                now,
+                now + timedelta(milliseconds=250),
+            )
+        )
+    finally:
+        detach(token)
+
+    assert span_exporter.get_finished_spans() == ()
+    assert outer_data.attributes.get(GenAI.PROVIDER_NAME) == "openai"
+    assert GenAI.INPUT_MESSAGES not in outer_data.attributes
+    assert GenAI.OUTPUT_MESSAGES not in outer_data.attributes
+    assert "input.value" not in outer_data.attributes
+    assert "output.value" not in outer_data.attributes
+    assert "langfuse.observation.input" not in outer_data.attributes
+    assert "langfuse.observation.output" not in outer_data.attributes
 
 
 def test_v2_suppressed_failure_enriches_outer_inference_context():
@@ -403,5 +455,3 @@ def test_v2_embedding_context_suppression():
     assert outer_emb.attributes.get(GenAI.PROVIDER_NAME) == "openai"
     assert outer_emb.attributes.get(GenAI.REQUEST_MODEL) == "text-embedding-3-small"
     assert outer_emb.attributes.get(GenAI.USAGE_INPUT_TOKENS) == 10
-
-

@@ -643,9 +643,12 @@ class OpenTelemetryV2(CustomLogger):
                 self._emitter.mark_emitted(call_id, SpanRole.LLM_CALL)
                 carrier.span.end(end_time=to_ns(end_time))
             return None
+        capture_content: Final = self._capture_span_content() and (
+            outer_ctx_data is None or bool(getattr(outer_ctx_data, "capture_content", False))
+        )
         data: Final = LLMCallSpanData.from_standard_logging_payload(
             payload,
-            capture_content=self._capture_span_content(),
+            capture_content=capture_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             completion_start_seconds=call.completion_start_seconds,
             request_route=request_root_http_route(),
