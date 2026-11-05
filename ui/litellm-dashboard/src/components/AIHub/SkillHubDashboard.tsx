@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from "react";
-import { SortingState } from "@tanstack/react-table";
-import { Inbox, Search, X } from "lucide-react";
+import { Inbox } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { DataTable } from "@/components/shared/DataTable";
 import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
 import SkillDetail, { legacySkillDetail } from "@/components/claude_code_plugins/skill_detail";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
+import { useSkillFilters, matchesSkillFilters, skillTags } from "@/components/claude_code_plugins/skillCatalog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const ALL_DOMAINS = "__all_domains__";
@@ -50,10 +50,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   onPublishSuccess,
 }) => {
   const { t } = useTranslation();
-  const [search, setSearch] = useState("");
+  const filters = useSkillFilters();
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([{ id: "name", desc: false }]);
+
 
   // Derived stats
   const totalSkills = skills.length;
@@ -69,19 +69,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     if (domainFilter) {
       result = result.filter((s) => (s.domain || "General") === domainFilter);
     }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          s.description?.toLowerCase().includes(q) ||
-          s.domain?.toLowerCase().includes(q) ||
-          s.namespace?.toLowerCase().includes(q) ||
-          s.keywords?.some((k) => k.toLowerCase().includes(q)),
-      );
-    }
-    return result;
-  }, [skills, search, domainFilter]);
+    return result.filter((skill) =>
+      matchesSkillFilters(skill, { search: filters.search, tag: filters.tag, scan: filters.scan }),
+    );
+  }, [skills, filters.search, filters.tag, filters.scan, domainFilter]);
 
   const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill }), []);
 
@@ -93,7 +84,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     [domains, t],
   );
 
-  const hasActiveFilter = search.trim().length > 0 || domainFilter != null;
+  const hasActiveFilter = filters.active || domainFilter != null;
 
   if (selectedSkill) {
     return (
@@ -131,7 +122,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           <h3 className="text-sm font-semibold text-foreground">
             {publicPage ? t("aiHub.skillHubDashboard.allPublicSkills") : t("aiHub.skillHubDashboard.allSkills")}
           </h3>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               items={domainItems}
               value={domainFilter ?? ALL_DOMAINS}
@@ -148,28 +139,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
                 ))}
               </SelectContent>
             </Select>
-            <InputGroup className="w-[280px]">
-              <InputGroupAddon>
-                <Search className="size-4 text-muted-foreground" />
-              </InputGroupAddon>
-              <InputGroupInput
-                placeholder={t("aiHub.skillHubDashboard.searchPlaceholder")}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search !== "" && (
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label={t("aiHub.skillHubDashboard.clearSearch")}
-                    onClick={() => setSearch("")}
-                  >
-                    <X className="size-3.5" />
-                  </InputGroupButton>
-                </InputGroupAddon>
-              )}
-            </InputGroup>
+            <SkillFilters {...filters} tags={skillTags(skills)} />
           </div>
         </div>
         <DataTable
@@ -178,8 +148,8 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           columns={columns}
           getRowId={(skill, index) => skill.id || String(index)}
           sortingMode="client"
-          sorting={sorting}
-          onSortingChange={setSorting}
+          sorting={filters.sorting}
+          onSortingChange={filters.onSortingChange}
           isLoading={isLoading}
           loadingMessage={t("aiHub.skillHubDashboard.loading")}
           noDataMessage={<SkillsEmptyState filtered={hasActiveFilter} />}

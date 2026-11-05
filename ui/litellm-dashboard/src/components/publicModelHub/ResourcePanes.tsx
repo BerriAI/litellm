@@ -5,17 +5,18 @@ import { Puzzle } from "lucide-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
-import { getSourceDisplayText } from "@/components/claude_code_plugins/helpers";
 import type { Plugin } from "@/components/claude_code_plugins/types";
+import { DataTableSortHeader } from "@/components/shared/DataTable/DataTableSortHeader";
 import { DataTable } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { matchesSearchTerm } from "@/utils/searchUtils";
+import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
+import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
+import { useSkillFilters, matchesSkillFilters, skillTags } from "@/components/claude_code_plugins/skillCatalog";
 
 import { CatalogDetails } from "./CatalogDetails";
 import { CatalogFilters } from "./CatalogFilters";
 import { LoadFailed, NoResults, NotListed } from "./HubEmpty";
-import { SearchInput } from "./HubParts";
 import { SkillInspector } from "./SkillInspector";
 import { useOpenHref } from "./useHubUrlState";
 
@@ -63,7 +64,8 @@ function SkillLink({
 
 export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }: SkillsPaneProps) {
   const { t } = useTranslation();
-  const [query, setQuery] = React.useState("");
+  const filters = useSkillFilters();
+  const query = filters.search;
   const [domains, setDomains] = React.useState<string[]>([]);
   const skills = React.useMemo(() => [...(rows ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [rows]);
   const options = React.useMemo(
@@ -77,65 +79,32 @@ export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }
   const shown = React.useMemo(
     () =>
       skills.filter((skill) => {
-        const matchesQuery = matchesSearchTerm(query, [
-          skill.name,
-          skill.description,
-          skill.domain,
-          skill.namespace,
-          ...(skill.keywords ?? []),
-        ]);
+        const matchesQuery = matchesSkillFilters(skill, {
+          search: filters.search,
+          tag: filters.tag,
+          scan: filters.scan,
+        });
         const matchesDomain = domains.length === 0 || domains.includes(skill.domain ?? "");
         return matchesQuery && matchesDomain;
       }),
-    [skills, query, domains],
+    [skills, filters.search, filters.tag, filters.scan, domains],
   );
   const opened = skills.find((skill) => skill.name === selected);
   const missingName = opened === undefined && !loading ? selected : null;
   const showRefreshError = error && !loading && shown.length > 0;
-  const filtered = query.trim() !== "" || domains.length > 0;
+  const filtered = filters.active || domains.length > 0;
   const clear = () => {
-    setQuery("");
+    filters.clear();
     setDomains([]);
   };
   const columns: ColumnDef<Plugin>[] = [
     {
       accessorKey: "name",
-      header: t("publicModelHub.catalog.skill", { defaultValue: "Skill" }),
+      header: ({ column }) => <DataTableSortHeader column={column} title={t("publicModelHub.catalog.skill", { defaultValue: "Skill" })} />,
       meta: { skeleton: "twoLine", className: "min-w-48 whitespace-normal" },
       cell: ({ row }) => <SkillLink skill={row.original} selected={selected} onSelect={onSelect} />,
     },
-    {
-      id: "source",
-      header: t("publicModelHub.catalog.source", { defaultValue: "Source" }),
-      meta: {
-        className: "hidden max-w-64 text-xs whitespace-normal wrap-anywhere text-muted-foreground lg:table-cell",
-      },
-      cell: ({ row }) => getSourceDisplayText(row.original.source),
-    },
-    {
-      accessorKey: "namespace",
-      header: t("publicModelHub.catalog.namespace", { defaultValue: "Namespace" }),
-      meta: {
-        className:
-          "hidden max-w-40 font-mono text-xs whitespace-normal wrap-anywhere text-muted-foreground xl:table-cell",
-      },
-      cell: ({ row }) => row.original.namespace || "-",
-    },
-    {
-      accessorKey: "category",
-      header: t("publicModelHub.catalog.category", { defaultValue: "Category" }),
-      meta: { className: "max-w-40 text-xs whitespace-normal wrap-anywhere text-muted-foreground" },
-      cell: ({ row }) => row.original.category || "-",
-    },
-    {
-      accessorKey: "version",
-      header: t("publicModelHub.catalog.version", { defaultValue: "Version" }),
-      meta: {
-        className:
-          "hidden max-w-32 font-mono text-xs whitespace-normal wrap-anywhere text-muted-foreground sm:table-cell",
-      },
-      cell: ({ row }) => row.original.version || "-",
-    },
+    ...getSkillMetadataColumns<Plugin>(),
   ];
   const countOptions = {
     count: shown.length,
@@ -183,16 +152,7 @@ export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }
       </CatalogFilters>
       <div data-slot="catalog-results" className="flex min-w-0 flex-col gap-4">
         <div data-slot="catalog-toolbar" className="flex flex-wrap items-center gap-3">
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            placeholder={t("publicModelHub.catalog.searchSkills", { defaultValue: "Search skills" })}
-          />
-          {filtered && (
-            <Button variant="ghost" size="sm" onClick={clear}>
-              {t("publicModelHub.catalog.clearAll", { defaultValue: "Clear all" })}
-            </Button>
-          )}
+          <SkillFilters {...filters} tags={skillTags(skills)} active={filtered} clear={clear} />
         </div>
         <div data-slot="catalog-count" className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
           {loading
@@ -203,6 +163,9 @@ export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }
         <div data-slot="catalog-table" aria-busy={loading}>
           <DataTable
             data={shown}
+            sortingMode="client"
+            sorting={filters.sorting}
+            onSortingChange={filters.onSortingChange}
             columns={columns}
             getRowId={(skill) => skill.name}
             isLoading={loading}

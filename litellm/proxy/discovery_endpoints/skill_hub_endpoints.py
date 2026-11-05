@@ -3,7 +3,8 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Annotated, Final
+from itertools import chain
+from typing import Annotated, Final, Literal
 from urllib.parse import quote
 
 import httpx
@@ -65,6 +66,7 @@ from litellm.proxy.discovery_endpoints.skill_import import (
     parse_skill_source,
     select_imported_skill,
 )
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.types.proxy.claude_code_endpoints import PluginListItem
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import AgentSkillsIndexEntry
 from litellm.types.proxy.skill_hub import (
@@ -78,6 +80,7 @@ from litellm.types.proxy.skill_hub import (
     SkillHubSkill,
     SkillHubVersion,
     SkillHubVersions,
+    SkillSortField,
 )
 
 router: Final = APIRouter(prefix="/skill-hub/skills", tags=["Skills Hub"])
@@ -121,6 +124,11 @@ def _skill_response(request: Request, plugin: PluginListItem, download_count: in
         namespace=plugin.namespace,
         keywords=None if plugin.keywords is None else tuple(plugin.keywords),
         updated_at=None if plugin.updated_at is None else datetime.fromisoformat(plugin.updated_at),
+        created_at=None if plugin.created_at is None else datetime.fromisoformat(plugin.created_at),
+        created_by=plugin.created_by,
+        approved_by=plugin.approved_by,
+        published_by=plugin.published_by,
+        security_scan_passed=plugin.security_scan_passed,
         visibility="public" if plugin.enabled else "private",
         source={"source": "archive", "url": _download_url(request, plugin.name)} if local_archive else plugin.source,
         download_url=_download_url(request, plugin.name) if local_archive else None,
@@ -137,26 +145,72 @@ async def list_skills(
     query: str = "",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    tag: str = "",
+    security_scan_passed: bool | None = None,
+    sort_by: SkillSortField = "name",
+    sort_order: Literal["asc", "desc"] = "asc",
 ) -> SkillHubList:
     """Browse the caller's public and granted private skills."""
     catalog: Final = await list_plugins(enabled_only=False, user_api_key_dict=caller)
-    needle: Final = query.casefold()
+    needle: Final = query.strip().casefold()
+    selected_tag: Final = tag.strip().casefold()
     matched: Final = tuple(
         plugin
         for plugin in sorted(catalog.plugins, key=lambda item: item.name)
-        if needle in " ".join((plugin.name, plugin.description or "", *(plugin.keywords or ()))).casefold()
+        if needle
+        in " ".join(
+            (
+                plugin.name,
+                plugin.description or "",
+                plugin.domain or "",
+                plugin.namespace or "",
+                plugin.created_by or "",
+                plugin.approved_by or "",
+                plugin.published_by or "",
+                *(plugin.keywords or ()),
+            )
+        ).casefold()
+        and (not selected_tag or selected_tag in {word.casefold() for word in plugin.keywords or ()})
+        and (security_scan_passed is None or plugin.security_scan_passed == security_scan_passed)
     )
-    page: Final = matched[offset : offset + limit]
     counts: Final[Mapping[str, int]] = (
-        await _require_store(uploads).download_counts(tuple(plugin.id for plugin in page))
-        if is_proxy_admin(caller)
+        await _require_store(uploads).download_counts(tuple(plugin.id for plugin in matched))
+        if sort_by == "download_count"
         else {}
     )
+    ordered: Final = sorted(
+        matched, key=lambda plugin: _skill_sort_key(plugin, sort_by, counts), reverse=sort_order == "desc"
+    )
+    page: Final = ordered[offset : offset + limit]
+    page_counts: Final = (
+        await _require_store(uploads).download_counts(tuple(plugin.id for plugin in page))
+        if sort_by != "download_count"
+        else counts
+    )
     return SkillHubList(
-        skills=tuple(_skill_response(request, plugin, counts.get(plugin.id)) for plugin in page),
+        skills=tuple(_skill_response(request, plugin, page_counts.get(plugin.id)) for plugin in page),
         count=len(matched),
         next_offset=offset + limit if offset + limit < len(matched) else None,
+        tags=tuple(
+            sorted(set(chain.from_iterable(plugin.keywords or () for plugin in catalog.plugins)), key=str.casefold)
+        ),
     )
+
+
+def _skill_sort_key(plugin: PluginListItem, field: SkillSortField, counts: Mapping[str, int]) -> str | float:
+    if field == "download_count":
+        return counts.get(plugin.id, 0)
+    if field == "security_scan_passed":
+        return int(plugin.security_scan_passed)
+    if field in {"created_at", "updated_at"}:
+        value: Final = plugin.created_at if field == "created_at" else plugin.updated_at
+        return datetime.fromisoformat(value).timestamp() if value else 0
+    return {
+        "name": plugin.name,
+        "created_by": plugin.created_by or "",
+        "published_by": plugin.published_by or "",
+        "approved_by": plugin.approved_by or "",
+    }[field].casefold()
 
 
 @router.get("/{name}", response_model=SkillHubSkill)
@@ -176,6 +230,7 @@ async def get_skill(
 
 def skill_metadata_response(request: Request, metadata: PluginArchiveMetadata) -> SkillHubSkill:
     manifest: Final = MANIFEST_FIELDS.validate_json(metadata.manifest_json or "{}")
+    review: Final = read_plugin_review(manifest)
     return _skill_response(
         request,
         PluginListItem.model_validate(
@@ -187,7 +242,11 @@ def skill_metadata_response(request: Request, metadata: PluginArchiveMetadata) -
                 "source": dict(metadata.source),
                 "has_agent_skill_metadata": metadata.has_agent_skill_metadata,
                 "enabled": metadata.enabled,
-                "created_at": None,
+                "created_at": metadata.created_at.isoformat() if metadata.created_at is not None else None,
+                "created_by": metadata.created_by,
+                "approved_by": review.approved_by if review else None,
+                "published_by": read_plugin_publisher(manifest),
+                "security_scan_passed": review.security_scan_passed if review else False,
                 "updated_at": metadata.updated_at.isoformat() if metadata.updated_at is not None else None,
                 "domain": manifest.get("domain"),
                 "namespace": manifest.get("namespace"),
@@ -416,7 +475,11 @@ def skill_publication_response(
                 "version": published.version,
                 "enabled": published.enabled,
                 "has_agent_skill_metadata": has_agent_skill_metadata(publication.manifest),
-                "created_at": None,
+                "created_at": published.created_at.isoformat() if published.created_at is not None else None,
+                "created_by": published.created_by,
+                "approved_by": published.review.approved_by if published.review else None,
+                "published_by": published.published_by,
+                "security_scan_passed": published.review.security_scan_passed if published.review else False,
                 "updated_at": published.updated_at.isoformat(),
                 "domain": publication.manifest.get("domain"),
                 "namespace": publication.manifest.get("namespace"),

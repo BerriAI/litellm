@@ -60,6 +60,7 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.claude_code_endpoints import (
@@ -693,9 +694,14 @@ async def list_plugins(
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
+            review = read_plugin_review(MANIFEST_FIELDS.validate_python(manifest))
             plugin_list.append(
                 PluginListItem(
                     id=p.id,
+                    created_by=p.created_by,
+                    approved_by=review.approved_by if review else None,
+                    published_by=read_plugin_publisher(MANIFEST_FIELDS.validate_python(manifest)),
+                    security_scan_passed=review.security_scan_passed if review else False,
                     name=p.name,
                     version=p.version,
                     description=p.description,

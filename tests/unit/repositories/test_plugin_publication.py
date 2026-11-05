@@ -16,6 +16,7 @@ from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginReview,
     PublishedPlugin,
 )
 from litellm.repositories.plugin_publication import (
@@ -144,6 +145,32 @@ async def test_first_legacy_update_preserves_its_original_snapshot(
     }
     assert replacement.kwargs["data"] == {
         "plugin_id": current.id, "version": result.version, "description": "replacement",
-        "manifest_json": json.dumps({"source": source, "version": result.version}),
+        "manifest_json": json.dumps({"source": source, "version": result.version, "_litellm_published_by": "admin"}),
         "published_at": result.updated_at, "published_by": "admin", "content": None, "archive_available": False,
     }
+
+
+@pytest.mark.parametrize("review", [None, PluginReview("reviewer@example.test", True)])
+@pytest.mark.asyncio
+async def test_publication_replaces_untrusted_or_stale_review_metadata(publication_tx: MagicMock, review: PluginReview | None) -> None:
+    current = publication_tx.litellm_claudecodeplugintable.find_unique.return_value
+
+    async def update(where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
+        return current.model_copy(update=dict(data))
+
+    publication_tx.litellm_claudecodeplugintable.update.side_effect = update
+    result = await publish_plugin(
+        cast(PluginPublicationTransaction, publication_tx),
+        PluginPublication("skill", None, "updated", {
+            "_litellm_review": {"approved_by": "forged", "security_scan_passed": True},
+            "source": {"source": "github", "repo": "example/skills"},
+        }, "author", review=review),
+        PluginPublicationBase(current.id, current.updated_at),
+    )
+    assert isinstance(result, PublishedPlugin)
+    manifest = json.loads(publication_tx.litellm_claudecodeplugintable.update.call_args.kwargs["data"]["manifest_json"])
+    assert manifest["_litellm_published_by"] == (review.approved_by if review else "author")
+    if review is None:
+        assert "_litellm_review" not in manifest
+    else:
+        assert manifest["_litellm_review"] == {"approved_by": review.approved_by, "security_scan_passed": True}

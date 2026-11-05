@@ -31,6 +31,8 @@ const mockOnPluginClick = vi.fn();
 
 const defaultProps = {
   pluginsList: mockPlugins,
+  sorting: [{ id: "name", desc: false }],
+  onSortingChange: vi.fn(),
   isLoading: false,
   onDeleteClick: mockOnDeleteClick,
   isAdmin: true,
@@ -48,22 +50,15 @@ describe("PluginTable", () => {
     [12345, "12,345"],
   ] as const)("renders headers and download count %s", (download_count, display) => {
     render(<PluginTable {...defaultProps} pluginsList={[{ ...mockPlugins[0], download_count }]} />);
-    for (const header of ["Skill Name", "Version", "Description", "Domain", "Public", "Updated at", "Downloads"]) {
+    for (const header of ["Skill Name", "Tags", "Created by", "Published by", "Approved by", "Created", "Last updated", "Security scan", "Downloads"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
-    expect(within(screen.getByRole("row", { name: /newer-skill/ })).getByText(display)).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /newer-skill/ })).getAllByText(display)[0]).toBeInTheDocument();
   });
 
   it("should display the empty state when data is empty", () => {
     render(<PluginTable {...defaultProps} pluginsList={[]} />);
-    expect(screen.getByText("No skills found")).toBeInTheDocument();
-  });
-
-  it("should sort by name ascending by default", () => {
-    render(<PluginTable {...defaultProps} />);
-    const rows = screen.getAllByRole("row").slice(1);
-    expect(within(rows[0]).getByText("newer-skill")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("older-skill")).toBeInTheDocument();
+    expect(screen.getByText("No skills registered yet")).toBeInTheDocument();
   });
 
   it("should call onPluginClick with the plugin ID when the skill name is clicked", async () => {
@@ -89,7 +84,8 @@ describe("PluginTable", () => {
   it("should show whether the skill is public", () => {
     render(<PluginTable {...defaultProps} />);
     expect(screen.getByText("Yes")).toBeInTheDocument();
-    expect(screen.getByText("No")).toBeInTheDocument();
+    const privateRow = screen.getByRole("row", { name: /older-skill/ });
+    expect(within(privateRow).getAllByText("No")).toHaveLength(2);
   });
 
   it("should delete a skill through the actions menu when admin", async () => {
@@ -111,7 +107,7 @@ describe("PluginTable", () => {
   it("should hide the delete action for non-admins but keep copy available", async () => {
     const user = userEvent.setup();
     render(<PluginTable {...defaultProps} isAdmin={false} />);
-    expect(screen.queryByRole("columnheader", { name: "Downloads" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Downloads" })).toBeInTheDocument();
     await user.click(screen.getByTestId("plugin-actions-newer-skill"));
     expect(await screen.findByTestId("plugin-action-copy")).toBeInTheDocument();
     expect(screen.queryByTestId("plugin-action-delete")).not.toBeInTheDocument();

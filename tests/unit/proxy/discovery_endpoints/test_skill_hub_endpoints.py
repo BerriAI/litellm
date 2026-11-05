@@ -196,9 +196,9 @@ def _assert_portable(response: httpx.Response) -> None:
         assert stat.S_IMODE(archive.getinfo("scripts/check.sh").external_attr >> 16) == 0o755
 
 
-@pytest.mark.parametrize("key, expected", ((MASTER_KEY, 7), (PLAIN_KEY, None)))
-async def test_catalog_counts_are_admin_only_and_batched_for_the_page(
-    hub: HubClient, key: str, expected: int | None,
+@pytest.mark.parametrize("key", (MASTER_KEY, PLAIN_KEY))
+async def test_catalog_counts_are_batched_for_the_page(
+    hub: HubClient, key: str,
 ) -> None:
     assert (await _upload(hub, _zip(FILES))).status_code == 200
     record: Final = _stored_upload(hub)
@@ -207,14 +207,11 @@ async def test_catalog_counts_are_admin_only_and_batched_for_the_page(
     hub.database.query_raw.return_value = [{"id": record.id, "download_count": 7}]
     response: Final = await hub.client.get(f"{HUB}?limit=1", headers=_headers(key))
     assert response.status_code == 200, response.text
-    assert [(item["id"], item["download_count"]) for item in response.json()["skills"]] == [(record.id, expected)]
-    if expected is None:
-        hub.database.query_raw.assert_not_awaited()
-    else:
-        assert hub.database.query_raw.await_count == 1
-        assert hub.database.query_raw.await_args.args[1] == (record.id,)
-        assert (await hub.client.get(f"{HUB}?offset=2", headers=_headers(key))).json()["skills"] == []
-        assert hub.database.query_raw.await_count == 1
+    assert [(item["id"], item["download_count"]) for item in response.json()["skills"]] == [(record.id, 7)]
+    assert hub.database.query_raw.await_count == 1
+    assert hub.database.query_raw.await_args.args[1] == (record.id,)
+    assert (await hub.client.get(f"{HUB}?offset=2", headers=_headers(key))).json()["skills"] == []
+    assert hub.database.query_raw.await_count == 1
 
 
 @pytest.mark.parametrize("operation", ("upload", "import"))
@@ -806,3 +803,98 @@ async def test_configured_scan_persists_result_without_changing_manual_approval(
     assert (await hub.client.get(path, headers=_headers(MASTER_KEY))).json() == before
     approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
     assert approved.status_code == 200 and approved.json()["submission"]["status"] == "approved"
+
+
+async def test_catalog_filters_metadata_before_pagination_and_preserves_tag_facets(hub: HubClient) -> None:
+    hub.plugins.find_many.return_value = [
+        prisma_models.LiteLLM_ClaudeCodePluginTable(
+            id=name, name=name, enabled=True, anonymous_download_count=0, created_by="author@example.test",
+            created_at=datetime(2026, 1, 2), updated_at=datetime(2026, 2, 3),
+            manifest_json=json.dumps({
+                "source": {"source": "github", "repo": "example/skills"},
+                "keywords": tags,
+                "_litellm_published_by": "publisher@example.test",
+                **({"_litellm_review": {"approved_by": "reviewer@example.test", "security_scan_passed": scanned}} if approved else {}),
+            }),
+        )
+        for name, tags, approved, scanned in (
+            ("a-other", ["support"], False, False),
+            ("b-review", ["engineering"], True, False),
+            ("c-review", ["engineering"], True, True),
+        )
+    ]
+    response = await hub.client.get(HUB, headers=_headers(MASTER_KEY), params={
+        "query": " REVIEWER ", "tag": "ENGINEERING", "limit": 1, "offset": 1,
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert body["tags"] == ["engineering", "support"]
+    assert [skill["name"] for skill in body["skills"]] == ["c-review"]
+    skill = body["skills"][0]
+    assert skill["created_by"] == "author@example.test"
+    assert skill["published_by"] == "publisher@example.test"
+    assert skill["approved_by"] == "reviewer@example.test"
+    assert skill["created_at"].startswith("2026-01-02")
+    assert skill["updated_at"].startswith("2026-02-03")
+    assert skill["security_scan_passed"] is True
+    scanned = await hub.client.get(HUB, headers=_headers(MASTER_KEY), params={"security_scan_passed": "true"})
+    assert [skill["name"] for skill in scanned.json()["skills"]] == ["c-review"]
+    unscanned = await hub.client.get(HUB, headers=_headers(MASTER_KEY), params={"security_scan_passed": "false"})
+    assert [skill["name"] for skill in unscanned.json()["skills"]] == ["a-other", "b-review"]
+    assert unscanned.json()["skills"][0]["approved_by"] is None
+
+
+@pytest.mark.parametrize("has_issues", (False, True))
+async def test_admin_approval_does_not_override_scan_result(pending_hub: HubClient, has_issues: bool) -> None:
+    hub: Final = pending_hub
+    pending: Final = await _upload(hub, _zip(FILES), MEMBER_KEY, version=None)
+    receipt: Final = pending.json()
+    submission: Final = hub.database.litellm_skillsubmission.rows[0]
+    digest: Final = hashlib.sha256(submission.archive_content.decode()).hexdigest()
+    await hub.database.litellm_skillsubmission.update(
+        where={"id": submission.id}, data={"scan_json": json.dumps({
+            "id": "scan", "requested_by": "admin", "started_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T00:03:00Z", "status": "completed", "archive_sha256": digest,
+            "report": {"scanner_version": "test", "scan_mode": "static-only", "complete": True,
+                       "risk_score": 0, "findings": [{"rule_id": "rule", "severity": "LOW",
+                       "message": "Issue", "file": "SKILL.md"}] if has_issues else []},
+        })},
+    )
+    approved: Final = await hub.client.put(
+        f"/skill-hub/submissions/{receipt['submission_id']}/approve", headers=_headers(MASTER_KEY),
+    )
+    assert approved.status_code == 200
+    skill: Final = approved.json()["skill"]
+    assert skill["security_scan_passed"] is not has_issues
+    assert skill["created_by"] == MEMBER_KEY
+    assert skill["approved_by"] == approved.json()["submission"]["reviewed_by"]
+    assert skill["published_by"] == skill["approved_by"]
+    _stored_upload(hub)
+    listed: Final = (await hub.client.get(HUB, headers=_headers(MASTER_KEY))).json()["skills"][0]
+    assert listed["security_scan_passed"] is not has_issues
+    assert listed["published_by"] == skill["published_by"]
+
+
+@pytest.mark.parametrize("field,order,expected", [
+    ("name", "asc", "a"), ("name", "desc", "c"),
+    ("download_count", "desc", "a"), ("download_count", "asc", "b"),
+    ("updated_at", "desc", "c"), ("updated_at", "asc", "b"),
+])
+async def test_catalog_sorts_all_matches_before_pagination(
+    hub: HubClient, field: str, order: str, expected: str,
+) -> None:
+    hub.plugins.find_many.return_value = [
+        prisma_models.LiteLLM_ClaudeCodePluginTable(
+            id=name, name=name, enabled=True, anonymous_download_count=0, updated_at=datetime(2026, 1, day),
+            manifest_json=json.dumps({"source": {"source": "github", "repo": "example/skills"}}),
+        ) for name, day in (("a", 2), ("b", 1), ("c", 3))
+    ]
+    hub.database.query_raw.return_value = [
+        {"id": name, "download_count": count} for name, count in (("a", 8), ("b", 0), ("c", 3))
+    ]
+    response = await hub.client.get(HUB, headers=_headers(PLAIN_KEY), params={
+        "sort_by": field, "sort_order": order, "limit": 1, "offset": 0,
+    })
+    assert response.status_code == 200, response.text
+    assert [skill["name"] for skill in response.json()["skills"]] == [expected]

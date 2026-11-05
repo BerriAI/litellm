@@ -1,15 +1,18 @@
 import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from semver import Version
 
 from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginReview,
     PublishedPlugin,
 )
 from litellm.repositories.prisma_protocols import TableActions
@@ -23,6 +26,22 @@ if TYPE_CHECKING:
 
 _MANIFEST: Final = TypeAdapter(dict[str, object])
 _SOURCE: Final = TypeAdapter(dict[str, str])
+_REVIEW: Final = TypeAdapter(PluginReview)
+_PUBLISHER: Final = TypeAdapter[str | None](str | None)
+
+
+def read_plugin_review(manifest: Mapping[str, object]) -> PluginReview | None:
+    try:
+        return _REVIEW.validate_python(manifest.get("_litellm_review"))
+    except ValidationError:
+        return None
+
+
+def read_plugin_publisher(manifest: Mapping[str, object]) -> str | None:
+    try:
+        return _PUBLISHER.validate_python(manifest.get("_litellm_published_by"))
+    except ValidationError:
+        return None
 
 
 class PluginPublicationTransaction(Protocol):
@@ -122,7 +141,19 @@ async def publish_plugin(
     )
     if isinstance(version, PluginPublicationError):
         return version
-    manifest_json: Final = json.dumps({**publication.manifest, "version": version})
+    publisher: Final = publication.review.approved_by if publication.review is not None else publication.created_by
+    manifest_json: Final = json.dumps(
+        {
+            **{
+                key: value
+                for key, value in publication.manifest.items()
+                if key not in {"_litellm_review", "_litellm_published_by"}
+            },
+            "version": version,
+            **({"_litellm_published_by": publisher} if publisher is not None else {}),
+            **({"_litellm_review": asdict(publication.review)} if publication.review is not None else {}),
+        }
+    )
     if publication.content is not None and verified_archive(publication.content, manifest_json) is None:
         return PluginPublicationError("conflict", "Uploaded archive does not match its published source digest")
     timestamp: Final = datetime.now(timezone.utc)
@@ -141,8 +172,18 @@ async def publish_plugin(
             await tx.litellm_claudecodepluginupload.create(
                 data={"plugin_name": publication.name, "content": Base64.encode(publication.content)}
             )
-        await _snapshot(tx, created, publication.content, publication.created_by)
-        return PublishedPlugin(created.id, created.name, version, created.enabled, created.updated_at or timestamp)
+        await _snapshot(tx, created, publication.content, publisher)
+        return PublishedPlugin(
+            created.id,
+            created.name,
+            version,
+            created.enabled,
+            created.updated_at or timestamp,
+            created.created_at,
+            created.created_by,
+            publication.review,
+            publisher,
+        )
     previous_archive: Final = await tx.litellm_claudecodepluginupload.find_unique(where={"plugin_name": current.name})
     previous_content: Final = (
         verified_archive(previous_archive.content.decode(), current.manifest_json)
@@ -171,5 +212,15 @@ async def publish_plugin(
                 "update": {"content": Base64.encode(content)},
             },
         )
-    await _snapshot(tx, updated, content, publication.created_by)
-    return PublishedPlugin(updated.id, updated.name, version, updated.enabled, updated.updated_at or timestamp)
+    await _snapshot(tx, updated, content, publisher)
+    return PublishedPlugin(
+        updated.id,
+        updated.name,
+        version,
+        updated.enabled,
+        updated.updated_at or timestamp,
+        updated.created_at,
+        updated.created_by,
+        publication.review,
+        publisher,
+    )
