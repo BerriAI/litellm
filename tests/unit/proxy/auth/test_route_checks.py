@@ -662,6 +662,41 @@ def test_virtual_key_llm_api_routes_allows_model_info(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    ("route", "is_llm_route"),
+    [
+        ("/eu_jev/v1/systemone", True),
+        ("/eu_jev/v1/systemone/extra", False),
+        ("/eu_jev/v1/systemone2", False),
+        ("/eu_jev/custom", False),
+    ],
+)
+def test_only_the_built_in_eu_jev_decision_path_is_an_llm_route(route: str, is_llm_route: bool) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is is_llm_route
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route")
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_an_llm_route() -> None:
+    assert RouteChecks.is_llm_api_route(route="/eu_jev/v1/systemone") is False
+
+
+@pytest.mark.usefixtures("configured_eu_jev_route_with_trailing_slash")
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/"])
+def test_a_pass_through_configured_at_the_eu_jev_decision_path_with_a_trailing_slash_is_not_an_llm_route(
+    route: str,
+) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is False
+
+
+@pytest.mark.parametrize("allowed_route", ["llm_api_routes", "llm_api_routes_without_mcp"])
+def test_an_llm_api_key_can_call_the_built_in_eu_jev_decision_route(allowed_route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=[allowed_route])
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/eu_jev/v1/systemone", valid_token=valid_token, request=_mock_request("POST")
+    )
+
+
 @pytest.mark.parametrize("route", ["/model/info", "/v1/model/info", "/model_group/info"])
 def test_model_info_not_classified_as_llm_api(route):
     """Membership in `llm_api_routes` must not promote /model/info to an
@@ -781,6 +816,52 @@ def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
 
     assert RouteChecks.is_llm_api_route(route=route) is True
     assert RouteChecks.is_management_route(route=route) is False
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/realtime/translations/client_secrets",
+        "/v1/realtime/translations/client_secrets",
+        "/realtime/translations/calls",
+        "/v1/realtime/translations/calls",
+    ],
+)
+def test_realtime_translation_routes_allowed_for_openai_virtual_keys(route):
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["openai_routes"],
+    )
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/openai/v1/realtime/translations",
+        "/openai/v1/realtime/translations/client_secrets",
+        "/openai/v1/realtime/translations/calls",
+    ],
+)
+def test_openai_prefixed_realtime_translation_routes_denied_for_openai_virtual_keys(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["openai_routes"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Tried to call route: {route}" in str(exc_info.value.detail)
 
 
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
@@ -3890,6 +3971,7 @@ AGENT_INFERENCE_ROUTES = [
     "/a2a/abc-123",
     "/a2a/abc-123/message/send",
     "/a2a/abc-123/message/stream",
+    "/v1/a2a/abc-123/message/stream",
     "/a2a/abc-123/.well-known/agent-card.json",
 ]
 

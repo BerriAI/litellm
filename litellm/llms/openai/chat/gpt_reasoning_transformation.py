@@ -5,8 +5,10 @@ from collections.abc import Collection
 from typing import ClassVar, Final
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.utils import (
     declared_value_factory,
+    has_catalog_entry,
     is_explicitly_disabled_factory,
     supports_factory,
 )
@@ -14,6 +16,25 @@ from litellm.utils import (
 from .gpt_transformation import OpenAIGPTConfig
 
 _GPT_SERIES_VERSION: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?(?=[.-]|$)")
+
+
+def refused_reasoning_effort_warning(*, suggest_declared_levels: bool, suggest_base_model: bool) -> str:
+    return "".join(
+        (
+            "Dropping %s=%r for model=%r (drop_params=True) because the model map does not mark that level "
+            "supported for %r.",
+            (
+                " If the deployment supports it, list every level it supports in model_info.reasoning_effort_levels."
+                if suggest_declared_levels
+                else ""
+            ),
+            (
+                " If the deployment name is not its underlying model, set model_info.base_model to that model."
+                if suggest_base_model
+                else ""
+            ),
+        )
+    )
 
 
 def _catalogue_declares_default_effort() -> bool:
@@ -93,6 +114,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh",))
     ROUTE_SPECIFIC_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("max",))
+    LOOKS_UP_BASE_MODEL: ClassVar[bool] = False
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -307,7 +329,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
         *,
-        declared_reasoning_efforts: Collection[str] = (),
+        declared_reasoning_efforts: Collection[str] | None = None,
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
@@ -338,10 +360,21 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         if (
             requested_effort is not None
-            and requested_effort not in declared_reasoning_efforts
+            and requested_effort not in (declared_reasoning_efforts or ())
             and self.refuses_reasoning_effort_level(model, requested_effort)
         ):
             if litellm.drop_params or drop_params:
+                verbose_logger.warning(
+                    refused_reasoning_effort_warning(
+                        suggest_declared_levels=declared_reasoning_efforts is not None,
+                        suggest_base_model=self.LOOKS_UP_BASE_MODEL
+                        and not has_catalog_entry(self._model_map_lookup_name(model), None),
+                    ),
+                    "reasoning_effort",
+                    requested_effort,
+                    model,
+                    self._model_map_lookup_name(model),
+                )
                 non_default_params.pop("reasoning_effort", None)
                 optional_params.pop("reasoning_effort", None)
             else:

@@ -7,9 +7,11 @@ regardless of the routing strategy being used.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
@@ -724,3 +726,159 @@ class TestDailyLimits:
             router.discard()
 
         assert served == ["a", "b", "b", "b"]
+
+
+_LOGGED_TOKENS: Final = TypeAdapter[float | None](float | None)
+
+
+async def _tpd_tokens_once_logged(cache: DualCache, key: str) -> int:
+    for _ in range(200):
+        logged: Final = _LOGGED_TOKENS.validate_python(
+            cache.in_memory_cache.get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
+        )
+        if logged is not None:
+            return int(logged)
+        await asyncio.sleep(0.01)
+    pytest.fail(f"the success callback never logged tpd tokens under {key}")
+
+
+RESET_AT_EIGHT = datetime(2026, 10, 28, 8, 0, 0, tzinfo=timezone.utc)
+DAILY_RESET_DEPLOYMENT = {
+    **RPD_DEPLOYMENT,
+    "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2, "daily_reset_time": "08:00"},
+}
+
+
+class TestDailyResetTime:
+    def test_rpd_window_starts_over_at_daily_reset_time_not_midnight(self):
+        clock = Clock(RESET_AT_EIGHT - timedelta(hours=9))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert _pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(hours=7)
+        assert _pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(minutes=1)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3") as exc_info:
+            _pre_call(check, DAILY_RESET_DEPLOYMENT)
+        assert exc_info.value.response.headers["retry-after"] == "60"
+
+        clock.now = RESET_AT_EIGHT
+        assert _pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+
+    @pytest.mark.asyncio
+    async def test_async_rpd_window_starts_over_at_daily_reset_time_not_midnight(self):
+        clock = Clock(RESET_AT_EIGHT - timedelta(hours=9))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+
+        assert await _async_pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(hours=7)
+        assert await _async_pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+        clock.now = RESET_AT_EIGHT - timedelta(minutes=1)
+        with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3") as exc_info:
+            await _async_pre_call(check, DAILY_RESET_DEPLOYMENT)
+        assert exc_info.value.response.headers["retry-after"] == "60"
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, DAILY_RESET_DEPLOYMENT) == DAILY_RESET_DEPLOYMENT
+
+    @pytest.mark.parametrize(
+        ("now", "seconds_to_reset"),
+        [
+            (RESET_AT_EIGHT + timedelta(seconds=1), 86399),
+            (datetime(2026, 10, 28, 23, 59, 30, tzinfo=timezone.utc), 28830),
+            (datetime(2026, 10, 29, 7, 30, 0, tzinfo=timezone.utc), 1800),
+        ],
+    )
+    def test_daily_429_retry_after_is_seconds_until_daily_reset_time(self, now: datetime, seconds_to_reset: int):
+        deployment = {
+            **RPD_DEPLOYMENT,
+            "litellm_params": {"model": "gpt-4.1-mini", "rpd": 0, "daily_reset_time": "08:00"},
+        }
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(now))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            _pre_call(check, deployment)
+
+        assert exc_info.value.response.headers["retry-after"] == str(seconds_to_reset)
+
+    @pytest.mark.asyncio
+    async def test_tokens_logged_before_daily_reset_time_do_not_count_after_it(self):
+        deployment = {
+            **RPD_DEPLOYMENT,
+            "litellm_params": {"model": "gpt-4.1-mini", "tpd": 100, "daily_reset_time": "08:00"},
+        }
+        clock = Clock(RESET_AT_EIGHT - timedelta(minutes=1))
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=clock)
+        await _async_log_success(
+            check,
+            {
+                "litellm_params": {"daily_reset_time": "08:00", "metadata": {}},
+                "standard_logging_object": {
+                    "model_id": "daily-test-id",
+                    "total_tokens": 120,
+                    "hidden_params": {"litellm_model_name": "gpt-4.1-mini"},
+                },
+            },
+        )
+        with pytest.raises(litellm.RateLimitError, match="TPD limit=100, current usage=120"):
+            await _async_pre_call(check, deployment)
+
+        clock.now = RESET_AT_EIGHT
+        assert await _async_pre_call(check, deployment) == deployment
+
+    @pytest.mark.parametrize(
+        "deployment",
+        [
+            {"litellm_params": {"model": "gpt-4.1-mini"}, "model_info": {"id": "x", "rpd": 0}, "model_name": "m"},
+            {"litellm_params": {"model": "gpt-4.1-mini"}, "model_info": {"id": "x"}, "model_name": "m", "rpd": 0},
+        ],
+    )
+    def test_rpd_outside_litellm_params_is_not_a_limit(self, deployment: dict[str, object]):
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
+
+        assert _pre_call(check, deployment) == deployment
+
+    @pytest.mark.parametrize("daily_reset_time", ["8am", "08:00:30", "08:00+05:00", "25:00"])
+    def test_router_rejects_a_daily_reset_time_that_is_not_hh_mm(self, daily_reset_time: str):
+        with pytest.raises(Exception, match="daily_reset_time"):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "daily-group",
+                        "litellm_params": {"model": "gpt-4.1-mini", "rpd": 2, "daily_reset_time": daily_reset_time},
+                    }
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_daily_reset_time_sent_in_the_request_does_not_move_the_tokens_out_of_the_deployment_window(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "daily-group",
+                    "litellm_params": {
+                        "model": "openai/gpt-4.1-mini",
+                        "api_key": "k",
+                        "mock_response": "a",
+                        "tpd": 100,
+                    },
+                    "model_info": {"id": "daily-test-id"},
+                }
+            ]
+        )
+        check = ModelRateLimitingCheck(dual_cache=router.cache, clock=Clock(RESET_AT_EIGHT - timedelta(minutes=1)))
+        router.optional_callbacks = [check]
+        litellm.logging_callback_manager.add_litellm_callback(check)
+        try:
+            await router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion kwargs are untyped
+                model="daily-group", messages=[{"role": "user", "content": "hi"}], daily_reset_time="08:00"
+            )
+            logged = await _tpd_tokens_once_logged(router.cache, "daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-28")
+        finally:
+            router.discard()
+
+        assert logged > 0
+        day_before: Final = _LOGGED_TOKENS.validate_python(
+            router.cache.in_memory_cache.get_cache("daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-27")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
+        )
+        assert day_before is None

@@ -54,6 +54,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.endpoints import (
     build_request_data_from_managed_vector_store,
     reject_caller_embedding_selection_params,
+    reject_caller_opensearch_index_name,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
@@ -913,6 +914,11 @@ async def rag_query(
             **retrieval_config,
             **store_data,
         }
+        reject_caller_opensearch_index_name(
+            caller_body=retrieval_config,
+            request_fields=merged_retrieval_config,
+            source="retrieval_config",
+        )
         effective_vector_store_config: Final = (
             managed_store_params
             if managed_store is not None

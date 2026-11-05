@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from typing import Final
 
 import pytest
 
@@ -70,3 +71,70 @@ def test_prepare_completion_kwargs_keeps_prompt_cache_key_through_responses_rero
     )
     assert completion_kwargs["model"] == "openai/responses/gpt-5.6-luna"
     assert completion_kwargs["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "azure_api_base_env", "derives_key"),
+    [
+        (None, None, True),
+        ("https://api.mistral.ai/v1", None, True),
+        ("https://my-resource.openai.azure.com/openai/v1", None, False),
+        (None, "https://my-resource.services.ai.azure.com/openai", False),
+    ],
+)
+def test_prepare_completion_kwargs_derives_prompt_cache_key_only_for_a_mistral_hosted_endpoint(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, azure_api_base_env: str | None, derives_key: bool
+) -> None:
+    if azure_api_base_env is None:
+        monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("MISTRAL_AZURE_API_BASE", azure_api_base_env)
+
+    completion_kwargs: Final = _prepare(
+        "mistral/mistral-small-latest", {"custom_llm_provider": "mistral", "api_base": api_base}
+    )
+
+    assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
+    assert ("prompt_cache_key" in completion_kwargs) is derives_key
+
+
+@pytest.mark.parametrize(
+    ("codestral_api_base_env", "derives_key"),
+    [(None, True), ("https://my-resource.services.ai.azure.com/openai/v1", False)],
+)
+def test_prepare_completion_kwargs_derives_prompt_cache_key_for_codestral_only_on_its_mistral_host(
+    monkeypatch: pytest.MonkeyPatch, codestral_api_base_env: str | None, derives_key: bool
+) -> None:
+    monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
+    if codestral_api_base_env is None:
+        monkeypatch.delenv("CODESTRAL_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("CODESTRAL_API_BASE", codestral_api_base_env)
+
+    completion_kwargs: Final = _prepare("codestral/codestral-latest", {"custom_llm_provider": "codestral"})
+
+    assert ("prompt_cache_key" in completion_kwargs) is derives_key
+
+
+def test_prepare_completion_kwargs_derives_no_prompt_cache_key_mistral_cannot_take_from_a_non_ascii_session() -> None:
+    non_ascii_user_id: Final = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "sitzung-ü"})
+
+    mistral_kwargs: Final = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="mistral/mistral-small-latest",
+        metadata={"user_id": non_ascii_user_id},
+        thinking=None,
+        extra_kwargs={"custom_llm_provider": "mistral"},
+    )[0]
+    openai_kwargs: Final = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        metadata={"user_id": non_ascii_user_id},
+        thinking=None,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )[0]
+
+    assert "prompt_cache_key" not in mistral_kwargs
+    assert openai_kwargs["prompt_cache_key"] == "sitzung-ü"

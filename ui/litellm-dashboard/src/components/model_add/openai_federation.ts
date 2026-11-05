@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { isBlank, type FederationField } from "./federation_field";
 
 const OPENAI_API_HOST = "api.openai.com";
@@ -43,4 +44,4 @@ const targetsOpenAIApi = (apiBase: string): boolean => {
 export const validateOpenAIFederationApiBase = (value: unknown): string | true =>
   typeof value !== "string" || isBlank(value) || targetsOpenAIApi(value)
     ? true
-    : `Workload identity federation only reaches the OpenAI API. Enter https://${OPENAI_API_HOST}/v1 or a regional *.${OPENAI_API_HOST} URL, or leave this empty`;
+    : i18n.t("modelAdd.openaiFederation.apiBaseNotOpenAI", { host: OPENAI_API_HOST });

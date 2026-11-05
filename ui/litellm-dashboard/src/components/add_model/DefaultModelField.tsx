@@ -1,4 +1,7 @@
 import React from "react";
+import i18n from "@/i18n/i18n";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { Info } from "lucide-react";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -12,15 +15,23 @@ interface DefaultModelFieldProps {
   modelOptions: { value: string; label: string }[];
 }
 
-const defaultModelPlaceholderFor = (derivedDefaultModel: string | undefined, isCustomSet: boolean): string => {
-  if (derivedDefaultModel) return `Derived from tiers: ${derivedDefaultModel}`;
-  return isCustomSet ? "Add a model to your fallback tier" : "Add a model to the Simple or Medium tier";
+const defaultModelPlaceholderFor = (
+  derivedDefaultModel: string | undefined,
+  isCustomSet: boolean,
+  t: TFunction = i18n.t.bind(i18n),
+): string => {
+  if (derivedDefaultModel) return t("addModel.defaultModelField.placeholders.derived", { model: derivedDefaultModel });
+  return isCustomSet
+    ? t("addModel.defaultModelField.placeholders.customSet")
+    : t("addModel.defaultModelField.placeholders.builtIn");
 };
 
 const DefaultModelField = ({ value, onChange, modelOptions }: DefaultModelFieldProps) => {
+  const { t } = useTranslation();
   const defaultModelPlaceholder = defaultModelPlaceholderFor(
     resolveComplexityDefaultModel(value),
     Boolean(value.custom_tier_set),
+    t,
   );
   // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
   // "track the tiers" everywhere downstream instead of as a blank model name.
@@ -29,10 +40,10 @@ const DefaultModelField = ({ value, onChange, modelOptions }: DefaultModelFieldP
   };
 
   return (
-    <div className="mt-4 mb-2" role="group" aria-label="Default model configuration">
+    <div className="mt-4 mb-2" role="group" aria-label={t("addModel.defaultModelField.groupAriaLabel")}>
       <div className="flex items-center gap-2 mb-2">
-        <strong className="text-base font-semibold">Default Model</strong>
-        <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
+        <strong className="text-base font-semibold">{t("addModel.defaultModelField.title")}</strong>
+        <SimpleTooltip content={t("addModel.defaultModelField.tooltip")}>
           <Info className="size-4 text-muted-foreground" />
         </SimpleTooltip>
       </div>
@@ -41,13 +52,13 @@ const DefaultModelField = ({ value, onChange, modelOptions }: DefaultModelFieldP
         value={value.default_model ?? ""}
         onValueChange={handleDefaultModelChange}
         placeholder={defaultModelPlaceholder}
-        emptyText="No models found"
-        aria-label="Default model"
+        emptyText={t("addModel.defaultModelField.empty")}
+        aria-label={t("addModel.defaultModelField.ariaLabel")}
       />
       <span className="block mt-1 text-xs text-muted-foreground">
         {isForecastClassifier(value.classifier_type)
-          ? "Used when routing cannot find a suitable model. Classifier failures route to the capable solver."
-          : 'Used when the tier the request lands in has no model, and when the classifier fails with "Route to the default model" selected.'}
+          ? t("addModel.defaultModelField.help.forecast")
+          : t("addModel.defaultModelField.help.standard")}
       </span>
     </div>
   );

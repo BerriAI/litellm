@@ -735,7 +735,7 @@ mod tests {
         assert!(matches!(
             CohereParseConfig.resolve_headers(
                 &OcrConnection {
-                    api_key: Some(litellm_auth::SecretValue::new("  ")),
+                    api_key: Some(litellm_secret_value::SecretValue::new("  ")),
                     ..Default::default()
                 },
                 &|_| None,
