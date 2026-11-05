@@ -12,11 +12,11 @@ use litellm_cache_memory::InMemoryCache;
 use litellm_python_compat::Value;
 use litellm_redis_client::{Declared, Expiry, RedisBatch, RedisClient, Slot};
 
+use self::scripts::Route;
 pub use self::scripts::{
     AcquireReply, Applied, AtomicCounter, AtomicReply, Gauge, GuardedIncrement, GuardedReply,
     Pending, WindowCount,
 };
-use self::scripts::Route;
 use crate::{Number, RequestRedis, codec::python_value};
 
 /// A rate-limit descriptor, `{descriptor:value}`, the hash tag every key of its window shares.
@@ -32,17 +32,23 @@ impl Scope {
     }
 
     fn window_key(&self) -> String {
-        self.key("window")
+        self.key(WINDOW)
     }
 
     fn gauge_key(&self) -> String {
-        self.key("max_parallel_requests")
+        self.key(GAUGE)
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+const WINDOW: &str = "window";
+const GAUGE: &str = "max_parallel_requests";
+
+/// A counter's key suffix, which is also how the Python limiter names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumString, strum::IntoStaticStr)]
 pub enum Kind {
+    #[strum(serialize = "requests")]
     Requests,
+    #[strum(serialize = "tokens")]
     Tokens,
 }
 
@@ -54,10 +60,7 @@ pub struct Counter {
 
 impl Counter {
     fn key(&self) -> String {
-        self.scope.key(match self.kind {
-            Kind::Requests => "requests",
-            Kind::Tokens => "tokens",
-        })
+        self.scope.key(self.kind.into())
     }
 }
 
@@ -70,6 +73,18 @@ pub enum Entry {
 }
 
 impl Entry {
+    /// The entry the Python limiter names by its key suffix: `window`, `max_parallel_requests`, or a
+    /// counter's `Kind`.
+    pub fn new(suffix: &str, scope: Scope) -> Result<Self, strum::ParseError> {
+        match suffix {
+            WINDOW => Ok(Self::Window(scope)),
+            GAUGE => Ok(Self::Gauge(scope)),
+            kind => kind
+                .parse()
+                .map(|kind| Self::Counter(Counter { scope, kind })),
+        }
+    }
+
     fn key(&self) -> String {
         match self {
             Self::Window(scope) => scope.window_key(),

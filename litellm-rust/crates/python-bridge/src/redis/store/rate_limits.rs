@@ -2,8 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_redis_store::rate_limits::{
     AcquireReply, Applied, AtomicCounter, AtomicReply, Counter, Entry, Error, Gauge,
-    GuardedIncrement, GuardedReply, Increment, Kind, Local, Pending, RateLimits, Scope,
-    WindowCount,
+    GuardedIncrement, GuardedReply, Increment, Local, Pending, RateLimits, Scope, WindowCount,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
@@ -32,7 +31,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for PyScope {
     }
 }
 
-/// `(descriptor_key, descriptor_value, "requests" | "tokens")`.
+/// `(descriptor_key, descriptor_value, kind)`, the kind spelled as its key suffix.
 struct PyCounter(Counter);
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyCounter {
@@ -42,38 +41,26 @@ impl<'a, 'py> FromPyObject<'a, 'py> for PyCounter {
         let (descriptor, value, kind): (String, String, String) = value.extract()?;
         Ok(Self(Counter {
             scope: Scope { descriptor, value },
-            kind: kind_of(&kind)?,
+            kind: kind.parse().map_err(|_| unknown_suffix(&kind))?,
         }))
     }
 }
 
-fn kind_of(kind: &str) -> PyResult<Kind> {
-    match kind {
-        "requests" => Ok(Kind::Requests),
-        "tokens" => Ok(Kind::Tokens),
-        _ => Err(PyValueError::new_err(format!(
-            "unknown rate-limit counter {kind:?}"
-        ))),
-    }
+fn unknown_suffix(suffix: &str) -> PyErr {
+    PyValueError::new_err(format!("unknown rate-limit key suffix {suffix:?}"))
 }
 
-/// `("window" | "requests" | "tokens" | "max_parallel_requests", descriptor_key, descriptor_value)`.
+/// `(key_suffix, descriptor_key, descriptor_value)`, read by `Entry::new`.
 struct PyEntry(Entry);
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyEntry {
     type Error = PyErr;
 
     fn extract(value: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let (slot, descriptor, value): (String, String, String) = value.extract()?;
-        let scope = Scope { descriptor, value };
-        Ok(Self(match slot.as_str() {
-            "window" => Entry::Window(scope),
-            "max_parallel_requests" => Entry::Gauge(scope),
-            kind => Entry::Counter(Counter {
-                scope,
-                kind: kind_of(kind)?,
-            }),
-        }))
+        let (suffix, descriptor, value): (String, String, String) = value.extract()?;
+        Entry::new(&suffix, Scope { descriptor, value })
+            .map(Self)
+            .map_err(|_| unknown_suffix(&suffix))
     }
 }
 

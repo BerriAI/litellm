@@ -263,6 +263,25 @@ async fn every_script_runs_mains_bytes_under_mains_keys(
 }
 
 #[rstest]
+#[case::window("window", Some(Entry::Window(scope("api_key", "k"))))]
+#[case::gauge("max_parallel_requests", Some(Entry::Gauge(scope("api_key", "k"))))]
+#[case::requests("requests", Some(Entry::Counter(counter(&scope("api_key", "k"), Kind::Requests))))]
+#[case::tokens("tokens", Some(Entry::Counter(counter(&scope("api_key", "k"), Kind::Tokens))))]
+#[case::unknown("token", None)]
+#[case::wrong_case("Requests", None)]
+fn entries_are_named_by_their_key_suffix(#[case] suffix: &str, #[case] expected: Option<Entry>) {
+    assert_eq!(Entry::new(suffix, scope("api_key", "k")).ok(), expected);
+}
+
+#[rstest]
+#[case::requests(Kind::Requests, "requests")]
+#[case::tokens(Kind::Tokens, "tokens")]
+fn a_counter_kind_round_trips_through_its_key_suffix(#[case] kind: Kind, #[case] suffix: &str) {
+    assert_eq!(<&str>::from(kind), suffix);
+    assert_eq!(suffix.parse::<Kind>().unwrap(), kind);
+}
+
+#[rstest]
 #[case::epoch("1730000000", Number::Int(1730000000))]
 #[case::int("7", Number::Int(7))]
 #[case::float("7.5", Number::Float(7.5))]

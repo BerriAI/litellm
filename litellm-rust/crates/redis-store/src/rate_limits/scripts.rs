@@ -1,7 +1,7 @@
 use std::{sync::LazyLock, time::Duration};
 
-use litellm_python_compat::repr::float_repr;
 use futures_util::future::BoxFuture;
+use litellm_python_compat::repr::float_repr;
 use litellm_redis_client::{Declared, RedisBatch, RedisClient, Script, Value};
 
 use super::{Counter, Error, Increment, Scope, lua};
@@ -150,10 +150,7 @@ pub(super) fn sliding_window(
 }
 
 /// `BATCH_COUNTER_READ_SCRIPT` over each counter's window and counter keys, in that order.
-pub(super) fn read_counters(
-    route: &Route,
-    counters: &[Counter],
-) -> Pending<Vec<Option<String>>> {
+pub(super) fn read_counters(route: &Route, counters: &[Counter]) -> Pending<Vec<Option<String>>> {
     let keys = counters
         .iter()
         .flat_map(|counter| [counter.scope.window_key(), counter.key()])
