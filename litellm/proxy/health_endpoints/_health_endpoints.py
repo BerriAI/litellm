@@ -111,6 +111,7 @@ from litellm.proxy.health_endpoints.model_checks import (
     response_cost,
     run_endpoint_check,
 )
+from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
 )
@@ -2754,6 +2755,17 @@ class TurnHooks(Protocol):
     ) -> HTTPException | None: ...
 
 
+def _pinned_in_metadata(
+    request: Mapping[str, object], pinned_model_id: str | None
+) -> dict[str, object]:  # mutable-ok: check_and_merge_model_level_guardrails takes and returns a request dict
+    """Name the pinned deployment where check_and_merge_model_level_guardrails looks for it, so the saved
+    deployment's own guardrails attach even when the calling key cannot see its team-scoped model name."""
+    if pinned_model_id is None:
+        return dict(request)
+    metadata: Final = _OBJECT_MAPPING.validate_python(request.get("metadata") or {})
+    return {**request, "metadata": {**metadata, "model_info": {"id": pinned_model_id}}}
+
+
 def _turn_caller(
     llm_router: Router | None,
     *,
@@ -2762,13 +2774,13 @@ def _turn_caller(
     proxy_metadata: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     hooks: TurnHooks,
-    guardrail_model_name: str | None,
 ) -> Callable[[EndpointScript, Mapping[str, object], str], Awaitable[CalledTurn]]:
     """The two ways a turn reaches the provider: pinned to a saved deployment through the router, so the
     deployment's own credentials and pricing apply, or straight through litellm with the submitted params.
-    Either way the turn picks up the guardrails attached to the deployments under ``guardrail_model_name`` and
-    goes through the proxy's pre-call hooks, so the caller's rate limits, parallel request cap and those
-    guardrails apply to it the way they apply to every proxied request, and it carries the
+    Either way the turn picks up the guardrails of the calling key, team, project and policies, then the ones
+    on the pinned deployment (or on the deployments serving the requested model name), and goes through the
+    proxy's pre-call hooks, so the caller's rate limits, parallel request cap and those guardrails apply to it
+    the way they apply to every proxied request, and it carries the
     proxy's own logging object, so the cost read back is the one the spend log row gets. Each turn runs in its
     own task, so hooks that keep per-request state in context variables (the rate limiter's slot stash) see one
     request per turn, as they do for separate proxied requests, and the hooks get a deep copy of the shared
@@ -2781,8 +2793,13 @@ def _turn_caller(
         request: dict[str, object],  # mutable-ok: the pre-call hooks rewrite the request dict in place
     ) -> tuple[LiteLLMLoggingObj, object]:
         try:
+            await move_guardrails_to_metadata(
+                data=request, _metadata_variable_name=script.metadata_key, user_api_key_dict=user_api_key_dict
+            )
             guarded: Final = check_and_merge_model_level_guardrails(
-                data=request, llm_router=llm_router, trust_client_model_info=False, model_alias=guardrail_model_name
+                data=_pinned_in_metadata(request, pinned_model_id),
+                llm_router=llm_router,
+                trust_client_model_info=pinned_model_id is not None,
             )
             admitted: Final = await hooks.pre_call_hook(
                 user_api_key_dict=user_api_key_dict, data=guarded, call_type=script.route_type
@@ -2818,7 +2835,12 @@ def _turn_caller(
             "drop_params": True,
             "cache": {"no-cache": True},
         }
-        logging_obj, response = await asyncio.create_task(admitted_turn(script, request))
+        turn_task: Final = asyncio.create_task(admitted_turn(script, request))
+        try:
+            logging_obj, response = await turn_task
+        except asyncio.CancelledError:
+            turn_task.cancel()
+            raise
         return CalledTurn(response=response, cost=await _logged_cost(logging_obj, response_cost(response)))
 
     return call
@@ -2950,12 +2972,11 @@ async def test_model(
         overrides_saved_deployment: Final = any(
             key != "model" or value != resolved.stored_model for key, value in resolved.request_litellm_params.items()
         )
-        pinned: Final = (
-            resolved.deployment_by_id
+        pinned_model_id: Final = (
+            resolved.deployment_by_id.model_info.id
             if resolved.deployment_by_id is not None and not overrides_saved_deployment
             else None
         )
-        pinned_model_id: Final = pinned.model_info.id if pinned is not None else None
         proxy_metadata: Final = {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
@@ -2973,7 +2994,6 @@ async def test_model(
             proxy_metadata=proxy_metadata,
             user_api_key_dict=user_api_key_dict,
             hooks=proxy_logging_obj,
-            guardrail_model_name=pinned.model_name if pinned is not None else None,
         )
         run_query: Final[_RawQuery | None] = prisma_client.db.query_raw if prisma_client is not None else None
         started_at: Final = datetime.now(timezone.utc) - timedelta(minutes=1)

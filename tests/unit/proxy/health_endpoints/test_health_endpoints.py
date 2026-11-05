@@ -6298,7 +6298,6 @@ async def test_test_model_turns_run_the_proxy_hooks_on_a_copy_of_the_fixture_eac
         proxy_metadata={},
         user_api_key_dict=UserAPIKeyAuth(token="synthetic-token"),
         hooks=hooks,
-        guardrail_model_name=None,
     )
     fixture_before: Final = copy.deepcopy(CHAT_COMPLETIONS.turn_1)
 
@@ -6336,13 +6335,13 @@ class _RecordingHooks:
 
 
 @pytest.mark.asyncio
-async def test_test_model_turns_pick_up_the_guardrails_attached_to_the_saved_deployment() -> None:
+async def test_test_model_turns_pick_up_the_keys_guardrails_and_the_pinned_team_deployments_guardrails() -> None:
     router: Final = Router(
         model_list=[
             {
                 "model_name": "guarded-model",
                 "litellm_params": {"model": "openai/synthetic", "api_key": "synthetic", "guardrails": ["pii-mask"]},
-                "model_info": {"id": "guarded-deployment"},
+                "model_info": {"id": "guarded-deployment", "team_id": "team-that-owns-the-model"},
             }
         ]
     )
@@ -6352,12 +6351,11 @@ async def test_test_model_turns_pick_up_the_guardrails_attached_to_the_saved_dep
         pinned_model_id="guarded-deployment",
         call_params={},
         proxy_metadata={},
-        user_api_key_dict=UserAPIKeyAuth(token="synthetic-token"),
+        user_api_key_dict=UserAPIKeyAuth(token="synthetic-token", metadata={"guardrails": ["key-prompt-guard"]}),
         hooks=hooks,
-        guardrail_model_name="guarded-model",
     )
 
     with pytest.raises(HTTPException, match="stopped before the provider"):
         await call(CHAT_COMPLETIONS_SCRIPT, CHAT_COMPLETIONS.turn_1, "turn-a")
 
-    assert hooks.guardrails == (["pii-mask"],)
+    assert hooks.guardrails == (["key-prompt-guard", "pii-mask"],)
