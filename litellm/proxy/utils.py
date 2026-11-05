@@ -30,7 +30,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
 from functools import partial, reduce
-from itertools import chain, takewhile
+from itertools import chain, takewhile, tee
 from operator import attrgetter
 from types import MappingProxyType
 from typing import (
@@ -946,11 +946,30 @@ def _load_balanced_callbacks(
 def _load_balanced_callbacks(
     callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
 ) -> tuple[object, ...]:
+    return tuple(_iter_load_balanced_callbacks(callbacks, eligible))
+
+
+@overload
+def _iter_load_balanced_callbacks(
+    callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool]
+) -> Iterator[CustomLogger]: ...
+
+
+@overload
+def _iter_load_balanced_callbacks(
+    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
+) -> Iterator[object]: ...
+
+
+def _iter_load_balanced_callbacks(
+    callbacks: Sequence[object], eligible: Callable[[CustomGuardrail], bool]
+) -> Iterator[object]:
     from litellm.proxy.proxy_server import llm_router
     from litellm.router_strategy.simple_shuffle import simple_shuffle
 
     if llm_router is None or not llm_router.settings().is_set("guardrail_list"):
-        return tuple(callbacks)
+        yield from callbacks
+        return
     settings: Final = llm_router.settings()
     registry: Final = llm_router.registry()
     balanced_names: Final = frozenset(
@@ -983,7 +1002,7 @@ def _load_balanced_callbacks(
         )
         return _deployment_callbacks(deployment)
 
-    return tuple(chain.from_iterable(selected(index, callback) for index, callback in enumerate(callbacks)))
+    yield from chain.from_iterable(selected(index, callback) for index, callback in enumerate(callbacks))
 
 
 def _partition_post_call_callbacks(
@@ -3306,10 +3325,10 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
                 return data
 
-            selected_callbacks: Final = (
+            callback_iterators: Final = tee(
                 caps.resolved_callbacks
                 if skip_guardrails
-                else _load_balanced_callbacks(
+                else _iter_load_balanced_callbacks(
                     caps.resolved_callbacks,
                     lambda cb: (
                         data is not None
@@ -3324,20 +3343,8 @@ class ProxyLogging:
                     ),
                 )
             )
-            parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
-                ()
-                if skip_guardrails
-                else tuple(
-                    cb
-                    for cb in selected_callbacks
-                    if isinstance(cb, CustomGuardrail)
-                    and getattr(cb, "run_in_parallel", False)
-                    and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
-                )
-            )
-
             deferred_route_exc: SensitiveDataRouteException | None = None
-            for _callback in selected_callbacks:
+            for _callback in callback_iterators[0]:
                 start_time = time.time()
                 try:
                     if isinstance(_callback, CustomGuardrail) and data is not None:
@@ -3415,6 +3422,17 @@ class ProxyLogging:
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
 
+            parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = (
+                ()
+                if skip_guardrails
+                else tuple(
+                    cb
+                    for cb in callback_iterators[1]
+                    if isinstance(cb, CustomGuardrail)
+                    and getattr(cb, "run_in_parallel", False)
+                    and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
+                )
+            )
             if parallel_guardrails and data is not None:
                 await self._run_parallel_pre_call_guardrails(
                     guardrails=parallel_guardrails,

@@ -2,7 +2,7 @@
 Test guardrail load balancing through the Router and ProxyLogging.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +14,7 @@ import litellm
 from litellm import Router
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails import guardrail_registry
@@ -22,7 +23,7 @@ from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks, GuardrailStreamScope
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, ModelResponseStream
 
 
 class MockGuardrail(CustomGuardrail):
@@ -37,9 +38,14 @@ class MockGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | None = None,
         default_on: bool = False,
         stream_scope: GuardrailStreamScope = "both",
+        run_in_parallel: bool = False,
     ):
         super().__init__(
-            guardrail_name=guardrail_name, event_hook=event_hook, default_on=default_on, stream_scope=stream_scope
+            guardrail_name=guardrail_name,
+            event_hook=event_hook,
+            default_on=default_on,
+            stream_scope=stream_scope,
+            run_in_parallel=run_in_parallel,
         )
         self.guardrail_id = guardrail_id
         self.calls = 0
@@ -71,6 +77,23 @@ class InheritedIteratorGuardrail(MockGuardrail):
 
 class NonIteratorGuardrail(CustomGuardrail):
     pass
+
+
+class GuardrailActivator(CustomLogger):
+    def __init__(self, action: str):
+        super().__init__()
+        self.action = action
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: Mapping[str, object],
+        call_type: CallTypesLiteral,
+    ) -> Mapping[str, object]:
+        if self.action == "raise":
+            raise ValueError("activation blocked")
+        return {**data, "guardrails": ["dynamic-lb"]} if self.action == "enable" else data
 
 
 @pytest.mark.asyncio
@@ -371,3 +394,44 @@ async def test_streaming_selects_iterator_capable_deployment(monkeypatch: pytest
     for request_index in range(20):
         await _dispatch_scoped_hook(logging, "iterator")
         assert eligible.calls == request_index + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ("enable", "noop", "raise"))
+@pytest.mark.parametrize("run_in_parallel", (False, True))
+@pytest.mark.parametrize("call_type", ("completion", "call_mcp_tool"))
+async def test_pre_call_load_balancing_observes_earlier_callback_activation(
+    action: str, run_in_parallel: bool, call_type: CallTypesLiteral, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event: Final = GuardrailEventHooks.pre_mcp_call if call_type == "call_mcp_tool" else GuardrailEventHooks.pre_call
+    replicas: Final = tuple(
+        MockGuardrail("dynamic-lb", region, event_hook=event, default_on=False, run_in_parallel=run_in_parallel)
+        for region in ("east", "west")
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "dynamic-lb",
+                "id": cb.guardrail_id,
+                "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": event.value},
+            }
+            for cb in replicas
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [GuardrailActivator(action), *replicas])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for request_index in range(30):
+        if action == "raise":
+            with pytest.raises(ValueError, match="activation blocked"):
+                await logging.pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(), data={"model": "test", "messages": []}, call_type=call_type
+                )
+        else:
+            await logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(), data={"model": "test", "messages": []}, call_type=call_type
+            )
+        assert sum(cb.calls for cb in replicas) == (request_index + 1 if action == "enable" else 0)
+    assert all(cb.calls > 0 for cb in replicas) is (action == "enable")
