@@ -1325,7 +1325,7 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
         input="Hello, this is a test",
         voice="en-US-Chirp3-HD-Charon",
         vertex_project="test-project",
-        vertex_location="us-central1",
+        vertex_location="global",
     )
 
     # Verify the HTTP call was made
@@ -1912,6 +1912,39 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_rejects_a_region_cloud_tts_does_
         )
 
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("vertex_location", "synthesize_url"),
+    (
+        ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("europe-west4", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us-central1", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("global", _SYNTHESIZE_URL),
+        ("asia-northeast1", _SYNTHESIZE_URL),
+    ),
+)
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_chirp_keeps_the_deployment_region(
+    respx_mock: respx.MockRouter,
+    google_token_endpoint: responses.RequestsMock,
+    vertex_location: str,
+    synthesize_url: str,
+) -> None:
+    route: Final = respx_mock.post(synthesize_url).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"vertex-audio").decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/chirp",
+        input="Bonjour",
+        voice="fr-FR-Chirp3-HD-Aoede",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location=vertex_location,
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"vertex-audio"
 
 
 @pytest.mark.asyncio

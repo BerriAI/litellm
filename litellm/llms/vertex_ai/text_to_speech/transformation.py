@@ -55,7 +55,7 @@ _LyriaVoice: TypeAlias = str | dict | None
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
-_GEMINI_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
+_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
     {
         **dict.fromkeys(
             ("us", "us-central1", "us-east1", "us-east4", "us-east5", "us-south1", "us-west1", "us-west4"), "us"
@@ -732,7 +732,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if api_base:
             return api_base
 
-        return self.TTS_API_URL
+        location: Final = litellm_params.get("vertex_location")
+        cloud_tts_location: Final = _CLOUD_TTS_LOCATIONS.get(location) if isinstance(location, str) else None
+        if cloud_tts_location is None:
+            return self.TTS_API_URL
+        return f"https://{cloud_tts_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
     def _get_gemini_tts_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if api_base:
@@ -748,7 +752,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_location: Final = location if isinstance(location, str) else self.get_default_vertex_location()
         if vertex_location == "global":
             return self.TTS_API_URL
-        cloud_tts_location: Final = _GEMINI_CLOUD_TTS_LOCATIONS.get(vertex_location)
+        cloud_tts_location: Final = _CLOUD_TTS_LOCATIONS.get(vertex_location)
         if cloud_tts_location is None:
             raise UnsupportedParamsError(
                 message=(
