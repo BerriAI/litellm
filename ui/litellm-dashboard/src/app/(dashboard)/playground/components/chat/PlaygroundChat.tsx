@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { ChevronDown, PanelRight, RotateCcw, SquarePen } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import { EndpointType, getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
@@ -20,6 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { toast } from "@/lib/toast";
+import i18n from "@/i18n/i18n";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { filterModelsForEndpoint, isModelCompatibleWithEndpoint } from "../chat_ui/EndpointUtils";
@@ -64,10 +67,10 @@ const modelGroups = (models: readonly ModelGroup[]): readonly OptionGroup[] =>
       .map((model) => ({ value: model.model_group, label: model.model_group })),
   }));
 
-const modelEmptyText = (failed: boolean, hasKey: boolean): string => {
-  if (failed) return "Unable to load models for this key";
-  if (!hasKey) return "Enter a virtual key to load models";
-  return "No models available for this endpoint";
+const modelEmptyText = (failed: boolean, hasKey: boolean, t: TFunction = i18n.t.bind(i18n)): string => {
+  if (failed) return t("playground.chat.page.models.failed");
+  if (!hasKey) return t("playground.chat.page.models.needsKey");
+  return t("playground.chat.page.models.empty");
 };
 
 const reachableMcp = (servers: readonly MCPServer[], toolsets: readonly MCPToolset[]): ReadonlySet<string> =>
@@ -112,10 +115,10 @@ const lastTracedReply = (messages: readonly MessageType[]): number =>
 const totalCost = (messages: readonly MessageType[]): number =>
   messages.reduce((sum, message) => sum + (message.usage?.cost ?? message.trace?.cost ?? 0), 0);
 
-const conversationSummary = (messages: readonly MessageType[]): string => {
+const conversationSummary = (messages: readonly MessageType[], t: TFunction = i18n.t.bind(i18n)): string => {
   const requests = messages.filter((message) => message.role === "user").length;
-  if (requests === 0) return "New chat";
-  const label = requests === 1 ? "1 request" : `${requests} requests`;
+  if (requests === 0) return t("playground.chat.page.newChat");
+  const label = t("playground.chat.page.requests", { count: requests });
   const cost = totalCost(messages);
   return cost > 0 ? `${label}, ${formatCost(cost)}` : label;
 };
@@ -129,6 +132,7 @@ export function PlaygroundChat({
   disabledPersonalKeyCreation: boolean;
   proxySettings: ProxySettings | undefined;
 }) {
+  const { t } = useTranslation();
   const { settings: stored, update, reset } = usePlaygroundSettings(disabledPersonalKeyCreation);
   const canViewPolicies = useCan("viewPolicies");
   const apiKey = (stored.keySource === "session" ? accessToken : stored.virtualKey.trim()) || null;
@@ -211,13 +215,13 @@ export function PlaygroundChat({
 
   const newChat = () => {
     clearChat();
-    toast.success("Chat history cleared.");
+    toast.success(t("playground.chat.page.historyCleared"));
   };
 
   const resetAll = () => {
     clearChat();
     reset();
-    toast.success("Chat and settings reset");
+    toast.success(t("playground.chat.page.resetDone"));
   };
 
   const code = (sdk: CodeSdk): string => {
@@ -250,23 +254,23 @@ export function PlaygroundChat({
     <>
       {capabilities.target === "model" && (
         <TargetPicker
-          label="Model"
-          placeholder="Select a model"
+          label={t("playground.chat.page.models.label")}
+          placeholder={t("playground.chat.page.models.placeholder")}
           groups={modelGroups(filterModelsForEndpoint([...modelList], settings.endpoint))}
           value={settings.model}
           onValueChange={selectModel}
           isLoading={models.isLoading}
-          emptyText={modelEmptyText(models.isError, Boolean(apiKey))}
+          emptyText={modelEmptyText(models.isError, Boolean(apiKey), t)}
           allowCustom
         />
       )}
       {capabilities.target === "agent" && (
         <TargetPicker
-          label="Agent"
-          placeholder="Select an agent"
+          label={t("playground.chat.page.agents.label")}
+          placeholder={t("playground.chat.page.agents.placeholder")}
           groups={[
             {
-              label: "Agents",
+              label: t("playground.chat.page.agents.group"),
               options: (agents.data ?? []).map((agent) => ({
                 value: agent.agent_name,
                 label: agent.agent_name || agent.agent_id,
@@ -277,21 +281,21 @@ export function PlaygroundChat({
           value={settings.agent}
           onValueChange={(agent) => update({ agent })}
           isLoading={agents.isLoading}
-          emptyText="No agents available for this key"
+          emptyText={t("playground.chat.page.agents.empty")}
         />
       )}
       {capabilities.target === "mcpTool" && (
         <>
           <TargetPicker
-            label="Server"
-            placeholder="Select an MCP server"
+            label={t("playground.chat.page.servers.label")}
+            placeholder={t("playground.chat.page.servers.placeholder")}
             groups={[
               {
-                label: "MCP servers",
+                label: t("playground.chat.page.servers.group"),
                 options: mcp.servers.map((server) => ({ value: server.server_id, label: serverName(server) })),
               },
               {
-                label: "Toolsets",
+                label: t("playground.chat.page.servers.toolsetsGroup"),
                 options: mcp.toolsets.map((toolset) => ({
                   value: `${TOOLSET_PREFIX}${toolset.toolset_id}`,
                   label: toolset.toolset_name,
@@ -302,18 +306,18 @@ export function PlaygroundChat({
             value={directSelection}
             onValueChange={(server) => update({ mcpSelection: [server], directTool: null })}
             isLoading={mcp.isLoading}
-            emptyText="No MCP servers available for this key"
+            emptyText={t("playground.chat.page.servers.empty")}
           />
           {directByok?.is_byok && (
             <ByokKeyButton server={directByok} name={serverName(directByok)} onConnected={mcp.refreshCredentials} />
           )}
           {directSelection && (
             <TargetPicker
-              label="Tool"
-              placeholder="Select a tool"
+              label={t("playground.chat.page.tools.label")}
+              placeholder={t("playground.chat.page.tools.placeholder")}
               groups={[
                 {
-                  label: "Tools",
+                  label: t("playground.chat.page.tools.group"),
                   options: targets.map(({ tool }) => ({
                     value: tool.name,
                     label: tool.name,
@@ -324,7 +328,7 @@ export function PlaygroundChat({
               value={settings.directTool}
               onValueChange={(tool) => update({ directTool: tool })}
               isLoading={directServers.some((server) => directServerTools[server]?.isLoading)}
-              emptyText={toolsFailed ? "Unable to load tools for this server" : "This server has no tools"}
+              emptyText={toolsFailed ? t("playground.chat.page.tools.failed") : t("playground.chat.page.tools.empty")}
             />
           )}
         </>
@@ -338,8 +342,10 @@ export function PlaygroundChat({
   );
 
   const guardrailGroups: readonly OptionGroup[] = [
-    { label: "Guardrails", options: guardrails.data ?? [] },
-    ...(canViewPolicies ? [{ label: "Policies", options: prefixed(policies.data ?? []) }] : []),
+    { label: t("playground.chat.page.guardrailsGroup"), options: guardrails.data ?? [] },
+    ...(canViewPolicies
+      ? [{ label: t("playground.chat.page.policiesGroup"), options: prefixed(policies.data ?? []) }]
+      : []),
   ];
 
   const composer = (
@@ -363,7 +369,7 @@ export function PlaygroundChat({
         />
       }
       vectorStores={{
-        groups: [{ label: "Vector stores", options: vectorStores.data ?? [] }],
+        groups: [{ label: t("playground.chat.page.vectorStoresGroup"), options: vectorStores.data ?? [] }],
         value: settings.vectorStores,
         onValueChange: (value) => update({ vectorStores: value }),
         isLoading: vectorStores.isLoading,
@@ -411,33 +417,35 @@ export function PlaygroundChat({
     <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-          <span className="text-xs text-muted-foreground tabular-nums">{conversationSummary(messages)}</span>
+          <span className="text-xs text-muted-foreground tabular-nums">{conversationSummary(messages, t)}</span>
           <span className="ml-auto flex items-center gap-2">
             {!isWide && (
               <Button variant="outline" size="sm" onClick={() => setSheetOpen(true)}>
                 <PanelRight />
-                Inspector
+                {t("playground.chat.page.inspector")}
               </Button>
             )}
             <ButtonGroup>
               <Button variant="outline" size="sm" onClick={newChat}>
                 <SquarePen />
-                New chat
+                {t("playground.chat.page.newChat")}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger
-                  render={<Button variant="outline" size="icon-sm" aria-label="More chat actions" />}
+                  render={
+                    <Button variant="outline" size="icon-sm" aria-label={t("playground.chat.page.moreActions")} />
+                  }
                 >
                   <ChevronDown />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">
                   <DropdownMenuItem onClick={newChat}>
                     <SquarePen />
-                    New chat, keep settings
+                    {t("playground.chat.page.newChatKeepSettings")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={resetAll}>
                     <RotateCcw />
-                    Reset chat and settings
+                    {t("playground.chat.page.resetAll")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -466,20 +474,23 @@ export function PlaygroundChat({
             }}
             inspectedIndex={inspectedIndex}
             onInspect={inspect}
-            suggestions={suggestions}
+            suggestions={suggestions.map((suggestion) => t(suggestion))}
             onPickSuggestion={draft.setText}
           />
         )}
         <div className="mx-auto w-full max-w-3xl px-6 pb-6">{composer}</div>
       </div>
       {isWide ? (
-        <aside aria-label="Inspector" className="flex w-96 shrink-0 flex-col border-l border-border">
+        <aside
+          aria-label={t("playground.chat.page.inspector")}
+          className="flex w-96 shrink-0 flex-col border-l border-border"
+        >
           {inspector}
         </aside>
       ) : (
         <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
           <SheetContent side="right" className="w-96 gap-0 p-0" showCloseButton={false}>
-            <SheetTitle className="sr-only">Inspector</SheetTitle>
+            <SheetTitle className="sr-only">{t("playground.chat.page.inspector")}</SheetTitle>
             {inspector}
           </SheetContent>
         </Sheet>

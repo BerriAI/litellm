@@ -14,6 +14,7 @@ export const TEST_MODES = [
   { value: "anthropic_messages", label: "Anthropic Messages - /v1/messages" },
   { value: "ocr", label: "OCR - /ocr" },
   { value: "decisions", label: "Decisions - /v1/decisions" },
+  { value: "extraction", label: "Extraction - /v1/extraction" },
 ];
 
 // Define the available auto router routing strategies

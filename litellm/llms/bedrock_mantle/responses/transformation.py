@@ -15,13 +15,17 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import chat_completion_prompt_cache_breakpoint_for_wire
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.base_llm.responses.transformation import ReasoningSummaryLevel
@@ -58,6 +62,10 @@ _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
+
+
+def _prompt_cache_breakpoint_as_sent_or_none(marker: object) -> object:
+    return marker if chat_completion_prompt_cache_breakpoint_for_wire(marker, drop_params=True) == marker else None
 
 
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
@@ -100,7 +108,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if MANTLE_HOST_RE.match(base):
             base = f"https://bedrock-mantle.{region}.api.aws"
         path: Final = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
-        return f"{base}{path}"
+        return join_api_base(base, path)
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
@@ -110,6 +118,13 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if litellm_params.aws_bedrock_project_id:
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
+
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
+        if reads_breakpoints or known_support is True:
+            return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
+        return _prompt_cache_breakpoint_as_sent_or_none
 
     def supports_native_file_search(self) -> bool:
         return False
@@ -195,7 +210,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
             "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )
-        hoisted: Final = hoist_additional_tools(input, params.get("tools"))
+        hoisted: Final = hoist_additional_tools(
+            input, params.get("tools"), drop_params=drops_unsupported_params(litellm_params.drop_params)
+        )
         normalized_input, rewritten_types = normalize_codex_input_items(hoisted.input)
         if rewritten_types:
             verbose_logger.warning(

@@ -26,6 +26,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token_above_128k_tokens": 2.2e-07,
         "output_cost_per_token_above_128k_tokens": 8.8e-07,
     },
+    "gateway-reported-cost-fixture": {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+    },
     "openrouter/anthropic/claude-sonnet-5": {
         "litellm_provider": "openrouter",
         "mode": "chat",
@@ -121,6 +127,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
+    "typesafe/jev-preview": {
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "input_cost_per_token": 8.4e-08,
+        "output_cost_per_token": 0.0,
+    },
     "fireworks_ai/accounts/fireworks/routers/rune": {
         "litellm_provider": "fireworks_ai",
         "mode": "evaluation",
@@ -137,13 +149,15 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     "databricks/databricks-openjev-qwen35-4b": {
         "litellm_provider": "databricks",
         "mode": "evaluation",
-        "input_cost_per_token": 0.0,
+        "input_cost_per_token": 4.2e-08,
+        "cache_read_input_token_cost": 4.2e-08,
+        "cache_creation_input_token_cost": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
     "openrouter/typesafe/jev-1.13": {
         "litellm_provider": "openrouter",
         "mode": "evaluation",
-        "input_cost_per_token": 0.0,
+        "input_cost_per_token": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
     "perplexity/pplx-decider-v1-27b": {
@@ -174,6 +188,8 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         },
     },
     "gpt-5.6": {
+        "cache_creation_input_token_cost": 2.1875e-06,
+        "cache_creation_input_token_cost_above_12hr": 4.375e-06,
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 1.75e-06,
@@ -597,6 +613,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "cache_read_input_token_cost_priority": 2.16e-07,
         "google_maps_grounding_cost_per_query": 0.0168,
         "input_cost_per_audio_token": 2.4e-06,
+        "input_cost_per_audio_token_priority": 4.32e-06,
         "input_cost_per_token": 2.4e-06,
         "input_cost_per_token_flex": 1.2e-06,
         "input_cost_per_token_priority": 4.32e-06,

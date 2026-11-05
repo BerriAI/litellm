@@ -113,6 +113,7 @@ def test_search_tool_create_update_delete_is_read_back_and_applied_without_resta
                 "results": [
                     {"title": target, "url": "https://crud.invalid", "snippet": key, "date": None, "last_updated": None}
                 ],
+                "provider_metadata": {},
             }, response.text
 
         read_back(original)

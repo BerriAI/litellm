@@ -283,7 +283,7 @@ class IPAddressUtils:
     @staticmethod
     def get_mcp_client_ip(
         request: Request,
-        general_settings: dict[str, Any] | None = None,
+        general_settings: dict[str, object] | None = None,
     ) -> str | None:
         """
         Extract client IP from a FastAPI request for MCP access control.
@@ -371,4 +371,4 @@ class IPAddressUtils:
                     return client_ip
                 case _HopCountUnset():
                     pass
-        return get_request_ip_address(request, use_x_forwarded_for=use_xff)
+        return get_request_ip_address(request, use_x_forwarded_for=use_xff is True)

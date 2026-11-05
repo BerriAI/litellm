@@ -113,6 +113,9 @@ class MockBatcher:
         self.litellm_projecttable = _Table("project", self)
         self.litellm_endusertable = _Table("enduser", self)
 
+    def execute_raw(self, query: str, *args: object) -> None:
+        self.calls.append({"table": "raw", "op": "execute_raw", "query": query, "args": args})
+
     async def commit(self):
         self.committed = True
         return self.calls
@@ -2112,6 +2115,7 @@ def test_budget_cascade_writes_land_in_a_single_transaction(reset_budget_job, mo
     assert {(call["table"], call["op"]) for call in enduser_page.calls} == {("enduser", "update_many")}
     assert batcher.committed is True
     assert {(call["table"], call["op"]) for call in batcher.calls} == {
+        ("raw", "execute_raw"),
         ("team_membership", "update_many"),
         ("key", "update_many"),
         ("org", "update_many"),
@@ -3391,6 +3395,35 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
         "data": {"spend": 0},
     } in membership_writes
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:team_member:member-1:team-1")
+
+
+def test_budget_cascade_floors_membership_total_spend_before_zeroing_spend(
+    rollover_enabled: None,
+    reset_budget_job: ResetBudgetJob,
+    mock_prisma_client: MockPrismaClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Membership rows written before total_spend existed hold their history only in
+    spend. The cascade lifts total_spend to spend for the expiring tier's rows, in the
+    same batch and ahead of the zero/decrement, so the reset cannot erase it."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget: Final = _budget_row(budget_id="budget-legacy", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [budget]
+    membership: Final = type(
+        "Membership",
+        (),
+        {"user_id": "member-1", "team_id": "team-1", "spend": 15.0, "budget_id": "budget-legacy"},
+    )
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results([membership])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    writes: Final = mock_prisma_client.db.batch_calls
+    repair_index: Final = next(i for i, call in enumerate(writes) if call["op"] == "execute_raw")
+    first_membership_reset: Final = next(i for i, call in enumerate(writes) if call["table"] == "team_membership")
+    assert repair_index < first_membership_reset, writes
+    assert writes[repair_index]["args"] == (["budget-legacy"],)
+    assert mock_prisma_client.db.batchers[-1].committed
 
 
 def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(

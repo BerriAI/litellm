@@ -207,6 +207,11 @@ def test_routing_diagnostics_reach_llm_spans_without_promoting_prompt_text(fail:
         "classifier_cost": 0.001,
         "classifier_failure_reason": "timeout",
         "classifier_error_type": "TimeoutError",
+        "classifier_input_budget_tokens": 24576,
+        "classifier_input_tokens": 23000,
+        "classifier_input_count_method": "estimated_tokens",
+        "classifier_input_truncated": True,
+        "classifier_input_budget_status": "truncated",
         "escalated": False,
     }
     payload: Final = _payload(
@@ -1928,6 +1933,7 @@ def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
         ("async_batch_get_cache", "redis.mget auth_objects", "redis.mget"),
         ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects", "redis.set"),
         ("async_increment_pipeline", "redis.incr auth_objects", "redis.incr"),
+        ("async_increment_if_present", "redis.incr auth_objects", "redis.incr"),
         ("async_delete_cache", "redis.delete auth_objects", "redis.delete"),
         ("async_scan_iter", "redis.scan auth_objects", "redis.scan"),
         ("request_redis_batch", "redis.pipeline auth_objects", "redis.pipeline"),

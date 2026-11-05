@@ -300,7 +300,7 @@ async def _resolve_mcp_server_identifiers_to_ids(
     if not identifiers:
         return {}
 
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
@@ -310,7 +310,7 @@ async def _resolve_mcp_server_identifiers_to_ids(
         identifiers=identifiers,
         prisma_client=prisma_client,
     ):
-        server_id = getattr(server, "server_id", None)
+        server_id = server.server_id
         if not server_id:
             continue
         for identifier in identifiers:
@@ -450,7 +450,7 @@ async def _resolve_team_allowed_mcp_servers(
     - Servers from mcp_access_groups
     - Server IDs referenced in mcp_tool_permissions keys
     """
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
 
@@ -475,7 +475,7 @@ async def _resolve_team_allowed_mcp_servers(
 
 def get_allow_all_keys_server_ids() -> set[str]:
     """Return the set of MCP server IDs marked with allow_all_keys=True."""
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
@@ -487,7 +487,7 @@ _get_allow_all_keys_server_ids: Final = get_allow_all_keys_server_ids
 
 def _get_all_mcp_server_ids() -> set[str]:
     """Return every MCP server id registered on the proxy (config + DB union)."""
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    from litellm.proxy.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
