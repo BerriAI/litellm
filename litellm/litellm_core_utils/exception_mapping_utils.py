@@ -446,6 +446,7 @@ def _map_openai_exception(
                 model=model,
                 response=response,
                 litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
             )
         if invalid_request_status == 404:
             raise NotFoundError(
@@ -531,6 +532,7 @@ def _map_openai_exception(
                 model=model,
                 response=response,
                 litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 404:
             raise NotFoundError(
