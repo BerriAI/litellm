@@ -4,7 +4,8 @@
 #
 # +-------------------------------------------------------------+
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from itertools import chain, takewhile
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -14,9 +15,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_last_user_message,
-)
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -256,10 +255,25 @@ class ZscalerAIGuard(CustomGuardrail):
     ) -> str | None:
         structured_messages: Final = inputs.get("structured_messages") or []
         has_chat_completions_rows: Final = any("content" in message for message in structured_messages)
-        if input_type == "request" and has_chat_completions_rows:
-            return get_last_user_message(list(structured_messages))
-        texts: Final = inputs.get("texts", [])
+        texts: Final = (
+            ZscalerAIGuard._last_user_turn_texts(structured_messages)
+            if input_type == "request" and has_chat_completions_rows
+            else inputs.get("texts", [])
+        )
         return " ".join(texts) if texts else None
+
+    @staticmethod
+    def _last_user_turn_texts(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+        last_user_turn: Final = tuple(takewhile(lambda message: message.get("role") == "user", reversed(messages)))
+        return tuple(chain.from_iterable(map(ZscalerAIGuard._content_texts, reversed(last_user_turn))))
+
+    @staticmethod
+    def _content_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return (content,)
+        parts: Final = (as_str_mapping(part) for part in as_object_list(content) or ())
+        return tuple(text for part in parts if part is not None and isinstance(text := part.get("text"), str))
 
     def extract_blocking_info(self, response):
         """

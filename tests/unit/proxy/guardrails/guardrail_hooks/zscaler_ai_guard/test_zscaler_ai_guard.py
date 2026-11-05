@@ -191,7 +191,7 @@ async def _execute_policy_bodies(
                     *_CONVERSATION,
                     {
                         "role": "user",
-                        "content": [{"type": "text", "text": "And three"}, {"type": "text", "text": " plus three?"}],
+                        "content": [{"type": "text", "text": "And three"}, {"type": "text", "text": "plus three?"}],
                     },
                 ],
             },
@@ -206,7 +206,7 @@ async def _execute_policy_bodies(
                     {"role": "user", "content": "Answer in words."},
                 ],
             },
-            "And three plus three?\nAnswer in words.",
+            "And three plus three? Answer in words.",
         ),
         (
             {
