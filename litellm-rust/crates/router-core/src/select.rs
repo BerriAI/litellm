@@ -308,7 +308,7 @@ impl Core {
             caller,
             default_target,
             snapshot.settings.dynamic.default_ref(),
-            jiff::Timestamp::now(),
+            self.health.timestamp(),
         )?
         .ok_or_else(|| Error::UnknownModel {
             // The name `_common_checks_available_deployment` looked for, past the alias.
