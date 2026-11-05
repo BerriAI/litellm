@@ -404,6 +404,7 @@ async def _assert_legacy_database_parity(
             assert len(rows) == 1
             if path == "ledger" and retention == "lean":
                 assert rows[0]["accounting_log_disabled"] is True
+                assert not {"messages", "response", "proxy_server_request", "metadata"}.intersection(rows[0])
                 frozen = rows[0]["accounting_payload"]
                 if isinstance(frozen, str):
                     frozen = json.loads(frozen)

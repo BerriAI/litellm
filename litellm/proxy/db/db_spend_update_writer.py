@@ -881,8 +881,12 @@ class DBSpendUpdateWriter:
                 payload=payload, prisma_client=prisma_client, disable_spend_logs=disable_spend_logs
             )
         if "accounting_payload" in payload:
+            from litellm.proxy.utils import accounting_only_spend_log
+
             await self._insert_spend_log_to_db(
-                payload={**payload, "accounting_log_disabled": disable_spend_logs},
+                payload=accounting_only_spend_log(payload)
+                if disable_spend_logs
+                else {**payload, "accounting_log_disabled": False},
                 prisma_client=prisma_client,
                 llm_router=llm_router,
             )
