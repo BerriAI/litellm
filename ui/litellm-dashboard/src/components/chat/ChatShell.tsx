@@ -127,6 +127,7 @@ const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         accessToken={accessToken}
         homeHref={routes.chats}
         homeLabel={t("chat.shell.home")}
+        onHomeClick={() => setSidebarOpen(false)}
         collapsed={collapsed}
         onToggleCollapsed={() => (isDesktop ? setSidebarCollapsed(!sidebarCollapsed) : setSidebarOpen(false))}
       />

@@ -27,12 +27,14 @@ export function SidebarBrand({
   homeLabel = "LiteLLM home",
   collapsed = false,
   onToggleCollapsed,
+  onHomeClick,
 }: {
   accessToken: string | null;
   homeHref?: string;
   homeLabel?: string;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+  onHomeClick?: () => void;
 }) {
   const { t } = useTranslation();
   const { logoUrl, logoUrlDark } = useTheme();
@@ -47,7 +49,7 @@ export function SidebarBrand({
     <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
       <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={homeHref} className="flex min-w-0 items-center" aria-label={homeLabel}>
+          <Link href={homeHref} onClick={onHomeClick} className="flex min-w-0 items-center" aria-label={homeLabel}>
             <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
             <img
               src={darkLogoSrc}

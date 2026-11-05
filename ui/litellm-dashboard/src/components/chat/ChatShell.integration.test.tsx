@@ -165,6 +165,25 @@ describe("ChatShell", () => {
     expect(screen.getByText("Conversation content")).toBeInTheDocument();
   });
 
+  it("should dismiss mobile navigation when the Chat home logo is selected", async () => {
+    mockUseMediaQuery.mockReturnValue(false);
+    const user = userEvent.setup();
+    render(
+      <ChatShell>
+        <input aria-label="Message" />
+      </ChatShell>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
+    const home = await screen.findByRole("link", { name: "Chat home" });
+    expect(home).toHaveAttribute("href", "/ui/chat");
+    await user.click(home);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("textbox", { name: "Message" }));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveFocus();
+  });
+
   it("should close mobile navigation with Escape and restore trigger focus", async () => {
     mockUseMediaQuery.mockReturnValue(false);
     const user = userEvent.setup();
