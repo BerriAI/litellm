@@ -1,12 +1,15 @@
+import datetime
 import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks import PROXY_HOOKS
 from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
@@ -33,6 +36,22 @@ def sse_frame(event: dict[str, object]) -> bytes:
 
 def message_start(message_id: str) -> dict[str, object]:
     return {"type": "message_start", "message": anthropic_message(message_id)}
+
+
+def sent_with(anthropic_beta: str, **data: object) -> dict[str, object]:
+    logging_obj: Final = Logging(
+        model="claude-opus-4-8",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call",
+        function_id="function",
+    )
+    sent: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages", headers={"anthropic-beta": anthropic_beta})
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(200, request=sent)
+    logging_obj.post_call(original_response="{}", additional_args={"complete_input_dict": {}})
+    return {**data, "litellm_logging_obj": logging_obj}
 
 
 def hook() -> MessageThreadOwnership:
@@ -164,8 +183,87 @@ async def test_a_thread_continue_on_another_route_stays_with_the_key_that_create
 
 
 @pytest.mark.asyncio
-async def test_a_pass_through_request_is_left_to_the_upstream_credential() -> None:
+async def test_a_pass_through_continue_of_a_message_the_proxy_never_bound_is_left_to_the_upstream_credential() -> None:
     assert await allows(hook(), INTRUDER, "msg_unknown", "pass_through_endpoint")
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_continue_of_another_keys_thread_is_thread_not_found() -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message("msg_bound")
+    )
+
+    assert await allows(ownership, OWNER, "msg_bound", "pass_through_endpoint")
+    assert not await allows(ownership, INTRUDER, "msg_bound", "pass_through_endpoint")
+
+
+@pytest.mark.asyncio
+async def test_a_continue_resends_the_betas_its_create_turn_sent_next_to_its_own_extra_headers() -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data=sent_with("advisor-tool-2026-03-01,message-threads-2026-08-12", thread=CREATE),
+        user_api_key_dict=OWNER,
+        response=anthropic_message("msg_advisor"),
+    )
+    continued: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=OWNER,
+        cache=DualCache(),
+        data={
+            **continue_from("msg_advisor"),
+            "extra_headers": {"Anthropic-Beta": "context-1m-2025-08-07", "x-trace": "abc"},
+        },
+        call_type="anthropic_messages",
+    )
+
+    assert continued is not None
+    assert continued["extra_headers"] == {
+        "x-trace": "abc",
+        "anthropic-beta": "advisor-tool-2026-03-01,context-1m-2025-08-07,message-threads-2026-08-12",
+    }
+    assert continued["thread"] == continue_from("msg_advisor")["thread"]
+
+
+@pytest.mark.asyncio
+async def test_the_create_turns_betas_reach_every_later_turn_of_the_thread() -> None:
+    ownership: Final = hook()
+    items: Final = (sse_frame(message_start("msg_streamed_first")), sse_frame({"type": "message_stop"}))
+    await served(ownership, items, sent_with("advisor-tool-2026-03-01,message-threads-2026-08-12", thread=CREATE))
+    second: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_streamed_first"), call_type="anthropic_messages"
+    )
+    assert second is not None
+    second_headers: Final = second["extra_headers"]
+    assert isinstance(second_headers, dict)
+    await ownership.async_post_call_success_hook(
+        data=sent_with(str(second_headers["anthropic-beta"]), **continue_from("msg_streamed_first")),
+        user_api_key_dict=OWNER,
+        response=anthropic_message("msg_second_turn"),
+    )
+    third: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_second_turn"), call_type="anthropic_messages"
+    )
+
+    assert third is not None
+    assert third["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
+
+
+@pytest.mark.parametrize("call_type", ("acompletion", "pass_through_endpoint"))
+@pytest.mark.asyncio
+async def test_a_continue_outside_the_messages_route_is_checked_but_left_unchanged(call_type: CallTypesLiteral) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data=sent_with("advisor-tool-2026-03-01", thread=CREATE),
+        user_api_key_dict=OWNER,
+        response=anthropic_message("msg_other_route"),
+    )
+
+    assert (
+        await ownership.async_pre_call_hook(
+            user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_other_route"), call_type=call_type
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

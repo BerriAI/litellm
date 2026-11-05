@@ -743,19 +743,29 @@ TURN_WITH_OUTPUT_CONFIG: Final = (
 )
 
 
-def test_the_thread_betas_are_the_same_on_the_create_and_the_continue_turn() -> None:
-    config: Final = AnthropicMessagesConfig()
-    create: Final = config._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+def test_a_thread_create_turn_takes_betas_from_its_tools_and_messages() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         headers={"anthropic-beta": "context-1m-2025-08-07"},
         optional_params={"thread": {"type": "create"}, "system": "be terse", "tools": list(TOOL_SEARCH_TOOLS)},
         messages=list(TURN_WITH_OUTPUT_CONFIG),
     )
-    cont: Final = config._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+    assert set(headers["anthropic-beta"].split(",")) == {  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare-dict result
+        "context-1m-2025-08-07",
+        MESSAGE_THREADS_BETA,
+        get_tool_search_beta_header("anthropic"),
+        "advisor-tool-2026-03-01",
+        "per-turn-control-2026-07-01",
+        "mid-conversation-tool-changes-2026-07-01",
+    }
+
+
+def test_a_thread_continue_turn_takes_no_betas_from_its_new_messages() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
         headers={"anthropic-beta": "context-1m-2025-08-07"},
         optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01p"}},
-        messages=[{"role": "user", "content": "and now?"}],
+        messages=list(TURN_WITH_OUTPUT_CONFIG),
     )
-    assert create["anthropic-beta"] == cont["anthropic-beta"] == f"context-1m-2025-08-07,{MESSAGE_THREADS_BETA}"
+    assert headers["anthropic-beta"] == f"context-1m-2025-08-07,{MESSAGE_THREADS_BETA}"
 
 
 def test_a_request_without_a_thread_still_takes_betas_from_its_tools_and_messages() -> None:

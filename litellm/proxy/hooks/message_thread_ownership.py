@@ -3,10 +3,13 @@ import re
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping
 from typing import TYPE_CHECKING, Final
 
+import httpx
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.messages.native.utils import continued_message_id, message_thread_not_found_body
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines_keepends
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
@@ -17,6 +20,8 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache
 
 _PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
+_MESSAGES_CALL_TYPE: Final = "anthropic_messages"
+_ANTHROPIC_BETA_HEADER: Final = "anthropic-beta"
 _OWNER_KEY_PREFIX: Final = "anthropic_message_thread_owner:"
 _OWNER_TTL_SECONDS: Final = 3600
 _SSE_DATA_FIELD: Final = "data:"
@@ -29,11 +34,61 @@ _UNOWNED_THREAD_MESSAGE: Final = (
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+class _ThreadBinding(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    owner: str
+    anthropic_beta: str | None = None
+
+
+_BINDING_ADAPTER: Final = TypeAdapter(_ThreadBinding)
+
+
 def _as_mapping(value: object) -> Mapping[str, object] | None:
     try:
         return _MAPPING_ADAPTER.validate_python(value, strict=True)
     except ValidationError:
         return None
+
+
+def _as_binding(value: object) -> _ThreadBinding | None:
+    try:
+        return _BINDING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _anthropic_beta(headers: Mapping[str, object]) -> str | None:
+    return next(
+        (
+            value
+            for name, value in headers.items()
+            if name.lower() == _ANTHROPIC_BETA_HEADER and isinstance(value, str) and value
+        ),
+        None,
+    )
+
+
+def _sent_anthropic_beta(request_data: Mapping[str, object]) -> str | None:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return None
+    response: Final[object] = logging_obj.model_call_details.get("httpx_response")
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        sent_headers: Final = response.request.headers
+    except RuntimeError:
+        return None
+    return sent_headers.get(_ANTHROPIC_BETA_HEADER) or None
+
+
+def _with_anthropic_beta(extra_headers: object, anthropic_beta: str) -> Mapping[str, object]:
+    headers: Final = _as_mapping(extra_headers) or {}
+    return {
+        **{name: value for name, value in headers.items() if name.lower() != _ANTHROPIC_BETA_HEADER},
+        _ANTHROPIC_BETA_HEADER: merge_anthropic_beta_headers(_anthropic_beta(headers), anthropic_beta),
+    }
 
 
 def _owner_key(message_id: str) -> str:
@@ -126,18 +181,18 @@ class MessageThreadOwnership(CustomLogger):
         cache: "DualCache",
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
-    ) -> None:
-        if call_type == _PASS_THROUGH_CALL_TYPE:
-            return
+    ) -> dict[str, object] | None:  # mutable-ok: the proxy swaps in a pre-call hook's result only when it is a dict
         previous_message_id: Final = continued_message_id(data.get("thread"))
         if previous_message_id is None:
-            return
-        if await self._owners.async_get_cache(
-            key=_owner_key(previous_message_id),
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-        ) == _owner(user_api_key_dict):
-            return
-        raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
+            return None
+        binding: Final = await self._binding(previous_message_id, user_api_key_dict)
+        if binding is None and call_type == _PASS_THROUGH_CALL_TYPE:
+            return None
+        if binding is None or binding.owner != _owner(user_api_key_dict):
+            raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
+        if binding.anthropic_beta is None or call_type != _MESSAGES_CALL_TYPE:
+            return None
+        return {**data, "extra_headers": _with_anthropic_beta(data.get("extra_headers"), binding.anthropic_beta)}
 
     async def async_post_call_success_hook(
         self,
@@ -147,7 +202,7 @@ class MessageThreadOwnership(CustomLogger):
     ) -> LLMResponseTypes:
         message_id: Final = _response_message_id(response) if data.get("thread") is not None else None
         if message_id is not None:
-            await self._record_owner(message_id, user_api_key_dict)
+            await self._record_owner(message_id, user_api_key_dict, _sent_anthropic_beta(data))
         return response
 
     async def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # the proxy streams bytes, str and dict chunks here, not the base's ModelResponseStream
@@ -160,18 +215,22 @@ class MessageThreadOwnership(CustomLogger):
         async for chunk in response:
             yield chunk
             if not scanner.finished and (message_id := scanner.scan(chunk)) is not None:
-                await self._record_owner(message_id, user_api_key_dict)
+                await self._record_owner(message_id, user_api_key_dict, _sent_anthropic_beta(request_data))
 
-    async def _record_owner(self, message_id: str, user_api_key_dict: "UserAPIKeyAuth") -> None:
-        owner_key: Final = _owner_key(message_id)
-        bound_owner: Final = await self._owners.async_get_cache(
-            key=owner_key, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
+    async def _binding(self, message_id: str, user_api_key_dict: "UserAPIKeyAuth") -> _ThreadBinding | None:
+        cached: Final[object] = await self._owners.async_get_cache(
+            key=_owner_key(message_id), litellm_parent_otel_span=user_api_key_dict.parent_otel_span
         )
-        if bound_owner is not None:
+        return _as_binding(cached)
+
+    async def _record_owner(
+        self, message_id: str, user_api_key_dict: "UserAPIKeyAuth", anthropic_beta: str | None
+    ) -> None:
+        if await self._binding(message_id, user_api_key_dict) is not None:
             return
         await self._owners.async_set_cache(
-            key=owner_key,
-            value=_owner(user_api_key_dict),
+            key=_owner_key(message_id),
+            value=_ThreadBinding(owner=_owner(user_api_key_dict), anthropic_beta=anthropic_beta).model_dump(),
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             ttl=_OWNER_TTL_SECONDS,
         )

@@ -884,8 +884,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """
         beta_values: Final[set[str]] = set()
         threaded: Final = optional_params.get("thread") is not None  # pyright: ignore[reportUnknownMemberType]  # the optional params arrive as a bare dict
-        scanned_messages: Final = () if threaded else messages
-        scanned_tools: Final = None if threaded else optional_params.get("tools")
+        scanned_messages: Final = (
+            ()
+            if continues_message_thread(optional_params.get("thread"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the optional params arrive as a bare dict
+            else messages
+        )
 
         existing_beta: Final = tuple(
             piece.strip()
@@ -926,12 +929,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if threaded:
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.MESSAGE_THREADS_2026_08_12.value)
 
-        if any(
-            isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for tool in scanned_tools or ()
-        ):
+        tools: Final = optional_params.get("tools")
+        if any(isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for tool in tools or ()):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value)
 
-        if AnthropicModelInfo().is_tool_search_used(scanned_tools):
+        if AnthropicModelInfo().is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header(custom_llm_provider))
 
         thinking_betas: Final = AnthropicModelInfo().thinking_betas(optional_params.get("thinking"))

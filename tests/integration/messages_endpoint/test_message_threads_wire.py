@@ -228,7 +228,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         owned_proxy(
             shared,
             directory,
-            {"LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "true"},
+            {
+                "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "true",
+                "ANTHROPIC_API_BASE": f"{wire.url}/anthropic",
+                "ANTHROPIC_API_KEY": "synthetic-anthropic-key",
+            },
             config=write_config(directory, wire.url),
             workers=1,
         ) as gateway,
@@ -342,6 +346,54 @@ def test_another_key_cannot_continue_a_thread_through_chat_completions(rig: Rig)
         )
         assert response.status_code == 404, response.content[:500]
         assert rig.received(intruder_nonce) == ()
+
+
+ADVISOR_TOOL: Final = {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-8"}
+ADVISOR_BETA: Final = "advisor-tool-2026-03-01"
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "streamed"])
+def test_a_continue_turn_resends_the_betas_its_create_turn_took_from_its_tools(rig: Rig, stream: bool) -> None:
+    create_nonce: Final = nonce()
+    status, raw = rig.send(ANTHROPIC_MODEL, create_nonce, {"type": "create"}, tools=[ADVISOR_TOOL], stream=stream)
+    assert status == 200, raw[:500]
+    (created,) = rig.received(create_nonce)
+    create_betas: Final = beta_header(created.headers)
+    assert {ADVISOR_BETA, MESSAGE_THREADS_BETA} <= create_betas, created.headers
+    continue_nonce: Final = nonce()
+    thread: Final = {"type": "continue", "previous_message_id": f"msg_{create_nonce.removeprefix('nonce-')}"}
+    status, raw = rig.send(ANTHROPIC_MODEL, continue_nonce, thread)
+    assert status == 200, raw[:500]
+    (continued,) = rig.received(continue_nonce)
+    assert "tools" not in _JSON_OBJECT.validate_json(continued.body)
+    assert beta_header(continued.headers) == create_betas, continued.headers
+
+
+def pass_through_continue(rig: Rig, request_nonce: str, previous_message_id: str, key: str) -> int:
+    return rig.gateway.client.post(
+        "/anthropic/v1/messages",
+        json={
+            "model": "claude-opus-4-8",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": f"hi {request_nonce}"}],
+            "thread": {"type": "continue", "previous_message_id": previous_message_id},
+        },
+        headers={"Authorization": f"Bearer {key}"},
+        timeout=120,
+    ).status_code
+
+
+def test_another_key_cannot_continue_a_thread_through_the_anthropic_pass_through_route(rig: Rig) -> None:
+    with rig.gateway.scenario() as scenario:
+        owner: Final = scenario.key()
+        intruder: Final = scenario.key()
+        previous_message_id: Final = rig.create(key=owner)
+        intruder_nonce: Final = nonce()
+        assert pass_through_continue(rig, intruder_nonce, previous_message_id, intruder) == 404
+        assert rig.received(intruder_nonce) == ()
+        owner_nonce: Final = nonce()
+        assert pass_through_continue(rig, owner_nonce, previous_message_id, owner) == 200
+        assert len(rig.received(owner_nonce)) == 1
 
 
 def test_a_streamed_create_turn_can_be_continued_by_its_key(rig: Rig) -> None:
