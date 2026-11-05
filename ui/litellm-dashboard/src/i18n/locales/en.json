@@ -8040,7 +8040,7 @@
       },
       "placeholder": {
         "conversation": "Send a message...",
-        "home": "Ask a question, attach a file, or paste something to work on…",
+        "home": "Ask anything…",
         "research": "What should I research on the web?",
         "image": "Describe the image you want to create…"
       },
@@ -8076,6 +8076,8 @@
     },
     "shell": {
       "accountFallback": "Account",
+      "accountMenu": "Account menu, signed in as {{identity}}",
+      "home": "Chat home",
       "workspaceItems": {
         "credentials": "Credentials",
         "apiKeys": "API Keys",
@@ -8115,6 +8117,7 @@
       },
       "searchTitle": "Search conversations",
       "searchLabel": "Search conversations",
+      "searchPlaceholder": "Search conversations…",
       "noResults": "No conversations found",
       "searchChats": "Search chats",
       "recent": "Recent",
