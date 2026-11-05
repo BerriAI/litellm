@@ -149,6 +149,8 @@ const advancedOpenExtras = {
 
 const baseModelInfo = { access_groups: undefined, mode: undefined };
 
+const TEST_TODAY = new Date(2026, 10, 4);
+
 const { api_base: _omitted, ...ALWAYS_MOUNTED_WITHOUT_API_BASE } = alwaysMounted;
 
 const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction, showBanner = false) => {
@@ -157,7 +159,7 @@ const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction, s
     showBanner ? (
       <>
         <AddModelPanel />
-        <ModelDeprecationBanner />
+        <ModelDeprecationBanner today={TEST_TODAY} />
       </>
     ) : (
       <AddModelPanel />

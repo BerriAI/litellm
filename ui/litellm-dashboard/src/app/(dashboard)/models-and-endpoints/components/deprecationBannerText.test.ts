@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ModelDeprecationInfo } from "@/app/(dashboard)/hooks/models/useModelDeprecations";
-import { deprecationBannerTitle, deprecationEntryText } from "./deprecationBannerText";
+import {
+  bucketByLocalDate,
+  countDistinctModels,
+  deprecationBannerTitle,
+  deprecationEntryText,
+  localDaysUntil,
+  parseLocalDate,
+} from "./deprecationBannerText";
 
 const makeInfo = (overrides: Partial<ModelDeprecationInfo> = {}): ModelDeprecationInfo => ({
   model_name: "gpt-4o",
@@ -8,6 +15,54 @@ const makeInfo = (overrides: Partial<ModelDeprecationInfo> = {}): ModelDeprecati
   days_until_deprecation: 26,
   status: "imminent",
   ...overrides,
+});
+
+describe("local deprecation dates", () => {
+  it("parses date parts as a local calendar date and counts from local midnight", () => {
+    const parsed = parseLocalDate("2026-11-06");
+
+    expect([parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), parsed.getHours()]).toEqual([2026, 10, 6, 0]);
+    expect(localDaysUntil("2026-11-06", new Date(2026, 10, 4, 18))).toBe(2);
+  });
+
+  it("buckets entries by their local date and warning window", () => {
+    const buckets = bucketByLocalDate(
+      [
+        makeInfo({ model_name: "yesterday", deprecation_date: "2026-11-03", status: "imminent" }),
+        makeInfo({ model_name: "today", deprecation_date: "2026-11-04", status: "deprecated" }),
+        makeInfo({ model_name: "outside-window", deprecation_date: "2026-12-05", status: "imminent" }),
+      ],
+      new Date(2026, 10, 4),
+      30,
+    );
+
+    expect(
+      buckets.deprecated.map(({ model_name, days_until_deprecation, status }) => [
+        model_name,
+        days_until_deprecation,
+        status,
+      ]),
+    ).toEqual([["yesterday", -1, "deprecated"]]);
+    expect(
+      buckets.imminent.map(({ model_name, days_until_deprecation, status }) => [
+        model_name,
+        days_until_deprecation,
+        status,
+      ]),
+    ).toEqual([["today", 0, "imminent"]]);
+  });
+});
+
+describe("countDistinctModels", () => {
+  it("counts visible names and providers, not deployment aliases", () => {
+    expect(
+      countDistinctModels([
+        makeInfo({ model_name: "team-a", team_public_model_name: "shared", litellm_provider: "openai" }),
+        makeInfo({ model_name: "team-b", team_public_model_name: "shared", litellm_provider: "openai" }),
+        makeInfo({ model_name: "team-c", team_public_model_name: "shared", litellm_provider: "anthropic" }),
+      ]),
+    ).toBe(2);
+  });
 });
 
 describe("deprecationBannerTitle", () => {

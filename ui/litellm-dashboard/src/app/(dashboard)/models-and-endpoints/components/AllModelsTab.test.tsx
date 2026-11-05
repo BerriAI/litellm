@@ -150,6 +150,8 @@ const defaultProps = {
   setSelectedTeamId: mockSetSelectedTeamId,
 };
 
+const TEST_TODAY = new Date(2026, 10, 4);
+
 const deprecatedResponse = {
   checked_at: "2026-06-01T00:00:00Z",
   warn_within_days: 30,
@@ -205,7 +207,7 @@ const renderModelsWithDeprecationBanner = () =>
   renderWithProviders(
     <>
       <AllModelsTab {...defaultProps} />
-      <ModelDeprecationBanner />
+      <ModelDeprecationBanner today={TEST_TODAY} />
     </>,
   );
 
@@ -646,7 +648,7 @@ describe("AllModelsTab", () => {
     renderWithProviders(
       <>
         <AllModelsTab {...defaultProps} />
-        <ModelDeprecationBanner />
+        <ModelDeprecationBanner today={TEST_TODAY} />
         <ModelListQueryProbe queryFn={observerQueryFn} />
       </>,
     );

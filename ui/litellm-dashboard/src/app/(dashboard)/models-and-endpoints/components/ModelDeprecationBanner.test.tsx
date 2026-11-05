@@ -39,6 +39,10 @@ const queryResult = (
   isError = false,
 ): ReturnType<typeof useModelDeprecations> => ({ data, isLoading, isError }) as ReturnType<typeof useModelDeprecations>;
 
+const pinnedToday = (): Date => new Date(2026, 10, 4);
+
+const renderBanner = (today = pinnedToday()) => render(<ModelDeprecationBanner today={today} />);
+
 describe("ModelDeprecationBanner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -48,7 +52,7 @@ describe("ModelDeprecationBanner", () => {
   it("renders nothing when there are no deprecated or imminent models", () => {
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse()));
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -62,18 +66,18 @@ describe("ModelDeprecationBanner", () => {
       ),
     );
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("renders nothing while loading or after an error", () => {
     mockedUseModelDeprecations.mockReturnValue(queryResult(undefined, true));
-    const { rerender } = render(<ModelDeprecationBanner />);
+    const { rerender } = renderBanner();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     mockedUseModelDeprecations.mockReturnValue(queryResult(undefined, false, true));
-    rerender(<ModelDeprecationBanner />);
+    rerender(<ModelDeprecationBanner today={pinnedToday()} />);
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -103,7 +107,7 @@ describe("ModelDeprecationBanner", () => {
     });
     mockedUseModelDeprecations.mockReturnValue(queryResult(response));
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     expect(screen.getByText("1 model is deprecated, 1 deprecates within 30 days")).toBeInTheDocument();
     const entries = within(screen.getByRole("list")).getAllByRole("listitem");
@@ -112,6 +116,59 @@ describe("ModelDeprecationBanner", () => {
     expect(screen.getByRole("link", { name: "Get Slack alerts for deprecations" })).toHaveAttribute(
       "href",
       `${uiHref("logging-and-alerts")}?tab=alerting-types`,
+    );
+  });
+
+  it("treats a server-deprecated entry dated today as imminent locally", () => {
+    const infoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "due-today",
+      deprecation_date: "2026-11-04",
+      days_until_deprecation: -1,
+      status: "deprecated",
+    };
+    const info = makeInfo(infoOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [info] })));
+
+    renderBanner();
+
+    expect(screen.getByText("1 model deprecates within 30 days")).toBeInTheDocument();
+    expect(within(screen.getByRole("list")).getByRole("listitem")).toHaveTextContent(
+      "due-today deprecates today (2026-11-04)",
+    );
+  });
+
+  it("treats a server-imminent entry dated yesterday as deprecated locally", () => {
+    const infoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "due-yesterday",
+      deprecation_date: "2026-11-03",
+      days_until_deprecation: 0,
+      status: "imminent",
+    };
+    const info = makeInfo(infoOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [info] })));
+
+    renderBanner();
+
+    expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
+    expect(within(screen.getByRole("list")).getByRole("listitem")).toHaveTextContent(
+      "due-yesterday was deprecated on 2026-11-03",
+    );
+  });
+
+  it("uses the local date difference instead of the server day count", () => {
+    const infoOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "due-in-two",
+      deprecation_date: "2026-11-06",
+      days_until_deprecation: 1,
+      status: "imminent",
+    };
+    const info = makeInfo(infoOverrides);
+    mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [info] })));
+
+    renderBanner();
+
+    expect(within(screen.getByRole("list")).getByRole("listitem")).toHaveTextContent(
+      "due-in-two deprecates on 2026-11-06, in 2 days",
     );
   });
 
@@ -149,7 +206,7 @@ describe("ModelDeprecationBanner", () => {
       ),
     );
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
     const entries = within(screen.getByRole("list")).getAllByRole("listitem");
@@ -179,9 +236,10 @@ describe("ModelDeprecationBanner", () => {
     const secondEntry = makeInfo(secondEntryOverrides);
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [firstEntry, secondEntry] })));
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     const entries = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
     expect(entries).toHaveLength(2);
     expect(entries[0]).toHaveTextContent("shared-model (openai) was deprecated on 2026-10-23, migrate to successor-a");
     expect(entries[1]).toHaveTextContent("shared-model (openai) was deprecated on 2026-10-23, migrate to successor-b");
@@ -208,7 +266,7 @@ describe("ModelDeprecationBanner", () => {
     const secondEntry = makeInfo(secondEntryOverrides);
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [firstEntry, secondEntry] })));
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     const entries = within(screen.getByRole("list")).getAllByRole("listitem");
     expect(entries).toHaveLength(2);
@@ -221,7 +279,7 @@ describe("ModelDeprecationBanner", () => {
     const secondInfo = makeInfo({ model_name: "claude-sonnet-4" });
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [info, secondInfo] })));
     const user = userEvent.setup();
-    const { unmount } = render(<ModelDeprecationBanner />);
+    const { unmount } = renderBanner();
 
     await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -252,46 +310,58 @@ describe("ModelDeprecationBanner", () => {
         }),
       ),
     );
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows the banner again when a new entry is added after dismissal", async () => {
-    const firstEntry = makeInfo({ model_name: "gpt-4", status: "deprecated" });
+    const firstEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "gpt-4",
+      deprecation_date: "2026-10-23",
+      days_until_deprecation: -12,
+      status: "deprecated",
+    };
+    const firstEntry = makeInfo(firstEntryOverrides);
+    const addedEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "gpt-3.5",
+      deprecation_date: "2026-10-23",
+      days_until_deprecation: -12,
+      status: "deprecated",
+    };
+    const addedEntry = makeInfo(addedEntryOverrides);
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ deprecated: [firstEntry] })));
     const user = userEvent.setup();
-    const { rerender } = render(<ModelDeprecationBanner />);
+    const { rerender } = renderBanner();
 
     await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
     mockedUseModelDeprecations.mockReturnValue(
       queryResult(
         makeResponse({
-          deprecated: [firstEntry, makeInfo({ model_name: "gpt-3.5", status: "deprecated" })],
+          deprecated: [firstEntry, addedEntry],
         }),
       ),
     );
-    rerender(<ModelDeprecationBanner />);
+    rerender(<ModelDeprecationBanner today={pinnedToday()} />);
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText("2 models are deprecated")).toBeInTheDocument();
   });
 
   it("shows the banner again when an imminent entry becomes deprecated", async () => {
-    const imminentEntry = makeInfo({ model_name: "gpt-4o", status: "imminent" });
+    const imminentEntryOverrides: Partial<ModelDeprecationInfo> = {
+      model_name: "gpt-4o",
+      deprecation_date: "2026-11-30",
+      days_until_deprecation: 0,
+      status: "imminent",
+    };
+    const imminentEntry = makeInfo(imminentEntryOverrides);
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [imminentEntry] })));
     const user = userEvent.setup();
-    const { rerender } = render(<ModelDeprecationBanner />);
+    const { rerender } = renderBanner(new Date(2026, 10, 30));
 
     await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
-    mockedUseModelDeprecations.mockReturnValue(
-      queryResult(
-        makeResponse({
-          deprecated: [makeInfo({ ...imminentEntry, status: "deprecated", days_until_deprecation: -1 })],
-        }),
-      ),
-    );
-    rerender(<ModelDeprecationBanner />);
+    rerender(<ModelDeprecationBanner today={new Date(2026, 11, 1)} />);
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText("1 model is deprecated")).toBeInTheDocument();
@@ -301,7 +371,7 @@ describe("ModelDeprecationBanner", () => {
     const entry = makeInfo({ successor_model: "successor-a" });
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent: [entry] })));
     const user = userEvent.setup();
-    const { rerender } = render(<ModelDeprecationBanner />);
+    const { rerender } = renderBanner();
 
     await user.click(screen.getByRole("button", { name: "Dismiss deprecation warning" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -309,7 +379,7 @@ describe("ModelDeprecationBanner", () => {
     mockedUseModelDeprecations.mockReturnValue(
       queryResult(makeResponse({ imminent: [makeInfo({ ...entry, successor_model: "successor-b" })] })),
     );
-    rerender(<ModelDeprecationBanner />);
+    rerender(<ModelDeprecationBanner today={pinnedToday()} />);
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/migrate to successor-b/)).toBeInTheDocument();
@@ -323,7 +393,7 @@ describe("ModelDeprecationBanner", () => {
     mockedUseModelDeprecations.mockReturnValue(queryResult(makeResponse({ imminent })));
     const user = userEvent.setup();
 
-    render(<ModelDeprecationBanner />);
+    renderBanner();
 
     const entries = within(screen.getByRole("list")).getAllByRole("listitem");
     expect(entries).toHaveLength(5);

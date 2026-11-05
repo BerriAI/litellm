@@ -467,6 +467,52 @@ class TestFormatDeprecationAlertMessage:
 
 
 class TestSuccessorModel:
+    def test_unmatched_successor_logs_warning_by_default(self, monkeypatch, caplog):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "openai/old-model"},
+                    "model_info": {
+                        "id": "1",
+                        "deprecation_date": "2026-06-10",
+                        "successor_model": "missing-model",
+                    },
+                }
+            ]
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            collect_model_deprecations(llm_router=router, today=date(2026, 6, 1))
+
+        successor_records: Final = tuple(
+            record for record in caplog.records if "names successor missing-model" in record.getMessage()
+        )
+        assert len(successor_records) == 1
+        assert successor_records[0].levelno == logging.WARNING
+
+    def test_empty_team_public_model_name_is_normalized_to_none(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "team-model",
+                    "litellm_params": {"model": "openai/team-model"},
+                    "model_info": {
+                        "id": "1",
+                        "team_id": "team-1",
+                        "team_public_model_name": "",
+                        "deprecation_date": "2026-06-10",
+                    },
+                }
+            ]
+        )
+
+        snapshot: Final = collect_model_deprecations(llm_router=router, today=date(2026, 6, 1))
+
+        assert snapshot.imminent[0].team_public_model_name is None
+
     def test_should_surface_the_successor_set_on_the_deployment(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})
         router = Router(

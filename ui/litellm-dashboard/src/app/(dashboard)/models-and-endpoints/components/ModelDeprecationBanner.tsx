@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { getLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { uiHref } from "@/utils/uiHref";
 import {
+  bucketByLocalDate,
+  countDistinctModels,
   dedupeDeprecationEntries,
   deprecationBannerFingerprint,
   deprecationBannerTitle,
@@ -16,7 +18,7 @@ import {
 
 const STORAGE_KEY = "modelDeprecationBannerDismissed";
 
-const ModelDeprecationBanner = () => {
+const ModelDeprecationBanner = ({ today = new Date() }: { today?: Date }) => {
   const { data, isError, isLoading } = useModelDeprecations();
   const [isExpanded, setIsExpanded] = useState(false);
   const [dismissedFingerprint, setDismissedFingerprint] = useState<string | null>(() =>
@@ -27,8 +29,13 @@ const ModelDeprecationBanner = () => {
     return null;
   }
 
-  const deprecated = dedupeDeprecationEntries(data.deprecated ?? []);
-  const imminent = dedupeDeprecationEntries(data.imminent ?? []);
+  const localBuckets = bucketByLocalDate(
+    [...(data.deprecated ?? []), ...(data.imminent ?? [])],
+    today,
+    data.warn_within_days,
+  );
+  const deprecated = dedupeDeprecationEntries(localBuckets.deprecated);
+  const imminent = dedupeDeprecationEntries(localBuckets.imminent);
 
   if (deprecated.length === 0 && imminent.length === 0) {
     return null;
@@ -59,7 +66,9 @@ const ModelDeprecationBanner = () => {
           <X />
         </Button>
       </AlertAction>
-      <AlertTitle>{deprecationBannerTitle(deprecated.length, imminent.length, data.warn_within_days)}</AlertTitle>
+      <AlertTitle>
+        {deprecationBannerTitle(countDistinctModels(deprecated), countDistinctModels(imminent), data.warn_within_days)}
+      </AlertTitle>
       <AlertDescription>
         <ul className="list-disc pl-5">
           {visibleEntries.map((info, index) => (

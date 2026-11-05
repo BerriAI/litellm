@@ -7,6 +7,8 @@ import { modelCostMapKeys } from "../../hooks/models/useModelCostMap";
 import ModelDeprecationBanner from "./ModelDeprecationBanner";
 import PriceDataManagementTab from "./PriceDataManagementTab";
 
+const TEST_TODAY = new Date(2026, 10, 4);
+
 vi.mock("@/components/price_data_reload", () => ({
   default: ({ onReloadSuccess }: { onReloadSuccess: () => void }) => <button onClick={onReloadSuccess}>reload</button>,
 }));
@@ -20,7 +22,7 @@ const renderTab = (queryClient: QueryClient, withBanner = false) =>
       {withBanner ? (
         <>
           <PriceDataManagementTab />
-          <ModelDeprecationBanner />
+          <ModelDeprecationBanner today={TEST_TODAY} />
         </>
       ) : (
         <PriceDataManagementTab />

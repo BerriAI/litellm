@@ -2,6 +2,41 @@ import type { ModelDeprecationInfo } from "@/app/(dashboard)/hooks/models/useMod
 
 const shownModelName = (info: ModelDeprecationInfo): string => info.team_public_model_name ?? info.model_name;
 
+export const countDistinctModels = (infos: readonly ModelDeprecationInfo[]): number =>
+  new Set(infos.map((info) => JSON.stringify([shownModelName(info), info.litellm_provider ?? null]))).size;
+
+export const parseLocalDate = (value: string): Date => {
+  const [year, month, day] = value.split("-");
+  return new Date(Number(year), Number(month) - 1, Number(day));
+};
+
+const startOfLocalDay = (today: Date): Date => new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+export const localDaysUntil = (deprecationDate: string, today: Date): number =>
+  Math.round((parseLocalDate(deprecationDate).getTime() - startOfLocalDay(today).getTime()) / 86_400_000);
+
+export const bucketByLocalDate = (
+  infos: readonly ModelDeprecationInfo[],
+  today: Date,
+  warnWithinDays: number,
+): { deprecated: ModelDeprecationInfo[]; imminent: ModelDeprecationInfo[] } => {
+  const inWindow = infos
+    .map((info): ModelDeprecationInfo => {
+      const daysUntilDeprecation = localDaysUntil(info.deprecation_date, today);
+      return {
+        ...info,
+        days_until_deprecation: daysUntilDeprecation,
+        status: daysUntilDeprecation < 0 ? "deprecated" : "imminent",
+      };
+    })
+    .filter((info) => info.days_until_deprecation <= warnWithinDays);
+
+  return {
+    deprecated: inWindow.filter((info) => info.status === "deprecated"),
+    imminent: inWindow.filter((info) => info.status === "imminent"),
+  };
+};
+
 const hasSameDedupeKey = (candidate: ModelDeprecationInfo, info: ModelDeprecationInfo): boolean => {
   const sameDisplayedModel = shownModelName(candidate) === shownModelName(info);
   const sameProvider = (candidate.litellm_provider ?? null) === (info.litellm_provider ?? null);

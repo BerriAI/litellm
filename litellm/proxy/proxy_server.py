@@ -6,6 +6,7 @@ import importlib
 import inspect
 import io
 import itertools
+import logging
 import os
 import random
 import re
@@ -18606,7 +18607,11 @@ async def model_deprecations(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
+    return collect_model_deprecations(
+        llm_router=llm_router,
+        warn_within_days=warn_within_days,
+        successor_log_level=logging.DEBUG,
+    )
 
 
 def get_model_group_info(
