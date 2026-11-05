@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Final, Literal, cast  # noqa: TID251  # generated Prisma structural interface
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # generated Prisma structural interface
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -10,7 +10,7 @@ from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_from_bucket
 from litellm.repositories.usage_alert_metrics import MetricsDatabase
 from litellm.types.proxy.issues import IssueCohort, IssueComparison, IssueImpact, IssueModelPair
-from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlertRuleInput, UsageAlertScope
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -56,35 +56,53 @@ WHERE date=$1 AND timed_requests>0 AND custom_llm_provider<>'' AND model<>''
   AND ($2::text IS NULL OR (custom_llm_provider,model)>($2,$3))
 ORDER BY provider,model LIMIT $4
 """
-_LATENCY: Final = """
+
+
+def _source(scope: UsageAlertScope) -> tuple[str, str]:
+    if scope == "team":
+        return '"LiteLLM_DailyTeamSpend"', "team_id"
+    if scope == "user":
+        return '"LiteLLM_DailyUserSpend"', "user_id"
+    if scope == "key":
+        return '"LiteLLM_DailyUserSpend"', "api_key"
+    if scope == "model":
+        return '"LiteLLM_DailyUserSpend"', "model"
+    return '"LiteLLM_DailyUserSpend"', "'deployment'::text"
+
+
+def _latency_query(scope: UsageAlertScope = "deployment") -> str:
+    table, entity = _source(scope)
+    return f"""
 WITH pairs AS (
     SELECT * FROM UNNEST($3::text[], $4::text[]) AS p(custom_llm_provider,model)
 ), daily AS MATERIALIZED (
-    SELECT custom_llm_provider AS provider,model,api_key,date,
+    SELECT {entity} AS source_id,custom_llm_provider AS provider,model,api_key,date,
            SUM(timed_requests)::bigint AS timed,
            SUM(total_response_time_ms)::double precision AS response_ms,
            SUM(api_requests)::bigint AS requests
-    FROM "LiteLLM_DailyUserSpend" JOIN pairs USING(custom_llm_provider,model)
+    FROM {table} JOIN pairs USING(custom_llm_provider,model)
     WHERE date >= $1 AND date <= $2
-      AND ($10::text[] IS NULL OR api_key=ANY($10))
-      AND ($11::text[] IS NULL OR model=ANY($11))
-    GROUP BY custom_llm_provider,model,api_key,date
+      AND ($10::text[] IS NULL OR {entity}=ANY($10))
+    GROUP BY source_id,custom_llm_provider,model,api_key,date
 ), history AS (
-    SELECT provider,model,api_key,COUNT(*) FILTER(WHERE timed>0)::int AS sample_days,
+    SELECT source_id,provider,model,api_key,COUNT(*) FILTER(WHERE timed>0)::int AS sample_days,
            SUM(timed)::double precision AS timed,
            SUM(response_ms)/NULLIF(SUM(timed),0) AS baseline
-    FROM daily WHERE date<$2 GROUP BY provider,model,api_key
+    FROM daily WHERE date<$2 GROUP BY source_id,provider,model,api_key
 ), current AS (
     SELECT d.*,h.sample_days,h.baseline,
            COALESCE(h.sample_days >= $5 AND h.baseline>0
              AND h.timed/NULLIF(h.sample_days,0) >= $6 AND d.timed >= $6 AND d.timed>0
              AND d.api_key<>'' AND d.api_key<>$9, FALSE) AS comparable
-    FROM daily d LEFT JOIN history h USING(provider,model,api_key) WHERE d.date=$2
+    FROM daily d LEFT JOIN history h USING(source_id,provider,model,api_key) WHERE d.date=$2
 ), scored AS MATERIALIZED (
     SELECT *, comparable AND response_ms/NULLIF(timed,0) >= GREATEST(baseline*$7,baseline+$8) AS degraded
     FROM current
 )
 """
+
+
+_LATENCY: Final = _latency_query()
 _MODEL_SCORES: Final = """
 , model_scores AS (
     SELECT provider,model,SUM(timed)::bigint AS total_timed,
@@ -148,8 +166,7 @@ def _arguments(
     pairs: tuple[IssueModelPair, ...],
     day: date,
     rule: UsageAlertRuleInput,
-    keys: tuple[str, ...] | None = None,
-    models: tuple[str, ...] | None = None,
+    source_ids: tuple[str, ...] | None = None,
 ) -> tuple[object, ...]:
     if not 1 <= len(pairs) <= 100 or len(frozenset(pairs)) != len(pairs):
         raise ValueError("Choose 1 to 100 unique provider/model pairs")
@@ -167,8 +184,7 @@ def _arguments(
         rule.multiplier,
         rule.min_value,
         PTU_SENTINEL_API_KEY,
-        keys,
-        models,
+        source_ids,
     )
 
 
@@ -235,24 +251,24 @@ class ProviderLatencyRepository:
         pairs: tuple[IssueModelPair, ...],
         day: date,
         rule: UsageAlertRuleInput,
-        scope_type: Literal["key", "model"],
+        scope_type: UsageAlertScope,
         source_ids: tuple[str, ...],
     ) -> frozenset[str]:
         if not source_ids:
             return frozenset()
         if len(source_ids) > 500:
             raise ValueError("Source membership accepts at most 500 IDs")
-        keys: Final = tuple(api_key_from_bucket(key) for key in source_ids) if scope_type == "key" else None
-        arguments: Final = _arguments(pairs, day, rule, keys, source_ids if scope_type == "model" else None)
-        column, parameter = ("api_key", 10) if scope_type == "key" else ("model", 11)
+        ids: Final = tuple(api_key_from_bucket(key) for key in source_ids) if scope_type == "key" else source_ids
+        arguments: Final = _arguments(pairs, day, rule, ids)
+        table, column = _source(scope_type)
         query: Final = (
-            _LATENCY
+            _latency_query(scope_type)
             + f"""
         , totals AS (
-            SELECT {column},SUM(timed_requests)::bigint AS total
-            FROM "LiteLLM_DailyUserSpend" WHERE date=$2 AND {column}=ANY(${parameter}) GROUP BY {column}
+            SELECT {column} AS source_id,SUM(timed_requests)::bigint AS total
+            FROM {table} WHERE date=$2 AND {column}=ANY($10) GROUP BY source_id
         )
-        SELECT s.{column} AS entity_id FROM scored s JOIN totals USING({column}) GROUP BY s.{column},totals.total
+        SELECT source_id AS entity_id FROM scored s JOIN totals USING(source_id) GROUP BY source_id,totals.total
         HAVING SUM(timed) FILTER(WHERE degraded) >= 0.8*totals.total AND totals.total>0
         """
         )

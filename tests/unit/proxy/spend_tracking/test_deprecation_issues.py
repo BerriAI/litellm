@@ -125,4 +125,4 @@ def test_maximum_model_identity_is_preserved_in_activity_and_evidence():
     issue = used_deprecation_issues(candidates, {name: usage(name)}, {}, NOW)[0]
     assert issue.cohort.scope_id == name
     assert issue.deprecation.usage_model == name
-    assert issue.title.startswith(name)
+    assert issue.title.startswith("public-alias")

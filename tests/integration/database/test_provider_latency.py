@@ -12,7 +12,7 @@ from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
 @pytest.mark.asyncio(loop_scope="session")
 async def test_provider_latency_requires_established_within_model_regressions(db: ManagementDatabase) -> None:
     prefix = f"provider-latency-{uuid4()}"
-    day = date(2026, 11, 4)
+    day = date(2031, 1, 12)
     pairs = tuple(IssueModelPair(provider=prefix, model=f"{prefix}-{suffix}") for suffix in ("a", "b"))
     keys = (prefix + "-key-a", prefix + "-key-b")
     rule = UsageAlertRuleInput(name="Latency", scope_type="key", metric="latency", direction="increase", min_value=500)
@@ -30,11 +30,11 @@ async def test_provider_latency_requires_established_within_model_regressions(db
         )
         await db.prisma.writer_db.query_raw(
             """INSERT INTO "LiteLLM_DailyTeamSpend"
-                (id,team_id,date,api_key,model,custom_llm_provider,api_requests,updated_at)
-            SELECT $1||'team'||t.n||m,$1||'team'||t.n,$2,$1||'-key-a',$1||'-'||m,$1,100,CURRENT_TIMESTAMP
-            FROM (VALUES('a'),('b')) models(m) CROSS JOIN generate_series(1,2) t(n) RETURNING id""",
+                (id,team_id,date,api_key,model,custom_llm_provider,api_requests,timed_requests,total_response_time_ms,updated_at)
+            SELECT id||'team',$1||CASE WHEN api_key=$1||'-key-a' THEN 'team1' ELSE 'team2' END,
+                   date,api_key,model,custom_llm_provider,api_requests,timed_requests,total_response_time_ms,CURRENT_TIMESTAMP
+            FROM "LiteLLM_DailyUserSpend" WHERE custom_llm_provider=$1 RETURNING id""",
             prefix,
-            day.isoformat(),
         )
         first = await repository.candidate_pairs(day, IssueModelPair(provider=prefix, model="0"), limit=1)
         assert first == pairs[:1]
@@ -52,6 +52,25 @@ async def test_provider_latency_requires_established_within_model_regressions(db
         assert await repository.source_members(pairs, day, rule, "key", keys) == frozenset(keys)
         models = tuple(pair.model for pair in pairs)
         assert await repository.source_members(pairs, day, rule, "model", models) == frozenset(models)
+        assert await repository.source_members(pairs, day, rule, "user", (prefix + "-owner",)) == {prefix + "-owner"}
+        teams = (prefix + "team1", prefix + "team2")
+        assert await repository.source_members(pairs, day, rule, "team", teams) == frozenset(teams)
+        assert await repository.source_members(pairs, day, rule, "deployment", ("deployment",)) == {"deployment"}
+        await db.prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,custom_llm_provider,api_requests,timed_requests,total_response_time_ms,updated_at)
+            SELECT id||'-new-owner',$1||'-new-owner',date,api_key,model,custom_llm_provider,api_requests,
+                   timed_requests,total_response_time_ms,CURRENT_TIMESTAMP
+            FROM "LiteLLM_DailyUserSpend" WHERE custom_llm_provider=$1 AND date=$2 RETURNING id""",
+            prefix,
+            day.isoformat(),
+        )
+        assert await repository.source_members(
+            pairs, day, rule, "user", (prefix + "-owner", prefix + "-new-owner")
+        ) == {prefix + "-owner"}
+        await db.prisma.writer_db.query_raw(
+            'DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id=$1 RETURNING id', prefix + "-new-owner"
+        )
         await db.prisma.writer_db.query_raw(
             'UPDATE "LiteLLM_DailyUserSpend" SET total_response_time_ms=total_response_time_ms/5 '
             "WHERE api_key=$1 AND date=$2 RETURNING id",
@@ -99,6 +118,18 @@ async def test_provider_latency_requires_established_within_model_regressions(db
         assert await repository.latency_cohort(pairs, day, rule) == evidence
         assert await repository.source_members(pairs, day, rule, "key", keys) == frozenset()
         assert await repository.source_members(pairs, day, rule, "model", models) == frozenset()
+        assert await repository.source_members(pairs, day, rule, "user", (prefix + "-owner",)) == frozenset()
+        assert await repository.source_members(pairs, day, rule, "deployment", ("deployment",)) == frozenset()
+        assert await repository.source_members(pairs, day, rule, "team", teams) == frozenset(teams)
+        await db.prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyTeamSpend"
+                (id,team_id,date,api_key,model,custom_llm_provider,api_requests,timed_requests,total_response_time_ms,updated_at)
+            SELECT id||'-other',team_id,date,api_key,model,$1||'-other',1000,1000,100000,CURRENT_TIMESTAMP
+            FROM "LiteLLM_DailyTeamSpend" WHERE custom_llm_provider=$1 AND date=$2 RETURNING id""",
+            prefix,
+            day.isoformat(),
+        )
+        assert await repository.source_members(pairs, day, rule, "team", teams) == frozenset()
         await db.prisma.writer_db.query_raw(
             """UPDATE "LiteLLM_DailyUserSpend"
                SET api_requests=CASE WHEN model=$1||'-a' AND date<$2 THEN 10000

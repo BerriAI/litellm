@@ -70,10 +70,11 @@ def deprecation_issue(
 ) -> IssueInput:
     today: Final = now.astimezone(timezone.utc).date()
     model: Final = candidate.model
+    name: Final = model.model_name or usage.model
     title: Final = (
-        f"{usage.model} retired on {model.deprecation_date.isoformat()}"
+        f"{name} retired on {model.deprecation_date.isoformat()}"
         if model.deprecation_date < today
-        else f"{usage.model} retires on {model.deprecation_date.isoformat()}"
+        else f"{name} retires on {model.deprecation_date.isoformat()}"
     )
     return IssueInput(
         id=f"deprecation:{candidate.state_key.removeprefix('model_deprecation_alert:')}",
