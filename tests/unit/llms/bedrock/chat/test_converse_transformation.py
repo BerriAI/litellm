@@ -5081,12 +5081,15 @@ def _schema_keys(node: object) -> frozenset[str]:
     return frozenset()
 
 
-def _converse_request_for_schema(model: str, schema: Mapping[str, object]) -> RequestObject:
+def _converse_request_for_schema(
+    model: str, schema: Mapping[str, object], tools: tuple[Mapping[str, object], ...] = ()
+) -> RequestObject:
     config: Final = AmazonConverseConfig()
     optional_params: Final = config.map_openai_params(
         non_default_params={
             "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
             "thinking": ADAPTIVE_THINKING,
+            **({"tools": list(tools)} if tools else {}),
         },
         optional_params={},
         model=model,
@@ -5101,12 +5104,11 @@ def _converse_request_for_schema(model: str, schema: Mapping[str, object]) -> Re
     )
 
 
-@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
-def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
-    set_native_structured_output, native_key
+def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects_on_an_opt_in_model(
+    set_native_structured_output,
 ):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "bedrock")
 
     request: Final = _converse_request_for_schema(model, CONSTRAINED_PERSON_SCHEMA)
 
@@ -5120,7 +5122,6 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     assert sent["properties"]["address"]["additionalProperties"] is False
 
 
-@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
 @pytest.mark.parametrize(
     ("schema", "kept_keyword"),
     [
@@ -5132,11 +5133,11 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     ],
     ids=["recursive", "root-ref", "open-object", "lookaround-pattern", "unlisted-format"],
 )
-def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
-    set_native_structured_output, schema, kept_keyword, native_key
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_an_opt_in_model(
+    set_native_structured_output, schema, kept_keyword
 ):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "bedrock")
 
     request: Final = _converse_request_for_schema(model, schema)
 
@@ -5144,6 +5145,102 @@ def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profil
     tool_spec: Final = request["toolConfig"]["tools"][0]["toolSpec"]
     assert tool_spec["name"] == "json_tool_call"
     assert kept_keyword in _schema_keys(tool_spec["inputSchema"]["json"])
+
+
+LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}},
+}
+
+ARRAY_ROOT_SCHEMA: Final = {"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}
+TYPED_ALL_OF_ROOT_SCHEMA: Final = {
+    "type": "object",
+    "allOf": [
+        {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+        {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]},
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        ARRAY_ROOT_SCHEMA,
+        TYPED_ALL_OF_ROOT_SCHEMA,
+        OPEN_OBJECT_SCHEMA,
+        CONSTRAINED_PERSON_SCHEMA,
+        LOOKAROUND_PATTERN_SCHEMA,
+        RECURSIVE_TREE_SCHEMA,
+    ],
+    ids=["array-root", "typed-all-of-root", "open-object", "constrained", "lookaround-pattern", "recursive"],
+)
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {},
+        {"thinking": ADAPTIVE_THINKING},
+        {"reasoning_effort": "low"},
+        {"tool_choice": "auto"},
+        {"tool_choice": {"type": "function", "function": {"name": "lookup"}}},
+    ],
+    ids=["plain", "thinking", "reasoning-effort", "tool-choice-auto", "named-tool-choice-without-tools"],
+)
+def test_model_native_on_every_request_sends_the_callers_schema_natively_with_every_keyword(
+    set_native_structured_output, schema, request_params
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "legacy")
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
+            **request_params,
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Fill in a plausible example."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert _schema_keys(schema) <= _schema_keys(sent)
+    assert "json_tool_call" not in [tool["toolSpec"]["name"] for tool in request.get("toolConfig", {}).get("tools", [])]
+
+
+def _tool_names(request: RequestObject) -> list[str]:
+    return sorted(tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"])
+
+
+def test_open_object_schema_stays_native_beside_the_callers_tools_on_a_model_native_on_every_request(
+    set_native_structured_output,
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "legacy")
+
+    request: Final = _converse_request_for_schema(model, OPEN_OBJECT_SCHEMA, (LOOKUP_TOOL,))
+
+    assert "outputConfig" in request
+    assert _tool_names(request) == ["lookup"]
+    assert "toolChoice" not in request["toolConfig"]
+
+
+def test_open_object_schema_keeps_the_json_tool_beside_the_callers_tools_on_an_opt_in_model(
+    set_native_structured_output,
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "bedrock")
+
+    request: Final = _converse_request_for_schema(model, OPEN_OBJECT_SCHEMA, (LOOKUP_TOOL,))
+
+    assert "outputConfig" not in request
+    assert _tool_names(request) == ["json_tool_call", "lookup"]
 
 
 def _shared_defs_schema(defs_key: str) -> Mapping[str, object]:
@@ -5195,7 +5292,6 @@ def _optional_groups_schema(count: int, group_size: int = 6) -> Mapping[str, obj
     return {"type": "object", "properties": groups, "required": list(groups)}
 
 
-@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
 @pytest.mark.parametrize(
     ("schema_for", "limit"),
     [
@@ -5212,11 +5308,11 @@ def _optional_groups_schema(count: int, group_size: int = 6) -> Mapping[str, obj
     ],
     ids=["type-list-unions", "any-of-unions", "optional", "optional-grammar-branches"],
 )
-def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
-    set_native_structured_output, native_key, schema_for, limit
+def test_schema_past_a_native_output_size_limit_keeps_the_tool_path_on_an_opt_in_model(
+    set_native_structured_output, schema_for, limit
 ):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "bedrock")
 
     at_limit: Final = _converse_request_for_schema(model, schema_for(limit))
     past_limit: Final = _converse_request_for_schema(model, schema_for(limit + 1))

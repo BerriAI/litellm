@@ -1025,8 +1025,10 @@ class AmazonConverseConfig(BaseConfig):
             model, self.custom_llm_provider, thinking_requested, model_info
         ):
             return None
-        if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
-            return bedrock_cleaned_output_schema(model, json_schema, self.custom_llm_provider or "bedrock_converse")
+        if bedrock_native_output_is_opt_in(
+            model, self.custom_llm_provider or "bedrock_converse", model_info
+        ) and BedrockModelInfo.get_base_model(model).startswith("anthropic"):
+            return bedrock_cleaned_output_schema(json_schema)
         return json_schema
 
     def _output_config_for_anthropic_format(

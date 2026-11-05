@@ -1681,24 +1681,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_schema: Mapping[str, object] | None,
         request_params: Mapping[str, object],
     ) -> bool:
-        open_object_takes_forced_json_tool: Final = (
-            json_schema is not None
-            and schema_has_open_object(json_schema)
-            and not self.is_thinking_requested(request_params)
-            and not self.is_thinking_enabled(dict(request_params))
-            and not request_params.get("tools")
-            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
-        )
-        return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
+        return self.uses_native_structured_output(model)
 
-    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+    def native_output_format_schema(
+        self, json_schema: Mapping[str, object], model: str | None = None
+    ) -> Mapping[str, object] | None:
         return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
 
-    def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
+    def map_response_format_to_anthropic_output_format(
+        self, value: dict | None, model: str | None = None
+    ) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-        native_schema: Final = self.native_output_format_schema(json_schema)
+        native_schema: Final = self.native_output_format_schema(json_schema, model)
         if native_schema is None:
             return None
         return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
@@ -1873,7 +1869,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     self._extract_json_schema_from_response_format(value),
                     REQUEST_PARAMS.validate_python(non_default_params),
                 ):
-                    _output_format = self.map_response_format_to_anthropic_output_format(value)
+                    _output_format = self.map_response_format_to_anthropic_output_format(value, model)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
                 else:

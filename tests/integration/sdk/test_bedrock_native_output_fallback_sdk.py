@@ -211,12 +211,18 @@ def _sent_bodies(
             "output_config": {"effort": "low"},
             "response_format": _response_format(_SCHEMA),
         },
+        {
+            "thinking": {"type": "adaptive"},
+            "response_format": _response_format(_SCHEMA),
+            "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+        },
     ],
     ids=[
         "reasoning_effort",
         "constrained_schema",
         "response_format_and_output_config_format",
         "adaptive_thinking_with_effort",
+        "caller_beta_header",
     ],
 )
 def test_the_retry_sends_what_a_deployment_without_native_output_sends(

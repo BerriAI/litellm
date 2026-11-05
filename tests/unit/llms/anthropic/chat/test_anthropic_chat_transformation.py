@@ -1346,15 +1346,15 @@ def test_opus_uses_native_structured_output(model_name):
 
 
 @pytest.mark.parametrize(
-    ("field_schema", "native"),
+    "field_schema",
     [
-        ({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, True),
-        ({"type": "object", "additionalProperties": {"type": "integer"}}, False),
-        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+        {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        {"type": "object", "additionalProperties": {"type": "integer"}},
+        {"anyOf": [{"type": "object"}, {"type": "null"}]},
     ],
     ids=["closed-object", "dict-field", "nullable-dict-field"],
 )
-def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(field_schema, native):
+def test_every_field_shape_keeps_native_output_on_a_native_structured_output_model(field_schema):
     optional_params: Final = AnthropicConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -1370,8 +1370,8 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
         drop_params=False,
     )
 
-    assert ("output_format" in optional_params) is native
-    assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
+    assert "output_format" in optional_params
+    assert "tools" not in optional_params
 
 
 

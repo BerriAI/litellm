@@ -1,9 +1,12 @@
 from collections.abc import Callable, Coroutine
 from typing import Final, TypeAlias
 
+import httpx
+
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import (
     NativeOutputFallback,
+    error_response_text,
     is_bedrock_native_output_rejection,
     warn_bedrock_native_output_rejected,
 )
@@ -16,14 +19,24 @@ NativeOutputAttempt: TypeAlias = Callable[[NativeOutputFallback | None], NativeO
 NativeOutputFallbackFactory: TypeAlias = Callable[[], NativeOutputFallback | None]
 
 
-def _fallback_for(
-    error: BaseLLMException, fallback: NativeOutputFallbackFactory, model: str
-) -> NativeOutputFallback | None:
-    if not is_bedrock_native_output_rejection(error.status_code, error.message):
+UpstreamError: TypeAlias = BaseLLMException | httpx.HTTPStatusError
+
+
+def _status_and_text(error: UpstreamError) -> tuple[int, str]:
+    match error:
+        case BaseLLMException():
+            return error.status_code, error.message
+        case httpx.HTTPStatusError():
+            return error.response.status_code, error_response_text(error.response)
+
+
+def _fallback_for(error: UpstreamError, fallback: NativeOutputFallbackFactory, model: str) -> NativeOutputFallback | None:
+    status_code, error_text = _status_and_text(error)
+    if not is_bedrock_native_output_rejection(status_code, error_text):
         return None
     retry: Final = fallback()
     if retry is not None:
-        warn_bedrock_native_output_rejected(model, error.message)
+        warn_bedrock_native_output_rejected(model, error_text)
     return retry
 
 
@@ -35,7 +48,7 @@ async def _await_with_native_output_fallback(
 ) -> NativeOutputResponse:
     try:
         return await first_attempt
-    except BaseLLMException as error:
+    except (BaseLLMException, httpx.HTTPStatusError) as error:
         retry: Final = _fallback_for(error, fallback, model)
         if retry is None:
             raise
@@ -52,7 +65,7 @@ def call_with_native_output_fallback(
         return attempt(None)
     try:
         first_attempt: Final = attempt(None)
-    except BaseLLMException as error:
+    except (BaseLLMException, httpx.HTTPStatusError) as error:
         retry: Final = _fallback_for(error, fallback, model)
         if retry is None:
             raise

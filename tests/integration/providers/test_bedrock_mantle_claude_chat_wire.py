@@ -17,6 +17,7 @@ from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 
 _HAIKU: Final = "anthropic.claude-haiku-4-5"
 _OPUS: Final = "anthropic.claude-opus-5-5"
+_OPT_IN_NATIVE_OUTPUT: Final = "anthropic.claude-opus-4-8"
 _SAFEGUARD: Final = "openai.gpt-oss-safeguard-120b"
 _API_KEY: Final = "synthetic-mantle-bearer"
 _ACCESS_KEY: Final = "AKIAINTEGRATION000009"
@@ -500,6 +501,37 @@ def test_chat_json_schema_response_format_is_sent_as_a_forced_tool_and_returned_
         choice: Final = _only_choice(_JSON_OBJECT.validate_json(response.content))
         message: Final = object_value(choice["message"])
         assert (choice["finish_reason"], message.get("tool_calls")) == ("stop", None), response.text
+        assert json.loads(string_value(message["content"])) == {"city": "Paris"}, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", _MESSAGES_PATH)]
+
+
+def test_chat_json_schema_with_thinking_on_an_opt_in_model_stays_on_the_json_tool(gateway: Gateway) -> None:
+    marker: Final = uuid4().hex
+    thinking: Final[dict[str, JsonValue]] = {"type": "adaptive"}
+    expected: Final = _outbound(
+        _OPT_IN_NATIVE_OUTPUT,
+        [_user_turn(marker)],
+        tools=[{"name": "json_tool_call", "input_schema": _CITY_SCHEMA}],
+        tool_choice={"name": "json_tool_call", "type": "tool"},
+        thinking=thinking,
+    )
+    reply: Final = _tool_reply(marker, _OPT_IN_NATIVE_OUTPUT, "json_tool_call")
+    with wire_server(_bearer_peer(expected, reply)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"bedrock_mantle/{_OPT_IN_NATIVE_OUTPUT}", api_base=wire.url, api_key=_API_KEY
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": _chat_messages(marker),
+                "thinking": thinking,
+                "response_format": {"type": "json_schema", "json_schema": {"name": "weather", "schema": _CITY_SCHEMA}},
+            },
+        )
+        assert response.status_code == 200, response.text
+        message: Final = object_value(_only_choice(_JSON_OBJECT.validate_json(response.content))["message"])
         assert json.loads(string_value(message["content"])) == {"city": "Paris"}, response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", _MESSAGES_PATH)]
 

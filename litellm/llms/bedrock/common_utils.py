@@ -369,15 +369,10 @@ def json_object_or_none(value: object) -> Mapping[str, object] | None:
 BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
 
 
-def bedrock_cleaned_output_schema(
-    model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
-) -> Mapping[str, object] | None:
+def bedrock_cleaned_output_schema(schema: Mapping[str, object]) -> Mapping[str, object] | None:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    if (
-        not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
-        and schema_property_count(schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
-    ):
+    if schema_property_count(schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES:
         return None
     return AnthropicConfig.native_output_schema(schema)
 
@@ -388,11 +383,10 @@ def bedrock_native_output_schema(
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
-    native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
     if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
-        return schema if native_schema is None else native_schema
+        return schema
     if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
-        return native_schema
+        return bedrock_cleaned_output_schema(schema)
     return None
 
 

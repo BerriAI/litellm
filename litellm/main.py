@@ -4296,6 +4296,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             client=client,
         )
     else:
+        headers_before_first_attempt: Final = dict(headers)
 
         def invoke_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
             return base_llm_http_handler.completion(
@@ -4309,7 +4310,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
                 custom_llm_provider="bedrock",
                 timeout=timeout,
-                headers=headers,
+                headers=headers if fallback is None else dict(headers_before_first_attempt),
                 encoding=_get_encoding(),
                 api_key=api_key,
                 logging_obj=logging,

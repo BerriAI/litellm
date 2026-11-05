@@ -582,18 +582,103 @@ def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
     assert ("tools" in result) is not native
 
 
-@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
 @pytest.mark.parametrize("schema", [TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
-def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
-    set_native_structured_output, schema, native_key
-):
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_an_opt_in_model(set_native_structured_output, schema):
     model = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "bedrock")
 
     result = _invoke_params_for_schema(model, schema)
 
     assert "output_format" not in result
     assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+
+
+LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}},
+}
+
+ARRAY_ROOT_SCHEMA: Final = {"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}
+TYPED_ALL_OF_ROOT_SCHEMA: Final = {
+    "type": "object",
+    "allOf": [
+        {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+        {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]},
+    ],
+}
+DEFINITIONS_REF_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"home": {"$ref": "#/definitions/Address"}},
+    "required": ["home"],
+    "definitions": {"Address": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}},
+}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [ARRAY_ROOT_SCHEMA, TYPED_ALL_OF_ROOT_SCHEMA, OPEN_OBJECT_SCHEMA, TREE_SCHEMA, DEFINITIONS_REF_SCHEMA],
+    ids=["array-root", "typed-all-of-root", "open-object", "recursive", "definitions-ref"],
+)
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {},
+        {"thinking": {"type": "adaptive"}},
+        {"reasoning_effort": "low"},
+        {"tool_choice": "none"},
+        {"tool_choice": {"type": "function", "function": {"name": "lookup"}}},
+    ],
+    ids=["plain", "thinking", "reasoning-effort", "tool-choice-none", "named-tool-choice-without-tools"],
+)
+def test_model_native_on_every_request_sends_every_schema_natively_without_the_json_tool(
+    set_native_structured_output, schema, request_params
+):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "legacy")
+
+    result = _invoke_params_for_schema(model, schema, request_params)
+
+    assert result["output_format"]["type"] == "json_schema"
+    assert "json_tool_call" not in [tool["name"] for tool in result.get("tools", [])]
+
+
+def test_definitions_ref_reaches_a_model_native_on_every_request_inlined(set_native_structured_output):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "legacy")
+
+    result = _invoke_params_for_schema(model, DEFINITIONS_REF_SCHEMA, {})
+
+    sent = result["output_format"]["schema"]
+    assert sent["properties"]["home"]["properties"]["city"] == {"type": "string"}
+    assert "$ref" not in json.dumps(sent)
+
+
+@pytest.mark.parametrize("thinking_params", [{}, {"thinking": {"type": "adaptive"}}], ids=["no-thinking", "thinking"])
+def test_open_object_schema_stays_native_beside_the_callers_tools_on_a_model_native_on_every_request(
+    set_native_structured_output, thinking_params
+):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "legacy")
+
+    result = _invoke_params_for_schema(model, OPEN_OBJECT_SCHEMA, {**thinking_params, "tools": [LOOKUP_TOOL]})
+
+    assert "tool_choice" not in result
+    assert [tool["name"] for tool in result["tools"]] == ["lookup"]
+    assert result["output_format"]["schema"]["properties"]["counts"]["additionalProperties"] is False
+
+
+def test_open_object_schema_keeps_the_json_tool_beside_the_callers_tools_on_an_opt_in_model(
+    set_native_structured_output,
+):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "bedrock")
+
+    result = _invoke_params_for_schema(
+        model, OPEN_OBJECT_SCHEMA, {"thinking": {"type": "adaptive"}, "tools": [LOOKUP_TOOL]}
+    )
+
+    assert "output_format" not in result
+    assert sorted(tool["name"] for tool in result["tools"]) == ["json_tool_call", "lookup"]
 
 
 @pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
@@ -609,10 +694,11 @@ def test_closed_schema_goes_native_on_either_native_key(set_native_structured_ou
     assert "tools" not in result
 
 
-@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
-def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_native_structured_output, native_key):
+def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use_on_an_opt_in_model(
+    set_native_structured_output,
+):
     model = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "bedrock")
     party_ref = {"$ref": "#/$defs/Party"}
     schema = {
         "type": "object",
@@ -649,12 +735,11 @@ class PuzzleAnswer(BaseModel):
     relabels: list[Relabel]
 
 
-@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
-def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_resolve(
-    set_native_structured_output, native_key
+def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_resolve_on_an_opt_in_model(
+    set_native_structured_output,
 ):
     model = "us.anthropic.claude-haiku-5-5"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "bedrock")
     config: Final = AmazonAnthropicClaudeConfig()
 
     result: Final = config.map_openai_params(
