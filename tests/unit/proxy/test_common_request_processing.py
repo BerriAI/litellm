@@ -4,9 +4,11 @@ import copy
 import datetime
 import gzip
 import json
+import os
+import sys
 from dataclasses import dataclass
 from collections.abc import AsyncIterable, Awaitable, Mapping
-from types import MappingProxyType, SimpleNamespace
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13032,6 +13034,15 @@ class _BuiltInContentCheck(CustomLogger):
         return data
 
 
+def _register_shipped_doubles(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the doubles that stand in for litellm's own guardrails and hooks a module file inside the litellm package."""
+    package_dir: Final = os.path.dirname(litellm.__file__)
+    for double in (_VendorGuardrail, _BuiltInContentCheck):
+        module = ModuleType(double.__module__)
+        module.__file__ = os.path.join(package_dir, *double.__module__.split(".")[1:]) + ".py"
+        monkeypatch.setitem(sys.modules, double.__module__, module)
+
+
 class _ModelMappingHook(CustomLogger):
     """A customer callback that renames a virtual model, editing the request or returning a new one."""
 
@@ -13174,6 +13185,7 @@ async def _send(
     from litellm.proxy.common_utils import registry_read_through
 
     recorder: Final = _FailureLogRecorder()
+    _register_shipped_doubles(monkeypatch)
     monkeypatch.setattr(litellm, "callbacks", [*callbacks, recorder])
     ProxyLogging._callback_capabilities_cache.clear()
     phase_events: Final = list[str]()
@@ -13434,6 +13446,15 @@ class TestUnroutableModelFailureLogHidesUnscannedContent:
                 },
                 id="extraction-state-and-fields",
             ),
+            pytest.param(
+                {
+                    "data": {
+                        "messages": [{"role": "user", "content": [{"text": f"email {_RAW_EMAIL}"}]}],
+                        "system": [{"text": f"email {_RAW_EMAIL}"}],
+                    }
+                },
+                id="pass-through-body",
+            ),
         ],
     )
     async def test_failure_log_hides_every_field_a_skipped_guardrail_would_have_scanned(self, monkeypatch, body):
@@ -13562,6 +13583,19 @@ class TestUnroutableModelFailureLogNamesOnlyGuardrailsThatRan:
 
         assert (operator.calls, skipped.calls) == (1, 0)
         assert sent.failure_logs[0]["applied_guardrails"] == ["operator"]
+
+    @pytest.mark.asyncio
+    async def test_failure_log_keeps_a_name_an_operator_guardrail_shares_with_a_skipped_one(self, monkeypatch):
+        class OperatorGuardrail(_VendorGuardrail):
+            __module__ = "operator_guardrails.checks"
+
+        operator: Final = OperatorGuardrail(name="shared")
+        skipped: Final = _VendorGuardrail(name="shared")
+
+        sent: Final = await _send(monkeypatch, [operator, skipped])
+
+        assert (operator.calls, skipped.calls) == (1, 0)
+        assert "shared" in sent.failure_logs[0]["applied_guardrails"]
 
     @pytest.mark.asyncio
     async def test_failure_log_names_a_guardrail_that_blocked_a_routable_model(self, monkeypatch):
@@ -13979,6 +14013,7 @@ class TestUnroutableModelLeavesEverythingElseAsBefore:
 
         enforcer: Final = _ContentEnforcer()
         guardrail: Final = _VendorGuardrail()
+        _register_shipped_doubles(monkeypatch)
         monkeypatch.setattr(litellm, "callbacks", [_ModelMappingHook(), enforcer, guardrail])
         ProxyLogging._callback_capabilities_cache.clear()
         router: Final = _routing_router()
