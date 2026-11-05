@@ -132,10 +132,6 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
 
 
 def test_reset_exhausted_key_is_served_again(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: /global/spend/reset zeroes DB spend but leaves Redis spend:key counters, "
-        "so an exhausted key stays refused with budget_exceeded"
-    )
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
