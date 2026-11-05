@@ -390,7 +390,9 @@ async def public_skill_hub(uploads: PluginUploadRepositoryDep):
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     try:
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
-        counts: Final[Mapping[str, int]] = await uploads.download_counts(tuple(plugin.id for plugin in plugins)) if uploads else {}
+        counts: Final[Mapping[str, int]] = (
+            await uploads.download_counts(tuple(plugin.id for plugin in plugins)) if uploads else {}
+        )
         items: Final = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}

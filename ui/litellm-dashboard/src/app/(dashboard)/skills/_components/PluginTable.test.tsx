@@ -50,7 +50,7 @@ describe("PluginTable", () => {
     [12345, "12,345"],
   ] as const)("renders headers and download count %s", (download_count, display) => {
     render(<PluginTable {...defaultProps} pluginsList={[{ ...mockPlugins[0], download_count }]} />);
-    for (const header of ["Skill Name", "Tags", "Created by", "Published by", "Approved by", "Created", "Last updated", "Security scan", "Downloads"]) {
+    for (const header of ["Skill Name", "Tags", "Created by", "Approved by", "Created", "Last updated", "Security scan", "Downloads"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
     expect(within(screen.getByRole("row", { name: /newer-skill/ })).getAllByText(display)[0]).toBeInTheDocument();

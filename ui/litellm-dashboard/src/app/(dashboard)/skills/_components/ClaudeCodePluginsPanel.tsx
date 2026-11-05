@@ -1,3 +1,4 @@
+import type { SkillListQuery } from "@/components/claude_code_plugins/types";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
 import { useSkillFilters } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
@@ -114,7 +115,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
   const filters = useSkillFilters();
   const { pagination, onPaginationChange, sorting, onSortingChange } = filters;
   const { pageIndex, pageSize } = pagination;
-  const catalogQuery = {
+  const catalogQuery: SkillListQuery & { limit: number; offset: number } = {
     limit: pageSize,
     offset: pageIndex * pageSize,
     query: filters.search,

@@ -7,7 +7,6 @@ import type { SkillCatalogMetadata } from "./skillCatalog";
 
 const IDENTITY_LABELS = {
   created_by: "skills.table.columns.createdBy",
-  published_by: "skills.table.columns.publishedBy",
   approved_by: "skills.table.columns.approvedBy",
 } as const;
 
@@ -41,7 +40,7 @@ export function getSkillMetadataColumns<T extends SkillCatalogMetadata>(): Colum
         </div>
       ),
     },
-    ...(["created_by", "published_by", "approved_by"] as const).map(
+    ...(["created_by", "approved_by"] as const).map(
       (field): ColumnDef<T> => ({
         id: field,
         accessorKey: field,

@@ -27,7 +27,6 @@ const CATALOG_STATE: UrlTableStateOptions<never> = {
     "created_at",
     "updated_at",
     "created_by",
-    "published_by",
     "approved_by",
     "security_scan_passed",
   ],
