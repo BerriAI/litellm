@@ -272,6 +272,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import (
     PipelineExecutor,
+    pipeline_callback_eligible,
     pipeline_step_is_detect_only,
     recorded_guardrail_information,
 )
@@ -1085,15 +1086,12 @@ def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, obje
         _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
 
 
-def _pipeline_step_supports_streaming(guardrail_name: str, translation: "BaseTranslation | None") -> bool:
+def _pipeline_step_supports_streaming(
+    step: "PipelineStep", data: Mapping[str, object], translation: "BaseTranslation | None"
+) -> bool:
     return any(
-        PipelineExecutor.supports_unified_execution(callback)
-        or (
-            translation is not None
-            and type(translation).assembles_streamed_response
-            and PipelineExecutor.supports_streaming_execution(callback)
-        )
-        for callback in _pipeline_callback_options(guardrail_name)
+        pipeline_callback_eligible(callback, step, data, None, "post_call", [], translation)
+        for callback in _pipeline_callback_options(step.guardrail)
     )
 
 
@@ -1223,21 +1221,19 @@ def _body_selected_deferrals(
 
 
 def _pipeline_unsupported_streaming_guardrails(
-    pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+    pipeline: "GuardrailPipeline", translation: "BaseTranslation | None", data: Mapping[str, object]
 ) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
-            step.guardrail
-            for step in pipeline.steps
-            if not _pipeline_step_supports_streaming(step.guardrail, translation)
+            step.guardrail for step in pipeline.steps if not _pipeline_step_supports_streaming(step, data, translation)
         )
     )
 
 
 def _pipeline_is_streamable(
-    policy_name: str, pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+    policy_name: str, pipeline: "GuardrailPipeline", translation: "BaseTranslation | None", data: Mapping[str, object]
 ) -> bool:
-    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline, translation)
+    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline, translation, data)
     if not unsupported:
         return True
     verbose_proxy_logger.warning(
@@ -1266,7 +1262,7 @@ def stream_gated_guardrail_names(
         tuple(
             (policy_name, pipeline)
             for policy_name, pipeline in _post_call_pipelines(request_data)
-            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
+            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation, request_data)
         )
     )
 
@@ -1302,7 +1298,7 @@ def _streamable_post_call_pipelines(
     return tuple(
         (policy_name, pipeline)
         for policy_name, pipeline in post_call_pipelines
-        if _pipeline_is_streamable(policy_name, pipeline, translation)
+        if _pipeline_is_streamable(policy_name, pipeline, translation, request_data)
     )
 
 

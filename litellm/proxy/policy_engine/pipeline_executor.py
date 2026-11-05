@@ -330,7 +330,7 @@ def _prepare_hook_input(
     return hook_input, scans_raw_request
 
 
-def _pipeline_callback_eligible(
+def pipeline_callback_eligible(
     callback: CustomGuardrail,
     step: PipelineStep,
     data: Mapping[str, object],
@@ -640,7 +640,7 @@ class PipelineExecutor:
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
         callbacks: Final = _load_balanced_callbacks(
             (callback,),
-            lambda cb: _pipeline_callback_eligible(
+            lambda cb: pipeline_callback_eligible(
                 cb, step, data, raw_request_snapshot, mode, streaming_chunks, endpoint_translation
             ),
             eligible_only=True,

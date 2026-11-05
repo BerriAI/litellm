@@ -120,6 +120,20 @@ class LegacyPostCallGuardrail(CustomGuardrail):
         return response
 
 
+class FallbackIteratorGuardrail(CustomGuardrail):
+    def __init__(self, fail: bool):
+        super().__init__(guardrail_name="relay-lb", event_hook="post_call", default_on=True)
+        self.calls = 0
+        self.fail = fail
+
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("guardrail offline")
+        async for chunk in response:
+            yield chunk
+
+
 class GuardrailActivator(CustomLogger):
     def __init__(self, action: str):
         super().__init__()
@@ -770,6 +784,55 @@ async def test_streamed_pipeline_selects_replica_compatible_with_endpoint(route,
         assert unified.calls == (index + 1 if gemini and not empty else 0)
         assert legacy.calls == (index + 1 if not gemini and not empty else 0)
         assert isinstance(legacy.response, litellm.ModelResponse) is (not gemini and not empty)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("mode", "stream_scope", "overlap", "none"))
+@pytest.mark.parametrize("output", ("normal", "empty", "error"))
+async def test_streaming_pipeline_falls_back_when_eligible_and_capable_replicas_do_not_overlap(
+    scenario, output, monkeypatch,
+):
+    unified: Final = RelayGuardrail("unified", fail=output == "error")
+    unified.event_hook = GuardrailEventHooks.pre_call if scenario in ("mode", "none") else GuardrailEventHooks.post_call
+    unified.apply_stream_scope("non_streaming" if scenario == "stream_scope" else "both")
+    native: Final = FallbackIteratorGuardrail(fail=output == "error")
+    native.event_hook = GuardrailEventHooks.pre_call if scenario == "none" else GuardrailEventHooks.post_call
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {
+                "guardrail_name": "relay-lb", "callback": cb,
+                "litellm_params": {"guardrail": "custom", "mode": "post_call", "weight": weight},
+            }
+            for cb, weight in ((native, 1), (unified, 0))
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [native, unified])
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+
+    async def response_chunks() -> AsyncIterator[ModelResponseStream]:
+        if output != "empty":
+            async for chunk in _output_chunks():
+                yield chunk
+
+    with pytest.raises(RuntimeError, match="guardrail offline") if output == "error" and scenario != "none" else nullcontext():
+        delivered: Final = [
+            chunk
+            async for chunk in logging.async_post_call_streaming_iterator_hook(
+                response=response_chunks(),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+                request_data={
+                    "model": "test-model", "stream": True,
+                    "metadata": {"_guardrail_pipelines": [("streamed-pipeline", GuardrailPipeline(
+                        mode="post_call", steps=[PipelineStep(guardrail="relay-lb")],
+                    ))]},
+                },
+            )
+        ]
+        assert "".join(_chunk_text(chunk) for chunk in delivered) == ("" if output == "empty" else "raw")
+    assert native.calls == (1 if scenario in ("mode", "stream_scope") else 0)
+    assert unified.calls == (1 if scenario == "overlap" and output != "empty" else 0)
 
 
 @pytest.mark.asyncio
