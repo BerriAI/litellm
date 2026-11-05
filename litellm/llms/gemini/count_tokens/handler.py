@@ -6,7 +6,7 @@ from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, json_contains
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.utils import LlmProviders
@@ -28,11 +28,6 @@ class _GeminiCountTokensResponseRoot(RootModel[_GeminiCountTokensResponse]):
 
 
 @runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-@runtime_checkable
 class _SupportsGetItem(Protocol):
     def __getitem__(self, key: str, /) -> object: ...
 
@@ -46,14 +41,6 @@ class _KeywordArguments(Protocol):
     def keys(self) -> Iterable[str]: ...
 
     def __getitem__(self, key: str, /) -> object: ...
-
-
-def _json_contains(value: object, key: str) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    if not hasattr(value, "__iter__") and not hasattr(value, "__getitem__"):
-        raise TypeError(f"argument of type '{type(value).__name__}' is not iterable")
-    return key in tuple(iter_items(value))
 
 
 def _subscript(value: object, key: str) -> object:
@@ -103,7 +90,7 @@ class GoogleAIStudioTokenCounter:
         for content in cleaned_contents:
             parts = content["parts"]
             for part in iter_items(parts):
-                if _json_contains(part, "functionResponse"):
+                if json_contains(part, "functionResponse"):
                     function_response_data = _subscript(part, "functionResponse")
                     function_response_part = FunctionResponse(**_function_response_kwargs(function_response_data))
                     function_response_part.id = None

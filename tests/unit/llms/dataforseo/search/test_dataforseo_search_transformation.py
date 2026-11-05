@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.conftest import in_operator_error
 
 
 @pytest.mark.asyncio
@@ -176,7 +177,7 @@ def test_dataforseo_malformed_item_is_rejected_without_naming_its_position():
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        (5, "argument of type 'int' is not iterable"),
+        (5, in_operator_error(5)),
         ({"tasks": 5}, "object of type 'int' has no len()"),
         ({"tasks": [{"status_code": 20000, "result": 5}]}, "object of type 'int' has no len()"),
     ],

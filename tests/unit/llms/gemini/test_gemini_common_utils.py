@@ -17,6 +17,7 @@ from litellm.llms.gemini.common_utils import (
 )
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
+from tests.unit.conftest import in_operator_error
 
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -502,7 +503,7 @@ class TestGoogleAIStudioTokenCounter:
     @pytest.mark.parametrize(
         ("part", "message"),
         [
-            (7, "argument of type 'int' is not iterable"),
+            (7, in_operator_error(7)),
             (frozenset({"functionResponse"}), "'frozenset' object is not subscriptable"),
             ({"functionResponse": "done"}, "FunctionResponse() argument after ** must be a mapping, not str"),
         ],

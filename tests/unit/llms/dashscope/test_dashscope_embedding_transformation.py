@@ -3,12 +3,12 @@ Unit tests for DashScope embedding transformation.
 """
 
 import json
+import re
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
-
 
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.embed.transformation import (
@@ -16,6 +16,7 @@ from litellm.llms.dashscope.embed.transformation import (
     DashScopeEmbeddingConfig,
 )
 from litellm.types.utils import EmbeddingResponse
+from tests.unit.conftest import in_operator_error
 
 WORKSPACE: Final = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
 
@@ -179,7 +180,7 @@ def test_transform_embedding_response_rejects_a_scalar_body():
         content=b"5",
         request=httpx.Request("POST", "https://example.com"),
     )
-    with pytest.raises(TypeError, match=r"^argument of type 'int' is not iterable$"):
+    with pytest.raises(TypeError, match=f"^{re.escape(in_operator_error(5))}$"):
         DashScopeEmbeddingConfig().transform_embedding_response(
             model="text-embedding-v4",
             raw_response=raw,

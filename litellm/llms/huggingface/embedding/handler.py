@@ -7,7 +7,7 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items, json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -41,19 +41,8 @@ class _SupportsTokenEncode(Protocol):
 
 
 @runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-@runtime_checkable
 class _SupportsGetItem(Protocol):
     def __getitem__(self, key: str | int, /) -> object: ...
-
-
-def _json_contains(value: object, key: str) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    raise TypeError(f"argument of type '{type(value).__name__}' is not iterable")
 
 
 def _subscript(value: object, key: str | int) -> object:
@@ -225,7 +214,7 @@ class HuggingFaceEmbedding(BaseLLM):
         encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
         output_data: Final = []
-        if _json_contains(embeddings, "similarities"):
+        if json_contains(embeddings, "similarities"):
             for idx, embedding in _pairs(_subscript(embeddings, "similarities")):
                 output_data.append(
                     {
@@ -326,7 +315,7 @@ class HuggingFaceEmbedding(BaseLLM):
 
         embeddings: Final = _DECODED_JSON.validate_python(response.json())
 
-        if _json_contains(embeddings, "error"):
+        if json_contains(embeddings, "error"):
             raise HuggingFaceError(status_code=500, message=_subscript(embeddings, "error"))
 
         ## PROCESS RESPONSE ##
@@ -432,7 +421,7 @@ class HuggingFaceEmbedding(BaseLLM):
 
         embeddings: Final = _DECODED_JSON.validate_python(response.json())
 
-        if _json_contains(embeddings, "error"):
+        if json_contains(embeddings, "error"):
             raise HuggingFaceError(status_code=500, message=_subscript(embeddings, "error"))
 
         ## PROCESS RESPONSE ##

@@ -11,7 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import DEFAULT_DATAFORSEO_LOCATION_CODE
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -26,19 +26,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 @runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-@runtime_checkable
 class _SupportsGetItem(Protocol):
     def __getitem__(self, key: str | int, /) -> object: ...
-
-
-def _json_contains(value: object, key: str) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    raise TypeError(f"argument of type '{type(value).__name__}' is not iterable")
 
 
 def _subscript(value: object, key: str | int) -> object:
@@ -229,7 +218,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         results: Final = []
 
         # DataForSEO wraps results in tasks array
-        if _json_contains(response_json, "tasks") and _json_len(_subscript(response_json, "tasks")) > 0:
+        if json_contains(response_json, "tasks") and _json_len(_subscript(response_json, "tasks")) > 0:
             task: Final = decoded_json_object(_subscript(_subscript(response_json, "tasks"), 0))
 
             # Check if task was successful

@@ -17,6 +17,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -33,19 +34,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 @runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-@runtime_checkable
 class _SupportsGetItem(Protocol):
     def __getitem__(self, key: str, /) -> object: ...
-
-
-def _json_contains(value: object, key: str) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    raise TypeError(f"argument of type '{type(value).__name__}' is not iterable")
 
 
 def _subscript(value: object, key: str) -> object:
@@ -187,7 +177,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             original_response=response_json,
         )
 
-        if _json_contains(response_json, "error"):
+        if json_contains(response_json, "error"):
             error: Final = _subscript(response_json, "error")
             message: Final = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise DashScopeError(

@@ -10,6 +10,7 @@ import respx
 import litellm
 from litellm.llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from litellm.types.utils import EmbeddingResponse
+from tests.unit.conftest import in_operator_error
 
 MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
 
@@ -259,7 +260,7 @@ async def test_huggingface_embedding_raises_the_error_the_endpoint_returns(
 @pytest.mark.parametrize(
     ("embeddings", "message"),
     [
-        (5, "argument of type 'int' is not iterable"),
+        (5, in_operator_error(5)),
         ([None], "'NoneType' object is not subscriptable"),
         ({"similarities": [1]}, "cannot unpack non-iterable int object"),
     ],

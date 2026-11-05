@@ -1429,8 +1429,9 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
         return 1.0
     if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
         verbose_logger.error(
-            "Invalid regional_processing_uplift_multiplier_%s for model; defaulting to 1.0",
+            "Invalid regional_processing_uplift_multiplier_%s for model (got %s); defaulting to 1.0",
             residency,
+            type(multiplier).__name__,
         )
         return 1.0
     try:

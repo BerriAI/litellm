@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.image_edit.stability_transformation import BedrockStabilityImageEditConfig
 from litellm.types.utils import ImageResponse
+from tests.unit.conftest import in_operator_error
 
 INPAINT_MODEL: Final = "stability.stable-image-inpaint-v1:0"
 
@@ -70,7 +71,7 @@ def test_transform_image_edit_response_raises_the_error_bedrock_reports(body: ob
 @pytest.mark.parametrize(
     ("body", "message"),
     [
-        (5, "argument of type 'int' is not iterable"),
+        (5, in_operator_error(5)),
         ({"finish_reasons": 5}, "'int' object is not subscriptable"),
     ],
 )

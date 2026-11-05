@@ -28,7 +28,7 @@ import httpx
 from httpx._types import RequestFiles
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -50,19 +50,8 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 @runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-@runtime_checkable
 class _SupportsGetItem(Protocol):
     def __getitem__(self, key: str | int, /) -> object: ...
-
-
-def _json_contains(value: object, key: str) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    raise TypeError(f"argument of type '{type(value).__name__}' is not iterable")
 
 
 def _subscript(value: object, key: str | int) -> object:
@@ -334,7 +323,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check for errors in response
-        if _json_contains(response_data, "errors"):
+        if json_contains(response_data, "errors"):
             raise self.get_error_class(
                 error_message=f"Bedrock Stability error: {_subscript(response_data, 'errors')}",
                 status_code=raw_response.status_code,
