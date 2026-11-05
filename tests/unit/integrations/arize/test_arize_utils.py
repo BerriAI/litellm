@@ -1,11 +1,14 @@
 import json
-from typing import Optional
+from collections.abc import Mapping
+from typing import Final, Optional
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 
 import asyncio
 
+import httpx
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
 import litellm
 from litellm.integrations._types.open_inference import (
@@ -13,9 +16,10 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
     ToolCallAttributes,
 )
+from litellm.integrations.arize._utils import _coerce_response_obj_for_attrs, _parse_passthrough_response
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import Choices, StandardCallbackDynamicParams
+from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
 
 
 def test_arize_set_attributes():
@@ -1013,6 +1017,55 @@ def test_arize_emits_response_cost():
     assert attrs["llm.response.cost"] == 0.0012345  # legacy key still emitted
 
 
+_PRICE_LOOKUP_FAILED: Final = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+
+
+@pytest.mark.parametrize(
+    ("cost_fields", "expected_cost"),
+    [
+        pytest.param({"response_cost": 0.0}, 0.0, id="free-model"),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced",
+        ),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED, "cache_hit": True},
+            0.0,
+            id="unpriced-cache-hit",
+        ),
+        pytest.param({"response_cost": "not-a-number"}, None, id="malformed-cost"),
+        pytest.param(
+            {"response_cost": 0.002, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced-with-guardrail-fee",
+        ),
+    ],
+)
+def test_arize_cost_attrs_tell_unpriced_call_from_free_call(
+    cost_fields: Mapping[str, object], expected_cost: float | None
+) -> None:
+    span: Final = TracerProvider().get_tracer(__name__).start_span("litellm_request")
+    kwargs: Final = {
+        "model": "unpriced-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "standard_logging_object": {"model_parameters": {}, "metadata": {}, "call_type": "completion", **cost_fields},
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+    response_obj: Final = ModelResponse(
+        usage={"total_tokens": 30, "completion_tokens": 20, "prompt_tokens": 10},
+        choices=[Choices(message={"role": "assistant", "content": "ok"})],
+        model="unpriced-model",
+        id="r4",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    assert span.attributes.get("llm.cost.total") == expected_cost
+    assert span.attributes.get("llm.response.cost") == expected_cost
+
+
 def test_arize_passthrough_bedrock_anthropic_normalization():
     """Bedrock-Anthropic passthrough: input/output text must be set so the
     span renders something other than raw provider attrs."""
@@ -1513,3 +1566,42 @@ def test_arize_mcp_emitter_is_inert_without_a_standard_logging_object():
 
     written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert SpanAttributes.TOOL_NAME not in written
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"id": "msg_1", "usage": {"input_tokens": 3}}', {"id": "msg_1", "usage": {"input_tokens": 3}}),
+        ("{}", {}),
+    ],
+)
+def test_coerce_response_obj_decodes_a_json_object_body(text: str, expected: dict[str, object]):
+    assert _coerce_response_obj_for_attrs(httpx.Response(200, text=text)) == expected
+
+
+@pytest.mark.parametrize("text", ["[1, 2]", '"text"', "7", "null", "true", "not json"])
+def test_coerce_response_obj_keeps_the_response_when_the_body_is_not_a_json_object(text: str):
+    response = httpx.Response(200, text=text)
+
+    assert _coerce_response_obj_for_attrs(response) is response
+
+
+@pytest.mark.parametrize(
+    ("raw", "coerced", "kwargs", "expected"),
+    [
+        (None, {"response": '{"id": "wrapped"}'}, {}, {"id": "wrapped"}),
+        (None, {"response": "[1, 2]"}, {}, None),
+        ({"id": "raw"}, {"response": "[1, 2]"}, {}, {"id": "raw"}),
+        ({"id": "raw"}, {"response": "not json"}, {}, {"id": "raw"}),
+        (None, {"response": "7"}, {"original_response": '{"id": "original"}'}, {"id": "original"}),
+        (None, None, {"original_response": '{"id": "original"}'}, {"id": "original"}),
+        (None, None, {"original_response": "[1, 2]"}, None),
+        (None, None, {"original_response": '"text"'}, None),
+        (None, None, {"original_response": "null"}, None),
+        (None, None, {"original_response": "not json"}, None),
+    ],
+)
+def test_parse_passthrough_response_reads_only_json_objects_from_text(
+    raw: object, coerced: object, kwargs: dict[str, object], expected: dict[str, object] | None
+):
+    assert _parse_passthrough_response(raw, coerced, kwargs) == expected

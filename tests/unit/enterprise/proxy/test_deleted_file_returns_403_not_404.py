@@ -30,15 +30,15 @@ def _make_unified_file_id() -> str:
 
 
 def _make_managed_files_with_no_db_record():
-    """Create a _PROXY_LiteLLMManagedFiles where the DB returns None (file was deleted)."""
+    """Create a PROXY_LiteLLMManagedFiles where the DB returns None (file was deleted)."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
-    return _PROXY_LiteLLMManagedFiles(
+    return PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=mock_prisma,
     )
@@ -64,7 +64,7 @@ async def test_should_raise_404_for_deleted_file():
 async def test_should_allow_owner_access_when_record_exists():
     """Baseline: file owner can access their own file."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     unified_file_id = _make_unified_file_id()
@@ -77,7 +77,7 @@ async def test_should_allow_owner_access_when_record_exists():
         return_value=mock_db_record
     )
 
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=mock_prisma,
     )
@@ -93,7 +93,7 @@ async def test_should_allow_owner_access_when_record_exists():
 async def test_should_block_different_user_when_record_exists():
     """Baseline: different user cannot access another user's file."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     unified_file_id = _make_unified_file_id()
@@ -106,7 +106,7 @@ async def test_should_block_different_user_when_record_exists():
         return_value=mock_db_record
     )
 
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=mock_prisma,
     )

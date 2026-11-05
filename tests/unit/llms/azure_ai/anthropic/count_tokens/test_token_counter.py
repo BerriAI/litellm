@@ -1,0 +1,435 @@
+import json
+import operator
+import threading
+from collections.abc import Mapping
+from typing import Final
+
+import httpx
+import pytest
+import respx
+from pydantic import ValidationError
+
+import litellm
+from litellm import anthropic_beta_headers_manager
+from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
+from litellm.types.utils import CountContextManagement, TokenCountResponse
+
+API_BASE: Final = "https://my-resource.services.ai.azure.com"
+COUNT_URL: Final = f"{API_BASE}/anthropic/v1/messages/count_tokens"
+
+
+async def _count(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> TokenCountResponse | None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        respx.post(COUNT_URL).mock(return_value=response)
+        return await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_total"),
+    [
+        ({"input_tokens": 15}, 15),
+        ({"input_tokens": "15"}, 15),
+        ({"input_tokens": 15.0}, 15),
+        ({"input_tokens": True}, 1),
+        ({"input_tokens": -3}, -3),
+        ({}, 0),
+        ({"type": "error", "error": {"message": "429 rate limit"}}, 0),
+        ({"input_tokens": 7, "context_management": {"original_input_tokens": 9}, "nested": {"a": [1, None]}}, 7),
+    ],
+)
+async def test_count_reports_upstream_input_tokens_and_keeps_the_raw_payload(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object], expected_total: int
+) -> None:
+    result: Final = await _count(monkeypatch, httpx.Response(200, json=payload))
+
+    assert result is not None
+    assert repr(result.model_dump()) == repr(
+        {
+            "total_tokens": expected_total,
+            "request_model": "azure_ai/claude-sonnet-4-5",
+            "model_used": "claude-sonnet-4-5",
+            "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
+            "original_response": payload,
+            "error": False,
+            "error_message": None,
+            "status_code": None,
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejected_count",
+    [
+        None,
+        15.5,
+        "Request timed out",
+        "429 Too Many Requests",
+        [15],
+        [*range(403), "Request timed out"],
+        {"value": 429},
+    ],
+)
+async def test_non_integer_input_tokens_becomes_an_error_response_carrying_the_validation_message(
+    monkeypatch: pytest.MonkeyPatch, rejected_count: object
+) -> None:
+    with pytest.raises(ValidationError) as rejection:
+        TokenCountResponse.model_validate(
+            {
+                "total_tokens": rejected_count,
+                "request_model": "azure_ai/claude-sonnet-4-5",
+                "model_used": "claude-sonnet-4-5",
+                "tokenizer_type": "azure_ai_anthropic_api",
+            }
+        )
+
+    result: Final = await _count(monkeypatch, httpx.Response(200, json={"input_tokens": rejected_count}))
+
+    assert result is not None
+    assert [error["loc"] for error in rejection.value.errors()] == [("total_tokens",)]
+    assert repr(result.model_dump()) == repr(
+        {
+            "total_tokens": 0,
+            "request_model": "azure_ai/claude-sonnet-4-5",
+            "model_used": "claude-sonnet-4-5",
+            "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
+            "original_response": None,
+            "error": True,
+            "error_message": str(rejection.value),
+            "status_code": 500,
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [[*({"input_tokens": position} for position in range(403)), "429"], "input_tokens", 15, 0, False],
+)
+async def test_count_payload_that_is_not_an_object_becomes_an_error_response_naming_the_failed_lookup(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    with pytest.raises(AttributeError) as failed_lookup:
+        operator.attrgetter("get")(payload)
+
+    result: Final = await _count(monkeypatch, httpx.Response(200, json=payload))
+
+    assert result is not None
+    assert repr(result.model_dump()) == repr(
+        {
+            "total_tokens": 0,
+            "request_model": "azure_ai/claude-sonnet-4-5",
+            "model_used": "claude-sonnet-4-5",
+            "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
+            "original_response": None,
+            "error": True,
+            "error_message": str(failed_lookup.value),
+            "status_code": 500,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_null_count_payload_falls_back_to_local_counting(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert await _count(monkeypatch, httpx.Response(200, content=b"null")) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_status", "upstream_text"),
+    [(429, "rate limit exceeded"), (403, "forbidden"), (408, "Request timed out")],
+)
+async def test_upstream_error_status_becomes_an_error_response_with_that_status_and_text(
+    monkeypatch: pytest.MonkeyPatch, upstream_status: int, upstream_text: str
+) -> None:
+    result: Final = await _count(monkeypatch, httpx.Response(upstream_status, text=upstream_text))
+
+    assert result is not None
+    assert repr(result.model_dump()) == repr(
+        {
+            "total_tokens": 0,
+            "request_model": "azure_ai/claude-sonnet-4-5",
+            "model_used": "claude-sonnet-4-5",
+            "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
+            "original_response": None,
+            "error": True,
+            "error_message": upstream_text,
+            "status_code": upstream_status,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_entra_rejecting_the_deployment_oidc_token_becomes_a_401_error_response_without_counting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    with respx.mock:
+        respx.post("https://login.microsoftonline.com/qa-tenant/oauth2/v2.0/token").mock(
+            return_value=httpx.Response(
+                401,
+                json={
+                    "error": "invalid_client",
+                    "error_description": "AADSTS700211: No matching federated identity record found for presented "
+                    "assertion issuer 'https://oidc.litellm-qa.invalid'. Trace ID: 0f5c2b1e",
+                    "error_codes": [700211],
+                },
+            )
+        )
+        count_route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_base": API_BASE,
+                    "tenant_id": "qa-tenant",
+                    "client_id": "qa-client",
+                    "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                }
+            },
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 401)
+    assert "AADSTS700211" in (result.error_message or "")
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
+async def test_entra_throttling_the_deployment_oidc_token_exchange_keeps_its_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    with respx.mock:
+        respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
+            return_value=httpx.Response(429, json={"error": "temporarily_unavailable", "error_codes": [90055]})
+        )
+        count_route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_base": API_BASE,
+                    "tenant_id": "throttled-tenant",
+                    "client_id": "qa-client",
+                    "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                }
+            },
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 429)
+    assert not count_route.called
+
+
+@pytest.mark.asyncio
+async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_decoder_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(json.JSONDecodeError) as undecodable:
+        json.loads("not json")
+
+    result: Final = await _count(monkeypatch, httpx.Response(200, text="not json"))
+
+    assert result is not None
+    assert repr(result.model_dump()) == repr(
+        {
+            "total_tokens": 0,
+            "request_model": "azure_ai/claude-sonnet-4-5",
+            "model_used": "claude-sonnet-4-5",
+            "tokenizer_type": "azure_ai_anthropic_api",
+            "count_source": None,
+            "original_response": None,
+            "error": True,
+            "error_message": f"CountTokens processing error: {undecodable.value}",
+            "status_code": 500,
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("set_base", ("env", "global"), ids=("AZURE_API_BASE", "litellm.api_base"))
+async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest.MonkeyPatch, set_base: str) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    if set_base == "env":
+        monkeypatch.setenv("AZURE_API_BASE", API_BASE)
+    else:
+        monkeypatch.setattr(litellm, "api_base", API_BASE)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key"}},
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 6
+    assert route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("assistant_content", "expected_beta"),
+    [
+        (
+            [{"type": "compaction", "content": "Summary of the chat so far.", "signature": "sig-abc"}],
+            "compact-2026-09-04,token-counting-2024-11-01",
+        ),
+        ("Use Recipe and Step tables.", "token-counting-2024-11-01"),
+    ],
+    ids=("signed_compaction_block", "plain_turn"),
+)
+async def test_count_sends_the_compact_beta_only_when_the_history_replays_a_compaction_block(
+    monkeypatch: pytest.MonkeyPatch, assistant_content: object, expected_beta: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 376}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": "What tables did we pick?"},
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 376
+    assert route.calls.last.request.headers["anthropic-beta"] == expected_beta
+
+
+@pytest.mark.asyncio
+async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 541}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[
+                {"role": "user", "content": "Use the ping tool once."},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 541
+    assert route.calls.last.request.headers["anthropic-beta"] == "mid-conversation-tool-changes-2026-07-01,token-counting-2024-11-01"
+
+
+async def _betas_azure_inference_sends(context_management: Mapping[str, object]) -> frozenset[str]:
+    with respx.mock:
+        route: Final = respx.post(f"{API_BASE}/anthropic/v1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 12, "output_tokens": 2},
+                },
+            )
+        )
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Summarize the thread."}],
+            model="azure_ai/claude-sonnet-5-5",
+            api_key="azure-key",
+            api_base=API_BASE,
+            context_management=context_management,
+        )
+    return frozenset(filter(None, route.calls.last.request.headers.get("anthropic-beta", "").split(",")))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize("edit_type", ["clear_tool_uses_20250919", "compact_20260112"])
+async def test_count_forwards_the_context_edits_with_the_betas_azure_inference_sends(
+    monkeypatch: pytest.MonkeyPatch, edit_type: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    spec: Final = {"edits": [{"type": edit_type}]}
+    inference_betas: Final = await _betas_azure_inference_sends(spec)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Summarize the thread."}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+            context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+        )
+    assert result is not None
+    assert result.total_tokens == 88
+    assert json.loads(route.calls.last.request.content)["context_management"] == spec
+    assert frozenset(route.calls.last.request.headers["anthropic-beta"].split(",")) == inference_betas | {
+        "token-counting-2024-11-01"
+    }
+
+
+class _FetchThreads:
+    seen: tuple[int, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.seen = (*self.seen, threading.get_ident())
+        return httpx.Response(200, json={})
+
+
+@pytest.mark.asyncio
+async def test_count_with_an_edit_fetches_the_remote_beta_config_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    fetch_threads: Final = _FetchThreads()
+    with respx.mock:
+        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
+        respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Summarize the thread."}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key", "api_base": API_BASE}},
+            request_model="azure_ai/claude-sonnet-5-5",
+            context_management=CountContextManagement(
+                spec={"edits": [{"type": "clear_tool_uses_20250919"}]}, drop_invalid_edits=False
+            ),
+        )
+    assert result is not None
+    assert len(fetch_threads.seen) == 1
+    assert threading.get_ident() not in fetch_threads.seen

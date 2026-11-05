@@ -10,13 +10,17 @@ worker on every call. ``SELECT DISTINCT ON`` keeps the transfer at one row per
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, field_validator
+from pydantic import ConfigDict, JsonValue, TypeAdapter, field_validator
+from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -43,7 +47,7 @@ ORDER BY "model_id" ASC, "model_name" ASC, "checked_at" DESC
 """
 
 
-class LatestHealthCheckRow(BaseModel):
+class LatestHealthCheckRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, protected_namespaces=())
 
     health_check_id: str
@@ -74,8 +78,17 @@ class LatestHealthCheckRow(BaseModel):
 _ROWS_ADAPTER: Final = TypeAdapter(tuple[LatestHealthCheckRow, ...])
 
 
+class _HealthCheckRowsQuery(Protocol):
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+
+def _health_check_rows_query(prisma_client: PrismaClient) -> _HealthCheckRowsQuery:
+    return prisma_client.db.query_raw
+
+
 async def query_latest_health_checks(prisma_client: PrismaClient) -> tuple[LatestHealthCheckRow, ...]:
-    rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_SQL)
+    async with db_span("latest_health_checks", "LiteLLM_HealthCheckTable"):
+        rows: Final = await _health_check_rows_query(prisma_client)(LATEST_HEALTH_CHECKS_SQL)
     return _ROWS_ADAPTER.validate_python(rows)
 
 
@@ -93,8 +106,21 @@ async def fetch_latest_health_checks_for_models(
     if not model_names:
         return ()
     try:
-        rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, list(model_names))
+        async with db_span("latest_health_checks", "LiteLLM_HealthCheckTable"):
+            rows: Final = await _health_check_rows_query(prisma_client)(
+                LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, list(model_names)
+            )
         return _ROWS_ADAPTER.validate_python(rows)
     except Exception as query_err:  # noqa: BLE001  # a paged model list must not fail on its health decoration
         verbose_proxy_logger.error("Error getting latest health checks for models: %s", query_err)
         return ()
+
+
+def latest_by_model_name(rows: Iterable[LatestHealthCheckRow]) -> Mapping[str, LatestHealthCheckRow]:
+    """The newest row per model name.
+
+    The queries above return one row per (model_id, model_name), so a model group with several
+    deployments comes back as several rows, plus one without a model_id if it was ever checked by
+    name. They arrive in model_id order with NULL last, which says nothing about which check is newest.
+    """
+    return MappingProxyType({row.model_name: row for row in sorted(rows, key=lambda row: row.checked_at)})

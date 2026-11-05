@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.voyage.rerank.transformation import VoyageRerankConfig
 from litellm.types.rerank import RerankResponse
@@ -294,11 +295,10 @@ class TestVoyageRerankTransform:
         assert "top_n" in supported_params
         assert "return_documents" in supported_params
 
-    @patch("litellm.llms.voyage.rerank.transformation.get_secret_str")
-    def test_validate_environment_missing_api_key(self, mock_get_secret_str):
+    def test_validate_environment_missing_api_key(self, monkeypatch):
         """Test that validate_environment raises error when API key is missing."""
-        # Mock get_secret_str to return None for both environment variables
-        mock_get_secret_str.return_value = None
+        for env_var in ("VOYAGE_API_KEY", "VOYAGE_AI_API_KEY", "VOYAGE_AI_TOKEN"):
+            monkeypatch.delenv(env_var, raising=False)
         with pytest.raises(ValueError, match="Voyage AI API key is required"):
             self.config.validate_environment(
                 headers={},
@@ -343,3 +343,81 @@ class TestVoyageRerankTransform:
 
         assert prompt_cost == 0.0
         assert completion_cost == 0.0
+
+
+def _transform(payload: object) -> RerankResponse:
+    return VoyageRerankConfig().transform_rerank_response(
+        model="rerank-2.5",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+    )
+
+
+def test_transform_rerank_response_keeps_provider_id_and_drops_unknown_result_fields():
+    response = _transform(
+        {
+            "id": "rerank-1",
+            "data": [
+                {"index": 2, "relevance_score": 0.25, "document": {"text": "doc", "extra": 1}, "extra": 2},
+                {"index": 0, "relevance_score": 1, "document": "plain"},
+            ],
+            "usage": {"total_tokens": 9},
+        }
+    )
+
+    assert response.id == "rerank-1"
+    assert response.results == [
+        {"index": 2, "relevance_score": 0.25, "document": {"text": "doc"}},
+        {"index": 0, "relevance_score": 1.0, "document": {"text": "plain"}},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_total_tokens"),
+    [
+        ({"data": []}, 0),
+        ({"data": [], "usage": {}}, 0),
+        ({"data": [], "usage": {"total_tokens": 79}}, 79),
+        ({"data": [], "usage": {"total_tokens": None}}, None),
+    ],
+)
+def test_transform_rerank_response_reads_total_tokens_from_usage(
+    payload: dict[str, object], expected_total_tokens: int | None
+):
+    assert _transform(payload).meta == {
+        "billed_units": {"total_tokens": expected_total_tokens},
+        "tokens": {"input_tokens": expected_total_tokens, "output_tokens": 0},
+    }
+
+
+def test_transform_rerank_response_empty_data_list_yields_no_results():
+    assert _transform({"id": "rerank-1", "data": []}).results == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"data": 7},
+        {"data": ["not an object"]},
+        {"data": [{"index": 0, "relevance_score": 0.5}], "usage": None},
+        {"data": [{"index": 0, "relevance_score": 0.5}], "usage": {"total_tokens": 1.5}},
+        {"data": [{"index": 0, "relevance_score": 0.5}], "id": 7},
+    ],
+)
+def test_transform_rerank_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError):
+        _transform(payload)
+
+
+def test_transform_rerank_response_result_without_index_raises_key_error():
+    with pytest.raises(KeyError, match="index"):
+        _transform({"data": [{"relevance_score": 0.5}]})
+
+
+def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"data": [["leaked document text"]]})
+
+    assert "leaked document text" not in str(exc_info.value)

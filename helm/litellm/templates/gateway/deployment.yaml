@@ -55,6 +55,11 @@ spec:
               containerPort: 4000
               protocol: TCP
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
+            {{- if .Values.ui.publicUrl }}
+            - name: LITELLM_CORS_ORIGINS
+              value: {{ include "litellm.ui.publicOrigin" . | quote }}
+            {{- end }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
@@ -81,7 +86,7 @@ spec:
             {{- include "litellm.gateway.collectorEnv" . | nindent 12 }}
             {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.collectorSocketDir" .) }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.gateway.metricsServer.enabled (include "litellm.gateway.collectorSocketDir" .) }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
@@ -95,9 +100,6 @@ spec:
             {{- if include "litellm.gateway.collectorSocketDir" . }}
             - name: collector-socket
               mountPath: {{ include "litellm.gateway.collectorSocketDir" . }}
-            {{- end }}
-            {{- if .Values.billingMetrics.enabled }}
-            {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
             {{- end }}
             {{- with .Values.gateway.volumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -201,7 +203,7 @@ spec:
       {{- with .Values.gateway.extraContainers }}
         {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
-      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.collectorSocketDir" .) }}
+      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.gateway.metricsServer.enabled (include "litellm.gateway.collectorSocketDir" .) }}
       volumes:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
@@ -216,9 +218,6 @@ spec:
         - name: collector-socket
           emptyDir:
             sizeLimit: 1Mi
-        {{- end }}
-        {{- if .Values.billingMetrics.enabled }}
-        {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
         {{- end }}
         {{- with .Values.gateway.volumes }}
         {{- toYaml . | nindent 8 }}

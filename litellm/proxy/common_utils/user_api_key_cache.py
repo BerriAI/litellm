@@ -17,14 +17,22 @@ from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+    from litellm.caching.redis_batch import BatchResult
+
 T = TypeVar("T", bound=BaseModel)
 
+from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa: E402, PLC0414  # public re-export
+
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+_BUDGET_WINDOWS_ABSENT_PREFIX: Final = "budget_windows_absent:"
 
 
 def is_user_key_cache_key(key: str) -> bool:
     """Only user-key objects are cached under a bare ``hash_token`` digest; every other object uses a prefixed key."""
     return _HASHED_TOKEN_CACHE_KEY.fullmatch(key) is not None
+
+
+_PIPELINED_SET_OPTIONS: Final = frozenset(("ttl",))
 
 
 class UserApiKeyCache(DualCache):
@@ -63,6 +71,7 @@ class UserApiKeyCache(DualCache):
         default_in_memory_ttl: float | None = None,
         default_redis_ttl: float | None = None,
         key_object_in_memory_cache: InMemoryCache | None = None,
+        budget_windows_absent_in_memory_cache: InMemoryCache | None = None,
     ) -> None:
         super().__init__(
             in_memory_cache=in_memory_cache,
@@ -76,19 +85,33 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
         )
+        self.budget_windows_absent_cache: Final = DualCache(
+            in_memory_cache=budget_windows_absent_in_memory_cache
+            or InMemoryCache(default_ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL),
+            default_in_memory_ttl=default_in_memory_ttl,
+        )
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
         return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
+
+    def delete_from_memory(self, key: str) -> None:
+        self.in_memory_cache_for(key).delete_cache(key)
+        if key.startswith(_BUDGET_WINDOWS_ABSENT_PREFIX):
+            self.budget_windows_absent_cache.delete_cache(key)
 
     def update_cache_ttl(self, default_in_memory_ttl: float | None, default_redis_ttl: float | None) -> None:
         super().update_cache_ttl(default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl)
         self.key_object_cache.update_cache_ttl(
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
+        self.budget_windows_absent_cache.update_cache_ttl(
+            default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=None
+        )
 
     def update_in_memory_max_size(self, max_size: int | None) -> None:
         super().update_in_memory_max_size(max_size)
         self.key_object_cache.update_in_memory_max_size(max_size)
+        self.budget_windows_absent_cache.update_in_memory_max_size(max_size)
 
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
@@ -208,10 +231,23 @@ class UserApiKeyCache(DualCache):
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
+        """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
+        else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        ttl: Final = kwargs.get("ttl")
+        pipelined: Final = (
+            key is not None
+            and not local_only
+            and kwargs.keys() <= _PIPELINED_SET_OPTIONS
+            and (ttl is None or isinstance(ttl, (int, float)))
+        )
         if key is not None and is_user_key_cache_key(key):
+            if pipelined and await self.key_object_cache.async_set_cache_pre_call(key, payload, ttl) is not None:
+                return None
             return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
+        if pipelined and await super().async_set_cache_pre_call(key, payload, ttl) is not None:
+            return None
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     def delete_cache(self, key: str) -> None:
@@ -225,6 +261,11 @@ class UserApiKeyCache(DualCache):
             await self.key_object_cache.async_delete_cache(key)
             return
         await super().async_delete_cache(key)
+
+    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+        if is_user_key_cache_key(key):
+            return await self.key_object_cache.async_delete_cache_pre_call(key)
+        return await super().async_delete_cache_pre_call(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
         """Batch twin of ``async_delete_cache``, partitioned like
@@ -247,6 +288,7 @@ class UserApiKeyCache(DualCache):
     def flush_cache(self) -> None:
         super().flush_cache()
         self.key_object_cache.in_memory_cache.flush_cache()
+        self.budget_windows_absent_cache.flush_cache()
 
     async def async_set_cache_pipeline(
         self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs: object
@@ -373,6 +415,11 @@ def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
 #: a plain string here means "no row", distinct from a serialized membership. The two budget readers
 #: already treat a non-model value as "no row", so they need no change to stay correct.
 NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
+
+
+def budget_windows_absent_cache_key(entity_type: str, entity_id: str) -> str:
+    """Cache key marking a key or team that holds no budget windows, so the spend fallback skips its row read."""
+    return f"{_BUDGET_WINDOWS_ABSENT_PREFIX}{entity_type}:{entity_id}"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:

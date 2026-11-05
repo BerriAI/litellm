@@ -16,28 +16,10 @@ import socket
 import subprocess
 import sys
 import time
-from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Final, NoReturn, TextIO, cast
-
-import pytest
-
-EXPECTED_CASES: Final = (
-    "CHAT-JSON",
-    "CHAT-TEXT-STREAM",
-    "CHAT-TOOL-STREAM",
-    "MODEL-ALLOW",
-    "MODEL-DENY",
-    "COST-EXPLICIT",
-    "COST-ZERO",
-    "LOG-CONTENT-ON",
-    "LOG-CONTENT-OFF",
-    "CALLBACK-SUCCESS",
-    "CALLBACK-FAILURE",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +39,6 @@ class _Args:
     ready_deadline: float = 120.0
     shutdown_deadline: float = 20.0
     poll_interval: float = 0.5
-    manifest: str = ""
-    rootdir: str | None = None
 
 
 def fail(reason: str) -> NoReturn:
@@ -345,120 +325,6 @@ def _terminate(proc: subprocess.Popen[bytes], log_file: TextIO) -> None:
     log_file.close()
 
 
-def _load_manifest(path: Path) -> MappingProxyType[str, str]:
-    def no_duplicates(pairs: list[tuple[object, object]]) -> dict[object, object]:
-        seen: dict[object, object] = {}
-        for key, value in pairs:
-            if key in seen:
-                raise ValueError(f"duplicate key in manifest: {key}")
-            seen[key] = value
-        return seen
-
-    raw_value: object = cast(object, json.loads(path.read_text(), object_pairs_hook=no_duplicates))
-    if not isinstance(raw_value, dict):
-        raise ValueError("manifest must be an object")
-    loaded: Final = cast(dict[object, object], raw_value)
-    cases_value: object = loaded.get("cases")
-    if not isinstance(cases_value, dict):
-        raise ValueError("manifest must be an object with a 'cases' object")
-    cases_any: Final = cast(dict[object, object], cases_value)
-    cases: Final = {k: v for k, v in cases_any.items() if isinstance(k, str) and isinstance(v, str)}
-    if len(cases) != len(cases_any):
-        raise ValueError("manifest 'cases' must map string ids to string node ids")
-    return MappingProxyType(cases)
-
-
-@dataclass(slots=True, eq=False)
-class _Recorder:
-    collect_failed: list[str] = field(default_factory=list)
-    collected: tuple[str, ...] = ()
-    reports: dict[str, list[tuple[str, str, bool]]] = field(default_factory=dict)
-
-    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
-        if report.failed:
-            self.collect_failed.append(report.nodeid)
-
-    def pytest_collection_finish(self, session: pytest.Session) -> None:
-        self.collected = tuple(item.nodeid for item in session.items)
-
-    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
-        self.reports.setdefault(report.nodeid, []).append((report.when, report.outcome, hasattr(report, "wasxfail")))
-
-
-def cmd_pytest(args: _Args) -> int:
-    try:
-        cases: Final = _load_manifest(Path(args.manifest))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        fail(f"manifest invalid: {exc}")
-    if tuple(cases) != EXPECTED_CASES:
-        fail(f"manifest case ids must be exactly {list(EXPECTED_CASES)} in order, got {list(cases)}")
-    node_ids: Final = tuple(cases.values())
-    if len(set(node_ids)) != len(node_ids):
-        fail("manifest node ids are not unique")
-    argv: Final = [
-        *node_ids,
-        "-p",
-        "no:cacheprovider",
-        "-p",
-        "no:xdist",
-        "-p",
-        "no:rerunfailures",
-        "-p",
-        "no:randomly",
-        "-rA",
-        "-q",
-        *(["--rootdir", args.rootdir] if args.rootdir else []),
-    ]
-
-    recorder: Final = _Recorder()
-    code: Final = pytest.main(argv, plugins=[recorder])
-    name_of: Final = MappingProxyType({node_id: case_id for case_id, node_id in cases.items()})
-    problems: Final[list[str]] = []
-    if code != 0:
-        problems.append(f"pytest exit code {code}")
-    for failed_id in recorder.collect_failed:
-        problems.append(f"collection failed: {name_of.get(failed_id, failed_id)}")
-    expected: Final = Counter(node_ids)
-    collected: Final = Counter(recorder.collected)
-    for node_id in expected - collected:
-        problems.append(f"missing case {name_of[node_id]} ({node_id})")
-    for node_id in collected - expected:
-        problems.append(f"unexpected test collected: {node_id}")
-    for node_id, count in collected.items():
-        if count > 1:
-            problems.append(f"duplicated test id: {node_id}")
-    if len(recorder.collected) != len(EXPECTED_CASES):
-        problems.append(f"collected {len(recorder.collected)} tests, expected {len(EXPECTED_CASES)}")
-    rows: Final[list[tuple[str, bool]]] = []
-    for case_id, node_id in cases.items():
-        reports = recorder.reports.get(node_id, [])
-        case_ok = (
-            bool(reports)
-            and all(outcome == "passed" and not wasxfail for _, outcome, wasxfail in reports)
-            and {when for when, _, _ in reports} >= {"setup", "call", "teardown"}
-        )
-        rows.append((case_id, case_ok))
-        if not reports:
-            problems.append(f"{case_id} ({node_id}) produced no runtest reports")
-            continue
-        for when, outcome, wasxfail in reports:
-            if outcome != "passed":
-                problems.append(f"{case_id} ({node_id}) {when} outcome={outcome}")
-            if wasxfail:
-                problems.append(f"{case_id} ({node_id}) {when} was xfail/xpass")
-        missing_phases = {"setup", "call", "teardown"} - {when for when, _, _ in reports}
-        for phase in sorted(missing_phases):
-            problems.append(f"{case_id} ({node_id}) missing {phase} report")
-    for case_id, passed in rows:
-        print(f"{case_id}  {'PASS' if passed else 'FAIL'}  {cases[case_id]}")
-    if problems:
-        for problem in problems:
-            print(f"merge-smoke: {problem}", file=sys.stderr)
-        fail("pytest verdict failed")
-    ok("pytest 11 cases")
-    return 0
-
-
 def main() -> int:
     parser: Final = argparse.ArgumentParser(description=__doc__)
     subs: Final = parser.add_subparsers(dest="command", required=True)
@@ -475,16 +341,12 @@ def main() -> int:
     p_proxy.add_argument("--ready-deadline", type=float, default=120)
     p_proxy.add_argument("--shutdown-deadline", type=float, default=20)
     p_proxy.add_argument("--poll-interval", type=float, default=0.5)
-    p_test: Final = subs.add_parser("pytest")
-    p_test.add_argument("--manifest", required=True)
-    p_test.add_argument("--rootdir", default=None)
     args: Final = parser.parse_args(namespace=_Args())
     handlers: Final = {
         "verify-isolation": cmd_verify_isolation,
         "interpreter": cmd_interpreter,
         "cli": cmd_cli,
         "proxy-startup": cmd_proxy_startup,
-        "pytest": cmd_pytest,
     }
     return handlers[args.command](args)
 

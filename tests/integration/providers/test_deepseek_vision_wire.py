@@ -17,7 +17,7 @@ _VISION_CONTENT: Final[JsonValue] = [
 @pytest.mark.covers("other.provider_wire.deepseek.vision_image_content_list_reaches_provider")
 def test_deepseek_vision_forwards_image_url_content_list_instead_of_collapsing_to_text(gateway: Gateway) -> None:
     with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         model: Final = scenario.model(
             model=f"deepseek/{_VISION_MODEL}",
             api_key=_API_KEY,

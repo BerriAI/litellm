@@ -18,9 +18,10 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_base_url,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -325,13 +326,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         model_name: Final = model.replace("vertex_ai/", "")
 
         # Construct the URL
-        if api_base:
-            base_url = api_base.rstrip("/")
-        else:
-            base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = api_base or get_vertex_base_url(vertex_location)
 
-        url: Final = (
-            f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
+        url: Final = join_api_base(
+            base_url, f"v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
         )
 
         return url
@@ -480,7 +478,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Construct the full URL including model ID
         # URL format: https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL:fetchPredictOperation
         # Strip trailing slashes from api_base and append model
-        url: Final = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
+        url: Final = join_api_base(api_base, f"{model}:fetchPredictOperation")
 
         # Request body contains the operation name
         params: Final = {"operationName": operation_name}
@@ -537,7 +535,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         create_time_str: Final = response_data.get("metadata", {}).get("createTime")
         if create_time_str:
             try:
-                created_at = _convert_vertex_datetime_to_openai_datetime(create_time_str)
+                created_at = convert_vertex_datetime_to_openai_datetime(create_time_str)
             except Exception:
                 created_at = int(time.time())
         else:
@@ -585,6 +583,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the Veo video content download response.
@@ -777,7 +776,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             if vertex_params:
                 request_data["parameters"] = vertex_params
 
-        edit_url: Final = f"{api_base.rstrip('/')}/{model}:predictLongRunning"
+        edit_url: Final = join_api_base(api_base, f"{model}:predictLongRunning")
         return edit_url, request_data, None
 
     def transform_video_edit_response(

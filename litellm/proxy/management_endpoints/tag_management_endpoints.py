@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
@@ -30,6 +31,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
@@ -57,6 +59,8 @@ if TYPE_CHECKING:
     from litellm.types.router import Deployment
 
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _TagRecord(Protocol):
@@ -190,21 +194,22 @@ async def _get_tag_list_scope(
     return {"api_key": {"in": scoped_api_keys}}
 
 
-async def _get_tag_daily_activity_api_key_filter(
+async def get_tag_daily_activity_api_key_filter(
     prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
     requested_api_key: str | None,
 ) -> str | list[str] | None:
+    selected_key: Final = api_key_from_bucket(requested_api_key) if requested_api_key else None
     user_role: Final = user_api_key_dict.user_role
     if user_api_key_has_admin_view(user_api_key_dict) or (user_role is None or not user_role.is_internal_user_role):
-        return requested_api_key
+        return [selected_key] if selected_key is not None else None
 
     scoped_api_keys: Final = await _get_internal_user_api_keys(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
     )
-    if requested_api_key is not None:
-        return requested_api_key if requested_api_key in scoped_api_keys else []
+    if selected_key is not None:
+        return [selected_key] if selected_key in scoped_api_keys else []
     return scoped_api_keys
 
 
@@ -225,12 +230,12 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
     # Check if model id
-    deployment: Final = llm_router.get_deployment(model_id=model)
+    deployment: Final = llm_router.registry().deployment(model)
     if deployment is not None:
         return [deployment]
 
     # Check if model name
-    deployments: Final = llm_router.get_model_list(model_name=model)
+    deployments: Final = llm_router.registry().deployments(model)
     if deployments is None:
         return []
     return [
@@ -272,6 +277,7 @@ async def new_tag(
     """
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
+        invalidate_spend_counter,
         litellm_proxy_admin_name,
         llm_router,
         prisma_client,
@@ -313,6 +319,7 @@ async def new_tag(
         )
 
         await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+        await invalidate_spend_counter(counter_key=f"spend:tag:{tag.name}")
 
         # Update models with new tag
         if tag.models:
@@ -438,7 +445,7 @@ async def update_tag(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
-            budget_duration_cleared="budget_duration" in tag.model_fields_set and tag.budget_duration is None,
+            cleared_budget_fields=frozenset(field for field in tag.model_fields_set if getattr(tag, field) is None),
         )
 
         # Get model names for model_info
@@ -523,7 +530,7 @@ async def info_tag(
             model_info: object = {}
             if tag_record.model_info:
                 if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
+                    model_info = _DECODED_JSON.validate_python(json.loads(tag_record.model_info))
                 else:
                     model_info = tag_record.model_info
 
@@ -646,7 +653,7 @@ async def list_tags(
             model_info: object = {}
             if tag_record.model_info:
                 if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
+                    model_info = _DECODED_JSON.validate_python(json.loads(tag_record.model_info))
                 else:
                     model_info = tag_record.model_info
 
@@ -757,7 +764,7 @@ async def get_tag_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     tag_list: Final = tags.split(",") if tags else None
-    scoped_api_key_filter: Final = await _get_tag_daily_activity_api_key_filter(
+    scoped_api_key_filter: Final = await get_tag_daily_activity_api_key_filter(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         requested_api_key=api_key,

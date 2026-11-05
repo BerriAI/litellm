@@ -1,12 +1,12 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm.proxy._types import SpanAttributes
+from litellm.types.integrations.otel_span_attributes import SpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 

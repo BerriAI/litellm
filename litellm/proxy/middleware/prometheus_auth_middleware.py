@@ -4,7 +4,7 @@ Prometheus Auth Middleware - Pure ASGI implementation
 
 import json
 from collections.abc import MutableMapping
-from typing import Any, Final
+from typing import Final
 
 from fastapi import Request
 from starlette.routing import get_route_path
@@ -52,9 +52,9 @@ class PrometheusAuthMiddleware:
             # user_api_key_auth reads the request body, which consumes ASGI `receive`.
             # Buffer those messages and replay them for the inner app; otherwise a
             # successful auth would forward an exhausted receive and /metrics hangs.
-            buffered_messages: Final[list[MutableMapping[str, Any]]] = []
+            buffered_messages: Final[list[MutableMapping[str, object]]] = []
 
-            async def receive_for_auth() -> MutableMapping[str, Any]:
+            async def receive_for_auth() -> MutableMapping[str, object]:
                 message: Final = await receive()
                 buffered_messages.append(message)
                 return message
@@ -102,7 +102,7 @@ class PrometheusAuthMiddleware:
 
             replay_idx = 0
 
-            async def receive_replay() -> MutableMapping[str, Any]:
+            async def receive_replay() -> MutableMapping[str, object]:
                 nonlocal replay_idx
                 if replay_idx < len(buffered_messages):
                     msg: Final = buffered_messages[replay_idx]

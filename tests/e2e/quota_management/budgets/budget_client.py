@@ -17,6 +17,7 @@ from datetime import datetime
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from models import (
     AnthropicMessagesBody,
@@ -253,15 +254,18 @@ class BudgetClient:
             )
         )
 
+    @step("Delete the virtual key")
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
 
+    @step("Read the key's budget windows from /key/info")
     def key_budget_windows(self, key: str) -> list[BudgetWindowState]:
         """A key's budget_limits windows as /key/info stores them. Each window's
         reset_at is advanced by the reset job in the same pass that zeroes the
         window's spend counter, so a strictly-later value proves the wipe ran."""
         return self.proxy.key_info(key).budget_limits or []
 
+    @step("Read the team's budget windows from /team/info")
     def team_budget_windows(self, team_id: str) -> list[BudgetWindowState]:
         """Team analog of key_budget_windows, read from /team/info."""
         match self._team_info(team_id):
@@ -270,11 +274,13 @@ class BudgetClient:
             case _:
                 return []
 
+    @step("Delete the end users {user_ids}")
     def delete_customers(self, user_ids: list[str]) -> None:
         self.proxy.delete_customers(user_ids)
 
     # ---- chat (raw HTTP outcome: a budget block surfaces as a non-2xx) --
 
+    @step('Send a /chat/completions request to {model} with the prompt "{content}"')
     def chat(
         self,
         key: str,
@@ -297,6 +303,7 @@ class BudgetClient:
             ),
         )
 
+    @step('Send a /v1/messages request to {model} with the prompt "{content}"')
     def messages(
         self,
         key: str,
@@ -317,6 +324,7 @@ class BudgetClient:
 
     # ---- internal user --------------------------------------------------
 
+    @step("Create an internal user with max budget: {max_budget}")
     def create_user(self, *, max_budget: float, budget_duration: str | None = None) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -327,6 +335,7 @@ class BudgetClient:
             )
         ).user_id
 
+    @step("Delete the internal user")
     def delete_user(self, user_id: str) -> None:
         _ = self.proxy.transport.post(
             "/user/delete",
@@ -335,6 +344,7 @@ class BudgetClient:
             response_type=NoBody,
         )
 
+    @step("Read the internal user's spend and budget from /user/info")
     def user_info(self, user_id: str) -> UserInfoRow | None:
         result = self.proxy.transport.get(
             "/user/info",
@@ -350,6 +360,7 @@ class BudgetClient:
 
     # ---- customer / end-user -------------------------------------------
 
+    @step("Create the end user {customer_id}")
     def create_customer(
         self,
         customer_id: str,
@@ -369,6 +380,7 @@ class BudgetClient:
 
     # ---- organization ---------------------------------------------------
 
+    @step("Create the organization {alias} with max budget: {max_budget}")
     def create_org(self, *, max_budget: float, alias: str, budget_duration: str | None = None) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -383,6 +395,7 @@ class BudgetClient:
             )
         ).organization_id
 
+    @step("Read the organization's budget id from /organization/info")
     def org_budget_id(self, org_id: str) -> str | None:
         """The id of the budget row backing an org; its budget_reset_at is read via
         budget_info (LIT-4570: /organization/new stores budget_duration without
@@ -399,6 +412,7 @@ class BudgetClient:
             case _:
                 return None
 
+    @step("Delete the organization")
     def delete_org(self, org_id: str) -> None:
         _ = self.proxy.transport.delete(
             "/organization/delete",
@@ -409,6 +423,7 @@ class BudgetClient:
 
     # ---- team -----------------------------------------------------------
 
+    @step("Create the team {alias} and wait until /team/info returns it")
     def create_team(
         self,
         *,
@@ -435,6 +450,7 @@ class BudgetClient:
         self._wait_for_team(team_id)
         return team_id
 
+    @step("Delete the team")
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
@@ -463,6 +479,7 @@ class BudgetClient:
         assert last is not None
         raise AssertionError(last)
 
+    @step("Add the internal user to the team")
     def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
         last_body = ""
         for attempt in range(_TEAM_READY_ATTEMPTS):
@@ -484,6 +501,7 @@ class BudgetClient:
             break
         raise AssertionError(last_body)
 
+    @step("Update the team member's budget with /team/member_update")
     def update_team_member(
         self,
         team_id: str,
@@ -504,6 +522,7 @@ class BudgetClient:
         )
         assert resp.ok, resp.body
 
+    @step("Read the team member's budget reset time from /team/info")
     def member_budget_reset_at(self, team_id: str, user_id: str) -> str | None:
         """The member's per-team budget_reset_at as /team/info reports it, or None if
         no reset is scheduled. The reset job advances this each time the window
@@ -519,6 +538,7 @@ class BudgetClient:
 
     # ---- tag ------------------------------------------------------------
 
+    @step("Create the tag {name} with max budget: {max_budget}")
     def create_tag(self, name: str, *, max_budget: float) -> str:
         resp = self.proxy.transport.send(
             "/tag/new",
@@ -528,6 +548,7 @@ class BudgetClient:
         assert resp.ok, resp.body
         return name
 
+    @step("Delete the tag {name}")
     def delete_tag(self, name: str) -> None:
         _ = self.proxy.transport.post(
             "/tag/delete",
@@ -538,6 +559,7 @@ class BudgetClient:
 
     # ---- model access group ---------------------------------------------
 
+    @step("Set a shared budget on the model access group {access_group}")
     def set_access_group_budget(
         self,
         access_group: str,
@@ -561,6 +583,7 @@ class BudgetClient:
             )
         )
 
+    @step("Read the budget and spend of the model access group {access_group}")
     def access_group_budget(self, access_group: str) -> AccessGroupBudgetResponse:
         return unwrap(
             self.proxy.transport.get(
@@ -571,6 +594,7 @@ class BudgetClient:
             )
         )
 
+    @step("Delete the budget on the model access group {access_group}")
     def delete_access_group_budget(self, access_group: str) -> None:
         _ = self.proxy.transport.delete(
             f"/access_group/{access_group}/budget",
@@ -581,6 +605,7 @@ class BudgetClient:
 
     # ---- budget table ---------------------------------------------------
 
+    @step("Create a budget with /budget/new")
     def create_budget(
         self,
         *,
@@ -603,6 +628,7 @@ class BudgetClient:
             )
         ).budget_id
 
+    @step("Delete the budget")
     def delete_budget(self, budget_id: str) -> None:
         _ = self.proxy.transport.post(
             "/budget/delete",
@@ -611,6 +637,7 @@ class BudgetClient:
             response_type=NoBody,
         )
 
+    @step("Read the budget from /budget/info")
     def budget_info(self, budget_id: str) -> tuple[BudgetRow, ...]:
         result = self.proxy.transport.post(
             "/budget/info",

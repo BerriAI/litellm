@@ -39,7 +39,7 @@ def _make_logging_obj(provider: str = "anthropic") -> MagicMock:
     logging_obj.stream_options = None
     logging_obj.messages = [{"role": "user", "content": "hi"}]
     logging_obj.completion_start_time = None
-    logging_obj._llm_caching_handler = None
+    logging_obj.llm_caching_handler = None
     return logging_obj
 
 

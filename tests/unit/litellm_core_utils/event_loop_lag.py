@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import time
 from collections.abc import Awaitable, Callable
 from typing import Final, TypeVar
@@ -32,7 +33,11 @@ async def timed_with_loop_lags(run: Callable[[], Awaitable[T]]) -> tuple[T, floa
         finally:
             finished.set()
 
-    (result, took), lags = await asyncio.gather(timed(), loop_wake_lags(finished))
+    gc.freeze()
+    try:
+        (result, took), lags = await asyncio.gather(timed(), loop_wake_lags(finished))
+    finally:
+        gc.unfreeze()
     return result, took, lags
 
 

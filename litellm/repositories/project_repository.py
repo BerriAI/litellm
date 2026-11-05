@@ -3,7 +3,7 @@ Project repository for database operations on LiteLLM_ProjectTable.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.repositories.base_repository import BaseRepository
@@ -13,12 +13,23 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _ProjectDb(Protocol):
+    @property
+    def litellm_projecttable(self) -> TableActions["prisma_models.LiteLLM_ProjectTable"]: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _ProjectDb: ...
+
+
 class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
     """Repository for project database operations."""
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
-        return self.prisma_client.db.litellm_projecttable
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.db.litellm_projecttable
 
     @property
     def model_class(self) -> type[LiteLLM_ProjectTable]:

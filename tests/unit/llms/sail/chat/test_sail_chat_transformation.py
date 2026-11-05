@@ -98,7 +98,7 @@ def test_sail_sync_chat_sends_the_tier_window(
     assert _window(body) == window
 
 
-@pytest.mark.parametrize("service_tier", ["scale", "standard", "asap", 5, ["flex"]])
+@pytest.mark.parametrize("service_tier", ["bogus", "scale", "standard", "asap", 5, ["flex"]])
 @pytest.mark.asyncio
 async def test_sail_chat_rejects_a_tier_with_no_window_before_sending(
     sail_env: None, chat_route: respx.Route, service_tier: object
@@ -110,16 +110,24 @@ async def test_sail_chat_rejects_a_tier_with_no_window_before_sending(
     assert not chat_route.called
 
 
-@pytest.mark.parametrize("service_tier", ["scale", 5])
+@pytest.mark.parametrize("service_tier", ["bogus", "scale", 5])
+@pytest.mark.parametrize(("global_drop", "request_drop"), [(False, True), (True, False)])
 @pytest.mark.asyncio
 async def test_sail_chat_drops_an_unknown_tier_under_drop_params_and_bills_asap(
-    sail_env: None, chat_route: respx.Route, spend_capture: SpendCapture, service_tier: object
+    sail_env: None,
+    chat_route: respx.Route,
+    spend_capture: SpendCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    service_tier: object,
+    global_drop: bool,
+    request_drop: bool,
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop)
     await litellm.acompletion(
         model=MODEL,
         messages=MESSAGES,
         service_tier=service_tier,
-        drop_params=True,
+        drop_params=request_drop,
         litellm_call_id=spend_capture.call_id,
     )
 

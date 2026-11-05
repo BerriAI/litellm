@@ -2,6 +2,7 @@
 
 import { Code2 } from "lucide-react";
 import React from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import CodeBlock from "@/components/CodeBlock";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,17 +21,18 @@ const exampleModel = (group: RoutingGroup): string =>
 const buildCurlSnippet = (group: RoutingGroup, baseUrl: string): string =>
   `curl -X POST '${baseUrl}/v1/chat/completions' \\
   -H 'Content-Type: application/json' \\
-  -H 'Authorization: Bearer $LITELLM_API_KEY' \\
+  -H "Authorization: Bearer $LITELLM_API_KEY" \\
   -d '{
     "model": "${exampleModel(group)}",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'`;
 
 const buildPythonSnippet = (group: RoutingGroup, baseUrl: string): string =>
-  `from openai import OpenAI
+  `import os
+from openai import OpenAI
 
 client = OpenAI(
-    api_key="$LITELLM_API_KEY",
+    api_key=os.environ["LITELLM_API_KEY"],
     base_url="${baseUrl}",
 )
 
@@ -63,23 +65,28 @@ const SNIPPET_TABS = [
 ] as const;
 
 export function RoutingGroupUsagePanel({ group, baseUrl }: RoutingGroupUsagePanelProps) {
+  const { t } = useTranslation();
   return (
     <div className="border-y bg-muted/40 px-4 py-4">
       <div className="mb-2 flex items-center gap-2">
         <Code2 className="size-4 text-primary" />
-        <span className="text-sm font-medium text-foreground">How routing works for this group</span>
+        <span className="text-sm font-medium text-foreground">{t("routingGroups.usagePanel.title")}</span>
       </div>
       <p className="mb-3 text-sm text-muted-foreground">
         {group.routing_strategy === "priority" ? (
-          <>
-            Request <span className="font-medium text-foreground">{group.group_name}</span> to try eligible models in
-            priority order. Direct requests to a member model keep their existing routing behavior.
-          </>
+          <Trans
+            i18nKey="routingGroups.usagePanel.priorityExplanation"
+            components={{ group: <span className="font-medium text-foreground">{group.group_name}</span> }}
+          />
         ) : (
-          <>
-            Callers request any model in the group by name; LiteLLM picks a deployment behind the scenes using the{" "}
-            <span className="font-medium text-foreground">{formatStrategyLabel(group.routing_strategy)}</span> strategy.
-          </>
+          <Trans
+            i18nKey="routingGroups.usagePanel.strategyExplanation"
+            components={{
+              strategy: (
+                <span className="font-medium text-foreground">{formatStrategyLabel(group.routing_strategy, t)}</span>
+              ),
+            }}
+          />
         )}
       </p>
       <Tabs defaultValue="curl">

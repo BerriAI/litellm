@@ -7,11 +7,13 @@ import httpx
 from httpx import Headers, Response
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
+
+from ..common_utils import merge_anthropic_beta_headers, without_caller_credential_headers
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -69,24 +71,30 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         api_base: str | None = None,
     ) -> dict:
         """Validate and prepare environment-specific headers and parameters."""
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
-        auth_header: Final = self.anthropic_model_info.get_auth_header(api_key, api_base)
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        if api_base is None and params_mapping is not None:
+            api_base = params_mapping.get("api_base")
+        auth_header: Final = self.anthropic_model_info.get_auth_header(
+            api_key, api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
         if auth_header is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
-        _headers: Final = {
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            "message-batches-2024-09-24",
+        )
+        # The deployment's own credential is applied below, so a caller-supplied one must not
+        # ride along: without this a minted federation Bearer travels beside the caller's x-api-key.
+        return {
+            **without_caller_credential_headers(headers),
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
+            **auth_header,
+            "anthropic-beta": merged_beta,
         }
-        _headers.update(auth_header)
-        # Add beta header for message batches
-        if "anthropic-beta" not in headers:
-            headers["anthropic-beta"] = "message-batches-2024-09-24"
-        headers.update(_headers)
-        return headers
 
     def get_complete_batch_url(
         self,
@@ -98,10 +106,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         data: CreateBatchRequest,
     ) -> str:
         """Get the complete URL for batch creation request."""
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        if not api_base.endswith("/v1/messages/batches"):
-            api_base = f"{api_base.rstrip('/')}/v1/messages/batches"
-        return api_base
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
+        return ensure_api_route(api_base, "v1/messages/batches")
 
     def transform_create_batch_request(
         self,
@@ -150,9 +156,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         Returns:
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
+        return join_api_base(api_base, f"v1/messages/batches/{encoded_batch_id}")
 
     def transform_retrieve_batch_request(
         self,

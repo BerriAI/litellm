@@ -2,7 +2,7 @@
 Repository for the auto-router per-session rollup (LiteLLM_AutoRouterSession).
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.repositories.base_repository import BaseRepository
@@ -12,10 +12,21 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _AutoRouterSessionDb(Protocol):
+    @property
+    def litellm_autoroutersession(self) -> TableActions["prisma_models.LiteLLM_AutoRouterSession"]: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _AutoRouterSessionDb: ...
+
+
 class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_AutoRouterSession"]:
-        return self.prisma_client.db.litellm_autoroutersession
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.db.litellm_autoroutersession
 
     @property
     def model_class(self) -> type[LiteLLM_AutoRouterSession]:
@@ -28,7 +39,7 @@ class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
         row under the caller's api_key, so a key can only ever see what it wrote itself.
         """
         record: Final = await self.table.find_first(
-            where={"api_key": api_key, "session_id": session_id},  # mutable-ok: Prisma where filter must be a dict
-            order={"last_turn_at": "desc"},  # mutable-ok: Prisma order clause must be a dict
+            where={"api_key": api_key, "session_id": session_id},
+            order={"last_turn_at": "desc"},
         )
         return self._to_model(record)

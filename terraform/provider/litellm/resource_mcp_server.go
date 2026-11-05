@@ -24,6 +24,7 @@ func resourceLiteLLMMCPServer() *schema.Resource {
 			"alias": {
 				Type:        schema.TypeString,
 				Optional:    true,
+				Computed:    true,
 				Description: "Alias for the MCP server",
 			},
 			"description": {
@@ -58,10 +59,59 @@ func resourceLiteLLMMCPServer() *schema.Resource {
 				Default:  "none",
 				ValidateFunc: validation.StringInSlice([]string{
 					"none",
+					"api_key",
 					"bearer",
+					"bearer_token",
 					"basic",
+					"authorization",
+					"oauth2",
+					"aws_sigv4",
+					"token",
+					"oauth2_token_exchange",
+					"oauth2_id_jag",
+					"true_passthrough",
+					"oauth_delegate",
 				}, false),
-				Description: "Authentication type (none, bearer, basic)",
+				Description: "Authentication type the proxy uses against this server (none, api_key, bearer_token, basic, " +
+					"authorization, oauth2, aws_sigv4, token, oauth2_token_exchange, oauth2_id_jag, true_passthrough, " +
+					"oauth_delegate)",
+			},
+			"auth_value_wo": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				WriteOnly:    true,
+				Sensitive:    true,
+				RequiredWith: []string{"auth_value_wo_version"},
+				Description: "Write-only credential for api_key, bearer_token, basic and authorization auth types " +
+					"(the token or user:password). Sent to the proxy on every apply and never written to plan or " +
+					"state. Requires Terraform 1.11 or later. Bump auth_value_wo_version to push a new value.",
+			},
+			"auth_value_wo_version": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				RequiredWith: []string{"auth_value_wo"},
+				Description:  "Version of auth_value_wo. Change it whenever auth_value_wo changes to trigger an update.",
+			},
+			"client_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "OAuth 2.0 client id the proxy presents to the server's token endpoint (oauth2 auth types)",
+			},
+			"client_secret_wo": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				WriteOnly:    true,
+				Sensitive:    true,
+				RequiredWith: []string{"client_secret_wo_version", "client_id"},
+				Description: "Write-only OAuth 2.0 client secret paired with client_id. Sent to the proxy on every " +
+					"apply and never written to plan or state. Requires Terraform 1.11 or later. Bump " +
+					"client_secret_wo_version to push a new value.",
+			},
+			"client_secret_wo_version": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				RequiredWith: []string{"client_secret_wo"},
+				Description:  "Version of client_secret_wo. Change it whenever client_secret_wo changes to trigger an update.",
 			},
 			"mcp_access_groups": {
 				Type:        schema.TypeList,

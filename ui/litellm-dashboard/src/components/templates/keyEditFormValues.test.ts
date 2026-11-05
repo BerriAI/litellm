@@ -53,3 +53,17 @@ describe("keyEditFormSchema", () => {
     expect(parse({ default_estimated_output_tokens_per_model: '{"gpt-4": 4096}' }).success).toBe(true);
   });
 });
+
+describe("duration submission", () => {
+  const submit = (duration: string | null) =>
+    toSubmittedValues({ duration }, { canViewPolicies: false, canViewPrompts: false });
+
+  it.each(["", "  "])("omits a blank duration value %j", (duration) => {
+    expect(submit(duration)).not.toHaveProperty("duration");
+  });
+
+  it("preserves a typed duration and null", () => {
+    expect(submit("30d")).toHaveProperty("duration", "30d");
+    expect(submit(null)).toHaveProperty("duration", null);
+  });
+});

@@ -208,6 +208,7 @@ print(response.output_text)
 #                 {
 #                     "type": "input_image",
 #                     "image_url": f"data:image/jpeg;base64,{base64_file}",  # or data:application/pdf;base64,{base64_file}
+#                     "detail": "auto",
 #                 },
 #             ],
 #         }
@@ -308,18 +309,22 @@ response = client.responses.create(
 							{
 									"type": "input_image",
 									"image_url": f"data:image/jpeg;base64,{base64_image1}",
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"image_url": f"data:image/jpeg;base64,{base64_image2}",
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"file_id": file_id1,
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"file_id": file_id2,
+									"detail": "auto",
 							}
 					],
 			}
@@ -392,18 +397,22 @@ response = client.responses.create(
 							{
 									"type": "input_image",
 									"image_url": f"data:image/jpeg;base64,{base64_image1}",
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"image_url": f"data:image/jpeg;base64,{base64_image2}",
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"file_id": file_id1,
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"file_id": file_id2,
+									"detail": "auto",
 							}
 					],
 			}
@@ -475,18 +484,22 @@ response = client.responses.create(
 							{
 									"type": "input_image",
 									"image_url": f"data:image/jpeg;base64,{base64_image1}",
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"image_url": f"data:image/jpeg;base64,{base64_image2}",
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"file_id": file_id1,
+									"detail": "auto",
 							},
 							{
 									"type": "input_image",
 									"file_id": file_id2,
+									"detail": "auto",
 							}
 					],
 			}

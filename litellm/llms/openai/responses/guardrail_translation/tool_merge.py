@@ -6,6 +6,7 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.guardrail_translation.utils import merge_returned_tools_into_request_tools, openai_tool_name
 from litellm.responses.litellm_completion_transformation.custom_tools import custom_tool_grammar_suffix
 from litellm.responses.litellm_completion_transformation.transformation import (
     NAMESPACE_DESCRIPTION_SEPARATOR,
@@ -93,7 +94,7 @@ def _rebuilt_member(member: Tool, flattened: Tool, guardrailed: Tool, namespace_
             if key not in _CHAT_TOOL_TOP_LEVEL_KEYS and flattened.get(key) != value
         }
     )
-    return {**member, **changed_extras, **changed_function}  # mutable-ok: json.dumps rejects MappingProxyType
+    return {**member, **changed_extras, **changed_function}
 
 
 def _rebuilt_flattened_members(
@@ -137,7 +138,7 @@ def _rebuilt_namespace(
     )
     if not rebuilt_members:
         return ()
-    return ({**original, "tools": list(rebuilt_members)},)  # mutable-ok: json.dumps needs a plain dict and list
+    return ({**original, "tools": list(rebuilt_members)},)
 
 
 def _merged_original(
@@ -183,3 +184,18 @@ def merge_guardrailed_tools(
         tuple(tool for key, tool in zip(guardrailed_keys, guardrailed) if key not in owned_keys)
     )
     return tuple(chain(merged_originals, appended))
+
+
+def append_returned_tools(
+    original_tools: Sequence[Tool],
+    flattened_groups: Sequence[Sequence[Tool]],
+    returned_tools: Iterable[object],
+) -> tuple[Tool, ...]:
+    request_chat_tools: Final = tuple(chain.from_iterable(flattened_groups))
+    additions: Final = merge_returned_tools_into_request_tools(
+        request_tools=request_chat_tools, returned_tools=_validated_tools(returned_tools), tool_name=openai_tool_name
+    )[len(request_chat_tools) :]
+    return (
+        *original_tools,
+        *LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(additions),
+    )

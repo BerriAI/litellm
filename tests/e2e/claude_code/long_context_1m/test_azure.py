@@ -58,6 +58,7 @@ from typing import Sequence
 
 import pytest
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -155,6 +156,15 @@ def _build_long_prompt(target_tokens: int = TARGET_INPUT_TOKENS) -> str:
 
 @pytest.mark.skip(reason="stage red: 1M long_context not green on stage Azure Foundry deployments yet")
 @pytest.mark.covers("llm.messages.azure_foundry.long_context_1m.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_long_context_1m_azure(compat_result):
     """Drive the `claude` CLI (Azure (Microsoft Foundry)) with a ~210k-token prompt and the
     `context-1m-2025-08-07` beta header; assert no 400 / 413 and a

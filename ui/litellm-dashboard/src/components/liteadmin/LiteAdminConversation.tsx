@@ -1,7 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import { ArrowDown, Check, ChevronDown } from "lucide-react";
 import { MessageScroller, useMessageScroller } from "@shadcn/react/message-scroller";
-import { ChatMessageContent } from "@/components/chat/ChatMessages";
 import CopyButton from "@/components/shared/CopyButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +10,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import type { ActionEntry, ConversationEntry } from "./useLiteAdmin";
+import { AriaAnswer } from "./AriaAnswer";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const ACTION_STATUS: Record<ActionEntry["status"], string> = {
   review: "Review change",
@@ -34,19 +35,22 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <MessageScroller.Viewport
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-pending-scroll:invisible"
-          aria-label="LiteAdmin conversation"
+          aria-label={`${ARIA_AGENT_LABEL} conversation`}
         >
-          <MessageScroller.Content className="flex flex-col gap-4 p-4" aria-busy={thinking}>
+          <MessageScroller.Content className="flex flex-col gap-6 p-4 sm:p-6" aria-busy={thinking}>
             {entries.map((entry) => (
               <MessageScroller.Item key={entry.id} messageId={entry.id}>
-                {entry.kind === "message" && (
-                  <ChatMessageContent
-                    message={entry.message}
-                    allowImages={false}
-                    isLastMessage={false}
-                    isStreaming={false}
-                  />
-                )}
+                {entry.kind === "message" &&
+                  (entry.message.role === "assistant" ? (
+                    <AriaAnswer message={entry.message} chart={entry.chart} question={entry.question} />
+                  ) : (
+                    <article
+                      aria-label="Your question"
+                      className="ml-auto w-fit max-w-[90%] whitespace-pre-wrap break-words rounded-xl bg-muted px-4 py-3 text-sm leading-relaxed"
+                    >
+                      {entry.message.content}
+                    </article>
+                  ))}
                 {entry.kind === "action" && (
                   <ActionCard entry={entry} open={open} reviewRef={reviewRef} onAnswer={onAnswer} />
                 )}
@@ -59,7 +63,7 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
             ))}
             {thinking && (
               <MessageScroller.Item messageId="thinking">
-                <div role="status" aria-label="LiteAdmin is working" className="space-y-2">
+                <div role="status" aria-label={`${ARIA_AGENT_LABEL} is working`} className="space-y-2">
                   <Skeleton className="h-3 w-3/4" />
                   <Skeleton className="h-3 w-1/2" />
                   <span className="sr-only">Working…</span>
@@ -68,14 +72,6 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
             )}
           </MessageScroller.Content>
         </MessageScroller.Viewport>
-        {entries.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-2 p-6">
-            <p className="font-medium">How can I help?</p>
-            <p className="text-sm text-muted-foreground">
-              Check budgets, inspect usage, or manage keys and teams. You review every change before it runs.
-            </p>
-          </div>
-        )}
         <MessageScroller.Button
           aria-label="Jump to latest"
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-sm data-[active=false]:pointer-events-none data-[active=false]:opacity-0"
@@ -99,8 +95,7 @@ function ActionCard({
   useEffect(() => {
     if (!open || !review) return;
     scrollToEnd();
-    reviewRef.current?.focus({ preventScroll: true });
-  }, [entry.id, open, review, reviewRef, scrollToEnd]);
+  }, [entry.id, open, review, scrollToEnd]);
   const answer = (approved: boolean) => {
     scrollToEnd();
     onAnswer(entry.id, approved);

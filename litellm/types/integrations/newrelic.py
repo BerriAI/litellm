@@ -88,7 +88,7 @@ NewRelicMetric = NewRelicCountMetric | NewRelicGaugeMetric | NewRelicSummaryMetr
 #: ``interval.ms`` has a dot in it, so the functional TypedDict form is required.
 NewRelicMetricCommon = TypedDict(
     "NewRelicMetricCommon",
-    {  # mutable-ok: functional TypedDict requires a dict-literal fields argument ("interval.ms" key)
+    {
         "timestamp": ReadOnly[int],
         "interval.ms": ReadOnly[int],
     },
