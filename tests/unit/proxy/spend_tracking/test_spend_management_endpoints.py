@@ -3721,8 +3721,8 @@ async def test_ui_view_spend_logs_excludes_exact_key_alias_before_pagination(cli
             "request_id": f"req{i}",
             "api_key": "sk-test-key",
             "spend": 0.05,
-            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
-            "model": "gpt-4",
+            "startTime": "2026-08-29T10:00:00+00:00",
+            "model": "test-model",
             "metadata": json.dumps({"user_api_key_alias": alias}) if alias is not None else "{}",
         }
         for i, alias in enumerate(aliases)
@@ -3744,14 +3744,13 @@ async def test_ui_view_spend_logs_excludes_exact_key_alias_before_pagination(cli
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
     try:
-        start_date, end_date = _default_date_range()
         responses = [
             client.get(
                 route,
                 params={
                     "exclude_key_alias": "noisy",
-                    "start_date": start_date,
-                    "end_date": end_date,
+                    "start_date": "2026-08-29 00:00:00",
+                    "end_date": "2026-08-30 00:00:00",
                     "page": page,
                     "page_size": 2,
                 },
@@ -7486,20 +7485,15 @@ async def test_ui_view_spend_logs_grouped_exclusion_reaches_page_count_and_repre
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
     statement_timeout_reads(mock_prisma, mock_prisma.db.query_raw)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
-        lambda user_api_key_dict: True,
-    )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
     try:
-        start_date, end_date = _default_date_range()
         response = client.get(
             "/spend/logs/ui",
             params={
-                "start_date": start_date,
-                "end_date": end_date,
+                "start_date": "2026-08-29 00:00:00",
+                "end_date": "2026-08-30 00:00:00",
                 "group_by_session": "true",
                 "exclude_key_alias": "noisy",
                 "page_size": 1,

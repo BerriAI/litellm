@@ -38,6 +38,7 @@ import {
 import { RequestLogsTable } from "./RequestLogsTable";
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
+const ALIAS_QUERY_PARSERS = { key_alias: parseAsString, exclude_key_alias: parseAsString };
 const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
 const findLogById = (logs: readonly LogEntry[], logId: string): LogEntry | null =>
   logs.find((log) => log.request_id === logId) ?? logs.find((log) => log.litellm_call_id === logId) ?? null;
@@ -55,10 +56,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [localFilters, setLocalFilters] = useState<ColumnFiltersState>([]);
-  const [{ key_alias, exclude_key_alias }, setAliasParams] = useQueryStates(
-    { key_alias: parseAsString, exclude_key_alias: parseAsString },
-    { history: "push" },
-  );
+  const [{ key_alias, exclude_key_alias }, setAliasParams] = useQueryStates(ALIAS_QUERY_PARSERS, { history: "push" });
   const [observedAliasParams, setObservedAliasParams] = useState({ key_alias, exclude_key_alias });
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const aliasFilters: ColumnFiltersState = [];
