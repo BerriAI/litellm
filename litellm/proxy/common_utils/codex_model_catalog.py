@@ -37,6 +37,7 @@ from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -583,7 +584,7 @@ def _catalog_row(
 
 
 OPENAI_API_HOST: Final = "api.openai.com"
-OPENAI_HOST_SUFFIX: Final = "openai.com"
+FEDRAMP_KEY_PREFIXES: Final = ("sk-proj-fedramp-", "sk-svcacct-fedramp-")
 
 
 _DEPLOYMENT_BASE_PARAMS: Final = ("api_base", "base_url")
@@ -591,7 +592,7 @@ _DEPLOYMENT_BASE_PARAMS: Final = ("api_base", "base_url")
 
 def _is_openai_host(url: object) -> bool:
     host: Final = urlparse(url).hostname if isinstance(url, str) else None
-    return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_HOST_SUFFIX}"))
+    return host == OPENAI_API_HOST
 
 
 def _is_openai_origin(bases: Sequence[object]) -> bool:
@@ -646,9 +647,13 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
         *(params.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
         *(credential.get(key) for key in _DEPLOYMENT_BASE_PARAMS),
     )
-    api_key: Final = effective.get("api_key")
     if _deployment_provider(effective) != "openai" or not _is_openai_origin(bases):
         return None
+    key: Final = _resolved_key(effective.get("api_key"))
+    return None if key is None or key.startswith(FEDRAMP_KEY_PREFIXES) else key
+
+
+def _resolved_key(api_key: object) -> str | None:
     if not isinstance(api_key, str) or not api_key:
         return os.getenv("OPENAI_API_KEY") or None
     from litellm.secret_managers.main import (
@@ -656,6 +661,10 @@ def _deployment_openai_key(deployment: DeploymentTypedDict) -> str | None:
     )
 
     return (get_secret_str(api_key) if api_key.startswith("os.environ/") else api_key) or None
+
+
+def uses_vendored_codex_catalog() -> bool:
+    return is_offline_mode() or os.getenv("LITELLM_LOCAL_CODEX_CATALOG", "").strip().lower() == "true"
 
 
 def codex_catalog_openai_key(
@@ -666,7 +675,11 @@ def codex_catalog_openai_key(
     """The OpenAI API key the catalog fetch authenticates with: the first one among the listed entries'
     deployments that routes to OpenAI with every `api_base` and `base_url` it or its credential sets being
     OpenAI's own, ``OPENAI_API_KEY`` from the environment for one that sets no key. A key for an
-    OpenAI-compatible server never leaves for OpenAI, and a listing without an OpenAI deployment sends none."""
+    OpenAI-compatible server or a FedRAMP key (Codex sends those to ``gov.chatgpt.com``) never leaves for
+    OpenAI's commercial catalog, a listing without an OpenAI deployment sends none, and no key is looked up
+    while the catalog stays local."""
+    if uses_vendored_codex_catalog():
+        return None
     registry: Final = llm_router.registry() if llm_router is not None else None
     deployments: Final = (
         tuple(

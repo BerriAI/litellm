@@ -8,7 +8,7 @@ import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPResponseLimitError
 from litellm.proxy.common_utils.codex_catalog_source import (
     CODEX_CATALOG_BASE_URL,
     CODEX_CATALOG_MAX_BYTES,
@@ -280,6 +280,47 @@ def test_the_cache_keeps_only_the_newest_releases() -> None:
     newest_models_url: Final = next(url for url in _tree(versions[-1]) if url.endswith("models.json"))
     assert tree.calls.count(oldest_models_url) == 2, tree.calls
     assert tree.calls.count(newest_models_url) == 1, tree.calls
+
+
+def test_releases_no_catalog_answered_leave_the_cache_before_a_fetched_one() -> None:
+    tree: Final = _RawTree(_tree(RELEASE))
+    clock: Final = _Clock()
+    source: Final = _source(tree, clock, retry_seconds=300, cached_versions=2)
+
+    async def walk() -> None:
+        await source.stock(RELEASE)
+        for minor in range(201, 205):
+            clock.now += 301
+            await source.stock(f"0.{minor}.0")
+        clock.now += 301
+        await source.stock(RELEASE)
+
+    asyncio.run(walk())
+    models_url: Final = next(url for url in _tree(RELEASE) if url.endswith("models.json"))
+    assert tree.calls.count(models_url) == 1, tree.calls
+
+
+def test_a_catalog_url_that_redirects_to_itself_serves_the_vendored_pair_and_waits_out_the_retry_window() -> None:
+    hops: Final[list[str]] = []
+
+    def redirect_to_itself(request: httpx.Request) -> httpx.Response:
+        hops.append(str(request.url))
+        return httpx.Response(302, headers={"location": str(request.url)})
+
+    source: Final = CodexCatalogSource(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(redirect_to_itself)), clock=_Clock()
+    )
+
+    async def ask_twice() -> tuple[str, int, str]:
+        first: Final = await source.stock(RELEASE)
+        hops_for_first: Final = len(hops)
+        second: Final = await source.stock(RELEASE)
+        return first.source, hops_for_first, second.source
+
+    first_source, hops_for_first, second_source = asyncio.run(ask_twice())
+    assert first_source == second_source == vendored_codex_stock().source
+    assert hops_for_first > 0
+    assert len(hops) == hops_for_first
 
 
 OPENAI_KEY: Final = "sk-unit-openai-key"

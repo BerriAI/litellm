@@ -40,7 +40,6 @@ import httpx
 from pydantic import ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.offline_mode import is_offline_mode
 from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BUNDLED_VERSION,
@@ -49,6 +48,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     bundled_codex_models,
     codex_base_instructions,
+    uses_vendored_codex_catalog,
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
@@ -127,17 +127,12 @@ def _default_client() -> _AsyncGetClient:
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.CodexModelCatalog)
 
 
+_VENDORED_SOURCE: Final = f"vendored {CODEX_BUNDLED_VERSION}"
+
+
 def vendored_codex_stock() -> CodexStock:
     """The pair vendored with LiteLLM, served when the requesting release's own cannot be."""
-    return CodexStock(
-        models=bundled_codex_models(),
-        instructions=codex_base_instructions(),
-        source=f"vendored {CODEX_BUNDLED_VERSION}",
-    )
-
-
-def uses_vendored_codex_catalog() -> bool:
-    return is_offline_mode() or os.getenv("LITELLM_LOCAL_CODEX_CATALOG", "").strip().lower() == "true"
+    return CodexStock(models=bundled_codex_models(), instructions=codex_base_instructions(), source=_VENDORED_SOURCE)
 
 
 def codex_release_tag(client_version: str | None) -> str | None:
@@ -271,8 +266,14 @@ class CodexCatalogSource:
         self._cache[slot] = entry
         self._cache.move_to_end(slot)
         while len(self._cache) > self._cached_versions:
-            self._cache.popitem(last=False)
+            del self._cache[self._eviction_victim()]
         return entry.stock
+
+    def _eviction_victim(self) -> _CacheSlot:
+        """The least recently asked release still on the vendored pair, else the least recently asked one, so
+        releases no catalog answered push each other out before a fetched release goes."""
+        vendored: Final = (slot for slot, cached in self._cache.items() if cached.stock.source == _VENDORED_SOURCE)
+        return next(vendored, next(iter(self._cache)))
 
     async def _fetch(
         self, tag: str, version: str, openai_api_key: str | None, *, github_fallback: bool
@@ -345,7 +346,7 @@ class CodexCatalogSource:
             response: Final = await client.get(
                 url, headers=headers, timeout=self._timeout, max_response_bytes=CODEX_CATALOG_MAX_BYTES
             )
-        except (httpx.HTTPError, httpx.InvalidURL, HTTPResponseLimitError) as error:
+        except (httpx.HTTPError, httpx.InvalidURL, HTTPResponseLimitError, ValueError) as error:
             return _FetchFailed(reason=f"{type(error).__name__} fetching {url}")
         if response.status_code != 200:
             return _FetchFailed(reason=f"HTTP {response.status_code} from {url}")
