@@ -2804,7 +2804,7 @@ class PrometheusLogger(CustomLogger):
                 response_cost=0,
             )
         except Exception as e:
-            verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
+            verbose_logger.exception("prometheus Layer Error(): Exception occurred - %s", e)
 
     def _extract_status_code(
         self,
@@ -3115,7 +3115,7 @@ class PrometheusLogger(CustomLogger):
             )
 
         except Exception as e:
-            verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
+            verbose_logger.exception("prometheus Layer Error(): Exception occurred - %s", e)
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
