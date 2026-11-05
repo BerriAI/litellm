@@ -48,6 +48,10 @@ class MockGuardrail(CustomGuardrail):
             yield chunk
 
 
+class InheritedIteratorGuardrail(MockGuardrail):
+    pass
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hook", ("pre_call", "during_call", "post_call", "streaming", "iterator"))
 @pytest.mark.parametrize("deployment_count", (0, 1, 2))
@@ -56,7 +60,10 @@ async def test_proxy_logging_hooks_load_balance_once_per_request(hook: str, depl
     MockGuardrail.call_count = 0
 
     guardrail_1 = MockGuardrail(guardrail_name="content-filter", guardrail_id="g1")
-    guardrail_2 = MockGuardrail(guardrail_name="content-filter", guardrail_id="g2")
+    second_guardrail_class: Final = (
+        InheritedIteratorGuardrail if hook == "iterator" and deployment_count == 2 else MockGuardrail
+    )
+    guardrail_2 = second_guardrail_class(guardrail_name="content-filter", guardrail_id="g2")
 
     guardrail_list = [
         {

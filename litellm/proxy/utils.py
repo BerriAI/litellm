@@ -2580,26 +2580,6 @@ class ProxyLogging:
                 raise HTTPException(status_code=400, detail={"error": response})
         return data
 
-    def _should_use_guardrail_load_balancing(
-        self,
-        guardrail_name: str,
-    ) -> bool:
-        """
-        Check if load balancing should be used for this guardrail.
-
-        Returns True if the router has multiple deployments for this guardrail name.
-        """
-        from litellm.proxy.proxy_server import llm_router
-
-        if llm_router is None:
-            return False
-        router_settings: Final = llm_router.settings()
-        if not router_settings.is_set("guardrail_list"):
-            return False
-
-        matching: Final = [g for g in router_settings.guardrail_list if g.get("guardrail_name") == guardrail_name]
-        return len(matching) > 1
-
     async def _execute_guardrail_hook(
         self,
         callback: "CustomGuardrail",
@@ -2656,50 +2636,6 @@ class ProxyLogging:
             )
         else:
             raise ValueError(f"Unknown hook_type: {hook_type}")
-
-    async def _execute_guardrail_with_load_balancing(
-        self,
-        guardrail_name: str,
-        hook_type: str,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth | None,
-        call_type: CallTypesLiteral,
-        response: LLMResponseTypes | None = None,
-    ) -> object:
-        """
-        Execute a guardrail using the router's load balancing.
-
-        Args:
-            guardrail_name: Name of the guardrail
-            hook_type: One of "pre_call", "during_call", "post_call"
-            data: Request data
-            user_api_key_dict: User API key auth
-            call_type: Type of call
-            response: Response object (for post_call hooks)
-
-        Returns:
-            Result from the guardrail execution
-        """
-        from litellm.proxy.proxy_server import llm_router
-
-        if llm_router is None:
-            raise ValueError("Router not initialized")
-
-        # Select guardrail using router's load balancing
-        selected_guardrail: Final = llm_router.settings().guardrail(guardrail_name)
-
-        callback: Final[CustomGuardrail | None] = selected_guardrail.get("callback")
-        if callback is None:
-            raise ValueError(f"No callback found for guardrail: {guardrail_name}")
-
-        return await self._execute_guardrail_hook(
-            callback=callback,
-            hook_type=hook_type,
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            call_type=call_type,
-            response=response,
-        )
 
     async def _process_guardrail_callback(
         self,
@@ -4845,7 +4781,19 @@ class ProxyLogging:
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         selected_iterator_callbacks: Final = _load_balanced_callbacks(tuple(cb for cb, _ in caps.iterator_overrides))
         selected_iterator_overrides: Final = tuple(
-            (cb, "override" if "async_post_call_streaming_iterator_hook" in type(cb).__dict__ else "apply_guardrail")
+            (
+                cb,
+                next(
+                    kind
+                    for original, kind in caps.iterator_overrides
+                    if original is cb
+                    or (
+                        isinstance(original, CustomGuardrail)
+                        and isinstance(cb, CustomGuardrail)
+                        and original.guardrail_name == cb.guardrail_name
+                    )
+                ),
+            )
             for cb in selected_iterator_callbacks
         )
         running_overrides: Final = tuple(
