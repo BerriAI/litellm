@@ -7,7 +7,6 @@ from the Google Interactions API, similar to the responses API streaming iterato
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import Any, Final
 
@@ -16,15 +15,6 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
-from litellm.interactions.long_decode import (
-    HOP_FAILURES,
-    continuation_token_of,
-    hop_request,
-    interaction_of,
-    log_failed_hop,
-    sum_usage,
-    usage_of,
-)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -40,7 +30,6 @@ from litellm.utils import CustomStreamWrapper
 _INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
     object, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
-_INTERACTIONS_STREAMING_EVENT: Final = TypeAdapter(dict[str, object])
 
 
 class BaseInteractionsAPIStreamingIterator:
@@ -58,18 +47,11 @@ class BaseInteractionsAPIStreamingIterator:
         logging_obj: LiteLLMLoggingObj,
         litellm_metadata: dict[str, Any] | None = None,
         custom_llm_provider: str | None = None,
-        request_body: Mapping[str, object] | None = None,
     ):
         self.response = response
         self.model = model
         self.logging_obj = logging_obj
         self.finished = False
-        self.request_body = request_body
-        self.hop_count = 1
-        self.pending_hop: Mapping[str, object] | None = None
-        self.held_completed: InteractionsAPIStreamingResponse | None = None
-        self.hop_tokens: tuple[str, ...] = ()
-        self.hop_usages: tuple[Mapping[str, object], ...] = ()
         self.interactions_api_config = interactions_api_config
         self.completed_response: InteractionsAPIStreamingResponse | None = None
         self.start_time = logging_obj.start_time
@@ -102,7 +84,7 @@ class BaseInteractionsAPIStreamingIterator:
 
         # Handle "[DONE]" marker
         if stripped_chunk == STREAM_SSE_DONE_STRING:
-            self.finished = self.pending_hop is None
+            self.finished = True
             return None
 
         try:
@@ -113,16 +95,11 @@ class BaseInteractionsAPIStreamingIterator:
             if isinstance(parsed_chunk, dict):
                 if self.logging_obj.completion_start_time is None:
                     self.logging_obj.update_completion_start_time(completion_start_time=datetime.now())
-                event: Final = _INTERACTIONS_STREAMING_EVENT.validate_python(parsed_chunk)
-                if self.hop_count > 1 and event.get("event_type") == "interaction.created":
-                    return None
                 streaming_response: Final = self.interactions_api_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=dict(self._with_merged_usage(event)),
+                    parsed_chunk=parsed_chunk,
                     logging_obj=self.logging_obj,
                 )
-                if self._holds_for_next_hop(event, streaming_response):
-                    return None
 
                 # Store the completed response.
                 # Legacy schema signals completion via status="completed".
@@ -143,46 +120,6 @@ class BaseInteractionsAPIStreamingIterator:
             verbose_logger.debug("Failed to parse streaming chunk: %s...", stripped_chunk[:200])
             return None
 
-    def _with_merged_usage(self, event: Mapping[str, object]) -> Mapping[str, object]:
-        """The final hop's interaction.completed carries usage summed over every hop, like a non-streaming decode."""
-        interaction: Final = interaction_of(event)
-        usage: Final = usage_of(interaction)
-        if (
-            not self.hop_usages
-            or event.get("event_type") != "interaction.completed"
-            or interaction is None
-            or usage is None
-        ):
-            return event
-        return {**event, "interaction": {**interaction, "usage": sum_usage((*self.hop_usages, usage))}}
-
-    def _holds_for_next_hop(
-        self, event: Mapping[str, object], streaming_response: InteractionsAPIStreamingResponse
-    ) -> bool:
-        """A hop ending in requires_continuation is held back, and the stream goes on with the next hop."""
-        interaction: Final = interaction_of(event)
-        if self.request_body is None or event.get("event_type") != "interaction.completed" or interaction is None:
-            return False
-        if (token := continuation_token_of(interaction)) is None or token in self.hop_tokens:
-            self.held_completed = None
-            return False
-        usage: Final = usage_of(interaction)
-        self.hop_usages = (*self.hop_usages, *((usage,) if usage is not None else ()))
-        self.pending_hop = hop_request(self.request_body, interaction, token)
-        self.held_completed = streaming_response
-        self.hop_tokens = (*self.hop_tokens, token)
-        return True
-
-    def _release_held_completed(self) -> InteractionsAPIStreamingResponse | None:
-        """A hop that could not be opened ends the stream with the held requires_continuation event instead."""
-        held: Final = self.held_completed
-        self.pending_hop = None
-        self.held_completed = None
-        if held is not None:
-            self.completed_response = held
-            self._handle_logging_completed_response()
-        return held
-
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses."""
 
@@ -200,8 +137,6 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         logging_obj: LiteLLMLoggingObj,
         litellm_metadata: dict[str, Any] | None = None,
         custom_llm_provider: str | None = None,
-        request_body: Mapping[str, object] | None = None,
-        open_next_hop: Callable[[Mapping[str, object]], Awaitable[httpx.Response]] | None = None,
     ):
         super().__init__(
             response=response,
@@ -210,23 +145,8 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
             logging_obj=logging_obj,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
-            request_body=request_body if open_next_hop is not None else None,
         )
-        self.open_next_hop = open_next_hop
         self.stream_iterator = aiter_sse_lines(response.aiter_text())
-
-    async def _start_next_hop(self) -> InteractionsAPIStreamingResponse | None:
-        if self.pending_hop is None or self.open_next_hop is None:
-            return None
-        try:
-            response: Final = await self.open_next_hop(self.pending_hop)
-        except HOP_FAILURES as e:
-            log_failed_hop(e)
-            return self._release_held_completed()
-        self.stream_iterator = aiter_sse_lines(response.aiter_text())
-        self.hop_count += 1
-        self.pending_hop = None
-        return None
 
     def __aiter__(self):
         return self
@@ -238,14 +158,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
                 try:
                     chunk = await self.stream_iterator.__anext__()
                 except StopAsyncIteration:
-                    if self.pending_hop is not None:
-                        held = await self._start_next_hop()
-                        if held is not None:
-                            return held
-                        continue
                     self.finished = True
-                    if (held := self._release_held_completed()) is not None:
-                        return held
                     raise StopAsyncIteration
 
                 result = self._process_chunk(chunk)
@@ -291,8 +204,6 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
         logging_obj: LiteLLMLoggingObj,
         litellm_metadata: dict[str, Any] | None = None,
         custom_llm_provider: str | None = None,
-        request_body: Mapping[str, object] | None = None,
-        open_next_hop: Callable[[Mapping[str, object]], httpx.Response] | None = None,
     ):
         super().__init__(
             response=response,
@@ -301,23 +212,8 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
             logging_obj=logging_obj,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
-            request_body=request_body if open_next_hop is not None else None,
         )
-        self.open_next_hop = open_next_hop
         self.stream_iterator = iter_sse_lines(response.iter_text())
-
-    def _start_next_hop(self) -> InteractionsAPIStreamingResponse | None:
-        if self.pending_hop is None or self.open_next_hop is None:
-            return None
-        try:
-            response: Final = self.open_next_hop(self.pending_hop)
-        except HOP_FAILURES as e:
-            log_failed_hop(e)
-            return self._release_held_completed()
-        self.stream_iterator = iter_sse_lines(response.iter_text())
-        self.hop_count += 1
-        self.pending_hop = None
-        return None
 
     def __iter__(self):
         return self
@@ -329,14 +225,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
                 try:
                     chunk = next(self.stream_iterator)
                 except StopIteration:
-                    if self.pending_hop is not None:
-                        held = self._start_next_hop()
-                        if held is not None:
-                            return held
-                        continue
                     self.finished = True
-                    if (held := self._release_held_completed()) is not None:
-                        return held
                     raise StopIteration
 
                 result = self._process_chunk(chunk)

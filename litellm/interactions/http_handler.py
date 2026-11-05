@@ -11,14 +11,6 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
-from litellm.interactions.long_decode import (
-    collect_hops_async,
-    collect_hops_sync,
-    merge_hops,
-    merged_response,
-    parse_body,
-    validated_request_body,
-)
 from litellm.interactions.streaming_iterator import (
     InteractionsAPIStreamingIterator,
     SyncInteractionsAPIStreamingIterator,
@@ -183,31 +175,34 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             },
         )
 
-        request_body: Final = validated_request_body(data)
-
-        def post(body: Mapping[str, object], streaming: bool = False) -> httpx.Response:
-            return sync_httpx_client.post(
-                url=api_base, headers=headers, json=dict(body), timeout=timeout or request_timeout, stream=streaming
-            )
-
         try:
             if stream:
-                return SyncInteractionsAPIStreamingIterator(
-                    response=post(request_body, streaming=True),
-                    model=model,
-                    interactions_api_config=interactions_api_config,
-                    logging_obj=logging_obj,
-                    request_body=request_body,
-                    open_next_hop=lambda body: post(body, streaming=True),
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout or request_timeout,
+                    stream=True,
                 )
-            response: Final = post(request_body)
+                return self._create_sync_streaming_iterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    interactions_api_config=interactions_api_config,
+                )
+            else:
+                response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout or request_timeout,
+                )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=interactions_api_config)
 
-        hops: Final = collect_hops_sync(parse_body(response), request_body, post)
         return interactions_api_config.transform_response(
             model=model,
-            raw_response=response if len(hops) == 1 else merged_response(response, merge_hops(hops)),
+            raw_response=response,
             logging_obj=logging_obj,
         )
 
@@ -275,31 +270,72 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             },
         )
 
-        request_body: Final = validated_request_body(data)
-
-        async def post(body: Mapping[str, object], streaming: bool = False) -> httpx.Response:
-            return await async_httpx_client.post(
-                url=api_base, headers=headers, json=dict(body), timeout=timeout or request_timeout, stream=streaming
-            )
-
         try:
             if stream:
-                return InteractionsAPIStreamingIterator(
-                    response=await post(request_body, streaming=True),
-                    model=model,
-                    interactions_api_config=interactions_api_config,
-                    logging_obj=logging_obj,
-                    request_body=request_body,
-                    open_next_hop=lambda body: post(body, streaming=True),
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout or request_timeout,
+                    stream=True,
                 )
-            response: Final = await post(request_body)
+                return self._create_async_streaming_iterator(
+                    response=response,
+                    model=model,
+                    logging_obj=logging_obj,
+                    interactions_api_config=interactions_api_config,
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=data,
+                    timeout=timeout or request_timeout,
+                )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=interactions_api_config)
 
-        hops: Final = await collect_hops_async(parse_body(response), request_body, post)
         return interactions_api_config.transform_response(
             model=model,
-            raw_response=response if len(hops) == 1 else merged_response(response, merge_hops(hops)),
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def _create_sync_streaming_iterator(
+        self,
+        response: httpx.Response,
+        model: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        interactions_api_config: BaseInteractionsAPIConfig,
+    ) -> SyncInteractionsAPIStreamingIterator:
+        """Create a synchronous streaming iterator.
+
+        Google AI's streaming format uses SSE (Server-Sent Events).
+        Returns a proper streaming iterator that yields chunks as they arrive.
+        """
+        return SyncInteractionsAPIStreamingIterator(
+            response=response,
+            model=model,
+            interactions_api_config=interactions_api_config,
+            logging_obj=logging_obj,
+        )
+
+    def _create_async_streaming_iterator(
+        self,
+        response: httpx.Response,
+        model: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        interactions_api_config: BaseInteractionsAPIConfig,
+    ) -> InteractionsAPIStreamingIterator:
+        """Create an asynchronous streaming iterator.
+
+        Google AI's streaming format uses SSE (Server-Sent Events).
+        Returns a proper streaming iterator that yields chunks as they arrive.
+        """
+        return InteractionsAPIStreamingIterator(
+            response=response,
+            model=model,
+            interactions_api_config=interactions_api_config,
             logging_obj=logging_obj,
         )
 
