@@ -1209,6 +1209,11 @@
       "count": 1
     }
   },
+  "src/components/ModelInfoEditForm.tsx": {
+    "max-lines": {
+      "count": 1
+    }
+  },
   "src/components/Navbar/BlogDropdown/BlogDropdown.test.tsx": {
     "max-nested-callbacks": {
       "count": 10
@@ -1319,6 +1324,11 @@
       "count": 1
     }
   },
+  "src/components/add_model/ComplexityRouterConfig.tsx": {
+    "max-lines": {
+      "count": 1
+    }
+  },
   "src/components/add_model/RouterConfigBuilder.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1341,6 +1351,11 @@
   },
   "src/components/add_model/auto_router_connection_test.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/add_model/build_complexity_router_config.ts": {
+    "max-lines": {
       "count": 1
     }
   },
