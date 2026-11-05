@@ -303,7 +303,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> InteractionsAPIStreamingResponse:
         """Parse streaming chunk."""
         verbose_logger.debug("Google AI Interactions streaming chunk: %s", parsed_chunk)
-        return InteractionsAPIStreamingResponse(**parsed_chunk)
+        return InteractionsAPIStreamingResponse.model_validate(parsed_chunk)
 
     # GET / DELETE / CANCEL - just build URLs, responses match spec directly
 
