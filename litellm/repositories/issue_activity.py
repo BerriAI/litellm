@@ -1,7 +1,9 @@
 """Issue investigations reuse the same aggregate filters as entity Activity."""
 
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import date
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # generated Prisma structural database interface
 
 from pydantic import BaseModel, TypeAdapter
@@ -36,6 +38,17 @@ class _Counts(BaseModel, frozen=True):
     entities: int
     models: int
     requests: int
+
+
+class _KeyLabel(BaseModel, frozen=True):
+    api_key: str
+    metadata: KeyMetadata
+
+
+class _UserLabel(BaseModel, frozen=True):
+    user_id: str
+    user_alias: str | None
+    user_email: str | None
 
 
 def issue_activity_scope(cohort: IssueCohort, start: date, end: date) -> DailyActivityScope:
@@ -79,18 +92,16 @@ class IssueActivityRepository:
     async def keys(
         self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int
     ) -> DailyActivityKeyPageResponse:
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("Read between one and 100 keys with a nonnegative offset")
         page: Final = await self.activity.key_page(issue_activity_scope(cohort, start, end), limit=limit, offset=offset)
-        metadata: Final = await self.activity.key_metadata(
-            frozenset(row.api_key for row in page.rows if row.api_key), None
-        )
+        metadata: Final = await self._key_labels(tuple(row.api_key for row in page.rows if row.api_key))
         return DailyActivityKeyPageResponse(
             api_keys=[
                 KeySpendActivityRow(
                     api_key=api_key_bucket(row.api_key),
                     metrics=KeySpendMetrics.model_validate(asdict(row)),
-                    metadata=KeyMetadata.model_validate(asdict(metadata[row.api_key]))
-                    if row.api_key in metadata
-                    else KeyMetadata(),
+                    metadata=metadata.get(row.api_key, KeyMetadata()),
                 )
                 for row in page.rows
             ],
@@ -102,19 +113,23 @@ class IssueActivityRepository:
     async def users(
         self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int
     ) -> DailyActivityUserPageResponse:
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("Read between one and 100 users with a nonnegative offset")
         if cohort.scope_type == "team":
             raise ValueError("Historical team aggregates do not retain user membership")
         page: Final = await self.activity.user_page(
             issue_activity_scope(cohort, start, end), limit=limit, offset=offset
         )
-        metadata: Final = await self.activity.user_metadata(frozenset(row.user_id for row in page.rows if row.user_id))
+        metadata: Final = await self._user_labels(tuple(row.user_id for row in page.rows if row.user_id))
         return DailyActivityUserPageResponse(
             users=tuple(
                 UserActivityRow.model_validate(
                     {
                         **asdict(row),
                         **(
-                            asdict(metadata[row.user_id]) if row.user_id is not None and row.user_id in metadata else {}
+                            metadata[row.user_id].model_dump()
+                            if row.user_id is not None and row.user_id in metadata
+                            else {}
                         ),
                     }
                 )
@@ -124,6 +139,47 @@ class IssueActivityRepository:
             limit=limit,
             offset=offset,
         )
+
+    async def _key_labels(self, ids: tuple[str, ...]) -> Mapping[str, KeyMetadata]:
+        if len(ids) > 100:
+            raise ValueError("Read at most 100 key labels")
+        if not ids:
+            return MappingProxyType({})
+        rows: Final = TypeAdapter(tuple[_KeyLabel, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT w.api_key,jsonb_build_object(
+                    'key_alias',LEFT(COALESCE(k.key_alias,d.key_alias),256),
+                    'team_id',COALESCE(k.team_id,d.team_id),'user_id',COALESCE(k.user_id,d.user_id),
+                    'user_email',CASE WHEN length(u.user_email)<=320 THEN u.user_email END,
+                    'key_exists',CASE WHEN k.token IS NOT NULL THEN true WHEN d.id IS NOT NULL THEN false END
+                ) AS metadata
+                FROM unnest($1::text[]) w(api_key)
+                LEFT JOIN "LiteLLM_VerificationToken" k ON k.token=w.api_key
+                LEFT JOIN LATERAL (
+                    SELECT id,key_alias,team_id,user_id FROM "LiteLLM_DeletedVerificationToken"
+                    WHERE token=w.api_key AND k.token IS NULL ORDER BY deleted_at DESC,id DESC LIMIT 1
+                ) d ON true
+                LEFT JOIN "LiteLLM_UserTable" u ON u.user_id=COALESCE(k.user_id,d.user_id)
+                LIMIT 100""",
+                list(ids),
+            )
+        )
+        return MappingProxyType({row.api_key: row.metadata for row in rows})
+
+    async def _user_labels(self, ids: tuple[str, ...]) -> Mapping[str, _UserLabel]:
+        if len(ids) > 100:
+            raise ValueError("Read at most 100 user labels")
+        if not ids:
+            return MappingProxyType({})
+        rows: Final = TypeAdapter(tuple[_UserLabel, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT user_id,LEFT(user_alias,256) AS user_alias,
+                    CASE WHEN length(user_email)<=320 THEN user_email END AS user_email
+                FROM "LiteLLM_UserTable" WHERE user_id=ANY($1::text[]) LIMIT 100""",
+                list(ids),
+            )
+        )
+        return MappingProxyType({row.user_id: row for row in rows})
 
     async def _counts(self, scope: DailyActivityScope) -> _Counts:
         where, params = build_where_clause(scope)

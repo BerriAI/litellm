@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
@@ -17,6 +17,7 @@ from prisma.types import DatasourceOverride
 from psycopg import sql
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase
 from litellm.repositories.daily_activity_sql import build_bounded_daily_activity_sql
 from litellm.repositories.issue_activity import IssueActivityRepository
 from litellm.repositories.issues import IssuesRepository
@@ -889,3 +890,82 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
             'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 RETURNING id',
             rule.id,
         )
+
+
+class _MeasuredActivityDatabase:
+    def __init__(self, database: DailyActivityQueryDatabase) -> None:
+        self.database = database
+        self.outputs: tuple[tuple[int, int], ...] = ()
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]] | None:
+        result: Final = await self.database.query_raw(query, *args)
+        self.outputs = (*self.outputs, (len(result or ()), len(json.dumps(result, default=str))))
+        return result
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
+    gateway: Gateway, db: ManagementDatabase
+) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    activity: Final = IssueActivityRepository.from_prisma(db.prisma)
+    measured: Final = _MeasuredActivityDatabase(activity.database)
+    repository: Final = IssueActivityRepository(activity.activity, measured)
+    identity: Final = uuid4().hex
+    reporting_key: Final = sha256(identity.encode()).hexdigest()
+    day: Final = date.today() - timedelta(days=3)
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        issue: Final = _issue(IssueCohort(scope_type="user", scope_id=owner)).model_copy(
+            update={"range_start": day, "range_end": day}
+        )
+        try:
+            await _query(
+                db,
+                """UPDATE "LiteLLM_UserTable" SET user_alias=repeat('u',1024),
+                user_email=repeat('m',400)||'@example.com' WHERE user_id=$1""",
+                owner,
+            )
+            await _query(
+                db,
+                """INSERT INTO "LiteLLM_DeletedVerificationToken"
+                (id,token,key_alias,user_id,models,metadata,deleted_at)
+                SELECT $1::text||'-'||n,$2::text,'archived-'||n||'-'||repeat('x',1024),$3::text,
+                    ARRAY[]::text[],jsonb_build_object('padding',repeat('x',65536)),
+                    CURRENT_TIMESTAMP+n*INTERVAL '1 second' FROM generate_series(1,400) n""",
+                identity,
+                reporting_key,
+                owner,
+            )
+            await _query(
+                db,
+                """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,api_requests,successful_requests,updated_at)
+                VALUES($1,$2,$3,$4,'example-model',10,10,CURRENT_TIMESTAMP)""",
+                identity,
+                owner,
+                day.isoformat(),
+                reporting_key,
+            )
+            await store.upsert_issue(issue)
+            keys: Final = await repository.keys(issue.cohort, day, day, 1, 0)
+            assert keys.total_api_keys == 1 and len(keys.api_keys) == 1
+            key: Final = keys.api_keys[0]
+            assert key.api_key == reporting_key and key.metadata.key_exists is False
+            assert key.metadata.key_alias is not None and key.metadata.key_alias.startswith("archived-400-")
+            assert len(key.metadata.key_alias) == 256 and key.metadata.user_id == owner
+            assert key.metadata.user_email is None
+            assert measured.outputs[-1][0] == 1 and measured.outputs[-1][1] < 2048
+            users: Final = await repository.users(issue.cohort, day, day, 1, 0)
+            assert users.total_users == 1 and len(users.users) == 1
+            assert users.users[0].user_id == owner and users.users[0].user_alias == "u" * 256
+            assert users.users[0].user_email is None
+            assert measured.outputs[-1][0] == 1 and measured.outputs[-1][1] < 2048
+            for endpoint in ("keys", "users"):
+                response: Final = gateway.request("GET", f"/issues/{issue.id}/{endpoint}", params={"limit": "1"})
+                assert response.status_code == 200 and len(response.content) < 2048
+                assert "padding" not in response.text
+        finally:
+            await _remove_issues(db, (issue.id,))
+            await _query(db, 'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id=$1', identity)
+            await _query(db, 'DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', reporting_key)
