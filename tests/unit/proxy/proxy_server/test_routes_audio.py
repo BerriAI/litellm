@@ -18,6 +18,7 @@ import math
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager
+from functools import partial
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -37,6 +38,7 @@ from litellm import Router
 from litellm.caching.caching import Cache
 from litellm.constants import AUDIO_SPEECH_CHUNK_SIZE
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, StreamEnd, StreamFailed
 from litellm.proxy import proxy_server
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -478,7 +480,7 @@ def _speech_request(payload: dict) -> Request:
     )
 
 
-def _audio_response(stream: _RecordingAudioStream) -> HttpxBinaryResponseContent:
+def _audio_response(stream: httpx.AsyncByteStream) -> HttpxBinaryResponseContent:
     return HttpxBinaryResponseContent(
         httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
     )
@@ -643,6 +645,33 @@ async def test_audio_speech_route_frees_the_deployment_slot_when_a_response_hook
     )
     await next_clip.aclose()
     assert first_upstream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_ends_the_audio_as_failed_when_a_response_hook_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A route error before any audio is sent is a failure, not a caller hang-up, through every
+    wrapper the router and the SDK put around the audio."""
+    upstream: Final = _RecordingAudioStream([b"audio"], [])
+    ends: Final[list[tuple[str, StreamEnd]]] = []
+
+    async def _record(layer: str, end: StreamEnd) -> None:
+        ends.append((layer, end))
+
+    sdk_stream: Final = OnEndAsyncByteStream(upstream, map_error=lambda e: e, on_end=partial(_record, "sdk"))
+    router_stream: Final = OnEndAsyncByteStream(sdk_stream, map_error=lambda e: e, on_end=partial(_record, "router"))
+    _route_speech_to(monkeypatch, _audio_response(router_stream), response_headers_hook=_headers_from_the_audio_body)
+
+    with pytest.raises(ProxyException):
+        await proxy_server.audio_speech(
+            request=_speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True}),
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert [(layer, type(end)) for layer, end in ends] == [("sdk", StreamFailed), ("router", StreamFailed)]
+    assert upstream.closed is True
 
 
 class _BreaksMidClipAudioStream(httpx.AsyncByteStream):

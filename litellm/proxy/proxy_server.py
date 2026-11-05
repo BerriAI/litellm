@@ -903,6 +903,7 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
 from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
@@ -13679,6 +13680,14 @@ async def _close_audio_speech_response(_response: HttpxBinaryResponseContent) ->
         await _response.aclose()
 
 
+async def _fail_audio_speech_response(_response: HttpxBinaryResponseContent, error: Exception) -> None:
+    """Release the audio as failed, so a route error before any byte is sent is not logged as a caller hang-up."""
+    with contextlib.suppress(Exception):
+        if isinstance(stream := _response.response.stream, OnEndAsyncByteStream):
+            await stream.afail(error)
+    await _close_audio_speech_response(_response)
+
+
 @router.post(
     "/v1/audio/speech",
     dependencies=[Depends(user_api_key_auth)],
@@ -13799,6 +13808,9 @@ async def audio_speech(
                 headers=custom_headers,
                 background=BackgroundTask(_close_audio_speech_response, audio),
             )
+        except Exception as error:
+            await _fail_audio_speech_response(response, error)
+            raise
         except BaseException:
             await _close_audio_speech_response(response)
             raise

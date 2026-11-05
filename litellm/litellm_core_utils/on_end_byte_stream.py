@@ -42,16 +42,19 @@ class OnEndAsyncByteStream(httpx.AsyncByteStream):
                 yield chunk
         except httpx.TransportError as error:
             mapped: Final = self._map_error(error)
-            await self._fail(mapped)
+            await self.afail(mapped)
             raise mapped from error
         except Exception as error:
-            await self._fail(error)
+            await self.afail(error)
             raise
         await self._end(StreamCompleted())
 
-    async def _fail(self, error: Exception) -> None:
+    async def afail(self, error: Exception) -> None:
         with contextlib.suppress(Exception):
-            await self._stream.aclose()
+            if isinstance(self._stream, OnEndAsyncByteStream):
+                await self._stream.afail(error)
+            else:
+                await self._stream.aclose()
         await self._end(StreamFailed(error))
 
     async def aclose(self) -> None:
