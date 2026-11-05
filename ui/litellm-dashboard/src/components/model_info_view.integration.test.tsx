@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
+import ModelDeprecationBanner from "@/app/(dashboard)/models-and-endpoints/components/ModelDeprecationBanner";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 vi.mock("./model_info/KubernetesPodsCard", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
 }));
@@ -44,9 +46,23 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token", userRole: "Admin" }),
+}));
+
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -65,6 +81,8 @@ const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
 const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
 const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
 const mockVectorStoreListCall = vi.mocked(networking.vectorStoreListCall);
+
+const TEST_TODAY = new Date(2026, 10, 4);
 
 describe("ModelInfoView", () => {
   let queryClient: QueryClient;
@@ -107,6 +125,7 @@ describe("ModelInfoView", () => {
       },
     });
     vi.clearAllMocks();
+    vi.mocked(useUserLookup).mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
     mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
@@ -183,6 +202,10 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
@@ -191,6 +214,70 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("refreshes deprecation banner data after updating model credentials", async () => {
+    const deprecatedResponse = {
+      checked_at: "2026-06-01T00:00:00Z",
+      warn_within_days: 30,
+      deprecated: [
+        {
+          model_name: "old-model",
+          litellm_provider: null,
+          deprecation_date: "2026-06-01",
+          days_until_deprecation: -1,
+          status: "deprecated",
+          successor_model: null,
+        },
+      ],
+      imminent: [],
+      upcoming: [],
+    };
+    const currentResponse = {
+      checked_at: "2026-06-02T00:00:00Z",
+      warn_within_days: 30,
+      deprecated: [],
+      imminent: [
+        {
+          model_name: "current-model",
+          litellm_provider: null,
+          deprecation_date: "2026-11-30",
+          days_until_deprecation: 26,
+          status: "imminent",
+          successor_model: null,
+        },
+      ],
+      upcoming: [],
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(deprecatedResponse))
+      .mockResolvedValueOnce(Response.json(currentResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <>
+        <ModelInfoView {...DEFAULT_ADMIN_PROPS} />
+        <ModelDeprecationBanner today={TEST_TODAY} />
+      </>,
+      { wrapper },
+    );
+
+    expect(await screen.findByText("old-model was deprecated on 2026-06-01")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("update-api-key-button"));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter the new API key"), {
+      target: { value: "new-api-key" },
+    });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Update API Key" }));
+
+    expect(await screen.findByText("current-model deprecates on 2026-11-30, in 26 days")).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(
+      fetchMock.mock.calls.map(
+        ([input]) => new URL(input instanceof Request ? input.url : String(input), "http://localhost").pathname,
+      ),
+    ).toEqual(["/model/deprecations", "/model/deprecations"]);
   });
 
   it("shows Kubernetes pods for discovery-enabled models", async () => {
@@ -1486,6 +1573,18 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
+  });
+
+  it("shows the creator alias as a link to the user page", async () => {
+    vi.mocked(useUserLookup).mockReturnValue({
+      data: { user_alias: "Alice", user_email: "alice@example.com" },
+    } as ReturnType<typeof useUserLookup>);
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("link", { name: "Alice" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/users?user=123"),
+    );
   });
 
   describe("team alias", () => {

@@ -2,8 +2,10 @@ import { useSyncExternalStore } from "react";
 import { act, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testQueryClient } from "../../../../../tests/test-utils";
 import AddModelPanel from "./AddModelPanel";
+import ModelDeprecationBanner from "../components/ModelDeprecationBanner";
 
 const modelCreateCall = vi.fn();
 const mockPtuEnabled = vi.fn();
@@ -147,11 +149,23 @@ const advancedOpenExtras = {
 
 const baseModelInfo = { access_groups: undefined, mode: undefined };
 
+const TEST_TODAY = new Date(2026, 10, 4);
+
 const { api_base: _omitted, ...ALWAYS_MOUNTED_WITHOUT_API_BASE } = alwaysMounted;
 
-const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction) => {
+const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction, showBanner = false) => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-  renderWithProviders(<AddModelPanel />, { searchParams, onUrlUpdate });
+  renderWithProviders(
+    showBanner ? (
+      <>
+        <AddModelPanel />
+        <ModelDeprecationBanner today={TEST_TODAY} />
+      </>
+    ) : (
+      <AddModelPanel />
+    ),
+    { searchParams, onUrlUpdate },
+  );
   await screen.findByText("Provider");
 
   const openAdvanced = async () => {
@@ -186,9 +200,67 @@ const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction) =
 describe("AddModelPanel submit payload contract", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
     mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("refreshes deprecation banner data after adding a model", async () => {
+    const deprecatedResponse = {
+      checked_at: "2026-06-01T00:00:00Z",
+      warn_within_days: 30,
+      deprecated: [
+        {
+          model_name: "old-model",
+          litellm_provider: null,
+          deprecation_date: "2026-06-01",
+          days_until_deprecation: -1,
+          status: "deprecated",
+          successor_model: null,
+        },
+      ],
+      imminent: [],
+      upcoming: [],
+    };
+    const currentResponse = {
+      checked_at: "2026-06-02T00:00:00Z",
+      warn_within_days: 30,
+      deprecated: [],
+      imminent: [
+        {
+          model_name: "current-model",
+          litellm_provider: null,
+          deprecation_date: "2026-11-30",
+          days_until_deprecation: 26,
+          status: "imminent",
+          successor_model: null,
+        },
+      ],
+      upcoming: [],
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(deprecatedResponse))
+      .mockResolvedValueOnce(Response.json(currentResponse));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { fillRequired, submit } = await setup(undefined, undefined, true);
+
+    expect(await screen.findByText("old-model was deprecated on 2026-06-01")).toBeInTheDocument();
+    await fillRequired();
+    await submit();
+    expect(await screen.findByText("current-model deprecates on 2026-11-30, in 26 days")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.map(
+        ([input]) => new URL(input instanceof Request ? input.url : String(input), "http://localhost").pathname,
+      ),
+    ).toEqual(["/model/deprecations", "/model/deprecations"]);
   });
 
   it("lists catalog models in the model picker, not entries registered at runtime for deployments", async () => {
