@@ -17,6 +17,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 ANTHROPIC_MODEL: Final = "threads-anthropic"
 BRIDGED_MODEL: Final = "threads-bridged"
 BRIDGED_DROP_PARAMS_MODEL: Final = "threads-bridged-drop-params"
+PASSTHROUGH_MODEL: Final = "threads-messages-passthrough"
 MESSAGE_THREADS_BETA: Final = "message-threads-2026-08-12"
 EXPIRED_THREAD_MARKER: Final = "thread-expired"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -158,6 +159,15 @@ def write_config(directory: Path, wire_url: str) -> Path:
                             "drop_params": True,
                         },
                     },
+                    {
+                        "model_name": PASSTHROUGH_MODEL,
+                        "litellm_params": {
+                            "model": "hosted_vllm/qwen3-coder",
+                            "api_base": f"{wire_url}/vllm",
+                            "api_key": "synthetic-vllm-key",
+                        },
+                        "model_info": {"supported_endpoints": ["/v1/messages"]},
+                    },
                 ],
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
@@ -266,9 +276,12 @@ def assert_thread_not_found(status: int, raw: bytes) -> None:
     assert detail["details"] == {"error_code": "thread_not_found"}
 
 
-def test_a_create_turn_on_a_translated_leg_is_thread_unsupported_and_never_reaches_the_provider(rig: Rig) -> None:
+@pytest.mark.parametrize("model", [BRIDGED_MODEL, PASSTHROUGH_MODEL], ids=["translated", "messages-passthrough"])
+def test_a_create_turn_on_a_leg_without_threads_is_thread_unsupported_and_never_reaches_the_provider(
+    rig: Rig, model: str
+) -> None:
     request_nonce: Final = nonce()
-    status, raw = rig.send(BRIDGED_MODEL, request_nonce, {"type": "create"})
+    status, raw = rig.send(model, request_nonce, {"type": "create"})
     assert status == 400, raw[:500]
     detail: Final = _JSON_OBJECT.validate_json(raw)["error"]
     assert isinstance(detail, dict), raw[:500]
@@ -286,9 +299,12 @@ def test_a_create_turn_on_a_translated_leg_is_served_without_the_thread_under_dr
     assert "thread" not in _JSON_OBJECT.validate_json(upstream.body)
 
 
-def test_a_continue_turn_on_a_translated_leg_is_thread_not_found_and_never_reaches_the_provider(rig: Rig) -> None:
+@pytest.mark.parametrize("model", [BRIDGED_MODEL, PASSTHROUGH_MODEL], ids=["translated", "messages-passthrough"])
+def test_a_continue_turn_on_a_leg_without_threads_is_thread_not_found_and_never_reaches_the_provider(
+    rig: Rig, model: str
+) -> None:
     request_nonce: Final = nonce()
-    status, raw = rig.send(BRIDGED_MODEL, request_nonce, {"type": "continue", "previous_message_id": rig.create()})
+    status, raw = rig.send(model, request_nonce, {"type": "continue", "previous_message_id": rig.create()})
     assert_thread_not_found(status, raw)
     assert rig.received(request_nonce) == ()
 
