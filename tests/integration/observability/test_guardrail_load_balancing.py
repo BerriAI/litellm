@@ -42,10 +42,6 @@ def _deployment(name: str, api_base: str) -> dict[str, object]:
 
 
 def test_requests_naming_a_shared_guardrail_are_spread_over_its_deployments(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip(
-        "BUG: init_guardrails_v2 populates llm_router.guardrail_list from the proxy_server global, which is still "
-        "None during load_config, so every deployment sharing a guardrail_name checks every request"
-    )
     name: Final = f"lb-guardrail-{uuid4().hex}"
     prompts: Final = tuple(f"Hello request {index}" for index in range(_REQUESTS))
     with (
@@ -75,5 +71,7 @@ def test_requests_naming_a_shared_guardrail_are_spread_over_its_deployments(gate
         (200, name)
     ] * _REQUESTS
     seen: Final = tuple(frozenset(json.loads(call.body)["texts"][0] for call in calls) for calls in checked)
+    assert sum(len(calls) for calls in checked) == _REQUESTS
+    assert seen[0].isdisjoint(seen[1])
     assert all(0 < len(prompts_seen) < _REQUESTS for prompts_seen in seen), [len(prompts_seen) for prompts_seen in seen]
     assert seen[0] | seen[1] == frozenset(prompts)
