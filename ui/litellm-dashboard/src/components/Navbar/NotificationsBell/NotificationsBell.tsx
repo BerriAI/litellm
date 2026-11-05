@@ -12,27 +12,29 @@ import {
 } from "@/app/(dashboard)/hooks/useAnnouncementRead";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { DashboardResources } from "@/components/Navbar/DashboardResources";
+import { DashboardBlogPosts, DashboardResources } from "@/components/Navbar/DashboardResources";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { AlertTriangle, ArrowUpRight, Bell } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Bell, ChevronDown } from "lucide-react";
 import DeprecationAlertItem from "@/components/ModelDeprecationAlerts/DeprecationAlertItem";
 import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
 import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
 import {
-  type AlertPage,
-  formatAlertValue,
-  METRIC_LABELS,
-  usageAlertEntity,
-  usageAlertHref,
-  useUsageAlerts,
+  type AlertGroupPage,
+  formatAlertChange,
+  METRIC_SHORT_LABELS,
+  SCOPE_LABELS,
+  usageAlertGroupName,
+  usageAlertGroupHref,
+  useUsageAlertGroups,
 } from "@/components/UsageAlerts/usageAlertApi";
 import { uiHref } from "@/utils/uiHref";
-import React, { Fragment } from "react";
+import React, { Fragment, useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
 
@@ -115,9 +117,44 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   );
 };
 
+function ProductUpdates({
+  announcements,
+  unreadCount,
+  hasAlerts,
+}: {
+  announcements: Announcement[];
+  unreadCount: number;
+  hasAlerts: boolean;
+}) {
+  const [open, setOpen] = useState<boolean | undefined>();
+  const expanded = open ?? !hasAlerts;
+  return (
+    <Collapsible open={expanded} onOpenChange={setOpen} className="shrink-0 border-t border-border px-4 py-2">
+      <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 py-1 text-sm font-medium">
+        <span>What’s new{unreadCount > 0 ? ` · ${unreadCount} unread` : ""}</span>
+        <ChevronDown
+          className={cn("size-4 text-muted-foreground transition-transform", expanded && "rotate-180")}
+          aria-hidden
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="max-h-[min(14rem,25dvh)] overflow-y-auto overscroll-contain">
+        <div className="space-y-3 pt-3">
+          {announcements.map((announcement, index) => (
+            <Fragment key={announcement.readKey}>
+              {index > 0 ? <Separator /> : null}
+              <AnnouncementItem announcement={announcement} />
+            </Fragment>
+          ))}
+          <DashboardBlogPosts />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 interface NotificationsBellViewProps {
   deprecationAlerts?: readonly DeprecationAlert[];
-  usageAlerts?: AlertPage;
+  usageAlertGroups?: AlertGroupPage;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -128,7 +165,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   latestRelease,
   deploymentHealthLink,
   deprecationAlerts,
-  usageAlerts,
+  usageAlertGroups,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
@@ -137,7 +174,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
 
   const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
   const openDeprecations = openAlerts.length;
-  const openUsageAlerts = usageAlerts?.total ?? 0;
+  const openUsageAlerts = usageAlertGroups?.total ?? 0;
   const needsAttention = openDeprecations + openUsageAlerts > 0;
   let label =
     unreadCount > 0
@@ -148,7 +185,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   }
   if (openUsageAlerts > 0) {
     const count = openDeprecations + openUsageAlerts;
-    label = `Notifications, ${count} ${count === 1 ? "alert needs" : "alerts need"} attention`;
+    label = `Notifications, ${count} ${count === 1 ? "alert group needs" : "alert groups need"} attention`;
   }
 
   return (
@@ -172,48 +209,55 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
       <PopoverContent
         align="end"
         aria-label={t("shell.notifications.bell.trigger")}
-        className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
+        className="flex max-h-[min(40rem,calc(100dvh-6rem))] w-96 max-w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0"
       >
-        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
-          {t("shell.notifications.bell.title")}
+        <PopoverTitle className="shrink-0 border-b border-border px-4 py-3 text-sm font-semibold">
+          {t("shell.notifications.bell.trigger")}
         </PopoverTitle>
-        <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
-          <div className="space-y-4 p-4">
+        <div aria-label="Notification content" className="min-h-0 overflow-y-auto overscroll-contain">
+          <div className="space-y-3 p-4">
             {openUsageAlerts > 0 && (
               <>
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold">Usage alerts</p>
+                  <p className="text-sm font-medium">Performance</p>
                   <a className="text-xs text-primary hover:underline" href={uiHref("alerts?type=usage")}>
                     View all {openUsageAlerts}
                   </a>
                 </div>
-                {usageAlerts?.data.slice(0, 3).map((alert) => (
-                  <Fragment key={alert.id}>
-                    <Separator />
-                    <a href={usageAlertHref(alert)} className="block space-y-1 text-sm hover:underline">
-                      <p className="font-medium truncate" title={usageAlertEntity(alert)}>
-                        {usageAlertEntity(alert)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {METRIC_LABELS[alert.metric]} {alert.direction === "increase" ? "increased" : "decreased"} to{" "}
-                        {formatAlertValue(alert.metric, alert.observed_value)} · {alert.day}
-                      </p>
-                    </a>
-                  </Fragment>
+                {usageAlertGroups?.data.slice(0, 3).map((group) => (
+                  <a
+                    key={group.id}
+                    href={usageAlertGroupHref(group)}
+                    className="block space-y-1 rounded-md py-1 text-sm hover:underline"
+                  >
+                    <p
+                      className="truncate font-medium"
+                      title={group.scope_label ?? group.scope_id ?? usageAlertGroupName(group)}
+                    >
+                      {usageAlertGroupName(group)}
+                    </p>
+                    <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      {group.metrics.map(({ metric, representative }) => (
+                        <span key={metric}>
+                          {METRIC_SHORT_LABELS[metric]} {formatAlertChange(representative)}
+                        </span>
+                      ))}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {SCOPE_LABELS[group.scope_type]} · {group.day} UTC
+                    </p>
+                  </a>
                 ))}
                 <Separator />
               </>
             )}
             {openAlerts.length > 0 && (
               <>
-                <div>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold">Model deprecations</p>
-                    <a className="text-xs text-primary hover:underline" href={migrationHref()}>
-                      View all {openDeprecations}
-                    </a>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">Model migrations across your keys and teams.</p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium">Model deprecations</p>
+                  <a className="text-xs text-primary hover:underline" href={migrationHref()}>
+                    View all {openDeprecations}
+                  </a>
                 </div>
                 {openAlerts.slice(0, 3).map((alert) => (
                   <Fragment key={alert.id}>
@@ -222,7 +266,6 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                   </Fragment>
                 ))}
                 <Separator />
-                <p className="text-xs font-medium text-muted-foreground">Announcements</p>
               </>
             )}
             {deprecationAlerts && openAlerts.length === 0 && (
@@ -230,16 +273,10 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                 View model deprecations
               </a>
             )}
-
-            {announcements.map((announcement, index) => (
-              <Fragment key={announcement.readKey}>
-                {index > 0 ? <Separator /> : null}
-                <AnnouncementItem announcement={announcement} />
-              </Fragment>
-            ))}
           </div>
-          <DashboardResources>{deploymentHealthLink}</DashboardResources>
         </div>
+        <ProductUpdates announcements={announcements} unreadCount={unreadCount} hasAlerts={needsAttention} />
+        <DashboardResources>{deploymentHealthLink}</DashboardResources>
       </PopoverContent>
     </Popover>
   );
@@ -252,13 +289,13 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
   const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
-  const { data: usageAlerts } = useUsageAlerts(accessToken, "open", 0, 3);
+  const { data: usageAlertGroups } = useUsageAlertGroups(accessToken, "open", { limit: 3 });
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
       deprecationAlerts={deprecationAlerts}
-      usageAlerts={usageAlerts}
+      usageAlertGroups={usageAlertGroups}
       deploymentHealthLink={deploymentHealthLink}
     />
   );
