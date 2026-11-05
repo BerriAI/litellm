@@ -46,7 +46,7 @@ def _require_admin(user: UserAPIKeyAuth, *, write: bool) -> None:
     raise HTTPException(status_code=403, detail="Only gateway admins can manage model deprecation alerts")
 
 
-@router.get("/model/deprecations/alerts/state", tags=["model management"], response_model=DeprecationAlertState)
+@router.get("/alerting/model-deprecations/state", tags=["alerting"], response_model=DeprecationAlertState)
 async def get_deprecation_alert_state(
     model: Annotated[str, Query(min_length=1, max_length=1024)],
     deprecation_date: date,
@@ -60,7 +60,7 @@ async def get_deprecation_alert_state(
     return DeprecationAlertState.model_validate(record.param_value)
 
 
-@router.put("/model/deprecations/alerts/state", tags=["model management"], response_model=DeprecationAlertState)
+@router.put("/alerting/model-deprecations/state", tags=["alerting"], response_model=DeprecationAlertState)
 async def update_deprecation_alert_state(
     data: DeprecationAlertUpdate,
     user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -74,9 +74,7 @@ async def update_deprecation_alert_state(
     return state
 
 
-@router.get(
-    "/model/deprecations/alerts/tags", tags=["model management"], response_model=tuple[DeprecationTagUsage, ...]
-)
+@router.get("/alerting/model-deprecations/tags", tags=["alerting"], response_model=tuple[DeprecationTagUsage, ...])
 async def get_deprecation_usage_tags(
     model: Annotated[str, Query(min_length=1, max_length=1024)],
     api_keys: Annotated[tuple[str, ...], Query(min_length=1, max_length=100)],
