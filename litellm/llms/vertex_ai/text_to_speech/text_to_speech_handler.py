@@ -12,6 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.text_to_speech.transformation import text_to_speech_host
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
@@ -127,7 +128,7 @@ class VertexTextToSpeechAPI(VertexLLM):
             audioConfig=vertex_audio_config,
         )
 
-        url: Final = "https://texttospeech.googleapis.com/v1/text:synthesize"
+        url: Final = api_base if api_base else f"https://{text_to_speech_host(vertex_location)}/v1/text:synthesize"
         ########## End of building request ############
 
         ########## Log the request for debugging / logging ############

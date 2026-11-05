@@ -32,6 +32,7 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
 from litellm.llms.vertex_ai.common_utils import (
     VertexAILyriaModelInfo,
     get_vertex_ai_lyria_model_info,
+    validate_vertex_location,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
@@ -66,6 +67,18 @@ _GEMINI_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
         "northamerica-northeast1": "northamerica-northeast1",
     }
 )
+
+
+def text_to_speech_host(location: str | None) -> str:
+    """Build the Cloud Text-to-Speech API host for a Vertex location.
+
+    Mirrors ``speech_to_text_host``: unset / empty / ``global`` keep the public
+    global endpoint for backward compatibility; any other location is validated
+    then prefixed (e.g. ``eu`` -> ``eu-texttospeech.googleapis.com``).
+    """
+    if not location or location == "global":
+        return "texttospeech.googleapis.com"
+    return f"{validate_vertex_location(location)}-texttospeech.googleapis.com"
 
 
 _DEFAULT_GEMINI_TTS_VOICE: Final = "Kore"
@@ -723,6 +736,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Get the complete URL for Vertex AI TTS request
 
         Google Cloud TTS endpoint: https://texttospeech.googleapis.com/v1/text:synthesize
+        Regional hosts follow ``text_to_speech_host`` (same idea as STT). An
+        explicit ``api_base`` is treated as the full synthesize URL.
         """
         if self._is_gemini_tts_model(model):
             return self._get_gemini_tts_url(
@@ -732,7 +747,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if api_base:
             return api_base
 
-        return self.TTS_API_URL
+        location: Final = self.safe_get_vertex_ai_location(litellm_params)
+        base_url: Final = f"https://{text_to_speech_host(location)}".rstrip("/")
+        return f"{base_url}/v1/text:synthesize"
 
     def _get_gemini_tts_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if api_base:

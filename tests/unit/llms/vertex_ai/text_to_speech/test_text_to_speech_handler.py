@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
 
 SYNTHESIZE_URL: Final = "https://texttospeech.googleapis.com/v1/text:synthesize"
+REGIONAL_SYNTHESIZE_URL: Final = "https://us-central1-texttospeech.googleapis.com/v1/text:synthesize"
 AUDIO: Final = b"hello audio"
 ENCODED_AUDIO: Final = base64.b64encode(AUDIO).decode()
 BOTH_CALL_STYLES: Final = pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
@@ -30,25 +31,36 @@ class _StaticGoogleCredentials(google.auth.credentials.Credentials):
 def synthesize_endpoint(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
     monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    return respx_mock.post(SYNTHESIZE_URL)
+    return respx_mock.post(REGIONAL_SYNTHESIZE_URL)
 
 
-async def _synthesized_audio(run_async: bool, endpoint: respx.Route, payload: object) -> bytes:
+def _speech_logging() -> Logging:
+    return Logging(
+        model="vertex_ai/",
+        messages=[],
+        stream=False,
+        call_type="speech",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="speech-call",
+        function_id="speech-function",
+    )
+
+
+async def _synthesized_audio(
+    run_async: bool,
+    endpoint: respx.Route,
+    payload: object,
+    *,
+    vertex_location: str | None = "us-central1",
+    api_base: str | None = None,
+) -> bytes:
     endpoint.mock(return_value=httpx.Response(200, content=json.dumps(payload).encode()))
     pending: Final = VertexTextToSpeechAPI().audio_speech(
-        logging_obj=Logging(
-            model="vertex_ai/",
-            messages=[],
-            stream=False,
-            call_type="speech",
-            start_time=datetime(2026, 1, 1),
-            litellm_call_id="speech-call",
-            function_id="speech-function",
-        ),
+        logging_obj=_speech_logging(),
         vertex_project="test-project",
-        vertex_location="us-central1",
+        vertex_location=vertex_location,
         vertex_credentials=None,
-        api_base=None,
+        api_base=api_base,
         timeout=10.0,
         model="vertex_ai/",
         input="hello world",
@@ -153,3 +165,56 @@ async def test_vertex_speech_reports_non_ascii_audio_content_with_the_base64_err
 ) -> None:
     with pytest.raises(ValueError, match="string argument should contain only ASCII characters"):
         await _synthesized_audio(run_async, synthesize_endpoint, {"audioContent": "é中"})
+
+
+@BOTH_CALL_STYLES
+@pytest.mark.parametrize(
+    ("vertex_location", "synthesize_url"),
+    [
+        (None, SYNTHESIZE_URL),
+        ("global", SYNTHESIZE_URL),
+        ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us-central1", REGIONAL_SYNTHESIZE_URL),
+    ],
+)
+async def test_vertex_speech_posts_to_the_location_host(
+    run_async: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    vertex_location: str | None,
+    synthesize_url: str,
+) -> None:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    endpoint: Final = respx_mock.post(synthesize_url)
+
+    await _synthesized_audio(
+        run_async,
+        endpoint,
+        {"audioContent": ENCODED_AUDIO},
+        vertex_location=vertex_location,
+    )
+
+    assert endpoint.call_count == 1
+    assert str(endpoint.calls.last.request.url) == synthesize_url
+
+
+@BOTH_CALL_STYLES
+async def test_vertex_speech_prefers_api_base_over_vertex_location(
+    run_async: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(google.auth, "default", lambda scopes: (_StaticGoogleCredentials(), "test-project"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = "https://tts.gateway.internal/v1/text:synthesize"
+    endpoint: Final = respx_mock.post(api_base)
+
+    await _synthesized_audio(
+        run_async,
+        endpoint,
+        {"audioContent": ENCODED_AUDIO},
+        vertex_location="eu",
+        api_base=api_base,
+    )
+
+    assert endpoint.call_count == 1
+    assert str(endpoint.calls.last.request.url) == api_base

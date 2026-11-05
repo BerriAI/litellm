@@ -102,6 +102,50 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == custom_url
 
+    @pytest.mark.parametrize(
+        ("vertex_location", "expected_url"),
+        [
+            (None, "https://texttospeech.googleapis.com/v1/text:synthesize"),
+            ("global", "https://texttospeech.googleapis.com/v1/text:synthesize"),
+            ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+            ("us", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+            ("us-central1", "https://us-central1-texttospeech.googleapis.com/v1/text:synthesize"),
+        ],
+    )
+    def test_get_complete_url_honors_vertex_location(self, vertex_location: str | None, expected_url: str) -> None:
+        config = VertexAITextToSpeechConfig()
+        litellm_params = {} if vertex_location is None else {"vertex_location": vertex_location}
+
+        url = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=None,
+            litellm_params=litellm_params,
+        )
+
+        assert url == expected_url
+
+    def test_get_complete_url_rejects_an_injected_vertex_location(self) -> None:
+        config = VertexAITextToSpeechConfig()
+
+        with pytest.raises(ValueError, match="Invalid vertex_location format"):
+            config.get_complete_url(
+                model="vertex_ai/chirp",
+                api_base=None,
+                litellm_params={"vertex_location": "evil.com#"},
+            )
+
+    def test_get_complete_url_prefers_api_base_over_vertex_location(self) -> None:
+        config = VertexAITextToSpeechConfig()
+        custom_url = "https://tts.gateway.internal/v1/text:synthesize"
+
+        url = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=custom_url,
+            litellm_params={"vertex_location": "eu"},
+        )
+
+        assert url == custom_url
+
     @patch.object(  # test-quality-ok: isolates provider credentials while testing request serialization
         VertexAITextToSpeechConfig, "_ensure_access_token"
     )
@@ -500,7 +544,11 @@ class TestVertexAITextToSpeechConfig:
                     "multiSpeakerVoiceConfig": {
                         "speakerVoiceConfigs": [
                             {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
-                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}, "tone": "x"},
+                            {
+                                "speaker": "Katie",
+                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
+                                "tone": "x",
+                            },
                         ]
                     }
                 },
@@ -510,8 +558,16 @@ class TestVertexAITextToSpeechConfig:
                 {
                     "multiSpeakerVoiceConfig": {
                         "speakerVoiceConfigs": [
-                            {"speaker": "Ryan", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}, "tone": "x"},
-                            {"speaker": "Katie", "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}}, "tone": "y"},
+                            {
+                                "speaker": "Ryan",
+                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}},
+                                "tone": "x",
+                            },
+                            {
+                                "speaker": "Katie",
+                                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Leda"}},
+                                "tone": "y",
+                            },
                         ]
                     }
                 },
@@ -534,7 +590,10 @@ class TestVertexAITextToSpeechConfig:
                 },
                 "multiSpeakerVoiceConfig.speakerVoiceConfigs.voiceConfig.replicatedVoiceConfig",
             ),
-            ({"languageCode": ["en-US"], "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}, "languageCode"),
+            (
+                {"languageCode": ["en-US"], "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}},
+                "languageCode",
+            ),
             ({"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": 5}}}, "voiceConfig.prebuiltVoiceConfig.voiceName"),
             ({"voiceConfig": "Puck"}, "voiceConfig"),
             ({"multiSpeakerVoiceConfig": [{"speaker": "Ryan"}]}, "multiSpeakerVoiceConfig"),
@@ -1332,8 +1391,8 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args.kwargs
 
-    # Verify the URL is the Google Cloud TTS API
-    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    # Chirp honors vertex_location for the Cloud TTS host
+    assert call_kwargs["url"] == "https://us-central1-texttospeech.googleapis.com/v1/text:synthesize"
 
     # Verify request body structure
     assert "json" in call_kwargs
@@ -2113,8 +2172,12 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_malformed_params_are_bad_request
 async def test_aspeech_vertex_ai_beta_lyria_2_serves_the_openai_params_it_ignores(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
 ) -> None:
-    route: Final = respx_mock.post(url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$").mock(
-        return_value=httpx.Response(200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]})
+    route: Final = respx_mock.post(
+        url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]}
+        )
     )
 
     response: Final = await litellm.aspeech(
