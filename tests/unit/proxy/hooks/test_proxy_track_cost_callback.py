@@ -39,6 +39,7 @@ from litellm.proxy.utils import (
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     BilledFailedAttempt,
+    PrismaClient,
     ProxyUpdateSpend,
 )
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -4056,3 +4057,40 @@ async def test_a_poll_of_an_already_charged_job_still_charges_its_own_guardrails
 
     assert await _charge_request_cost(charge_spend, dict(poll), 0.43, reservation) == charged
     assert charge_spend.calls == ((0.43, 0.43, reservation), *(() if second_call is None else (second_call,)))
+
+
+class _SpendLogQueue:
+    """The database client's spend-log queue, where the writer puts a failure's spend row."""
+
+    get_request_status = PrismaClient.get_request_status
+
+    def __init__(self) -> None:
+        self.spend_log_transactions: Final[list[Mapping[str, object]]] = []
+        self._spend_log_transactions_lock: Final = asyncio.Lock()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+async def test_async_post_call_failure_hook_scrubs_the_prompt_out_of_the_persisted_error(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
+    secret: Final = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    spend_logs: Final = _SpendLogQueue()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", spend_logs)
+
+    await ProxyDBLogger(spend_writer=DBSpendUpdateWriter).async_post_call_failure_hook(
+        request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": secret}], "metadata": {}},
+        original_exception=litellm.BadRequestError(
+            message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        traceback_str=f"Traceback: {secret}",
+    )
+
+    (row,) = spend_logs.spend_log_transactions
+    persisted: Final = json.loads(str(row["metadata"]))["error_information"]
+    assert (secret in json.dumps(persisted)) is not redact
+    assert "Unsupported content: " in persisted["error_message"]
+    assert persisted["error_class"] == "BadRequestError"
+    assert persisted["error_code"] == "400"

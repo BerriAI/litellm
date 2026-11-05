@@ -10,8 +10,11 @@ import ast
 import asyncio
 import contextlib
 import contextvars
+import gc
 import os
 import re
+import sys
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1551,6 +1554,212 @@ def test_record_error_attributes_on_span_decorates_without_ending():
     assert span.attributes["litellm.provider.error.code"] == "422"
     assert span.status.status_code is StatusCode.ERROR
     assert [e.name for e in span.events] == ["exception"]
+
+
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_failure_hook_scrubs_the_prompt_out_of_the_server_span_and_the_restamp_keeps_it(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
+    import json
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    secret: Final = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    logger, exporter = _logger()
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    exc: Final = _proxy_exc(f"blocked: {secret}", 400)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": secret}]},
+            original_exception=exc,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+    )
+    logger.record_error_attributes_on_span(server, exc, 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    logged: Final = json.dumps(
+        [dict(span.attributes), [dict(event.attributes or {}) for event in span.events], span.status.description]
+    )
+    assert (secret in logged) is not redact
+    assert span.attributes["error.message"].startswith("blocked: ")
+    assert span.attributes["error.type"] == "ProxyException"
+
+
+def _raised(exc: Exception) -> Exception:
+    try:
+        raise exc
+    except Exception as raised:
+        return raised
+
+
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_restamp_shows_the_handlers_own_error_with_the_prompt_scrubbed(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
+    """The proxy's failure hook and its exception handler stamp the same SERVER span from different
+    exceptions. The handler's restamp keeps its own wording and stack trace, scrubbed like the hook's."""
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    secret: Final = "my ssn is 123-45-6789"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    logger, exporter = _logger()
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": secret}]},
+            original_exception=HTTPException(status_code=400, detail={"error": f"blocked: {secret}", "mode": "pre"}),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=f'  File "/srv/litellm/router.py", line 7, in route\nHTTPException: blocked: {secret}\n',
+        )
+    )
+    logger.record_error_attributes_on_span(server, _raised(_proxy_exc(f"blocked: {secret}", 500)), 500)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+
+    assert span.attributes["error.message"] == f"blocked: {'redacted-by-litellm' if redact else secret}"
+    assert "_raised" in span.attributes["litellm.provider.error.stack_trace"]
+    assert "router.py" not in span.attributes["litellm.provider.error.stack_trace"]
+
+
+def test_failure_hook_lets_the_failed_requests_span_be_freed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The proxy keeps the request's root span in the request's own metadata. What the failure hook
+    keeps for the handler's restamp must not hold that span alive once the request is done."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, _ = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    server_ref: Final = weakref.ref(server)
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={
+                "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+                "metadata": {"litellm_parent_otel_span": server},
+            },
+            original_exception=_proxy_exc("blocked", 400),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=server),
+        )
+    )
+    del server
+    gc.collect()
+
+    assert server_ref() is None
+
+
+def _hook_failure(logger: OpenTelemetryV2, server: object, error: str, *prompts: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"messages": [{"role": "user", "content": prompt} for prompt in prompts]},
+            original_exception=_proxy_exc(error, 400),
+            user_api_key_dict=UserAPIKeyAuth(parent_otel_span=server),
+        )
+    )
+
+
+def test_failure_hook_keeps_no_request_text_its_error_does_not_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A keep-alive timer can hold a failed request's span past the request. The span must not keep alive request
+    text that the failure's error never quoted, whether or not it quoted another message of the request."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, _ = _logger()
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    prompt: Final = " ".join(("my ssn is", "123-45-6789"))
+    held: Final = sys.getrefcount(prompt)
+
+    _hook_failure(logger, server, "blocked by the upstream provider", prompt)
+    held_after_an_unquoting_error: Final = sys.getrefcount(prompt)
+    _hook_failure(logger, server, "blocked: say hi", prompt, "say hi")
+
+    assert (held_after_an_unquoting_error, sys.getrefcount(prompt)) == (held, held)
+
+
+def test_restamp_lets_go_of_the_request_text_it_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger()
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    prompt: Final = " ".join(("my ssn is", "123-45-6789"))
+    held: Final = sys.getrefcount(prompt)
+
+    _hook_failure(logger, server, f"blocked: {prompt}", prompt)
+    logger.record_error_attributes_on_span(server, _proxy_exc(f"blocked: {prompt}", 400), 400)
+    server.end()
+
+    assert sys.getrefcount(prompt) == held
+    assert exporter.get_finished_spans()[0].attributes["error.message"] == "blocked: redacted-by-litellm"
+
+
+def test_restamp_scrubs_message_parts_its_error_joins_into_one_word(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _logger()
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+
+    _hook_failure(logger, server, "blocked: Helloworld!", "Hello", "world")
+    logger.record_error_attributes_on_span(server, _proxy_exc("blocked: Helloworld!", 400), 400)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+
+    assert span.attributes["error.message"] == "blocked: redacted-by-litellmredacted-by-litellm!"
+    assert [event.attributes["exception.message"] for event in span.events] == [span.attributes["error.message"]]
+
+
+def test_restamp_of_a_failure_that_is_not_redacted_keeps_its_own_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A span the proxy reuses across requests holds nothing from an earlier redacted failure once a later failure
+    on it is not redacted."""
+    import litellm
+
+    logger, exporter = _logger()
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    _hook_failure(logger, server, "blocked: my ssn is 123-45-6789", "my ssn is 123-45-6789")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    _hook_failure(logger, server, "blocked: my ssn is 123-45-6789", "my ssn is 123-45-6789")
+
+    logger.record_error_attributes_on_span(server, _proxy_exc("blocked: my ssn is 123-45-6789", 400), 400)
+    server.end()
+
+    assert exporter.get_finished_spans()[0].attributes["error.message"] == "blocked: my ssn is 123-45-6789"
+
+
+@pytest.mark.parametrize("redact", [True, False], ids=["redaction_on", "redaction_off"])
+def test_failure_hook_and_restamp_stamp_a_span_that_cannot_be_hashed(
+    monkeypatch: pytest.MonkeyPatch, redact: bool
+) -> None:
+    import litellm
+
+    logger, exporter = _logger()
+    concurrent: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    _hook_failure(logger, concurrent, "blocked: another request", "another request")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    server.__class__ = type("UnhashableSpan", (type(server),), {"__slots__": (), "__hash__": None})
+
+    _hook_failure(logger, server, "blocked: my ssn is 123-45-6789", "my ssn is 123-45-6789")
+    logger.record_error_attributes_on_span(server, _proxy_exc("blocked", 403), 403)
+    server.end()
+    (span,) = exporter.get_finished_spans()
+
+    assert concurrent.is_recording()
+    assert span.attributes["error.type"] == "ProxyException"
+    assert span.attributes["litellm.provider.error.code"] == "403"
+    assert span.status.status_code is StatusCode.ERROR
+    assert [event.name for event in span.events] == ["exception"]
 
 
 def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_error():
