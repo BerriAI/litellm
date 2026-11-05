@@ -10,7 +10,7 @@ CREATE TABLE "LiteLLM_UsageAlertIncident" (
  "scope_type" TEXT NOT NULL, "scope_id" TEXT, "metric" TEXT NOT NULL,
  "status" TEXT NOT NULL, "day" TEXT NOT NULL, "evaluation_day" TEXT NOT NULL,
  "breached" BOOLEAN NOT NULL, "record" JSONB NOT NULL,
- "notified_channels" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+ "notified_channels" TEXT[] DEFAULT ARRAY[]::TEXT[],
  "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX "LiteLLM_UsageAlertIncident_rule_id_scope_key_evaluation_day_idx" ON "LiteLLM_UsageAlertIncident" ("rule_id", "scope_key", "evaluation_day");
