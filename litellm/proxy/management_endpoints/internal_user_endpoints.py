@@ -571,9 +571,12 @@ async def new_user(
         # Check if license is over limit
         billable_users: Final = await UserRepository(prisma_client).count_billable_users()
         if billable_users and _license_check.is_over_limit(total_users=billable_users):
-            raise HTTPException(
-                status_code=403,
-                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            raise ProxyException(
+                message="License is over limit. Please contact support@berri.ai to upgrade your license.",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code=403,
+                openai_code=ProxyErrorTypes.license_limit_exceeded.value,
             )
 
         # Only proxy admins can create administrative users
