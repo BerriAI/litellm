@@ -5102,3 +5102,25 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
         )
     except HTTPException as exc:
         pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
+
+
+@pytest.mark.parametrize("route", [
+    "/skill-hub/skills/{name}/versions",
+    "/skill-hub/skills/{name}/versions/{version_id}",
+    "/skill-hub/skills/{name}/versions/{version_id}/archive",
+])
+def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER.value),
+            _user_role=LitellmUserRoles.INTERNAL_USER,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(user_id="reader", user_role=LitellmUserRoles.INTERNAL_USER),
+            request_data={},
+        )
+    except HTTPException as exc:
+        pytest.fail(f"History visibility could not run: {exc.detail}")

@@ -1,15 +1,16 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/networking";
-import type { Plugin } from "@/components/claude_code_plugins/types";
+import { listSkillHubSkills, deleteSkillHubSkill } from "@/components/networking";
+import type { SkillHubSkill } from "@/components/claude_code_plugins/types";
 
 import ClaudeCodePluginsPanel from "./ClaudeCodePluginsPanel";
 
 vi.mock("@/components/networking", () => ({
-  getClaudeCodePluginsList: vi.fn(),
-  deleteClaudeCodePlugin: vi.fn(),
+  listSkillHubSkills: vi.fn(),
+  deleteSkillHubSkill: vi.fn(),
 }));
 
 vi.mock("./PluginTable", () => ({
@@ -20,7 +21,7 @@ vi.mock("./PluginTable", () => ({
     onDeleteClick,
   }: {
     isLoading: boolean;
-    pluginsList: Plugin[];
+    pluginsList: SkillHubSkill[];
     onDeleteClick: (pluginName: string, displayName: string) => void;
   }) => (
     <div data-testid="plugin-table">
@@ -39,32 +40,34 @@ vi.mock("./PluginTable", () => ({
 }));
 
 vi.mock("./add_plugin_form", () => ({ __esModule: true, default: () => null }));
+vi.mock("./SkillSubmissions", () => ({ __esModule: true, default: () => null }));
 vi.mock("@/components/claude_code_plugins/skill_detail", () => ({ __esModule: true, default: () => null }));
 
-const mockGetClaudeCodePluginsList = vi.mocked(getClaudeCodePluginsList);
-const mockDeleteClaudeCodePlugin = vi.mocked(deleteClaudeCodePlugin);
+const mockListSkillHubSkills = vi.mocked(listSkillHubSkills);
+const mockDeleteSkillHubSkill = vi.mocked(deleteSkillHubSkill);
 
-const skill: Plugin = {
+const skill: SkillHubSkill = {
   id: "plugin-1",
   name: "my-skill",
   source: { source: "github", repo: "acme/my-skill" },
-  enabled: true,
+  visibility: "public",
 };
 
 describe("ClaudeCodePluginsPanel loading state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
   });
 
   it("should resolve the loading state when accessToken is null instead of showing the skeleton forever", async () => {
     render(<ClaudeCodePluginsPanel accessToken={null} />);
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
-    expect(mockGetClaudeCodePluginsList).not.toHaveBeenCalled();
+    expect(mockListSkillHubSkills).not.toHaveBeenCalled();
   });
 
   it("should show the loading state until the skills fetch settles", async () => {
-    let resolveFetch: (value: { plugins: never[]; count: number }) => void = () => {};
-    mockGetClaudeCodePluginsList.mockReturnValue(
+    let resolveFetch: (value: { skills: never[]; count: number; next_offset: number | null }) => void = () => {};
+    mockListSkillHubSkills.mockReturnValue(
       new Promise((resolve) => {
         resolveFetch = resolve;
       }),
@@ -72,16 +75,17 @@ describe("ClaudeCodePluginsPanel loading state", () => {
     render(<ClaudeCodePluginsPanel accessToken="sk-test" userRole="Admin" />);
     expect(screen.getByText("table-loading")).toBeInTheDocument();
 
-    resolveFetch({ plugins: [], count: 0 });
+    resolveFetch({ skills: [], count: 0, next_offset: null });
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
-    expect(mockGetClaudeCodePluginsList).toHaveBeenCalledWith("sk-test", false);
+    expect(mockListSkillHubSkills).toHaveBeenCalledWith("sk-test", { limit: 50, offset: 0 });
   });
 });
 
 describe("ClaudeCodePluginsPanel delete confirmation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetClaudeCodePluginsList.mockResolvedValue({ plugins: [skill], count: 1 });
+    testQueryClient.clear();
+    mockListSkillHubSkills.mockResolvedValue({ skills: [skill], count: 1, next_offset: null });
   });
 
   it("should ask for confirmation before deleting and name the skill", async () => {
@@ -93,20 +97,20 @@ describe("ClaudeCodePluginsPanel delete confirmation", () => {
     expect(await screen.findByText(/are you sure you want to delete skill/i)).toBeInTheDocument();
     expect(screen.getByText("my-skill")).toBeInTheDocument();
     expect(screen.getByText("This action cannot be undone.")).toBeInTheDocument();
-    expect(mockDeleteClaudeCodePlugin).not.toHaveBeenCalled();
+    expect(mockDeleteSkillHubSkill).not.toHaveBeenCalled();
   });
 
   it("should delete the skill and refresh the list once confirmed", async () => {
     const user = userEvent.setup();
-    mockDeleteClaudeCodePlugin.mockResolvedValue({});
+    mockDeleteSkillHubSkill.mockResolvedValue({});
     render(<ClaudeCodePluginsPanel accessToken="sk-test" userRole="Admin" />);
 
     await user.click(await screen.findByTestId("row-delete-plugin-1"));
     await screen.findByText(/are you sure you want to delete skill/i);
     await user.click(screen.getByRole("button", { name: "Delete" }));
 
-    await waitFor(() => expect(mockDeleteClaudeCodePlugin).toHaveBeenCalledWith("sk-test", "my-skill"));
-    await waitFor(() => expect(mockGetClaudeCodePluginsList).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockDeleteSkillHubSkill).toHaveBeenCalledWith("sk-test", "my-skill"));
+    await waitFor(() => expect(mockListSkillHubSkills).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText(/are you sure you want to delete skill/i)).not.toBeInTheDocument());
   });
 
@@ -119,6 +123,6 @@ describe("ClaudeCodePluginsPanel delete confirmation", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(screen.queryByText(/are you sure you want to delete skill/i)).not.toBeInTheDocument());
-    expect(mockDeleteClaudeCodePlugin).not.toHaveBeenCalled();
+    expect(mockDeleteSkillHubSkill).not.toHaveBeenCalled();
   });
 });

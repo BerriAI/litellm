@@ -1,5 +1,8 @@
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
+import type { TFunction } from "i18next";
+
+import i18n from "@/i18n/i18n";
 
 dayjs.extend(utc);
 
@@ -23,8 +26,6 @@ export interface BudgetResetSchedule {
   period: string | null;
   tooltip: string;
 }
-
-const ROLLOVER_NOTE = "Spend above a rollover cap at reset carries into the next period.";
 
 const DURATION_WORD_ALIASES: Record<string, string> = {
   hourly: "1h",
@@ -73,6 +74,7 @@ export function formatBudgetPeriod(start: Dayjs, end: Dayjs): string {
 export function describeBudgetResetSchedule(
   budgetDuration: string | null | undefined,
   budgetResetAt: string | null | undefined,
+  t: TFunction = i18n.t.bind(i18n),
 ): BudgetResetSchedule {
   const resetDate = budgetResetAt ? dayjs(budgetResetAt) : null;
   if (resetDate?.isValid()) {
@@ -82,28 +84,32 @@ export function describeBudgetResetSchedule(
       ? formatBudgetPeriod(getBudgetPeriodStart(budgetDuration, resetDate.utc()).local(), resetDate)
       : null;
     const coverage = period
-      ? `Current Period Spend covers ${period} and resets every ${budgetDuration}.`
-      : "Current Period Spend resets on a schedule.";
+      ? t("budgetSchedule.coverageWithPeriod", { period, duration: budgetDuration })
+      : t("budgetSchedule.coverageWithoutPeriod");
+    const tooltipValues = { coverage, label, timeZone, rolloverNote: t("budgetSchedule.rolloverNote") };
     return {
       label,
       resetAt: resetDate.toISOString(),
       period,
-      tooltip: `${coverage} Next reset ${label} (${timeZone}). ${ROLLOVER_NOTE}`,
+      tooltip: t("budgetSchedule.scheduledTooltip", tooltipValues),
     };
   }
   if (!budgetDuration) {
     return {
-      label: "Never resets",
+      label: t("budgetSchedule.neverResets.label"),
       resetAt: null,
       period: null,
-      tooltip: "This budget has no reset window, so this is lifetime spend for as long as the membership exists.",
+      tooltip: t("budgetSchedule.neverResets.tooltip"),
     };
   }
   return {
-    label: "Unknown",
+    label: t("budgetSchedule.unscheduled.label"),
     resetAt: null,
     period: null,
-    tooltip: `Resets every ${budgetDuration}, but the next reset time has not been scheduled yet. ${ROLLOVER_NOTE}`,
+    tooltip: t("budgetSchedule.unscheduled.tooltip", {
+      duration: budgetDuration,
+      rolloverNote: t("budgetSchedule.rolloverNote"),
+    }),
   };
 }
 
