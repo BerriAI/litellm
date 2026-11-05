@@ -221,7 +221,7 @@ class BaseConfig(ABC):
         """
         Returns True if the model/provider should retry the LLM API on UnprocessableEntityError
 
-        Overriden by azure ai - where different models support different parameters
+        Overridden by azure ai - where different models support different parameters
         """
         return False
 
