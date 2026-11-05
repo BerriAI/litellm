@@ -1881,6 +1881,8 @@ class _CallbackCapabilities:
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
     last_custom_pre_call_hook: int = -1
     routes_on_sensitive_data: bool = False
+    has_parallel_guardrail_before_last_custom_hook: bool = False
+    never_skipped_guardrail_names: frozenset[str] = frozenset()
 
 
 def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
@@ -1892,12 +1894,22 @@ def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
 
-_LITELLM_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
+_LITELLM_PACKAGES: Final = ("litellm", "litellm_enterprise")
+
+
+def _ships_with_litellm(callback: object) -> bool:
+    """Whether ``callback``'s class is defined in a file inside the imported ``litellm`` or ``litellm_enterprise`` package."""
+    package_files: Final = (getattr(sys.modules.get(name), "__file__", None) for name in _LITELLM_PACKAGES)
+    package_dirs: Final = tuple(
+        os.path.dirname(os.path.realpath(path)) + os.sep for path in package_files if isinstance(path, str)
+    )
+    source: Final = getattr(sys.modules.get(type(callback).__module__), "__file__", None)
+    return isinstance(source, str) and os.path.realpath(source).startswith(package_dirs)
 
 
 def _is_custom_pre_call_hook(callback: CustomLogger) -> bool:
     return isinstance(callback, CustomCodeGuardrail) or (
-        type(callback).__module__.partition(".")[0] not in _LITELLM_PACKAGES
+        not _ships_with_litellm(callback)
         and (isinstance(callback, CustomGuardrail) or "async_pre_call_hook" in type(callback).__dict__)
     )
 
@@ -1919,7 +1931,8 @@ async def _skipped_for_unroutable_model(
         or not await probe.refuses(data)
     ):
         return False
-    probe.record_skipped_guardrail(guardrail.guardrail_name)
+    if guardrail.guardrail_name not in caps.never_skipped_guardrail_names:
+        probe.record_skipped_guardrail(guardrail.guardrail_name)
     return True
 
 
@@ -1937,7 +1950,8 @@ def _without_extraction_spec_texts(spec: object) -> object:
 
 
 def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, object]:
-    """Every request field a pre-call guardrail can rewrite, each replaced with a redaction marker."""
+    """Every request field a pre-call guardrail can rewrite, each replaced with a redaction marker, including the
+    fields of a pass-through request's body under ``data``."""
     system_instruction: Final = {"parts": [{"text": REDACTED_BY_LITELLM}]}
     redactions: Final[Mapping[str, object]] = {
         "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],
@@ -1952,12 +1966,17 @@ def without_unscanned_content(request: Mapping[str, object]) -> Mapping[str, obj
         "instructions": REDACTED_BY_LITELLM,
         **{key: system_instruction for key in _SYSTEM_INSTRUCTION_KEYS},
     }
+    body: Final = request.get("data")
+    body_fields: Final = _as_str_mapping(body)
     config: Final = request.get("config")
     config_fields: Final = _as_str_mapping(config)
     extraction_fields: Final = request.get("fields")
     extraction_specs: Final = _as_str_mapping(extraction_fields)
     return {
         **{key: value for key, value in redactions.items() if key in request},
+        **(
+            {} if not isinstance(body, Mapping) else {"data": {**body_fields, **without_unscanned_content(body_fields)}}
+        ),
         **(
             {}
             if not isinstance(extraction_fields, Mapping)
@@ -3290,9 +3309,11 @@ class ProxyLogging:
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
 
         With ``routing_probe``, a pre-call guardrail litellm ships is not called for a model ``route_request``
-        refuses, when only litellm's own guardrails and hooks come after it and no guardrail reroutes on
-        sensitive data. The hooks after a skipped sequential guardrail see the request with every field it
-        could have rewritten redacted, and a skipped guardrail is left out of ``applied_guardrails``.
+        refuses, when only litellm's own guardrails and hooks come after it, no guardrail reroutes on sensitive
+        data, and no ``run_in_parallel`` guardrail sits at or before the last operator-written guardrail or hook.
+        The hooks after a skipped sequential guardrail see the request with every field it could have rewritten
+        redacted, and a skipped guardrail is left out of ``applied_guardrails`` unless a guardrail at or before
+        the last operator-written one shares its name.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -3360,7 +3381,11 @@ class ProxyLogging:
             )
 
             caps: Final = ProxyLogging.callback_capabilities()
-            probe: Final = None if caps.routes_on_sensitive_data else routing_probe
+            probe: Final = (
+                None
+                if caps.routes_on_sensitive_data or caps.has_parallel_guardrail_before_last_custom_hook
+                else routing_probe
+            )
             # Skip the per-request callback walk entirely when nothing in
             # ``litellm.callbacks`` overrides ``async_pre_call_hook`` and no
             # CustomGuardrail is configured. Saves the loop overhead +
@@ -3800,6 +3825,15 @@ class ProxyLogging:
                 if resolved.enforces_request_content is True:
                     has_content_enforcer = True
 
+        last_custom_pre_call_hook: Final = max(
+            (position for position, callback in enumerate(resolved_callbacks) if _is_custom_pre_call_hook(callback)),
+            default=-1,
+        )
+        never_skipped_guardrails: Final = tuple(
+            callback
+            for callback in resolved_callbacks[: last_custom_pre_call_hook + 1]
+            if isinstance(callback, CustomGuardrail)
+        )
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
             has_iterator_override=has_iterator_override
@@ -3814,17 +3848,18 @@ class ProxyLogging:
             listed_models_filters=tuple(
                 callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
             ),
-            last_custom_pre_call_hook=max(
-                (
-                    position
-                    for position, callback in enumerate(resolved_callbacks)
-                    if _is_custom_pre_call_hook(callback)
-                ),
-                default=-1,
-            ),
+            last_custom_pre_call_hook=last_custom_pre_call_hook,
             routes_on_sensitive_data=any(
                 isinstance(callback, CustomGuardrail) and callback.should_route_on_sensitive_data()
                 for callback in resolved_callbacks
+            ),
+            has_parallel_guardrail_before_last_custom_hook=any(
+                getattr(guardrail, "run_in_parallel", False) for guardrail in never_skipped_guardrails
+            ),
+            never_skipped_guardrail_names=frozenset(
+                name
+                for name in (getattr(guardrail, "guardrail_name", None) for guardrail in never_skipped_guardrails)
+                if isinstance(name, str)
             ),
         )
         # Limit cache to handle test churn without leaking; production
