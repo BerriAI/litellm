@@ -95,6 +95,8 @@ attributes! {
     source: String,
     /// Model the provider recommends migrating to before `deprecation_date`, as a catalog key when one exists.
     successor_model: String,
+    /// URL of the provider page or feed `deprecation_date` was read from.
+    deprecation_source: String,
     /// Audio container formats the model can return.
     supported_audio_formats: Vec<AudioFormat>,
     /// OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.
@@ -307,6 +309,8 @@ mod tests {
     #[case::negative_dbu("input_dbu_cost_per_token", json!(-1), false)]
     #[case::successor_model("successor_model", json!("gpt-6-luna"), true)]
     #[case::successor_model_not_a_name("successor_model", json!(["gpt-6-luna"]), false)]
+    #[case::deprecation_source("deprecation_source", json!("https://developers.openai.com/api/docs/deprecations"), true)]
+    #[case::deprecation_source_not_a_url_string("deprecation_source", json!(7), false)]
     #[case::thinking_on_by_default("thinking_on_by_default", json!(true), true)]
     #[case::thinking_on_by_default_not_a_flag("thinking_on_by_default", json!("yes"), false)]
     #[case::reasoning_contexts("reasoning_contexts", json!(["reasoning", "non_reasoning"]), true)]

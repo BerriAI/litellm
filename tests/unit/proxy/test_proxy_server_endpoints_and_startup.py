@@ -1794,6 +1794,38 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
 
 
+@pytest.mark.asyncio
+async def test_proxy_startup_reads_fips_mode_from_the_config_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": True})
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_enforces_fips", lambda: False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode is on but OpenSSL does not enforce FIPS"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_refuses_a_fips_mode_reference_to_an_unset_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy.common_utils.fips import FipsModeError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(
+        monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key", "fips_mode": "os.environ/FIPS_MODE_NOT_SET"}
+    )
+    monkeypatch.delenv("FIPS_MODE_NOT_SET", raising=False)
+
+    with pytest.raises(FipsModeError, match=r"general_settings\.fips_mode has no value"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
@@ -5603,6 +5635,13 @@ def _routing_groups_router():
     )
 
 
+def _routing_groups_of(router: litellm.Router) -> dict[str, tuple[list[str], str]]:
+    return {
+        group["group_name"]: (group["models"], group["routing_strategy"])
+        for group in router.settings().as_dict()["routing_groups"] or []
+    }
+
+
 @pytest.mark.asyncio
 async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
     from unittest.mock import AsyncMock, MagicMock
@@ -5624,8 +5663,7 @@ async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
     await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
 
     assert router.num_retries == 7
-    assert router._model_to_group == {"m1": "g1"}
-    assert router._get_routing_context("m1", None)[0] == "latency-based-routing"
+    assert _routing_groups_of(router) == {"g1": (["m1"], "latency-based-routing")}
 
 
 @pytest.mark.asyncio
@@ -5646,8 +5684,7 @@ async def test_valid_db_routing_groups_still_replace_router_groups():
     await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
 
     assert router.num_retries == 7
-    assert router._model_to_group == {"m2": "g2"}
-    assert router._get_routing_context("m2", None)[0] == "least-busy"
+    assert _routing_groups_of(router) == {"g2": (["m2"], "least-busy")}
 
 
 def _content_policy_router(**router_kwargs: object) -> litellm.Router:
@@ -16627,3 +16664,63 @@ async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(
     banner_records: Final = [record for record in records if record["message"] == LITELLM_BANNER]
     assert len(banner_records) == 1, records
     assert banner_records[0]["level"] == "INFO"
+
+
+@contextlib.contextmanager
+def _accounting_window_env(cached: Mapping[str, object], client: MagicMock) -> Iterator[None]:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache: Final = UserApiKeyCache()
+    for key, value in cached.items():
+        cache.set_cache(key=key, value=value)
+    originals: Final = (proxy_server_module.user_api_key_cache, proxy_server_module.prisma_client)
+    proxy_server_module.user_api_key_cache = cache
+    proxy_server_module.prisma_client = client
+    try:
+        yield
+    finally:
+        proxy_server_module.user_api_key_cache, proxy_server_module.prisma_client = originals
+
+
+@pytest.mark.asyncio
+async def test_accounting_window_keys_cover_the_stored_key_and_the_cached_team():
+    key_reset: Final = datetime(2026, 11, 13, tzinfo=timezone.utc)
+    team_reset: Final = datetime(2026, 11, 6, tzinfo=timezone.utc)
+    key_row: Final = _StoredRow(
+        budget_limits=[{"budget_duration": "30d", "max_budget": 100.0, "reset_at": key_reset.isoformat()}]
+    )
+    team_obj: Final = MagicMock()
+    team_obj.budget_limits = [{"budget_duration": "7d", "max_budget": 50.0, "reset_at": team_reset.isoformat()}]
+
+    with _accounting_window_env({"team_id:team-1": team_obj}, _prisma_with_rows(keys={"hashed-key": key_row})):
+        windows = await proxy_server_module.accounting_window_keys("hashed-key", "team-1")
+
+    assert windows == (
+        {
+            "entity_type": "key",
+            "entity_id": "hashed-key",
+            "window_duration": "30d",
+            "window_start": (key_reset - timedelta(days=30)).isoformat(),
+        },
+        {
+            "entity_type": "team",
+            "entity_id": "team-1",
+            "window_duration": "7d",
+            "window_start": (team_reset - timedelta(days=7)).isoformat(),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_accounting_window_keys_remember_a_key_without_windows_but_retry_a_failed_read():
+    client: Final = _prisma_with_rows(keys={"no-windows": _StoredRow(budget_limits=[])})
+
+    with _accounting_window_env({}, client):
+        assert await proxy_server_module.accounting_window_keys("no-windows", None) == ()
+        assert await proxy_server_module.accounting_window_keys("no-windows", None) == ()
+        assert client.db.litellm_verificationtoken.find_unique.await_count == 1
+
+        client.db.litellm_verificationtoken.find_unique.side_effect = RuntimeError("database unavailable")
+        assert await proxy_server_module.accounting_window_keys("unreadable", None) == ()
+        assert await proxy_server_module.accounting_window_keys("unreadable", None) == ()
+        assert client.db.litellm_verificationtoken.find_unique.await_count == 3

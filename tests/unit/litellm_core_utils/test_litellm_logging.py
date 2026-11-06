@@ -14490,3 +14490,193 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
     (first_cost, second_cost) = costs
     assert second_cost == pytest.approx(2 * first_cost)
     assert shared_metadata == {"tag": "x"}
+
+
+@pytest.mark.asyncio
+async def test_a_redacted_video_poll_still_tells_the_spend_callbacks_the_video_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, job_to_charge_once
+    from litellm.types.videos.main import VideoObject
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.events = (*self.events, (dict(kwargs), response_obj))
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logging_obj: Final = LitellmLogging(
+        model="custom-video",
+        messages=[],
+        stream=False,
+        call_type="avideo_status",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="poll-1",
+        function_id="poll-1",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {}, "video_id": "video_abc"}, optional_params={}
+    )
+
+    await logging_obj.async_success_handler(result=VideoObject(id="video_abc", object="video", status="completed"))
+
+    ((kwargs, response_obj),) = recorder.events
+    assert not isinstance(response_obj, VideoObject)
+    assert job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="video", job_id="video_abc")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "output_file_id", "deferred", "charged"),
+    [("in_progress", None, True, False), ("completed", "file-out", False, True)],
+)
+async def test_a_redacted_batch_retrieve_still_tells_the_spend_callbacks_whether_the_batch_cost_is_final(
+    monkeypatch: pytest.MonkeyPatch, status: str, output_file_id: str | None, deferred: bool, charged: bool
+) -> None:
+    from litellm.litellm_core_utils.batch_utils import ChargeOnceJob, defers_batch_cost, job_to_charge_once
+    from litellm.types.utils import LiteLLMBatch, Usage
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.events = (*self.events, (dict(kwargs), response_obj))
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="aretrieve_batch",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="retrieve-1",
+        function_id="retrieve-1",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+
+    await logging_obj.async_success_handler(
+        result=LiteLLMBatch(
+            id="batch_abc",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status=status,
+            output_file_id=output_file_id,
+        ),
+        batch_cost=0.42,
+        batch_usage=Usage(prompt_tokens=20, completion_tokens=18, total_tokens=38),
+        batch_models=["gpt-4o-mini"],
+    )
+
+    ((kwargs, response_obj),) = recorder.events
+    assert not isinstance(response_obj, LiteLLMBatch)
+    assert defers_batch_cost(kwargs, response_obj) is deferred
+    assert (job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="batch", job_id="batch_abc")) is charged
+
+
+_FAILED_ATTEMPT: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+
+
+async def _success_row_cost_after_a_failed_attempt(stash: Callable[[LitellmLogging], None]) -> float:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="recovered-attempt",
+        function_id="recovered-attempt",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    stash(logging_obj)
+    logging_obj.carry_failed_attempt_usage()
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(
+        ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+        now,
+        now,
+    )
+    return logging_obj.model_call_details["standard_logging_object"]["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_attempt_bills_a_failed_agentic_follow_up_but_not_a_failure_that_logged_its_own_row() -> None:
+    own_cost: Final = await _success_row_cost_after_a_failed_attempt(lambda logging_obj: None)
+    after_a_dropped_stream: Final = await _success_row_cost_after_a_failed_attempt(
+        lambda logging_obj: logging_obj.record_partial_usage_for_failure(*_FAILED_ATTEMPT)
+    )
+    after_a_failed_follow_up: Final = await _success_row_cost_after_a_failed_attempt(
+        lambda logging_obj: logging_obj.record_served_rounds_for_failure((_FAILED_ATTEMPT,))
+    )
+
+    assert own_cost > 0
+    assert after_a_dropped_stream == pytest.approx(own_cost)
+    assert after_a_failed_follow_up == pytest.approx(own_cost + _FAILED_ATTEMPT[1])
+
+
+def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_billed_from() -> None:
+    """A direct call that sets its own prices is logged at those prices, not at the catalog row's rates."""
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
+
+    rates: Final = {"input_cost_per_token": 3e-06, "output_cost_per_token": 7e-06}
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=now,
+        litellm_call_id="per-call-prices",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano", user="", optional_params={}, litellm_params=rates, custom_llm_provider="openai"
+    )
+    logging_obj.set_per_call_pricing(per_call_model_info("gpt-5.4-nano", "openai", rates, "chat"))
+    response: Final = ModelResponse(
+        model="gpt-5.4-nano",
+        choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=6, total_tokens=16),
+    )
+
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-5.4-nano",
+            "custom_llm_provider": "openai",
+            "litellm_params": rates,
+            "response_cost": logging_obj.response_cost_calculator(result=response),
+        },
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(10 * 3e-06 + 6 * 7e-06)
+    model_map_value: Final = payload["model_map_information"]["model_map_value"]
+    assert model_map_value is not None
+    assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (3e-06, 7e-06)

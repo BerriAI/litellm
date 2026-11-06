@@ -1,8 +1,8 @@
+import asyncio
 import base64
 import json
 import logging
 import time
-import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from types import SimpleNamespace
@@ -23,12 +23,13 @@ from litellm_enterprise.proxy.hooks.managed_files import (
     PROXY_LiteLLMManagedFiles,
     _provider_file_retrieve_credentials,
 )
+
 from litellm.caching import DualCache
 from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
-    is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
+    is_base64_encoded_unified_file_id,
 )
 from litellm.types.llms.openai import OpenAIFileObject
 from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
@@ -209,6 +210,7 @@ def _marked_fallback_file_row(
 
 def _batch_response_for_output_listing() -> "LiteLLMBatch":
     from openai.types.batch import BatchRequestCounts
+
     from litellm.types.utils import LiteLLMBatch
 
     response: Final = LiteLLMBatch(
@@ -753,9 +755,9 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
 
 @pytest.mark.asyncio
 async def test_output_file_id_for_batch_retrieve():
-    import litellm.proxy.proxy_server as proxy_server_module
     from openai.types.batch import BatchRequestCounts
 
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
     from litellm.types.utils import LiteLLMBatch
@@ -837,9 +839,9 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
     (e.g. Vertex batch retrieve), unified output_file_id should still include
     target_model_names from the managed input file ID.
     """
-    import litellm.proxy.proxy_server as proxy_server_module
     from openai.types.batch import BatchRequestCounts
 
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
     from litellm.types.utils import LiteLLMBatch
@@ -925,9 +927,9 @@ async def test_error_file_id_for_failed_batch():
     """
     Test that the error_file_id is properly managed when a batch fails
     """
-    import litellm.proxy.proxy_server as proxy_server_module
     from openai.types.batch import BatchRequestCounts
 
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
     from litellm.types.utils import LiteLLMBatch
@@ -1102,7 +1104,7 @@ def test_update_responses_input_with_unified_file_id():
     Test that update_responses_input_with_model_file_ids correctly decodes
     unified file IDs and extracts llm_output_file_id from responses API input.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1145,7 +1147,7 @@ def test_update_responses_input_with_regular_file_id():
     Test that update_responses_input_with_model_file_ids keeps regular
     OpenAI file IDs unchanged.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1181,7 +1183,7 @@ def test_update_responses_input_with_string_input():
     """
     Test that update_responses_input_with_model_file_ids returns string input unchanged.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1198,7 +1200,7 @@ def test_update_responses_input_with_multiple_file_ids():
     Test that update_responses_input_with_model_file_ids handles multiple file IDs
     (both unified and regular) in the same input.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1242,7 +1244,7 @@ def test_update_responses_input_with_model_file_id_mapping():
     Test that update_responses_input_with_model_file_ids correctly uses
     model_file_id_mapping to map managed file IDs to provider-specific file IDs.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1302,7 +1304,7 @@ def test_update_responses_tools_with_model_file_id_mapping():
     tools.container.file_ids were not being replaced with provider-specific
     file IDs, causing "string too long" errors from OpenAI.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_tools_with_model_file_ids,
     )
 
@@ -1350,7 +1352,7 @@ def test_update_responses_tools_without_mapping():
     Test that update_responses_tools_with_model_file_ids keeps file IDs
     unchanged when no mapping is provided.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_tools_with_model_file_ids,
     )
 
@@ -1382,7 +1384,7 @@ def test_update_responses_tools_with_mixed_file_ids():
     Test that update_responses_tools_with_model_file_ids correctly handles
     a mix of managed and regular file IDs.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_tools_with_model_file_ids,
     )
 
@@ -3943,7 +3945,6 @@ async def test_afile_retrieve_raises_error_for_non_managed_file():
 
 @pytest.mark.asyncio
 async def test_list_batches_from_managed_objects_table():
-    from openai.types.batch import BatchRequestCounts
 
     from litellm.proxy._types import UserAPIKeyAuth
 
