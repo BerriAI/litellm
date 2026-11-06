@@ -496,7 +496,7 @@ def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable
     return declare
 
 
-NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock", "default"] | None
 
 
 @pytest.fixture
@@ -506,7 +506,8 @@ def set_native_structured_output(
     def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
         entry: Final = litellm.model_cost[model_cost_key]
         monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
-        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key in ("bedrock", "default"))
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output_by_default", native_key == "default")
         litellm.get_model_info.cache_clear()
 
     return set_flags

@@ -22,7 +22,7 @@ from botocore.credentials import Credentials
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
@@ -2069,6 +2069,76 @@ class TestBedrockBatchAnthropicRowParams:
 
         assert ("format" in model_input.get("output_config", {})) is native_output
         assert (tool_names == {"json_tool_call"}) is not native_output
+
+    @pytest.mark.parametrize(
+        ("model", "native_over_the_limit"),
+        [(MODEL, True), ("bedrock/us.anthropic.claude-opus-5-5", False)],
+        ids=["already_native_model", "native_by_default_model"],
+    )
+    @pytest.mark.parametrize("over_the_limit", [False, True], ids=["at_the_limit", "over_the_limit"])
+    def test_only_native_by_default_models_send_json_schemas_wider_than_the_limit_through_the_json_tool(
+        self, local_model_cost_map, model, native_over_the_limit, over_the_limit
+    ):
+        native_output: Final = native_over_the_limit or not over_the_limit
+        field_names: Final = tuple(
+            f"field_{index:03d}" for index in range(BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES + over_the_limit)
+        )
+        wide_schema: Final = {
+            "type": "object",
+            "properties": {name: {"type": "string"} for name in field_names},
+            "required": list(field_names),
+            "additionalProperties": False,
+        }
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Describe a ceramic coffee mug"}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "wide", "schema": wide_schema}},
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
+
+    def test_a_deployment_opt_out_sends_uploaded_json_schema_rows_through_the_json_tool(self, local_model_cost_map):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        record: Final = {
+            "custom_id": "row-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": self.MODEL,
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "weather", "schema": self.PARAMETERS},
+                },
+            },
+        }
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model=self.MODEL,
+            create_file_data={
+                "file": ("batch.jsonl", json.dumps(record).encode(), "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={
+                "s3_bucket_name": "litellm-batch-bucket",
+                "litellm_metadata": {"model_info": {"supports_bedrock_native_structured_output": False}},
+            },
+        )
+        assert isinstance(request, dict)
+        model_input: Final = json.loads(request["data"].splitlines()[0])["modelInput"]
+
+        assert "format" not in model_input.get("output_config", {})
+        assert [tool["name"] for tool in model_input["tools"]] == ["json_tool_call"]
 
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(
