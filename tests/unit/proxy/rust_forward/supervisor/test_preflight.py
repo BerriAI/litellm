@@ -4,6 +4,7 @@ from typing import Final
 
 import pytest
 
+from litellm.proxy.rust_forward.platform import Platform
 from litellm.proxy.rust_forward.platform.posix import PosixPlatform
 from litellm.proxy.rust_forward.platform.windows import WindowsPlatform
 from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
@@ -17,58 +18,47 @@ POSIX_ONLY: Final = pytest.mark.skipif(sys.platform == "win32", reason="runs a P
 
 
 @pytest.mark.parametrize(
-    ("server", "reason"),
+    ("platform", "server", "refusal"),
     [
-        (python_server(Server.HYPERCORN), "LITELLM_RUST does not support Hypercorn"),
-        (python_server(Server.GRANIAN), "LITELLM_RUST does not support Granian"),
-        (python_server(listener=Listener.TLS), "LITELLM_RUST does not support TLS on the public port"),
+        (POSIX, python_server(), None),
+        (POSIX, python_server(Server.GUNICORN), None),
+        (WINDOWS, python_server(), None),
+        (WINDOWS, python_server(Server.GUNICORN), "does not support gunicorn on Windows"),
+        (POSIX, python_server(Server.HYPERCORN), "does not support Hypercorn"),
+        (POSIX, python_server(Server.GRANIAN), "does not support Granian"),
+        (POSIX, python_server(listener=Listener.TLS), "does not support TLS on the public port"),
+        (POSIX, python_server(listener=Listener.UNIX_SOCKET), "does not support a Unix socket on the public port"),
         (
-            python_server(listener=Listener.UNIX_SOCKET),
-            "LITELLM_RUST does not support a Unix socket on the public port",
-        ),
-        (
+            POSIX,
             python_server(Server.GUNICORN, Listener.INHERITED_FD),
-            "LITELLM_RUST does not support an inherited file descriptor on the public port",
+            "does not support an inherited file descriptor on the public port",
         ),
     ],
 )
-def test_unsupported_servers_are_refused_before_anything_starts(
-    server: PythonServer, reason: str, capsys: pytest.CaptureFixture[str]
+def test_only_plain_tcp_on_a_supported_server_can_be_forwarded(
+    platform: Platform, server: PythonServer, refusal: str | None
 ) -> None:
-    assert startup_check(POSIX, server, "gateway") == StartupError(reason)
-    prepared: Final[list[bool]] = []
-    refused: Final = supervise(server, ("python",), before_start=lambda: prepared.append(True), platform=POSIX)
-    assert refused == StartupError(reason)
-    assert (capsys.readouterr().err, prepared) == (
-        f"{reason}, so Python serves the public port without Rust forwarding\n",
-        [],
-    )
+    expected: Final = "gateway" if refusal is None else StartupError(f"LITELLM_RUST {refusal}")
+    assert startup_check(platform, server, "gateway") == expected
 
 
-@pytest.mark.parametrize("server", [Server.UVICORN, Server.GUNICORN])
-def test_plain_tcp_uvicorn_and_gunicorn_can_be_forwarded(server: Server) -> None:
-    assert startup_check(POSIX, python_server(server), "gateway") == "gateway"
-
-
-def test_windows_forwards_uvicorn_and_refuses_gunicorn() -> None:
-    assert startup_check(WINDOWS, python_server(), "gateway") == "gateway"
-    assert startup_check(WINDOWS, python_server(Server.GUNICORN), "gateway") == StartupError(
-        "LITELLM_RUST does not support gunicorn on Windows"
-    )
-
-
-def test_missing_binary_is_refused_before_anything_starts(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("server", "refusal"),
+    [
+        (python_server(Server.HYPERCORN), "does not support Hypercorn"),
+        (python_server(), "requires the litellm-gateway binary from the litellm-proxy package"),
+    ],
+)
+def test_a_refused_start_says_why_in_one_line_and_starts_nothing(
+    server: PythonServer, refusal: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     prepared: Final[list[bool]] = []
     refused: Final = supervise(
-        python_server(),
-        ("python",),
-        before_start=lambda: prepared.append(True),
-        scripts_dir=str(tmp_path),
-        platform=POSIX,
+        server, ("python",), before_start=lambda: prepared.append(True), scripts_dir=str(tmp_path), platform=POSIX
     )
-    assert (refused, prepared) == (
-        StartupError("LITELLM_RUST requires the litellm-gateway binary from the litellm-proxy package"),
-        [],
+    assert (refused, prepared) == (StartupError(f"LITELLM_RUST {refusal}"), [])
+    assert (
+        capsys.readouterr().err == f"LITELLM_RUST {refusal}, so Python serves the public port without Rust forwarding\n"
     )
 
 

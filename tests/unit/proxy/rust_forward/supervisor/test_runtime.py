@@ -13,7 +13,6 @@ from litellm.proxy.rust_forward.platform.windows import WindowsPlatform
 from litellm.proxy.rust_forward.supervisor import supervise
 from litellm.proxy.rust_forward.supervisor.children import ChildSpec
 from litellm.proxy.rust_forward.supervisor.lifecycle import (
-    FAILURE,
     Action,
     Caught,
     Child,
@@ -65,6 +64,7 @@ def test_rust_opens_the_public_port_only_once_python_listens(tmp_path: Path, mon
 TERM: Final = signal.SIGTERM
 POSIX_ONLY: Final = pytest.mark.skipif(sys.platform == "win32", reason="the child traps SIGTERM")
 STOPS: Final = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGQUIT})
+RUST_MISSING: Final = SpawnFailed(FileNotFoundError("litellm-gateway"))
 
 
 @dataclass
@@ -72,12 +72,12 @@ class ScriptedExecutor:
     """Replays a fixed event script and records every action the driver carries out."""
 
     events: list[Event]
-    failing: frozenset[Child] = frozenset()
+    failing: frozenset[Child]
     done: list[Action] = field(default_factory=list)
 
     async def spawn(self, child: Child) -> SpawnFailed | None:
         self.done.append(Spawn(child))
-        return SpawnFailed(FileNotFoundError(child.value)) if child in self.failing else None
+        return RUST_MISSING if child in self.failing else None
 
     def send(self, child: Child, signum: signal.Signals) -> None:
         self.done.append(Send(child, signum))
@@ -86,34 +86,41 @@ class ScriptedExecutor:
         return self.events.pop(0)
 
 
-async def test_driver_carries_out_each_action_in_order_and_ends_with_pythons_status() -> None:
-    executor: Final = ScriptedExecutor(
-        [Probe.PYTHON_LISTENING, Caught(TERM), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)]
-    )
-    assert await drive(executor, STOPS) == -15
-    assert executor.done == [Spawn(Child.PYTHON), Spawn(Child.RUST), Send(Child.RUST, TERM), Send(Child.PYTHON, TERM)]
-    assert executor.events == []
-
-
-async def test_driver_stops_python_and_fails_when_rust_is_lost() -> None:
-    executor: Final = ScriptedExecutor(
-        [Probe.PYTHON_LISTENING, ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)]
-    )
-    assert await drive(executor, STOPS) == FAILURE
-    assert executor.done == [Spawn(Child.PYTHON), Spawn(Child.RUST), Send(Child.PYTHON, TERM)]
-
-
-async def test_driver_asks_for_no_event_once_the_status_is_settled() -> None:
-    executor: Final = ScriptedExecutor([ChildExited(Child.PYTHON, 3), Caught(TERM)])
-    assert await drive(executor, STOPS) == 3
-    assert executor.events == [Caught(TERM)]
-
-
-async def test_driver_returns_a_failed_spawn_without_waiting_for_events() -> None:
-    executor: Final = ScriptedExecutor([Probe.PYTHON_LISTENING, Caught(TERM)], failing=frozenset({Child.RUST}))
-    outcome: Final = await drive(executor, STOPS)
-    assert isinstance(outcome, SpawnFailed)
-    assert executor.events == [Caught(TERM)]
+@pytest.mark.parametrize(
+    ("events", "failing", "done", "outcome", "unread"),
+    [
+        pytest.param(
+            [Probe.PYTHON_LISTENING, Caught(TERM), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)],
+            frozenset(),
+            [Spawn(Child.PYTHON), Spawn(Child.RUST), Send(Child.RUST, TERM), Send(Child.PYTHON, TERM)],
+            -15,
+            [],
+            id="carries out each action in order and ends with Python's status",
+        ),
+        pytest.param(
+            [ChildExited(Child.PYTHON, 3), Caught(TERM)],
+            frozenset(),
+            [Spawn(Child.PYTHON)],
+            3,
+            [Caught(TERM)],
+            id="reads no event once the status is settled",
+        ),
+        pytest.param(
+            [Probe.PYTHON_LISTENING, Caught(TERM)],
+            frozenset({Child.RUST}),
+            [Spawn(Child.PYTHON), Spawn(Child.RUST)],
+            RUST_MISSING,
+            [Caught(TERM)],
+            id="returns a failed spawn without waiting for more events",
+        ),
+    ],
+)
+async def test_driver_executes_lifecycle_decisions(
+    events: list[Event], failing: frozenset[Child], done: list[Action], outcome: int | SpawnFailed, unread: list[Event]
+) -> None:
+    executor: Final = ScriptedExecutor(events, failing)
+    assert await drive(executor, STOPS) == outcome
+    assert (executor.done, executor.events) == (done, unread)
 
 
 def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:

@@ -1,10 +1,11 @@
 import functools
+import itertools
 import signal
 from dataclasses import dataclass, replace
 from typing import Final
 
 import pytest
-from hypothesis import example, given
+from hypothesis import given
 from hypothesis import strategies as st
 
 from litellm.proxy.rust_forward.platform.posix import PosixPlatform
@@ -16,7 +17,6 @@ from litellm.proxy.rust_forward.supervisor.lifecycle import (
     ChildExited,
     Event,
     Lifecycle,
-    Phase,
     Probe,
     Send,
     Spawn,
@@ -25,73 +25,127 @@ from litellm.proxy.rust_forward.supervisor.lifecycle import (
     step,
 )
 
+PY: Final = Child.PYTHON
+RUST: Final = Child.RUST
+LISTENING: Final = Probe.PYTHON_LISTENING
 TERM: Final = signal.SIGTERM
 INT: Final = signal.SIGINT
-POSIX: Final = PosixPlatform()
+HUP: Final = signal.SIGHUP
+STOPS: Final = PosixPlatform().stop_signals
+
+
+def _replay(events: tuple[Event, ...]) -> tuple[tuple[tuple[Action, ...], ...], int | None]:
+    transitions: Final = tuple(
+        itertools.accumulate(events, lambda transition, event: step(transition[0], event, STOPS), initial=boot())
+    )
+    return tuple(actions for _, actions in transitions[1:]), exit_status(transitions[-1][0])
+
+
+@pytest.mark.parametrize(
+    ("trace", "status"),
+    [
+        pytest.param(
+            (
+                (LISTENING, (Spawn(RUST),)),
+                (Caught(TERM), (Send(RUST, TERM), Send(PY, TERM))),
+                (ChildExited(RUST, 0), ()),
+                (ChildExited(PY, -15), ()),
+            ),
+            -15,
+            id="TERM reaches Rust first, then Python, and the supervisor dies as Python did",
+        ),
+        pytest.param(
+            (
+                (LISTENING, (Spawn(RUST),)),
+                (Caught(INT), (Send(RUST, INT), Send(PY, INT))),
+                (Caught(INT), (Send(RUST, INT), Send(PY, INT))),
+                (ChildExited(PY, 1), (Send(RUST, TERM),)),
+                (ChildExited(RUST, 0), ()),
+            ),
+            1,
+            id="a second Ctrl-C reaches Python again to force the exit",
+        ),
+        pytest.param(
+            (
+                (LISTENING, (Spawn(RUST),)),
+                (Caught(HUP), (Send(PY, HUP),)),
+                (Caught(signal.SIGTTIN), (Send(PY, signal.SIGTTIN),)),
+                (ChildExited(PY, 0), (Send(RUST, TERM),)),
+                (ChildExited(RUST, 0), ()),
+            ),
+            0,
+            id="gunicorn's HUP and TTIN reach only Python and Rust keeps serving",
+        ),
+        pytest.param(
+            (
+                (LISTENING, (Spawn(RUST),)),
+                (ChildExited(RUST, 0), (Send(PY, TERM),)),
+                (ChildExited(PY, -15), ()),
+            ),
+            FAILURE,
+            id="losing Rust while Python serves stops Python and fails",
+        ),
+        pytest.param(
+            (
+                (Caught(TERM), (Send(PY, TERM),)),
+                (LISTENING, ()),
+                (ChildExited(PY, -15), ()),
+            ),
+            -15,
+            id="a stop before Python listens never starts Rust",
+        ),
+        pytest.param(((ChildExited(PY, 3), ()),), 3, id="Python failing to boot exits with its status"),
+    ],
+)
+def test_supervisor_relays_signals_and_exits_as_python_did(
+    trace: tuple[tuple[Event, tuple[Action, ...]], ...], status: int
+) -> None:
+    events: Final = tuple(event for event, _ in trace)
+    assert _replay(events) == (tuple(actions for _, actions in trace), status)
 
 
 @dataclass(frozen=True, slots=True)
-class World:
-    """What the operating system knows about the children, kept independently of ``Lifecycle``."""
+class Observed:
+    """What an outside observer of the two processes knows, without looking inside ``Lifecycle``."""
 
-    alive: frozenset[Child] = frozenset({Child.PYTHON})
-    spawned: frozenset[Child] = frozenset({Child.PYTHON})
-    reported_listening: bool = False
+    state: Lifecycle
+    alive: frozenset[Child] = frozenset({PY})
+    rust_spawns: int = 0
     stop_requested: bool = False
-    python_status: int | None = None
     rust_lost: bool = False
+    python_status: int | None = None
 
 
-def _expected_exit(world: World) -> int | None:
-    if world.alive or world.python_status is None:
-        return None
-    return FAILURE if world.rust_lost else world.python_status
+def _observe(seen: Observed, event: Event) -> Observed:
+    state, actions = step(seen.state, event, STOPS)
+    death: Final = event if isinstance(event, ChildExited) and event.child in seen.alive else None
+    exited: Final = None if death is None else death.child
+    running: Final = seen.alive - {exited}
+    assert all(action.child in running for action in actions if isinstance(action, Send)), "signalled a dead child"
+    if isinstance(event, Caught):
+        to_rust: Final = (Send(RUST, event.signum),) if event.signum in STOPS and RUST in running else ()
+        assert actions == (*to_rust, *((Send(PY, event.signum),) if PY in running else ()))
+    spawned: Final = Spawn(RUST) in actions
+    assert not spawned or (event is LISTENING and not seen.stop_requested), "started Rust out of turn"
+    stop_requested: Final = seen.stop_requested or (isinstance(event, Caught) and event.signum in STOPS)
+    after: Final = replace(
+        seen,
+        state=state,
+        alive=running | ({RUST} if spawned else frozenset()),
+        rust_spawns=seen.rust_spawns + int(spawned),
+        stop_requested=stop_requested,
+        rust_lost=seen.rust_lost or (exited is RUST and PY in running and not stop_requested),
+        python_status=death.status if death is not None and exited is PY else seen.python_status,
+    )
+    settled: Final = None if after.alive or after.python_status is None else after.python_status
+    assert exit_status(state) == (FAILURE if after.rust_lost and settled is not None else settled)
+    return after
 
 
-def _expected_relay(world: World, signum: signal.Signals) -> tuple[Action, ...]:
-    to_rust: Final = (Send(Child.RUST, signum),) if signum in STOPS and Child.RUST in world.alive else ()
-    to_python: Final = (Send(Child.PYTHON, signum),) if Child.PYTHON in world.alive else ()
-    return (*to_rust, *to_python)
-
-
-def _expected_on_exit(world: World, child: Child) -> tuple[Action, ...]:
-    match child:
-        case Child.PYTHON:
-            return (Send(Child.RUST, TERM),) if Child.RUST in world.alive else ()
-        case Child.RUST:
-            serving: Final = Child.PYTHON in world.alive and not world.stop_requested
-            return (Send(Child.PYTHON, TERM),) if serving else ()
-
-
-def _after(world: World, event: Event) -> World:
-    match event:
-        case Caught(signum):
-            return replace(world, stop_requested=world.stop_requested or signum in STOPS)
-        case Probe.PYTHON_LISTENING:
-            return replace(world, reported_listening=world.reported_listening or Child.PYTHON in world.alive)
-        case ChildExited(child, status) if child in world.alive:
-            lost: Final = child is Child.RUST and Child.PYTHON in world.alive and not world.stop_requested
-            return replace(
-                world,
-                alive=world.alive - {child},
-                python_status=status if child is Child.PYTHON else world.python_status,
-                rust_lost=world.rust_lost or lost,
-            )
-        case ChildExited():
-            return world
-
-
-def _spawned(world: World, actions: tuple[Action, ...]) -> World:
-    started: Final = frozenset(action.child for action in actions if isinstance(action, Spawn))
-    return replace(world, alive=world.alive | started, spawned=world.spawned | started)
-
-
-SIGNALS: Final = POSIX.relayed_signals
-STOPS: Final = POSIX.stop_signals
 EVENTS: Final = st.lists(
     st.one_of(
-        st.sampled_from(SIGNALS).map(Caught),
-        st.just(Probe.PYTHON_LISTENING),
+        st.sampled_from(PosixPlatform().relayed_signals).map(Caught),
+        st.just(LISTENING),
         st.builds(ChildExited, st.sampled_from(Child), st.integers(-15, 3)),
     ),
     max_size=40,
@@ -99,69 +153,6 @@ EVENTS: Final = st.lists(
 
 
 @given(EVENTS)
-@example([Caught(TERM), Caught(signal.SIGHUP), Probe.PYTHON_LISTENING])
-@example([Probe.PYTHON_LISTENING, Caught(TERM), Caught(signal.SIGWINCH), ChildExited(Child.RUST, 0)])
-def test_lifecycle_relays_every_signal_and_ends_with_pythons_status(events: list[Event]) -> None:
-    state, actions = boot()
-    world = World()
-    assert actions == (Spawn(Child.PYTHON),)
-    for event in events:
-        before = _after(world, event)
-        state, actions = step(state, event, STOPS)
-        match event:
-            case Caught(signum):
-                assert actions == _expected_relay(before, signum)
-            case Probe.PYTHON_LISTENING:
-                starts_rust = Child.PYTHON in world.alive and not world.reported_listening and not world.stop_requested
-                assert actions == ((Spawn(Child.RUST),) if starts_rust else ())
-            case ChildExited(child) if child in world.alive:
-                assert actions == _expected_on_exit(world, child)
-            case ChildExited():
-                assert actions == ()
-        assert all(action.child in before.alive for action in actions if isinstance(action, Send))
-        assert all(action.child not in before.spawned for action in actions if isinstance(action, Spawn))
-        world = _spawned(before, actions)
-        assert exit_status(state) == _expected_exit(world)
-
-
-@given(EVENTS)
-def test_rust_starts_at_most_once_and_only_while_python_listens_unstopped(events: list[Event]) -> None:
-    def advance(acc: tuple[Lifecycle, tuple[tuple[Event, Lifecycle, Action], ...]], event: Event):
-        state, seen = acc
-        following, actions = step(state, event, STOPS)
-        return following, (*seen, *((event, state, action) for action in actions))
-
-    _, history = functools.reduce(advance, events, (boot()[0], ()))
-    spawns: Final = tuple((event, state) for event, state, action in history if isinstance(action, Spawn))
-    assert len(spawns) <= 1
-    assert all(
-        event is Probe.PYTHON_LISTENING and state.python is Phase.SPAWNED and not state.stop_requested
-        for event, state in spawns
-    )
-
-
-@pytest.mark.parametrize(
-    ("events", "expected"),
-    [
-        ((Probe.PYTHON_LISTENING, Caught(TERM), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)), -15),
-        (
-            (
-                Probe.PYTHON_LISTENING,
-                Caught(INT),
-                Caught(INT),
-                ChildExited(Child.PYTHON, 1),
-                ChildExited(Child.RUST, 0),
-            ),
-            1,
-        ),
-        (
-            (Probe.PYTHON_LISTENING, Caught(signal.SIGHUP), ChildExited(Child.PYTHON, -1), ChildExited(Child.RUST, 0)),
-            -1,
-        ),
-        ((Probe.PYTHON_LISTENING, ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, 0)), FAILURE),
-        ((ChildExited(Child.PYTHON, 3),), 3),
-    ],
-)
-def test_supervisor_exits_as_python_did_unless_rust_was_lost(events: tuple[Event, ...], expected: int) -> None:
-    final: Final = functools.reduce(lambda state, event: step(state, event, STOPS)[0], events, boot()[0])
-    assert exit_status(final) == expected
+def test_any_event_order_keeps_the_supervisor_transparent_to_python(events: list[Event]) -> None:
+    final: Final = functools.reduce(_observe, events, Observed(boot()[0]))
+    assert final.rust_spawns <= 1

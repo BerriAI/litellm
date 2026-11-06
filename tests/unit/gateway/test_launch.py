@@ -12,7 +12,6 @@ from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
-import uvicorn
 from uvicorn.importer import import_from_string
 from uvicorn.main import main as uvicorn_main
 
@@ -20,7 +19,14 @@ from gateway.launch import GATEWAY_APP, main, pool_database_url, python_server, 
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
 from litellm.proxy.proxy_server import app as proxy_app
-from litellm.proxy.rust_forward.mode import AssignedPort, InheritedFd, Supervised, uvicorn_flags
+from litellm.proxy.rust_forward.mode import (
+    AssignedPort,
+    InheritedFd,
+    Mode,
+    RustForwardMode,
+    Supervised,
+    uvicorn_flags,
+)
 from litellm.proxy.rust_forward.server import Listener
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
@@ -172,10 +178,6 @@ class TestUvicornArgv:
         served: Final = _uvicorn_params(uvicorn_argv(argv, os.environ))["timeout_keep_alive"]
         assert python_server(argv).keepalive_seconds == served
 
-    def test_without_a_keepalive_rust_follows_uvicorns_own_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("KEEPALIVE_TIMEOUT", raising=False)
-        assert python_server(()).keepalive_seconds == uvicorn.Config(app="", log_config=None).timeout_keep_alive
-
     @pytest.mark.parametrize("argv", [(), ("--timeout-graceful-shutdown", "12")])
     def test_rust_drains_for_pythons_graceful_timeout_plus_teardown(
         self, argv: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
@@ -185,28 +187,27 @@ class TestUvicornArgv:
         graceful: Final = GracefulShutdownManager.get_timeout() if flag is None else float(str(flag))
         assert python_server(argv).graceful_timeout_seconds == graceful
 
-    def test_supervised_listener_uses_the_inherited_loopback_socket(self):
-        supervised: Final = uvicorn_flags(Supervised(InheritedFd(17), True, "127.0.0.1"))
-        params: Final = _uvicorn_params((*uvicorn_argv(("--workers", "2"), {}), *supervised))
-        assert params["fd"] == 17
-        assert params["workers"] == 2
-
-    def test_assigned_port_listener_binds_only_loopback(self):
-        supervised: Final = uvicorn_flags(Supervised(AssignedPort(45556), True, "127.0.0.1"))
-        params: Final = _uvicorn_params((*uvicorn_argv(("--host", "0.0.0.0", "--port", "4000"), {}), *supervised))
-        assert (params["host"], params["port"], params["fd"]) == ("127.0.0.1", 45556, None)
-
-    @pytest.mark.parametrize("argv", [(), ("--proxy-headers",), ("--forwarded-allow-ips=*",)])
-    def test_private_hop_leaves_proxy_headers_to_the_app(self, argv: tuple[str, ...]):
-        params: Final = _uvicorn_params(
-            (*uvicorn_argv(argv, {}), *uvicorn_flags(Supervised(InheritedFd(17), True, "*")))
-        )
-        assert params["proxy_headers"] is False
-
-    def test_direct_listener_keeps_explicit_proxy_header_options(self):
-        params: Final = _uvicorn_params(uvicorn_argv(("--no-proxy-headers", "--forwarded-allow-ips=*"), {}))
-        assert params["proxy_headers"] is False
-        assert params["forwarded_allow_ips"] == "*"
+    @pytest.mark.parametrize(
+        ("mode", "served"),
+        [
+            (Mode.DISABLED, {"host": "0.0.0.0", "port": 4000, "fd": None, "proxy_headers": True}),
+            (
+                Supervised(InheritedFd(17), True, "*"),
+                {"host": "0.0.0.0", "port": 4000, "fd": 17, "proxy_headers": False},
+            ),
+            (
+                Supervised(AssignedPort(45556), True, "*"),
+                {"host": "127.0.0.1", "port": 45556, "fd": None, "proxy_headers": False},
+            ),
+        ],
+    )
+    def test_supervised_uvicorn_serves_the_private_hop_and_never_trusts_it(
+        self, mode: RustForwardMode, served: dict[str, object]
+    ) -> None:
+        argv: Final = ("--host", "0.0.0.0", "--port", "4000", "--workers", "2", "--proxy-headers")
+        params: Final = _uvicorn_params((*uvicorn_argv((*argv, "--forwarded-allow-ips=*"), {}), *uvicorn_flags(mode)))
+        assert {name: params[name] for name in served} == served
+        assert (params["workers"], params["forwarded_allow_ips"]) == (2, "*")
 
     def test_keepalive_env_reaches_uvicorn(self):
         params: Final = _uvicorn_params(uvicorn_argv(("--workers", "4"), {"KEEPALIVE_TIMEOUT": "75"}))

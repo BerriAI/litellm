@@ -26,6 +26,7 @@ import urllib.parse as urlparse
 
 import uvicorn
 import yaml
+from gunicorn.config import Config as GunicornConfig
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -34,7 +35,8 @@ from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
-from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
+from litellm.proxy.rust_forward.server import Listener, Server
+from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, GracefulShutdownManager
 
 
 @pytest.fixture(autouse=True)
@@ -4301,22 +4303,20 @@ class TestRustForwardServer:
         )
 
     @pytest.mark.parametrize(
-        ("argv", "reason"),
+        ("argv", "server", "listener"),
         [
-            (
-                ["--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"],
-                "does not support TLS on the public port",
-            ),
-            (["--run_hypercorn"], "does not support Hypercorn"),
-            (["--run_granian"], "does not support Granian"),
+            ([], Server.UVICORN, Listener.TCP),
+            (["--run_gunicorn"], Server.GUNICORN, Listener.TCP),
+            (["--run_hypercorn"], Server.HYPERCORN, Listener.TCP),
+            (["--run_granian"], Server.GRANIAN, Listener.TCP),
+            (["--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"], Server.UVICORN, Listener.TLS),
         ],
     )
-    def test_unsupported_servers_are_refused_before_starting_children(self, argv: list[str], reason: str) -> None:
-        from litellm.proxy.rust_forward.platform.posix import PosixPlatform
-        from litellm.proxy.rust_forward.supervisor.preflight import StartupError, startup_check
-
-        _, server = self._server(argv)
-        assert startup_check(PosixPlatform(), server, "gateway") == StartupError(f"LITELLM_RUST {reason}")
+    def test_the_supervisor_sees_the_server_and_listener_python_would_use(
+        self, argv: list[str], server: Server, listener: Listener
+    ) -> None:
+        _, described = self._server(argv)
+        assert (described.server, described.listener) == (server, listener)
 
     @patch("uvicorn.run")
     @patch("atexit.register")
@@ -4383,59 +4383,37 @@ class TestRustForwardServer:
         assert (result.exit_code, len(lines)) == (1, 1)
         assert lines[0].startswith("Error: LITELLM_RUST is invalid: ")
 
-    @pytest.mark.parametrize(
-        ("argv", "environ"),
-        [(["--keepalive_timeout", "2"], {}), ([], {"KEEPALIVE_TIMEOUT": "7"}), ([], {})],
-    )
-    def test_rust_retires_connections_by_the_keepalive_uvicorn_runs_with(
-        self, argv: list[str], environ: dict[str, str], monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("KEEPALIVE_TIMEOUT", raising=False)
-        for name, value in environ.items():
-            monkeypatch.setenv(name, value)
-        params, server = self._server(argv)
+    @staticmethod
+    def _served_by_python(params: dict[str, object]) -> tuple[object, ...]:
+        if params["run_gunicorn"]:
+            gunicorn: Final = GunicornConfig()
+            return gunicorn.keepalive, GracefulShutdownManager.get_timeout(), ",".join(gunicorn.forwarded_allow_ips)
         served: Final = uvicorn.Config(
             **ProxyInitializationHelpers.get_default_unvicorn_init_args(
                 "127.0.0.1", 45555, keepalive_timeout=params["keepalive_timeout"]
             )
         )
-        assert server.keepalive_seconds == served.timeout_keep_alive
+        return served.timeout_keep_alive, served.timeout_graceful_shutdown, served.forwarded_allow_ips
 
-    def test_gunicorn_workers_keep_gunicorns_keepalive_and_rust_follows(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from gunicorn.config import Config as GunicornConfig
-
-        monkeypatch.delenv("KEEPALIVE_TIMEOUT", raising=False)
-        _, server = self._server(["--run_gunicorn", "--keepalive_timeout", "9"])
-        assert server.keepalive_seconds == GunicornConfig().keepalive
-
-    @pytest.mark.parametrize("gunicorn", [True, False])
-    def test_python_behind_rust_trusts_the_proxies_its_server_would_have(
-        self, gunicorn: bool, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("argv", "environ"),
+        [
+            ([], {}),
+            (["--keepalive_timeout", "2"], {"GRACEFUL_SHUTDOWN_TIMEOUT": "12.5"}),
+            ([], {"KEEPALIVE_TIMEOUT": "7", "FORWARDED_ALLOW_IPS": "10.0.0.5"}),
+            (["--run_gunicorn", "--keepalive_timeout", "9"], {}),
+        ],
+    )
+    def test_rust_follows_the_keepalive_drain_and_trust_python_serves_with(
+        self, argv: list[str], environ: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from gunicorn.config import Config as GunicornConfig
-
-        from litellm.proxy.rust_forward.mode import InheritedFd, Supervised, rust_forward_mode
-        from litellm.proxy.rust_forward.platform import PrivateListener
-        from litellm.proxy.rust_forward.platform.posix import PosixPlatform
-        from litellm.proxy.rust_forward.supervisor.children import python_spec
-
-        monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
-        _, server = self._server(["--run_gunicorn"] if gunicorn else [])
-        mode: Final = rust_forward_mode(
-            python_spec(
-                PosixPlatform(), ("litellm",), PrivateListener(InheritedFd(17), 45555, (17,)), server
-            ).env_overrides
-        )
-        trusted: Final = (
-            GunicornConfig().forwarded_allow_ips
-            if gunicorn
-            else [uvicorn.Config(app="", log_config=None).forwarded_allow_ips]
-        )
-        assert isinstance(mode, Supervised)
-        assert mode.trusted_proxies.split(",") == trusted
-
-    def test_rust_drains_for_the_graceful_timeout_uvicorn_runs_with(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "12.5")
-        _, server = self._server([])
-        served: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args("127.0.0.1", 45555)
-        assert server.graceful_timeout_seconds == served["timeout_graceful_shutdown"]
+        for name in ("KEEPALIVE_TIMEOUT", "GRACEFUL_SHUTDOWN_TIMEOUT", "FORWARDED_ALLOW_IPS"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in environ.items():
+            monkeypatch.setenv(name, value)
+        params, server = self._server(argv)
+        assert (
+            server.keepalive_seconds,
+            server.graceful_timeout_seconds,
+            server.trusted_proxies,
+        ) == self._served_by_python(params)

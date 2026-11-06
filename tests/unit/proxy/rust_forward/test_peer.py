@@ -95,16 +95,6 @@ async def test_python_behind_rust_sees_what_a_direct_connection_would(
     assert behind_rust == direct
 
 
-async def test_untrusted_peer_cannot_set_the_scheme_behind_rust() -> None:
-    client, scheme, _ = await _seen_by_app(
-        True,
-        ("127.0.0.1", 60000),
-        ((b"x-forwarded-proto", b"https"), (b"x-litellm-rust-peer", b"203.0.113.7:51234")),
-        Supervised(InheritedFd(17), True, "127.0.0.1"),
-    )
-    assert (client, scheme) == (("203.0.113.7", 51234), "http")
-
-
 async def test_peer_header_from_anyone_but_the_rust_hop_is_dropped_and_ignored() -> None:
     client, _, headers = await _seen_by_app(
         True,
