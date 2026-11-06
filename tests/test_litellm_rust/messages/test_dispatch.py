@@ -528,6 +528,36 @@ def test_each_detected_feature_reaches_its_rule(
     assert served(kwargs) is python_result
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param({"shared_session": object()}, id="proxy-shared-session"),
+        pytest.param({"stream": True, "timeout": 600.0, "stream_timeout": 600.0}, id="proxy-stream-timeout"),
+    ),
+)
+def test_proxy_request_shape_stays_native(kwargs: Mapping[str, object]) -> None:
+    rules: Final[Rules] = (
+        RouteRule(
+            Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.CALLER_CLIENT, Feature.TIMEOUT_VARIANTS})
+        ),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("A proxy-shaped request must not fall back to Python")
+
+    served: Final = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    assert served is native_result
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kwargs",

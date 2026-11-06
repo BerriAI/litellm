@@ -123,6 +123,7 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
+        Feature.TIMEOUT_VARIANTS: route_detectors.timeout_variants,
         Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
