@@ -28,6 +28,7 @@ from litellm.exceptions import ServiceUnavailableError
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
@@ -93,6 +94,134 @@ def _isolated_request_stash():
     token = _request_stash.set(None)
     yield
     _request_stash.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team"))
+@pytest.mark.parametrize("metric", ("model_rpm_limit", "model_tpm_limit"))
+@pytest.mark.parametrize("budget_alias", (False, True))
+async def test_latest_alias_is_blocked_by_either_rate_limit(scope: str, metric: str, budget_alias: bool) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    target: Final = get_model_latest_aliases()["anthropic"]["claude-opus-latest"]
+    limited_model: Final = "anthropic/claude-opus-latest" if budget_alias else f"anthropic/{target}"
+    limits: Final = {metric: {limited_model: 0}}
+    auth: Final = UserAPIKeyAuth(
+        api_key="latest-rate-key",
+        team_id="latest-rate-team",
+        metadata=limits if scope == "key" else {},
+        team_metadata=limits if scope == "team" else {},
+    )
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.async_pre_call_hook(
+            auth,
+            cache,
+            {"model": "anthropic/claude-opus-latest", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            "acompletion",
+        )
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team"))
+@pytest.mark.parametrize("metric", ("model_rpm_limit", "model_tpm_limit"))
+@pytest.mark.parametrize("model", ("anthropic/claude-opus-5-5", "anthropic/unknown-model"))
+async def test_latest_alias_rate_limit_does_not_govern_other_requests(scope: str, metric: str, model: str) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    limits: Final = {metric: {"anthropic/claude-opus-latest": 0}}
+    auth: Final = UserAPIKeyAuth(
+        api_key="latest-other-key",
+        team_id="latest-other-team",
+        metadata=limits if scope == "key" else {},
+        team_metadata=limits if scope == "team" else {},
+    )
+    assert await handler.async_pre_call_hook(auth, cache, {"model": model}, "acompletion") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team"))
+async def test_latest_alias_rpm_draws_from_both_model_counters(scope: str) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    alias: Final = "anthropic/claude-opus-latest"
+    target: Final = f"anthropic/{get_model_latest_aliases()['anthropic']['claude-opus-latest']}"
+    limits: Final = {"model_rpm_limit": {alias: 2, target: 1}}
+    auth: Final = UserAPIKeyAuth(
+        api_key="latest-rpm-key",
+        team_id="latest-rpm-team",
+        metadata=limits if scope == "key" else {},
+        team_metadata=limits if scope == "team" else {},
+    )
+    assert await handler.async_pre_call_hook(auth, cache, {"model": alias}, "acompletion") is None
+    descriptor: Final = "model_per_key" if scope == "key" else "model_per_team"
+    entity: Final = auth.api_key if scope == "key" else auth.team_id
+    for model in (alias, target):
+        counter: Final = handler.create_rate_limit_keys(descriptor, f"{entity}:{model}", "requests")
+        assert await cache.async_get_cache(counter) == 1
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.async_pre_call_hook(auth, cache, {"model": alias}, "acompletion")
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team"))
+@pytest.mark.parametrize("event", ("success", "failure", "partial"))
+@pytest.mark.parametrize("reservation", (False, True))
+async def test_latest_alias_tpm_settles_both_counters(
+    scope: str, event: str, reservation: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", str(reservation).lower())
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        time_provider=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    alias: Final = "anthropic/claude-opus-latest"
+    target: Final = f"anthropic/{get_model_latest_aliases()['anthropic']['claude-opus-latest']}"
+    limits: Final = {"model_tpm_limit": {alias: 10000, target: 10000}}
+    auth: Final = UserAPIKeyAuth(
+        api_key="latest-tpm-key",
+        team_id="latest-tpm-team",
+        tpm_limit=10000,
+        metadata=limits if scope == "key" else {},
+        team_metadata=limits if scope == "team" else {},
+    )
+    await handler.async_pre_call_hook(
+        auth, cache, {"model": alias, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64}, "acompletion"
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    descriptor: Final = "model_per_key" if scope == "key" else "model_per_team"
+    entity: Final = auth.api_key if scope == "key" else auth.team_id
+    keys: Final = tuple(
+        handler.create_rate_limit_keys(descriptor, f"{entity}:{model}", "tokens") for model in (alias, target)
+    )
+    for key in keys:
+        assert int(await cache.async_get_cache(key) or 0) == (stash.reserved_tokens if reservation else 1)
+    kwargs: Final = {
+        "standard_logging_object": {
+            "model_group": alias,
+            "metadata": {"user_api_key_hash": auth.api_key, "user_api_key_team_id": auth.team_id},
+        },
+        "litellm_params": {"metadata": {"model_group": alias, "user_api_key_metadata": auth.metadata}},
+        **(
+            {"combined_usage_object": Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5)}
+            if event == "partial"
+            else {}
+        ),
+    }
+    if event == "success":
+        await handler.async_log_success_event(
+            kwargs,
+            ModelResponse(model=target, usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5)),
+            None,
+            None,
+        )
+    else:
+        await handler.async_log_failure_event(kwargs, None, None, None)
+    for key in (*keys, handler.create_rate_limit_keys("api_key", auth.api_key, "tokens")):
+        assert int(await cache.async_get_cache(key) or 0) == (0 if event == "failure" else 5) + (0 if reservation else 1)
 
 
 @pytest.mark.parametrize(

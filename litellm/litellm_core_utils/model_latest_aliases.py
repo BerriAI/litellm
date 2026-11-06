@@ -20,6 +20,12 @@ def resolve_model_latest_alias(model: str, provider: str) -> str:
     return aliases.get(model, model) if aliases is not None else model
 
 
+def expand_model_latest_alias(model: str) -> tuple[str, ...]:
+    provider, separator, name = model.partition("/")
+    target: Final = resolve_model_latest_alias(name, provider) if separator else name
+    return (model, f"{provider}/{target}") if separator and target != name else (model,)
+
+
 def is_model_latest_alias(model: str, custom_llm_provider: str | None = None) -> bool:
     prefix, separator, name = model.partition("/")
     provider: Final = custom_llm_provider or prefix

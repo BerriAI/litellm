@@ -3,7 +3,22 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases, is_model_latest_alias
+from litellm.litellm_core_utils.model_latest_aliases import (
+    expand_model_latest_alias,
+    get_model_latest_aliases,
+    is_model_latest_alias,
+)
+
+
+@pytest.mark.parametrize("model", ("", "gpt-luna-latest", "openai/unknown", "gemini/gemini-pro-latest"))
+def test_non_alias_expansion_keeps_the_requested_name(model: str) -> None:
+    assert expand_model_latest_alias(model) == (model,)
+
+
+def test_alias_expansion_keeps_requested_and_target_names() -> None:
+    for provider, aliases in get_model_latest_aliases().items():
+        for alias, target in aliases.items():
+            assert expand_model_latest_alias(f"{provider}/{alias}") == (f"{provider}/{alias}", f"{provider}/{target}")
 
 
 def test_latest_alias_targets_have_chat_pricing_without_shadowing_native_models() -> None:
