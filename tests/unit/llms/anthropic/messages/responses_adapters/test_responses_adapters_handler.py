@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
 from itertools import chain
 from typing import Final, Protocol, cast, runtime_checkable
 from unittest.mock import AsyncMock, patch
@@ -1100,6 +1100,11 @@ class _ClosableByteStream(Iterator[bytes], Protocol):
     def close(self) -> None: ...
 
 
+@runtime_checkable
+class _AsyncClosableByteStream(AsyncIterable[bytes], Protocol):
+    async def aclose(self) -> None: ...
+
+
 def _sync_stream_from_create(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: _RecordingSSEBody
 ) -> _ClosableByteStream:
@@ -1143,3 +1148,46 @@ def test_closing_a_sync_stream_part_way_closes_the_upstream_response(
 
     assert first.startswith(b"event: message_start\n")
     assert body.closed
+    assert list(stream) == []
+
+
+@pytest.mark.asyncio
+async def test_closing_a_sync_stream_also_ends_an_async_read_of_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body: Final = _RecordingSSEBody()
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body)
+    assert isinstance(stream, AsyncIterator)
+
+    stream.close()
+
+    assert [frame async for frame in stream] == []
+    assert body.closed
+
+
+@pytest.mark.asyncio
+async def test_aclose_on_a_sync_streamed_create_still_ends_an_async_read_of_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    assert isinstance(stream, _AsyncClosableByteStream)
+
+    await stream.aclose()
+
+    assert [frame async for frame in stream] == []
+
+
+@pytest.mark.asyncio
+async def test_a_sync_streamed_create_on_an_openai_model_can_still_be_read_with_async_for(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    assert isinstance(stream, AsyncIterator)
+
+    frames: Final = [frame.decode() async for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]

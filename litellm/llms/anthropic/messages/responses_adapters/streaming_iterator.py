@@ -157,6 +157,7 @@ class AnthropicResponsesStreamWrapper:
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
+        self._closed = False
 
     def _make_message_start(self) -> dict[str, object]:
         return {
@@ -498,6 +499,8 @@ class AnthropicResponsesStreamWrapper:
         return self
 
     async def __anext__(self) -> Mapping[str, object]:
+        if self._closed:
+            raise StopAsyncIteration
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
@@ -536,6 +539,8 @@ class AnthropicResponsesStreamWrapper:
         return self
 
     def __next__(self) -> Mapping[str, object]:
+        if self._closed:
+            raise StopIteration
         if self._chunk_queue:
             return self._chunk_queue.popleft()
         if self._stream_failed:
@@ -559,6 +564,7 @@ class AnthropicResponsesStreamWrapper:
         return last_chunk
 
     def close(self) -> None:
+        self._closed = True
         if isinstance(self.responses_stream, _Closeable):
             self.responses_stream.close()
 
@@ -626,10 +632,7 @@ class AnthropicResponsesSSEByteStream:
         return self._wrapper.partial_response_on_disconnect()
 
 
-class AnthropicResponsesSyncSSEByteStream:
-    def __init__(self, wrapper: AnthropicResponsesStreamWrapper) -> None:
-        self._wrapper: Final = wrapper
-
+class AnthropicResponsesSyncSSEByteStream(AnthropicResponsesSSEByteStream):
     def __iter__(self) -> "AnthropicResponsesSyncSSEByteStream":
         return self
 
