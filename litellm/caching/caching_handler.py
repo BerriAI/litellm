@@ -49,6 +49,7 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
+    StreamingChoices,
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -68,6 +69,7 @@ _StreamResultT = TypeVar("_StreamResultT")
 
 
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
 )
@@ -152,10 +154,14 @@ def _content_block_payload(event: Mapping[str, object]) -> object:
             return None
 
 
+def _content_block_carries_output(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and any(key != "type" and value not in ("", [], None) for key, value in fields.items())
+
+
 def _sse_line_carries_output(line: str) -> bool:
     event: Final = _sse_event_data(line)
-    payload: Final = as_str_mapping(_content_block_payload(event)) if event is not None else None
-    return payload is not None and any(key != "type" and value not in ("", [], None) for key, value in payload.items())
+    return event is not None and _content_block_carries_output(_content_block_payload(event))
 
 
 def _sse_frame_carries_output(frame: object) -> bool:
@@ -163,36 +169,62 @@ def _sse_frame_carries_output(frame: object) -> bool:
     return isinstance(text, str) and any(_sse_line_carries_output(line) for line in split_sse_lines(text))
 
 
+_REPLAY_METADATA_FIELDS: Final = frozenset({"thought_signatures", "continuation_token"})
+
+
+def _message_field_carries_output(key: str, value: object) -> bool:
+    match key:
+        case "role":
+            return False
+        case "provider_specific_fields":
+            fields: Final = as_str_mapping(value) or {}
+            return any(
+                name not in _REPLAY_METADATA_FIELDS and field not in ("", [], {}, None)
+                for name, field in fields.items()
+            )
+        case _:
+            return value not in ("", [], {}, None)
+
+
+def _choice_output_fields(choice: object) -> Mapping[str, object]:
+    match choice:
+        case Choices():
+            return choice.message.model_dump(exclude_none=True)
+        case StreamingChoices():
+            return choice.delta.model_dump(exclude_none=True)
+        case TextChoices():
+            return {"text": choice.text}
+        case _:
+            cached: Final = as_str_mapping(choice) or {}
+            return as_str_mapping(cached.get("message")) or {"text": cached.get("text")}
+
+
+def _choice_carries_output(choice: object) -> bool:
+    return any(_message_field_carries_output(key, value) for key, value in _choice_output_fields(choice).items())
+
+
+def _choices_carry_output(choices: object) -> bool:
+    return any(_choice_carries_output(choice) for choice in as_object_list(choices) or ())
+
+
 def is_response_without_output(result: object) -> bool:
     if isinstance(result, (ModelResponse, TextCompletionResponse)):
-        return not result.choices
+        return not _choices_carry_output(result.choices)
     if isinstance(result, ResponsesAPIResponse):
         return not getattr(result, "output", None)
-    if not isinstance(result, dict):
+    cached: Final = as_str_mapping(result)
+    if cached is None:
         return False
-    cached_stream_events: Final = result.get(CACHED_STREAM_EVENTS_KEY)
+    cached_stream_events: Final = cached.get(CACHED_STREAM_EVENTS_KEY)
     if isinstance(cached_stream_events, (list, tuple)):
         return not any(_sse_frame_carries_output(event) for event in cached_stream_events)
-    if "choices" in result:
-        return not result["choices"]
-    if result.get("object") == "response":
-        return not result.get("output")
-    if result.get("type") == "message":
-        return not result.get("content")
+    if "choices" in cached:
+        return not _choices_carry_output(cached["choices"])
+    if cached.get("object") == "response":
+        return not cached.get("output")
+    if cached.get("type") == "message":
+        return not any(_content_block_carries_output(block) for block in as_object_list(cached.get("content")) or ())
     return False
-
-
-def _choice_carries_output(choice: Choices | TextChoices) -> bool:
-    payload: Final[Mapping[str, object]] = (
-        choice.message.model_dump(exclude_none=True) if isinstance(choice, Choices) else {"text": choice.text}
-    )
-    return any(key != "role" and value not in ("", [], {}) for key, value in payload.items())
-
-
-def _assembled_stream_without_output(response: ModelResponse | TextCompletionResponse) -> bool:
-    """The stream wrapper closes a stream whose chunks carried no choice with an empty choice of its own, so the
-    assembled response has choices and the no-output check on it alone would store that empty answer."""
-    return not any(_choice_carries_output(choice) for choice in response.choices)
 
 
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
@@ -1358,7 +1390,7 @@ class LLMCachingHandler:
                 is_async=True,
             )
         )
-        if complete_streaming_response is None or _assembled_stream_without_output(complete_streaming_response):
+        if complete_streaming_response is None or is_response_without_output(complete_streaming_response):
             return
         await self.async_set_cache(
             result=complete_streaming_response,
@@ -1388,7 +1420,7 @@ class LLMCachingHandler:
             )
         )
 
-        if complete_streaming_response is None or _assembled_stream_without_output(complete_streaming_response):
+        if complete_streaming_response is None or is_response_without_output(complete_streaming_response):
             return
         self.sync_set_cache(
             result=complete_streaming_response,

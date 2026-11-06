@@ -2402,7 +2402,7 @@ def test_async_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatc
 
     async def _short_lived_script():
         await handler.async_set_cache(
-            result=litellm.ModelResponse(),
+            result=chat_completion_response,
             original_function=acompletion,
             kwargs={},
         )
@@ -2434,7 +2434,7 @@ def test_async_cache_write_runs_in_the_post_response_phase_without_leaking_it(mo
     monkeypatch.setattr(litellm, "cache", _PhaseRecordingCache())
 
     async def _request():
-        await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+        await handler.async_set_cache(result=chat_completion_response, original_function=acompletion, kwargs={})
         leaked = in_post_response_phase()
         await asyncio.gather(*_PENDING_CACHE_WRITES)
         return leaked
@@ -2689,7 +2689,7 @@ async def test_response_cache_lookup_and_write_declare_the_llm_response_target(m
         call_type=CallTypes.acompletion.value,
         kwargs={"messages": [{"role": "user", "content": "hi"}]},
     )
-    await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+    await handler.async_set_cache(result=chat_completion_response, original_function=acompletion, kwargs={})
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert seen == {"get": "llm_response", "set": "llm_response"}
@@ -2753,6 +2753,22 @@ def _anthropic_message_with_null_content() -> dict[str, object]:
 
 def _anthropic_message_missing_content() -> dict[str, object]:
     return {"id": f"msg_{uuid.uuid4()}", "type": "message", "role": "assistant", "model": "claude-sonnet-5"}
+
+
+def _anthropic_message_with_only_an_empty_text_block() -> dict[str, object]:
+    return {
+        "id": f"msg_{uuid.uuid4()}",
+        "type": "message",
+        "role": "assistant",
+        "model": "gemini/gemini-3.8-flash",
+        "content": [{"type": "text", "text": ""}],
+    }
+
+
+def _empty_reply_with_provider_metadata(provider_specific_fields: dict[str, object]) -> ModelResponse:
+    return litellm.ModelResponse(
+        choices=[litellm.Choices(message=litellm.Message(content="", provider_specific_fields=provider_specific_fields))]
+    )
 
 
 def _anthropic_stream_without_content_blocks() -> dict[str, object]:
@@ -2823,6 +2839,24 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
             aanthropic_messages,
             CallTypes.aanthropic_messages.value,
             {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+        (
+            _anthropic_message_with_only_an_empty_text_block(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+        (
+            _empty_reply_with_provider_metadata({"thought_signatures": ["c2lnbmF0dXJl"]}),
+            litellm.acompletion,
+            CallTypes.acompletion.value,
+            {"messages": _unique_messages()},
+        ),
+        (
+            _empty_reply_with_provider_metadata({"continuation_token": "dG9rZW4="}),
+            litellm.acompletion,
+            CallTypes.acompletion.value,
+            {"messages": _unique_messages()},
         ),
         (
             _anthropic_stream_without_content_blocks(),
@@ -3063,6 +3097,18 @@ def _closing_chunk_without_output() -> ModelResponseStream:
     return _stream_chunk([StreamingChoices(finish_reason="stop", index=0, delta=Delta())])
 
 
+def _closing_chunk_with_only_a_thought_signature() -> ModelResponseStream:
+    return _stream_chunk(
+        [
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", provider_specific_fields={"thought_signatures": ["c2lnbmF0dXJl"]}),
+            )
+        ]
+    )
+
+
 def _cached_content(cached: object) -> object:
     assert cached is not None
     stored = cached if isinstance(cached, dict) else json.loads(cached)
@@ -3074,12 +3120,17 @@ def _content_chunk(content: str) -> ModelResponseStream:
 
 
 @pytest.mark.asyncio
-async def test_async_streamed_answer_without_output_is_never_cached():
+@pytest.mark.parametrize(
+    "closing_chunk",
+    [_closing_chunk_without_output(), _closing_chunk_with_only_a_thought_signature()],
+    ids=["no-delta", "only-a-thought-signature"],
+)
+async def test_async_streamed_answer_without_output_is_never_cached(closing_chunk: ModelResponseStream):
     setup_cache()
     kwargs = {"model": "gpt-4o", "messages": _unique_messages()}
     handler = LLMCachingHandler(original_function=litellm.acompletion, request_kwargs=kwargs, start_time=_FIXED_START)
 
-    await handler.add_streaming_response_to_cache(_closing_chunk_without_output())
+    await handler.add_streaming_response_to_cache(closing_chunk)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert litellm.cache.get_cache(**kwargs) is None
