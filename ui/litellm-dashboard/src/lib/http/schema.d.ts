@@ -1864,13 +1864,15 @@ export interface paths {
         };
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
         put?: never;
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
         delete?: never;
@@ -17159,6 +17161,7 @@ export interface paths {
          *
          *     Parameters:
          *     - name: str - The name of the tag to update
+         *     - spend: Optional[float] - Updated spend for the tag
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
@@ -32836,6 +32839,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DeploymentPricing */
+        DeploymentPricing: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Provider */
+            provider: string;
+            /**
+             * Tiered Pricing
+             * @default []
+             */
+            tiered_pricing: components["schemas"]["PriceTier"][];
+        };
         /** DeploymentWarning */
         DeploymentWarning: {
             /** Id */
@@ -39686,6 +39703,11 @@ export interface components {
             } | null;
             /** Custom Tags */
             custom_tags?: string[] | null;
+            /**
+             * Deployment Pricing
+             * @default []
+             */
+            deployment_pricing: components["schemas"]["DeploymentPricing"][];
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -42889,6 +42911,18 @@ export interface components {
              * @description New status: 'published' or 'production'.
              */
             version_status: string;
+        };
+        /** PriceTier */
+        PriceTier: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Range */
+            range: [
+                number,
+                number
+            ];
         };
         /** Prompt */
         Prompt: {
@@ -47982,6 +48016,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -55936,7 +55972,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unmodified Codex response or server-sent events */
+            /** @description Codex response, the model catalog with the key's LiteLLM models, or server-sent events */
             200: {
                 headers: {
                     [name: string]: unknown;

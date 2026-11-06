@@ -1464,7 +1464,7 @@ def get_fedramp_uplift_multiplier(model_info: ModelInfo, data_residency: str | N
         return 1.0
 
 
-def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+def get_vertex_regional_endpoint_uplift(model_info: Mapping[str, object], vertex_location: str | None) -> float:
     """
     Resolve the per-model uplift multiplier for Vertex AI non-global (regional and
     multi-region) endpoints.
