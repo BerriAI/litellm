@@ -232,7 +232,7 @@ async def test_update_tag():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spend_fields", [{"spend": 0}, {}, {"spend": None}])
-async def test_update_tag_changes_spend_and_invalidates_counter_only_when_provided(
+async def test_update_tag_changes_spend_and_counter_only_when_provided(
     spend_fields: Mapping[str, float | None],
 ) -> None:
     from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
@@ -260,7 +260,9 @@ async def test_update_tag_changes_spend_and_invalidates_counter_only_when_provid
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         _tag_cache_doubles(),
         patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+        patch("litellm.proxy.proxy_server.spend_counter_cache") as counter_cache,
     ):
+        counter_cache.redis_cache = None
         response: Final = await update_tag(
             tag=TagUpdateRequest.model_validate({"name": "reset-tag", **spend_fields}),
             user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
@@ -277,9 +279,10 @@ async def test_update_tag_changes_spend_and_invalidates_counter_only_when_provid
         },
     )
     if spend_fields.get("spend") is not None:
-        invalidate.assert_awaited_once_with(counter_key="spend:tag:reset-tag")
+        counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:tag:reset-tag", value=0, ttl=60)
     else:
-        invalidate.assert_not_awaited()
+        counter_cache.in_memory_cache.set_cache.assert_not_called()
+    invalidate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -305,6 +308,61 @@ async def test_update_tag_rejects_non_finite_spend_before_writing(spend: float) 
     assert "spend must be a finite number" in str(error.value.detail)
     update_row.assert_not_awaited()
     invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis_state", ["available", "absent", "error"])
+async def test_update_tag_overwrites_stale_counter_repopulated_during_tag_cache_eviction(redis_state: str) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    counter_key: Final = "spend:tag:overlap-reset-tag"
+    memory: Final = InMemoryCache()
+    redis_cache: Final = AsyncMock()
+    if redis_state == "error":
+        redis_cache.async_set_cache.side_effect = RuntimeError("Redis unavailable")
+    updated_tag: Final = SimpleNamespace(
+        tag_name="overlap-reset-tag",
+        description=None,
+        models=[],
+        budget_id=None,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=AsyncMock(return_value=updated_tag)
+            ),
+            litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        )
+    )
+
+    async def overlapping_completion(cache_keys: Sequence[str]) -> None:
+        memory.set_cache(key=counter_key, value=1.5, ttl=60)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            SimpleNamespace(in_memory_cache=memory, redis_cache=None if redis_state == "absent" else redis_cache),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys",
+            overlapping_completion,
+        ),
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="overlap-reset-tag", spend=0),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert memory.get_cache(key=counter_key) == 0
+    if redis_state == "absent":
+        redis_cache.async_set_cache.assert_not_awaited()
+    else:
+        redis_cache.async_set_cache.assert_awaited_once_with(key=counter_key, value=0, ttl=60)
 
 
 @pytest.mark.asyncio
