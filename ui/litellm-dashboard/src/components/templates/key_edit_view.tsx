@@ -356,6 +356,8 @@ function KeyEditSession({
     })),
   ];
 
+  const disallowedModelOptions = availableModels.map((model) => ({ value: model, label: model }));
+
   const visibleTeams =
     canChangeOrganization && selectedOrganizationId
       ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
@@ -409,6 +411,25 @@ function KeyEditSession({
                 }}
                 disabled={isModelsDisabled}
                 placeholder={t("keyDetail.keyEditView.fields.modelsPlaceholder")}
+              />
+            )}
+          </FormField>
+
+          <FormField
+            control={form.control}
+            name="disallowed_models"
+            label={labelWithHint(
+              t("keyDetail.keyEditView.fields.disallowedModels"),
+              t("keyDetail.keyEditView.fields.disallowedModelsHint"),
+            )}
+          >
+            {({ value, onChange, id }) => (
+              <MultiSelect
+                id={id}
+                options={disallowedModelOptions}
+                value={(value as string[] | undefined) ?? []}
+                onValueChange={onChange}
+                placeholder={t("keyDetail.keyEditView.fields.disallowedModelsPlaceholder")}
               />
             )}
           </FormField>

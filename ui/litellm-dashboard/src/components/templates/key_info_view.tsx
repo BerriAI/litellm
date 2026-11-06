@@ -9,6 +9,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/cva.config";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -89,6 +90,32 @@ const PREMIUM_METADATA_FIELDS = ["policies", "guardrails", "prompts", "tags", "a
 
 const isEmptyValue = (v: unknown): boolean =>
   v == null || (Array.isArray(v) && v.length === 0) || (typeof v === "string" && v.trim() === "");
+
+const DisallowedModels = ({
+  models,
+  label,
+  className,
+  labelClassName,
+}: {
+  models: readonly string[] | undefined;
+  label: string;
+  className?: string;
+  labelClassName?: string;
+}) => {
+  if (!models || models.length === 0) return null;
+  return (
+    <div className={className}>
+      <p className={cn("text-sm", labelClassName)}>{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {models.map((model) => (
+          <Badge key={model} variant="destructive" className="min-w-0 break-words">
+            {model}
+          </Badge>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 /**
  * ─────────────────────────────────────────────────────────────────────────
@@ -856,6 +883,11 @@ export default function KeyInfoView({
                     <p className="text-sm">{t("keyDetail.keyInfoView.overview.noModels")}</p>
                   )}
                 </div>
+                <DisallowedModels
+                  models={currentKeyData.disallowed_models}
+                  label={t("keyDetail.keyInfoView.overview.disallowedModels")}
+                  className="mt-4"
+                />
               </Card>
 
               <Card className="block p-6">
@@ -1229,6 +1261,12 @@ export default function KeyInfoView({
                       )}
                     </div>
                   </div>
+
+                  <DisallowedModels
+                    models={currentKeyData.disallowed_models}
+                    label={t("keyDetail.keyInfoView.settings.disallowedModels")}
+                    labelClassName="font-medium"
+                  />
 
                   <div>
                     <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.rateLimits")}</p>

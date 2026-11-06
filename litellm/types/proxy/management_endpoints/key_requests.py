@@ -1,5 +1,5 @@
 import enum
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
@@ -38,6 +38,7 @@ class KeyRequestBase(GenerateRequestBase):
     allowed_routes: list[Any] | None = []
     allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
+    disallowed_models: Sequence[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm

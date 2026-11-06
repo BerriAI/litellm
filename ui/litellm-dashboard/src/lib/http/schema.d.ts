@@ -33915,6 +33915,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -34083,6 +34085,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -35648,6 +35652,8 @@ export interface components {
             deleted_by?: string | null;
             /** Deleted By Api Key */
             deleted_by_api_key?: string | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Expires */
             expires?: string | null;
             /** Id */
@@ -37511,6 +37517,8 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Expires */
             expires?: string | null;
             /** Key Alias */
@@ -40834,6 +40842,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -43459,6 +43469,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -50075,6 +50087,8 @@ export interface components {
             denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** Duration */
             duration?: string | null;
             /** Enable Prompt Caching */
@@ -51223,6 +51237,8 @@ export interface components {
             created_by?: string | null;
             /** Created By User */
             created_by_user?: unknown | null;
+            /** Disallowed Models */
+            disallowed_models?: string[] | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */

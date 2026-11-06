@@ -113,6 +113,18 @@ describe("always-present keys", () => {
   });
 });
 
+describe("disallowed_models", () => {
+  it("forwards the selected disallowed models next to the allowed ones", () => {
+    expect(
+      payloadOf(build({ key_alias: "my-key", models: ["gpt-4o", "claude"], disallowed_models: ["claude"] })),
+    ).toStrictEqual(aliasOnly({ models: ["gpt-4o", "claude"], disallowed_models: ["claude"] }));
+  });
+
+  it("omits an empty disallowed selection so a new key blocks nothing", () => {
+    expect(payloadOf(build({ key_alias: "my-key", disallowed_models: [] }))).toStrictEqual(aliasOnly());
+  });
+});
+
 describe("duration", () => {
   it("forwards a typed duration by value", () => {
     expect(payloadOf(build({ key_alias: "my-key", duration: "45d" }))).toStrictEqual(aliasOnly({ duration: "45d" }));

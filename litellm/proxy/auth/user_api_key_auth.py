@@ -122,6 +122,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth.key_disallowed_models import ensure_key_may_call_model, key_disallowed_models
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
@@ -4641,7 +4642,7 @@ async def enforce_key_and_fallback_model_access(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_model_list: list | None,
+    llm_model_list: Sequence[object] | None,
     llm_router: litellm.Router | None,
 ) -> None:
     """
@@ -4650,49 +4651,50 @@ async def enforce_key_and_fallback_model_access(
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
-    config: Final = valid_token.config
+    skips_key_allowlist: Final = valid_token.config != {} or (
+        isinstance(valid_token.models, list) and "all-team-models" in valid_token.models
+    )
+    if skips_key_allowlist and not key_disallowed_models(valid_token):
+        return
 
-    if config != {}:
-        model_list: Final = config.get("model_list", [])
-        new_model_list: Final = model_list
-        verbose_proxy_logger.debug("\n new llm router model list %s", new_model_list)
-    elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
-        pass
-    else:
-        model: Final = _get_model_from_request_context(
-            request_data=request_data,
-            route=route,
-            request=request,
+    model: Final = _get_model_from_request_context(
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_router=llm_router,
+        team_id=valid_token.team_id,
+    )
+    fallback_names: Final = tuple(
+        name
+        for target in iter_request_fallback_targets(request_data)
+        if (name := fallback_target_model_name(target)) is not None
+    )
+
+    if skips_key_allowlist:
+        requested_models: Final = () if model is None else (model,) if isinstance(model, str) else tuple(model)
+        ensure_key_may_call_model((*requested_models, *fallback_names), valid_token, llm_router)
+        return
+
+    if model is not None:
+        await can_key_call_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
             llm_router=llm_router,
-            team_id=valid_token.team_id,
         )
 
-        if model is not None:
-            await can_key_call_model(
-                model=model,
-                llm_model_list=llm_model_list,
-                valid_token=valid_token,
-                llm_router=llm_router,
-            )
-
-        fallback_names: Final = tuple(
-            name
-            for target in iter_request_fallback_targets(request_data)
-            if (name := fallback_target_model_name(target)) is not None
+    for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
+        await can_key_call_model(
+            model=_name,
+            llm_model_list=llm_model_list,
+            valid_token=valid_token,
+            llm_router=llm_router,
         )
-
-        for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
-            await can_key_call_model(
-                model=_name,
-                llm_model_list=llm_model_list,
-                valid_token=valid_token,
-                llm_router=llm_router,
-            )
-            await is_valid_fallback_model(
-                model=_name,
-                llm_router=llm_router,
-                user_model=None,
-            )
+        await is_valid_fallback_model(
+            model=_name,
+            llm_router=llm_router,
+            user_model=None,
+        )
 
 
 _enforce_key_and_fallback_model_access: Final = enforce_key_and_fallback_model_access  # pyright: ignore[reportUnknownVariableType]  # existing tests use this alias

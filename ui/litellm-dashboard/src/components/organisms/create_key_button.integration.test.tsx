@@ -112,6 +112,7 @@ const OPENAPI_SCHEMA = {
           soft_budget: { type: "number", title: "Soft Budget" },
           blocked: { type: "boolean", title: "Blocked" },
           max_budget: { type: "number", title: "Max Budget" },
+          disallowed_models: { type: "array", items: { type: "string" }, title: "Disallowed Models" },
         },
       },
     },
@@ -891,6 +892,32 @@ describe("CreateKey", () => {
 
       expect(await screen.findByRole("option", { name: "All Team Models" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("disallowed models", () => {
+    it("sends the model picked as disallowed on the create request", async () => {
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+      await userEvent.click(await screen.findByRole("option", { name: "gpt-4" }));
+      await userEvent.keyboard("{Escape}");
+      await submit();
+
+      expect((await createdPayload()).disallowed_models).toEqual(["gpt-4"]);
+    });
+
+    it("keeps the schema-driven Advanced Settings from rendering a second disallowed models control", async () => {
+      await openModal();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.advanced);
+      await screen.findByLabelText("Soft Budget");
+
+      const disallowedLabels = screen.getAllByText(
+        (_, element) => element?.tagName === "LABEL" && element.textContent?.trim() === "Disallowed Models",
+      );
+      expect(disallowedLabels).toHaveLength(1);
     });
   });
 

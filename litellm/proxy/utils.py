@@ -10118,6 +10118,7 @@ async def get_available_models_for_user(
         personal_key_team_model_access_applies,
         personal_key_team_visible_models,
     )
+    from litellm.proxy.auth.key_disallowed_models import without_key_disallowed_models
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
@@ -10242,10 +10243,8 @@ async def get_available_models_for_user(
         team_id=effective_team_id,
         resolve_agent_ceiling=resolve_agent_ceiling,
     )
-    if agent_visible is None:
-        return all_models
-    capped: Final = [m for m in all_models if m in agent_visible]
-    return capped
+    visible_models: Final = all_models if agent_visible is None else [m for m in all_models if m in agent_visible]
+    return list(without_key_disallowed_models(visible_models, user_api_key_dict, llm_router))
 
 
 def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:

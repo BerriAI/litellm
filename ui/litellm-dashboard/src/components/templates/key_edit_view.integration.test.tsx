@@ -2299,6 +2299,57 @@ describe("KeyEditView", () => {
     });
   });
 
+  describe("disallowed models", () => {
+    const renderEditor = (keyData: KeyResponse, onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+    const toggleDisallowedOption = async (label: string) => {
+      fireEvent.click(
+        await waitFor(() => {
+          const match = optionByContent(label);
+          expect(match).toBeTruthy();
+          return match as HTMLElement;
+        }),
+      );
+    };
+
+    it("submits the model the admin picked as disallowed", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditor(MOCK_KEY_DATA, onSubmitMock);
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+      await toggleDisallowedOption("gpt-3.5-turbo");
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(onSubmitMock).toHaveBeenCalled());
+      expect(onSubmitMock.mock.calls[0][0].disallowed_models).toEqual(["gpt-3.5-turbo"]);
+    });
+
+    it("submits an empty list when the admin removes the last disallowed model", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditor({ ...MOCK_KEY_DATA, disallowed_models: ["gpt-4"] }, onSubmitMock);
+
+      await userEvent.click(await screen.findByLabelText("Disallowed Models"));
+      await toggleDisallowedOption("gpt-4");
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(onSubmitMock).toHaveBeenCalled());
+      expect(onSubmitMock.mock.calls[0][0].disallowed_models).toEqual([]);
+    });
+  });
+
   describe("default customer budget", () => {
     const serviceAccountKey = (endUserBudgetId?: string): KeyResponse => ({
       ...MOCK_KEY_DATA,
@@ -2557,6 +2608,7 @@ describe("KeyEditView", () => {
   const UNTOUCHED_SAVE_PAYLOAD = {
     key_alias: "asdasdas",
     models: [],
+    disallowed_models: undefined,
     max_budget: 0,
     soft_budget: null,
     budget_duration: "30d",
