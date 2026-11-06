@@ -207,6 +207,16 @@ def test_a_native_read_timeout_maps_to_the_public_timeout_with_python_text() -> 
     assert "Read timed out. Timeout passed=1.0" in str(mapped)
 
 
+@pytest.mark.parametrize(("phase", "billed"), (("Read", True), ("Connection", False)))
+def test_a_native_timeout_is_billed_on_the_failure_row_as_python_bills_it(phase: str, billed: bool) -> None:
+    from litellm.proxy.utils import _provider_billed_the_failure
+
+    mapped: Final = messages_host.map_failure(_marked(phase), {"model": _ADAPTIVE_OPUS, "timeout": 1.0}, "anthropic")
+
+    assert isinstance(mapped, litellm.Timeout)
+    assert _provider_billed_the_failure(mapped) is billed
+
+
 def test_an_upstream_status_maps_through_the_provider_error_class() -> None:
     upstream: Final = ValueError(429, "slow down")
     upstream.headers = [("retry-after", "3")]  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host

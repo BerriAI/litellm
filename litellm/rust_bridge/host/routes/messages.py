@@ -143,6 +143,10 @@ _HTTPX_DNS_ERRNO: Final = {
     "Name or service not known": socket.EAI_NONAME,
     "Temporary failure in name resolution": socket.EAI_AGAIN,
 }
+_TRANSPORT_TIMEOUTS: Final[Mapping[object, type[httpx.TimeoutException]]] = {
+    "Connection": httpx.ConnectTimeout,
+    "Read": httpx.ReadTimeout,
+}
 _MISSING_KEY: Final = (
     "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
     "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
@@ -331,6 +335,11 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
         # Python reads a stream's body outside its HTTP client's error mapping, so a body the
         # connection cut short reaches the caller as its transport raised it.
         return _body_cut(*_BODY_CUT.validate_python(body_cut))
+    transport_timeout: Final = _TRANSPORT_TIMEOUTS.get(getattr(error, "messages_timeout", None))
+    if transport_timeout is not None:
+        # Python's `litellm.Timeout` is raised while handling httpx's own timeout, which the proxy's
+        # failure spend reads to bill a read timeout's prompt.
+        error.__context__ = transport_timeout(str(error))
     if getattr(error, "messages_late_rejection", False):
         _log_resolved_call(request, request_provider)
     if getattr(error, "messages_request_error", False):
