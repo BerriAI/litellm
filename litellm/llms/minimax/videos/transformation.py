@@ -507,7 +507,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             if value is None or key in dropped_keys:
                 continue
             if key == "seconds" and requested.get("duration") is not None:
-                if _duration_param(value, model) != _duration_param(requested["duration"], model) and not drop_params:
+                if not drop_params and _duration_param(value, model) != _duration_param(requested["duration"], model):
                     raise UnsupportedParamsError(
                         message="duration and seconds must agree, set drop_params=True to ignore seconds",
                         model=model,

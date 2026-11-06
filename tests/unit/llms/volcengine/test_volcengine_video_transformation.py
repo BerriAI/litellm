@@ -1228,3 +1228,32 @@ def test_dropping_invalid_frames_preserves_raw_content_and_other_mappings() -> N
         "ratio": "16:9",
         "duration": 8,
     }
+
+@pytest.mark.parametrize("references", [[], [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]])
+def test_plural_and_singular_reference_conflict_raises_or_prefers_plural(references: object) -> None:
+    config: Final = VolcEngineVideoConfig()
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "input_references": references, "input_reference": "https://example.com/first.png",
+    })
+    with pytest.raises(UnsupportedParamsError, match="input_references cannot be combined"):
+        config.map_openai_params(params, SEEDANCE_2_5, False)
+    assert config.map_openai_params(params, SEEDANCE_2_5, True) == {
+        "content": [
+            {"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": "reference_image"}
+        ] if references else [],
+    }
+
+
+def test_dropping_seconds_does_not_parse_the_discarded_value() -> None:
+    assert VolcEngineVideoConfig().map_openai_params({"duration": 8, "seconds": "abc"}, SEEDANCE_2_5, True) == {"duration": 8}
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_aspect_ratio_preserves_native_ratio_precedence_over_size(drop_params: bool) -> None:
+    config: Final = VolcEngineVideoConfig()
+    assert config.map_openai_params(
+        {"size": "1280x720", "aspect_ratio": "9:16"}, SEEDANCE_2_5, drop_params,
+    ) == {"ratio": "9:16", "resolution": "720p"}
+    assert config.map_openai_params(
+        cast(VideoCreateOptionalRequestParams, {"size": "1280x720", "ratio": "9:16"}), SEEDANCE_2_5, drop_params,
+    ) == {"ratio": "9:16", "resolution": "720p"}

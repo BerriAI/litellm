@@ -566,10 +566,10 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             drop_params,
         )
         if (
-            requested.get("duration") is not None
+            not drop_params
+            and requested.get("duration") is not None
             and requested.get("seconds") is not None
             and _duration_param(requested["duration"]) != _duration_param(requested["seconds"])
-            and not drop_params
         ):
             raise _droppable(model, "duration and seconds must agree")
         unsupported: Final = next(

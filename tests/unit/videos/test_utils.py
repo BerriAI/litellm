@@ -186,15 +186,19 @@ def test_optional__non_dict_extra_body_ignored():
     assert result == {"seconds": "8"}
 
 
-def test_extra_body_cannot_restore_image_conflicts_after_mapping() -> None:
+@pytest.mark.parametrize("extra_body", [
+    {"content": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": "reference_image"}]},
+    {"input_reference": "https://example.com/ref.png"},
+])
+def test_extra_body_cannot_restore_image_conflicts_after_mapping(extra_body: object) -> None:
     params: Final = get_requested({
         "kwargs": {
             "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
-            "extra_body": {"content": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": "reference_image"}]},
+            "extra_body": extra_body,
         },
     })
     config: Final = VolcEngineVideoConfig()
-    with pytest.raises(UnsupportedParamsError, match="content cannot be combined"):
+    with pytest.raises(UnsupportedParamsError, match="cannot be combined"):
         get_optional("model", config, params)
     assert get_optional("model", config, params, drop_params=True) == {
         "content": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "role": "first_frame"}],

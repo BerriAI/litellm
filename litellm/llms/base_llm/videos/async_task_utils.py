@@ -50,6 +50,8 @@ def video_image_params(
         if params.get("content") is not None and (frames is not None or references is not None)
         else "frame_images cannot be combined with input_references or input_reference"
         if frames is not None and (references is not None or params.get("input_reference") is not None)
+        else "input_references cannot be combined with input_reference"
+        if references is not None and params.get("input_reference") is not None
         else None
     )
     if conflict is not None and not drop_params:

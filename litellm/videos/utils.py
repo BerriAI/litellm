@@ -54,7 +54,7 @@ class VideoGenerationRequestUtils:
                         key: value
                         for key, value in extra_body.items()
                         if not (key in OPENROUTER_VIDEO_FIELDS and key not in mapped_params)
-                        and not (key == "content" and mapped_images)
+                        and not (key in {"content", "input_reference"} and mapped_images)
                     }
                 )
             # Remove extra_body from mapped_params since it's not sent to the API
