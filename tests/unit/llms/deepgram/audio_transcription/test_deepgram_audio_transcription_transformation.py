@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.base_llm.audio_transcription.transformation import AudioTranscriptionRequestData
 from litellm.llms.deepgram.audio_transcription.transformation import (
@@ -599,23 +600,23 @@ def test_transform_response_keeps_the_transcript_out_of_malformed_words_errors(w
 
 
 @pytest.mark.parametrize(
-    ("payload", "error"),
+    ("payload", "failing_lookup_error"),
     [
-        ({"results": None}, "'NoneType' object is not subscriptable"),
-        (_deepgram_payload({"transcript": "hello", "words": 5}, {}), "object of type 'int' has no len()"),
-        (
-            {**_deepgram_payload({"transcript": "hello"}, {}), "metadata": None},
-            "'NoneType' object is not subscriptable",
-        ),
-        (_deepgram_payload({"transcript": ["hello"]}, {}), "1 validation error for TranscriptionResponse\ntext\n"),
+        ({"results": None}, TypeError),
+        (_deepgram_payload({"transcript": "hello", "words": 5}, {}), TypeError),
+        ({**_deepgram_payload({"transcript": "hello"}, {}), "metadata": None}, TypeError),
+        (_deepgram_payload({"transcript": ["hello"]}, {}), ValidationError),
     ],
 )
-def test_transform_response_wraps_the_error_of_the_failing_lookup_without_the_body(payload: object, error: str):
+def test_transform_response_wraps_the_error_of_the_failing_lookup_without_the_body(
+    payload: object, failing_lookup_error: type[Exception]
+):
     raw_response: Final = httpx.Response(200, json=payload)
 
     with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
         DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
-    assert exc_info.type is ValueError
-    assert str(exc_info.value).startswith(f"Error transforming Deepgram response: {error}")
+    failing_lookup: Final = exc_info.value.__context__
+    assert isinstance(failing_lookup, failing_lookup_error)
+    assert str(exc_info.value) == f"Error transforming Deepgram response: {failing_lookup}"
     assert "hello" not in "".join(traceback.format_exception(exc_info.value))

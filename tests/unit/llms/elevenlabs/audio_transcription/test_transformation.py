@@ -5,6 +5,7 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -132,9 +133,12 @@ def test_transform_audio_transcription_response_keeps_the_body_out_of_malformed_
 def test_transform_audio_transcription_response_names_the_failing_lookup_of_a_malformed_payload():
     raw_response = httpx.Response(200, json={"text": "sensitive", "words": [None]})
 
-    with pytest.raises(ValueError, match=r"^Error transforming ElevenLabs response: 1 validation error for ") as exc_info:
+    with pytest.raises(ValueError, match="Error transforming ElevenLabs response: ") as exc_info:
         ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
 
+    failing_lookup: Final = exc_info.value.__context__
+    assert isinstance(failing_lookup, ValidationError)
+    assert str(exc_info.value) == f"Error transforming ElevenLabs response: {failing_lookup}"
     assert "sensitive" not in "".join(traceback.format_exception(exc_info.value))
 
 
