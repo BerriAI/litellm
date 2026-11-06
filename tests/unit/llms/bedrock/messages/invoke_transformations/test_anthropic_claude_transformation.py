@@ -4016,7 +4016,10 @@ _NATIVE_OUTPUT_REJECTION: Final = {
     "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
 }
 _STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
-_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
+_OPTED_OUT: Final = {
+    "supports_native_structured_output": False,
+    "supports_bedrock_native_structured_output": False,
+}
 _CONSTRAINED_SCHEMA: Final = {
     "type": "object",
     "properties": {
@@ -4158,21 +4161,21 @@ async def test_bedrock_messages_native_output_rejection_and_signature_400_each_g
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("model", "model_info", "error"),
+    ("model", "model_info", "error", "should_retry"),
     [
-        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
-        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
-        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}, False),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION, True),
+        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION, False),
     ],
-    ids=["other_400", "native_model", "deployment_opt_out"],
+    ids=["other_400", "native_rejection", "deployment_opt_out"],
 )
-async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
-    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
+async def test_bedrock_messages_retries_only_native_output_rejections(
+    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object], should_retry: bool
 ) -> None:
     bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
 
-    assert isinstance(raised, litellm.BadRequestError)
-    assert len(bedrock.bodies) == 1
+    assert (raised is None) is should_retry
+    assert len(bedrock.bodies) == (2 if should_retry else 1)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

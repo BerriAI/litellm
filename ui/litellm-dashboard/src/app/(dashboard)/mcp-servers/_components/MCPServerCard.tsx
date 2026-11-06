@@ -379,7 +379,7 @@ const HealthChip: FC<HealthChipProps> = ({
       />
       <TooltipContent side="top" className="max-w-xs">
         <div className="mb-1 font-semibold">{t("mcpServers.serverCard.healthChip.health", { status })}</div>
-        {status === "reachable" && <div className="mb-1 text-xs">{MCP_REACHABLE_DESCRIPTION}</div>}
+        {status === "reachable" && <div className="mb-1 text-xs">{t(MCP_REACHABLE_DESCRIPTION)}</div>}
         {lastCheck && (
           <div className="mb-1 text-xs">
             {t("mcpServers.serverCard.healthChip.lastCheck", { time: new Date(lastCheck).toLocaleString() })}

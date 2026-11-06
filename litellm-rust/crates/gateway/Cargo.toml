@@ -12,6 +12,7 @@ envy = "0.4.2"
 http-body-util = "0.1"
 litellm-inference.workspace = true
 litellm-gateway-inference.workspace = true
+litellm-gateway-forward.workspace = true
 litellm-gateway-mcp.workspace = true
 tokio-util = "0.7"
 thiserror.workspace = true

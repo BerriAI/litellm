@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.asyncify import (
     run_async_function,  # pyright: ignore[reportUnknownVariableType]  # untyped helper
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
