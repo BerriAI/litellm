@@ -2368,13 +2368,11 @@ _SECRET_HEADER_MARKERS: Final = ("authorization", "cookie", "key", "token", "sec
 
 
 def _is_secret_header(name: str) -> bool:
-    """Whether a header name carries a credential rather than request context."""
     lowered: Final = name.lower()
     return any(marker in lowered for marker in _SECRET_HEADER_MARKERS)
 
 
 def _is_json_safe(value: object) -> bool:
-    """Whether a value survives the JSON encoding a guardrail vendor puts it through."""
     try:
         json.dumps(value)
     except (TypeError, ValueError):
@@ -2383,7 +2381,6 @@ def _is_json_safe(value: object) -> bool:
 
 
 def _forwarded_identity_value(key: str, value: object) -> object:
-    """The value to forward, with the credential headers taken out of the header bucket."""
     if key != "headers":
         return value
     return {name: item for name, item in _metadata_fields(value).items() if not _is_secret_header(name)}
@@ -2409,9 +2406,7 @@ def _guardrail_request_metadata(
 
     The caller's bucket goes through the sanitizer the LLM routes use, so this endpoint drops
     the same fields they do, and what that leaves is then overlaid with the identity the proxy
-    resolved. A vendor receives this encoded as JSON, so only JSON-safe values are forwarded,
-    which leaves the authenticated key object behind, and the headers go without the ones
-    carrying a credential.
+    resolved.
 
     The request route is withheld from both sides. The tool policy guardrail reads the request
     itself when a route is present, instead of the tools replayed to it, so a route here turns
