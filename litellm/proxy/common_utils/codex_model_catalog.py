@@ -32,6 +32,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
+from packaging.version import Version
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -109,6 +110,7 @@ class CodexStockModel(LiteLLMBaseModel):
     supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
     context_window: int | None = None
     max_context_window: int | None = None
+    minimal_client_version: str | tuple[int, ...] | None = None
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -278,6 +280,19 @@ def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> Co
     return next((stock[name] for name in names if name in stock), None)
 
 
+def _readable_by(stock_model: CodexStockModel, client_version: str | None) -> bool:
+    """Whether Codex's own server would hand this entry to the requesting release: one at or past the entry's
+    `minimal_client_version`. An older release can fail to decode it, and one entry it cannot decode (a reasoning
+    effort it has no name for) fails the whole catalog, so it gets a translated entry. No version keeps the entry."""
+    minimum: Final = stock_model.minimal_client_version
+    if minimum is None or client_version is None:
+        return True
+    try:
+        return Version(client_version) >= Version(minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
+    except ValueError:
+        return False
+
+
 def _tier_fields(stock_model: CodexStockModel, tiers: tuple[CodexServiceTier, ...]) -> Mapping[str, object]:
     """The tier fields of an entry offering `tiers`. Codex turns `/fast` on off a speed tier as much as off a
     service tier, so a speed tier stays only while a service tier billed the same way is still offered, and the
@@ -370,7 +385,8 @@ def _entry(
     alias_defaults: CodexAliasDefaults,
     client_version: str | None,
 ) -> CodexCatalogEntry:
-    stock_model: Final = _stock_for(row, stock)
+    matched: Final = _stock_for(row, stock)
+    stock_model: Final = matched if matched is not None and _readable_by(matched, client_version) else None
     stock_tiers: Final = MappingProxyType(
         {tier.id: tier for tier in (stock_model.service_tiers if stock_model is not None else ())}
     )

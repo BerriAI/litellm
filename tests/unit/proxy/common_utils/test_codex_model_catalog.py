@@ -180,6 +180,51 @@ def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
     assert (entry["default_reasoning_level"], entry["supported_reasoning_levels"]) == ("medium", levels)
 
 
+@pytest.mark.parametrize("minimum", ["0.153.0", [0, 153, 0]], ids=["string", "parts"])
+@pytest.mark.parametrize(
+    ("client_version", "display_name", "levels"),
+    [
+        ("0.153.0", "GPT-6.1 Terra", ["low", "max"]),
+        ("0.166.0", "GPT-6.1 Terra", ["low", "max"]),
+        (None, "GPT-6.1 Terra", ["low", "max"]),
+        ("0.152.9", "gpt-6.1-terra", ["low", "max"]),
+        ("0.137.0", "gpt-6.1-terra", ["low"]),
+        ("not-a-version", "gpt-6.1-terra", ["low"]),
+    ],
+)
+def test_a_codex_older_than_an_entrys_minimal_version_gets_an_entry_it_can_decode(
+    minimum, client_version, display_name, levels
+):
+    """Codex 0.137 rejects the whole catalog on an effort it has no name for, such as the `max` Codex's own
+    gpt-6.1-terra entry offers, so a release older than the entry's `minimal_client_version` gets the translated
+    entry, whose levels are trimmed to that release."""
+    stock = CodexStockModel.model_validate(
+        {
+            "slug": "gpt-6.1-terra",
+            "display_name": "GPT-6.1 Terra",
+            "priority": 3,
+            "visibility": "list",
+            "minimal_client_version": minimum,
+            "default_reasoning_level": "low",
+            "supported_reasoning_levels": [{"effort": "low"}, {"effort": "max"}],
+        }
+    )
+
+    (entry,) = json.loads(
+        codex_models_response_json(
+            (_row("gpt-6.1-terra", supported_reasoning_efforts=("low", "max")),),
+            stock={"gpt-6.1-terra": stock},
+            instructions=_PROMPT,
+            client_version=client_version,
+        ).json
+    )["models"]
+
+    assert (entry["display_name"], [level["effort"] for level in entry["supported_reasoning_levels"]]) == (
+        display_name,
+        levels,
+    )
+
+
 def test_known_model_keeps_codex_stock_entry_listed_under_the_served_id():
     (entry,) = _models(_row("gpt-daybreak"))
 
