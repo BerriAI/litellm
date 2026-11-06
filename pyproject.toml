@@ -54,6 +54,7 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
@@ -268,6 +269,7 @@ proxy-dev = [
     "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "nemo-switchyard==0.4.0a1",
     "backports-zstd==1.8.0; python_version < '3.14'",
     "httptools>=0.7.1,<0.8",
     "semver>=3.0.4,<4",
