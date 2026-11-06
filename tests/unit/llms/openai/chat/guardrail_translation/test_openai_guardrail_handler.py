@@ -2048,9 +2048,8 @@ class TestNoScannableContentRecordsNotRun:
         assert all(e.get("guardrail_status") != "not_run" for e in self._recorded_entries(data))
 
     @pytest.mark.asyncio
-    async def test_image_only_content_is_not_reported_as_not_run(self):
-        """Images are only scanned alongside text, so an image-only request is a
-        pre-existing scan gap, not a message-scoping skip, and must not be labelled one"""
+    async def test_image_only_content_is_scanned(self):
+        """An image in a scanned role reaches apply_guardrail, not a pre-existing scan gap"""
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockGuardrail(guardrail_name="image-guardrail")
         guardrail.skip_system_message_in_guardrail = True
@@ -2066,7 +2065,9 @@ class TestNoScannableContentRecordsNotRun:
 
         await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert self._recorded_entries(data) == []
+        assert guardrail.last_inputs is not None
+        assert guardrail.last_inputs.get("images") == ["https://example.com/cat.png"]
+        assert all(entry.get("guardrail_status") != "not_run" for entry in self._recorded_entries(data))
 
     @pytest.mark.asyncio
     async def test_scoped_out_image_only_message_is_not_reported_as_not_run(self):

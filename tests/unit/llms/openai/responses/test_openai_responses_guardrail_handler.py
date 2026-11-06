@@ -95,6 +95,24 @@ class MockGuardrail(CustomGuardrail):
         return inputs
 
 
+class ImageRecordingGuardrail(CustomGuardrail):
+    """Mock guardrail that records the images it was asked to scan"""
+
+    def __init__(self, guardrail_name: str = "test") -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_images: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_images.append(list(inputs.get("images", [])))
+        return inputs
+
+
 class RecordingMaskingGuardrail(MockGuardrail):
     """MockGuardrail that also records the texts and structured message contents it was shown"""
 
@@ -375,6 +393,49 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"][0]["content"][0]["text"] == "Describe this image [GUARDRAILED]"
         # Image URL should remain unchanged
         assert result["input"][0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
+
+    @pytest.mark.asyncio
+    async def test_process_input_extracts_native_input_image(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = ImageRecordingGuardrail()
+
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Describe this image"},
+                        {"type": "input_image", "image_url": "https://example.com/cat.png"},
+                    ],
+                    "type": "message",
+                }
+            ],
+            "model": "gpt-4",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_images == [["https://example.com/cat.png"]]
+
+    @pytest.mark.asyncio
+    async def test_process_input_image_only_dispatches_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = ImageRecordingGuardrail()
+
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_image", "image_url": "https://example.com/cat.png"}],
+                    "type": "message",
+                }
+            ],
+            "model": "gpt-4",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_images == [["https://example.com/cat.png"]]
 
     @pytest.mark.asyncio
     async def test_process_input_with_empty_content(self):

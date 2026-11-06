@@ -20,6 +20,7 @@ from .base import (  # noqa: F401  # legacy module exports
     _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     RESPONSES_API_CALL_TYPES,
     AzureGuardrailBase,
+    check_categories_against_thresholds,
 )
 
 if TYPE_CHECKING:
@@ -167,56 +168,13 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         return inputs
 
     def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:
-        """
-        - Check if threshold set by category
-        - Check if general severity threshold set
-        - If both none, use default_severity_threshold
-        """
-
-        if self.severity_threshold_by_category:
-            for category in response["categoriesAnalysis"]:
-                severity_category_threshold_item = self.severity_threshold_by_category.get(category["category"])
-                if (
-                    severity_category_threshold_item is not None
-                    and category["severity"] >= severity_category_threshold_item
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Azure Content Safety Guardrail: {} crossed severity {}, Got severity: {}".format(
-                                category["category"],
-                                self.severity_threshold_by_category.get(category["category"]),
-                                category["severity"],
-                            )
-                        },
-                    )
-        if self.severity_threshold:
-            for category in response["categoriesAnalysis"]:
-                if category["severity"] >= self.severity_threshold:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Azure Content Safety Guardrail: {} crossed severity {}, Got severity: {}".format(
-                                category["category"],
-                                self.severity_threshold,
-                                category["severity"],
-                            )
-                        },
-                    )
-        if self.severity_threshold is None and self.severity_threshold_by_category is None:
-            for category in response["categoriesAnalysis"]:
-                if category["severity"] >= self.default_severity_threshold:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": "Azure Content Safety Guardrail: {} crossed severity {}, Got severity: {}".format(
-                                category["category"],
-                                self.default_severity_threshold,
-                                category["severity"],
-                            )
-                        },
-                    )
-        return True
+        return check_categories_against_thresholds(
+            response["categoriesAnalysis"],
+            severity_threshold=self.severity_threshold,
+            severity_threshold_by_category=self.severity_threshold_by_category,
+            default_severity_threshold=self.default_severity_threshold,
+            guardrail_label="Azure Content Safety Guardrail",
+        )
 
     @log_guardrail_information
     async def async_pre_call_hook(

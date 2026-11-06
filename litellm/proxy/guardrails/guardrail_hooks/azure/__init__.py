@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
+from .image_moderation import AzureContentSafetyImageModerationGuardrail
 from .prompt_shield import AzureContentSafetyPromptShieldGuardrail
 from .text_moderation import AzureContentSafetyTextModerationGuardrail
 
@@ -25,7 +26,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     if azure_guardrail == "prompt_shield":
         azure_content_safety_guardrail: (
-            AzureContentSafetyPromptShieldGuardrail | AzureContentSafetyTextModerationGuardrail
+            AzureContentSafetyPromptShieldGuardrail
+            | AzureContentSafetyTextModerationGuardrail
+            | AzureContentSafetyImageModerationGuardrail
         ) = AzureContentSafetyPromptShieldGuardrail(
             guardrail_name=guardrail_name,
             **{
@@ -47,6 +50,17 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
                 "event_hook": litellm_params.mode,
             },
         )
+    elif azure_guardrail == "image_moderations":
+        azure_content_safety_guardrail = AzureContentSafetyImageModerationGuardrail(
+            guardrail_name=guardrail_name,
+            **{
+                **litellm_params.model_dump(exclude_none=True),
+                "api_key": litellm_params.api_key,
+                "api_base": litellm_params.api_base,
+                "default_on": litellm_params.default_on,
+                "event_hook": litellm_params.mode,
+            },
+        )
     else:
         raise ValueError(f"Azure Content Safety: {azure_guardrail} is not a valid guardrail")
 
@@ -57,10 +71,12 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: initialize_guardrail,
     SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: initialize_guardrail,
+    SupportedGuardrailIntegrations.AZURE_IMAGE_MODERATIONS.value: initialize_guardrail,
 }
 
 
 guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.AZURE_PROMPT_SHIELD.value: AzureContentSafetyPromptShieldGuardrail,
     SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value: AzureContentSafetyTextModerationGuardrail,
+    SupportedGuardrailIntegrations.AZURE_IMAGE_MODERATIONS.value: AzureContentSafetyImageModerationGuardrail,
 }

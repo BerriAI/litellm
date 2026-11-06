@@ -1,6 +1,14 @@
 from pydantic import Field
+from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class AzureCategoriesAnalysis(TypedDict):
+    """Per-category severity returned by Azure Content Safety analyse endpoints"""
+
+    category: str
+    severity: int
 
 
 class AzureContentSafetyConfigModel(LiteLLMBaseModel):

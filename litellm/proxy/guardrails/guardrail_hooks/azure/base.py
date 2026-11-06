@@ -1,8 +1,9 @@
 import re
-from collections.abc import Mapping
-from typing import Any, Final, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
+from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -16,8 +17,14 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.azure.base import AzureCategoriesAnalysis
+
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
+
+# Azure Content Safety accepts images up to 4 MB after base64 decoding.
+AZURE_CONTENT_SAFETY_MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 
 # Azure Content Safety bills text in 1,000-character "text records"; a submitted
 # chunk of N characters consumes ceil(N / 1000) text records.
@@ -35,6 +42,61 @@ def resolve_content_safety_api_version(configured: str | None) -> str:
     if not configured or configured == JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES:
         return AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION
     return configured
+
+
+def check_categories_against_thresholds(
+    categories_analysis: "Sequence[AzureCategoriesAnalysis]",
+    *,
+    severity_threshold: int | None,
+    severity_threshold_by_category: "Mapping[str, int] | None",
+    default_severity_threshold: int,
+    guardrail_label: str,
+) -> Literal[True]:
+    """Raise ``HTTPException(400)`` when any category reaches its configured severity.
+
+    Shared by the Azure text and image moderation guardrails so both accept the
+    same ``severity_threshold`` / ``severity_threshold_by_category`` config and
+    return the same error shape.
+    """
+    if severity_threshold_by_category:
+        for category in categories_analysis:
+            if (threshold := severity_threshold_by_category.get(category["category"])) is not None and (
+                category["severity"] >= threshold
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "{}: {} crossed severity {}, Got severity: {}".format(
+                            guardrail_label, category["category"], threshold, category["severity"]
+                        )
+                    },
+                )
+    if severity_threshold:
+        for category in categories_analysis:
+            if category["severity"] >= severity_threshold:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "{}: {} crossed severity {}, Got severity: {}".format(
+                            guardrail_label, category["category"], severity_threshold, category["severity"]
+                        )
+                    },
+                )
+    if severity_threshold is None and severity_threshold_by_category is None:
+        for category in categories_analysis:
+            if category["severity"] >= default_severity_threshold:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "{}: {} crossed severity {}, Got severity: {}".format(
+                            guardrail_label,
+                            category["category"],
+                            default_severity_threshold,
+                            category["severity"],
+                        )
+                    },
+                )
+    return True
 
 
 class AzureGuardrailBase:

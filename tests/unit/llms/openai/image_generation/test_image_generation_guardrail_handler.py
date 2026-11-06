@@ -25,6 +25,20 @@ class MockGuardrail(CustomGuardrail):
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
 
+class ImageRecordingGuardrail(CustomGuardrail):
+    """Mock guardrail that records the images it was asked to scan"""
+
+    def __init__(self, guardrail_name: str = "test") -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_images: list[list[str]] = []
+
+    async def apply_guardrail(
+        self, inputs: dict, request_data: dict, input_type: str, **kwargs
+    ) -> dict:
+        self.seen_images.append(list(inputs.get("images", [])))
+        return inputs
+
+
 class TestHandlerDiscovery:
     """Test that the handler is properly discovered"""
 
@@ -129,6 +143,43 @@ class TestOutputProcessing:
         assert result == response
         assert result.created == 1589478378
         assert len(result.data) == 1
+
+    @pytest.mark.asyncio
+    async def test_process_output_scans_base64_images(self):
+        handler = OpenAIImageGenerationHandler()
+        guardrail = ImageRecordingGuardrail()
+        response = ImageResponse(
+            created=1589478378,
+            data=[ImageObject(b64_json="aGVsbG8=")],
+        )
+
+        result = await handler.process_output_response(response, guardrail)
+
+        assert result == response
+        assert guardrail.seen_images == [["data:image/png;base64,aGVsbG8="]]
+
+    @pytest.mark.asyncio
+    async def test_process_output_passes_url_images_to_guardrail(self):
+        handler = OpenAIImageGenerationHandler()
+        guardrail = ImageRecordingGuardrail()
+        response = ImageResponse(
+            created=1589478378,
+            data=[ImageObject(url="https://example.com/image.png")],
+        )
+
+        await handler.process_output_response(response, guardrail)
+
+        assert guardrail.seen_images == [["https://example.com/image.png"]]
+
+    @pytest.mark.asyncio
+    async def test_process_output_without_images_skips_guardrail(self):
+        handler = OpenAIImageGenerationHandler()
+        guardrail = ImageRecordingGuardrail()
+        response = ImageResponse(created=1589478378, data=[])
+
+        await handler.process_output_response(response, guardrail)
+
+        assert guardrail.seen_images == []
 
 
 class TestPIIMaskingScenario:

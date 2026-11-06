@@ -1,4 +1,4 @@
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import Field
 from typing_extensions import Required, TypedDict
@@ -6,7 +6,7 @@ from typing_extensions import Required, TypedDict
 from litellm.types.llms.base import LiteLLMBaseModel
 
 from ..base import GuardrailConfigModel
-from .base import AzureContentSafetyConfigModel
+from .base import AzureCategoriesAnalysis, AzureContentSafetyConfigModel
 
 # Shared Azure Content Safety categories
 AZURE_CONTENT_SAFETY_CATEGORIES: Final = ["Hate", "SelfHarm", "Sexual", "Violence"]
@@ -27,11 +27,7 @@ class AzureTextModerationGuardrailRequestBody(AzureTextModerationRequestBodyOpti
     text: Required[str]
 
 
-class AzureTextModerationGuardrailResponseCategoriesAnalysis(TypedDict):
-    """Response from the Azure Text Moderation guardrail"""
-
-    category: str
-    severity: int
+AzureTextModerationGuardrailResponseCategoriesAnalysis: TypeAlias = AzureCategoriesAnalysis
 
 
 class AzureTextModerationGuardrailResponse(TypedDict):
