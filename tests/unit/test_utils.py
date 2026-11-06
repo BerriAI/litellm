@@ -1354,6 +1354,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_image_size": {"type": "boolean"},
             "supports_native_structured_output": {"type": "boolean"},
             "supports_bedrock_native_structured_output": {"type": "boolean"},
+            "supports_bedrock_native_structured_output_by_default": {"type": "boolean"},
             "use_openai_responses_path": {"type": "boolean"},
             "off_peak_pricing": {
                 "type": "object",

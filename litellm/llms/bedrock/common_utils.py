@@ -298,9 +298,16 @@ def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "be
 def _bedrock_native_output_enabled(
     model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
 ) -> bool:
-    deployment_flag: Final = (model_info or {}).get("supports_native_structured_output")
+    deployment_info: Final = model_info or {}
+    deployment_flag: Final = deployment_info.get("supports_native_structured_output")
     if isinstance(deployment_flag, bool):
         return deployment_flag
+    return deployment_info.get("supports_bedrock_native_structured_output") is not False and (
+        bedrock_model_always_takes_native_output(model, custom_llm_provider)
+    )
+
+
+def bedrock_model_always_takes_native_output(model: str, custom_llm_provider: str = "bedrock") -> bool:
     return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
 
 
@@ -444,6 +451,18 @@ def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
     )
 
 
+def is_bedrock_stream_permission_denial(status_code: int, error_text: str) -> bool:
+    return status_code == 403 and "bedrock:InvokeModelWithResponseStream" in error_text
+
+
+def warn_bedrock_native_output_stream_denied(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock denied bedrock:InvokeModelWithResponseStream for model=%s, so litellm sent the structured output "
+        "request again as a buffered stream. Allow that action to stream it.",
+        model,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class NativeOutputFallback:
     optional_params: Mapping[str, object]
@@ -542,6 +561,22 @@ def json_object_or_none(value: object) -> Mapping[str, object] | None:
 
 
 BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def _response_format_json_schema(response_format: object) -> Mapping[str, object] | None:
+    json_schema: Final = json_object_or_none((json_object_or_none(response_format) or {}).get("json_schema"))
+    return json_object_or_none((json_schema or {}).get("schema"))
+
+
+def bedrock_batch_record_takes_native_output(
+    model: str, response_format: object, model_info: Mapping[str, object] | None = None
+) -> bool:
+    schema: Final = _response_format_json_schema(response_format)
+    return _bedrock_native_output_enabled(model, "bedrock", model_info) and (
+        schema is None
+        or schema_property_count(schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+        or not _bedrock_model_supports(model, "supports_bedrock_native_structured_output_by_default")
+    )
 
 
 def bedrock_cleaned_output_schema(

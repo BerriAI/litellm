@@ -222,7 +222,12 @@ from litellm.types.utils import (
     is_server_derived_pricing_key,
     pricing_override_fields,
 )
-from litellm.utils import acredential_updates, cost_map_omits_token_price, with_named_credential
+from litellm.utils import (
+    acredential_updates,
+    cost_map_omits_token_price,
+    native_structured_output_support,
+    with_named_credential,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -16753,7 +16758,7 @@ def _enrich_model_info_with_litellm_data(
     stamped_model_info: Final = MappingProxyType(
         {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
     )
-    model["model_info"] = {
+    merged_model_info: Final = {
         **stamped_model_info,
         **{
             k: None if unpriced and k in ("input_cost_per_token", "output_cost_per_token") else v
@@ -16761,6 +16766,18 @@ def _enrich_model_info_with_litellm_data(
             if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
     }
+    native_output_info: Final = {
+        **merged_model_info,
+        "supports_bedrock_native_structured_output_by_default": litellm_model_info.get(
+            "supports_bedrock_native_structured_output_by_default"
+        ),
+    }
+    model["model_info"] = (
+        {**merged_model_info, "supports_native_structured_output": native_structured_output_support(native_output_info)}
+        if "supports_native_structured_output" in merged_model_info
+        and "supports_native_structured_output" not in stamped_model_info
+        else merged_model_info
+    )
     # don't return the api key / vertex credentials
     # don't return the llm credentials
     model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
