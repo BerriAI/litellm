@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from typing import Final
 
@@ -10,12 +11,22 @@ from litellm.types.router import DeploymentPricing, PriceTier
 _RAW_PRICE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
+def _numeric_text(value: str) -> float | None:
+    try:
+        parsed: Final = float(value)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def _cost_value(value: object) -> float | None:
     match value:
         case bool():
             return None
         case int() | float():
             return float(value)
+        case str():
+            return _numeric_text(value)
         case _:
             return None
 

@@ -2108,6 +2108,38 @@ def test_model_group_info_lists_tiered_pricing_ranges(local_model_cost_map: None
     ]
 
 
+def test_model_group_info_reads_prices_written_as_text_the_way_billing_does(local_model_cost_map: None) -> None:
+    tier: Final = {"range": [0, 256000], "input_cost_per_token": "5e-08", "output_cost_per_token": "4e-07"}
+    model: Final = _cost_map_model(
+        "hub-text-priced-model", {"tiered_pricing": [tier], "cache_read_input_token_cost": "N/A"}
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "tiered", "litellm_params": {"model": model}},
+            {
+                "model_name": "flat",
+                "litellm_params": {"model": model, "input_cost_per_token": "3e-7", "output_cost_per_token": "1.2e-6"},
+                "model_info": {"id": "hub-text-override"},
+            },
+        ]
+    )
+
+    tiered: Final = router.registry().group("tiered")
+    flat: Final = router.registry().group("flat")
+
+    assert tiered is not None
+    assert flat is not None
+    assert [dict(t.costs) for t in tiered.deployment_pricing[0].tiered_pricing] == [
+        {"input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07}
+    ]
+    assert "cache_read_input_token_cost" not in tiered.deployment_pricing[0].costs
+    flat_costs: Final = flat.deployment_pricing[0].costs
+    shown: Final = ("input_cost_per_token", "output_cost_per_token")
+    assert {key: flat_costs[key] for key in shown} == pytest.approx(
+        {key: _billed_rate(model, "hub-text-override", *_usage_billed_at(key)) for key in shown}
+    )
+
+
 def test_model_group_info_lists_custom_prices_of_an_unmapped_deployment_and_skips_an_unpriced_one() -> None:
     router: Final = litellm.Router(
         model_list=[
