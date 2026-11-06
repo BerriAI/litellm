@@ -163,6 +163,7 @@ from .tool_search import (
     is_anthropic_tool_search_chat_tool,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
     tool_search_routing,
@@ -1191,7 +1192,7 @@ class LiteLLMCompletionResponsesConfig:
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
             replay_tool_search=holds_tool_search_items(request_input)
-            and route_runs_tool_search(model, custom_llm_provider),
+            and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
         )
 
         litellm_completion_request: dict = {
@@ -1325,10 +1326,10 @@ class LiteLLMCompletionResponsesConfig:
         return messages
 
     @staticmethod
-    def _without_tool_search_uses_the_route_cannot_run(
-        messages: Sequence[SessionMessage], route: CompletionRoute
+    def _without_tool_search_uses_the_request_cannot_run(
+        messages: Sequence[SessionMessage], route: CompletionRoute, tools: Iterable[object]
     ) -> tuple[SessionMessage, ...]:
-        if route_runs_tool_search(route.model, route.custom_llm_provider):
+        if request_runs_tool_search(tools, route.model, route.custom_llm_provider):
             return tuple(messages)
         search_call_ids: Final = tool_search_call_ids(messages)
         return tuple(
@@ -1390,7 +1391,9 @@ class LiteLLMCompletionResponsesConfig:
             request_fields.get("context_management"),
         )
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_route_cannot_run(stored_messages, route)
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_request_cannot_run(
+                stored_messages, route, _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or [])
+            )
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
         )
