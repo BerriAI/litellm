@@ -359,6 +359,7 @@ exclude = [
 ]
 
 [tool.uv]
+concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "rust-toolchain.toml" },
@@ -395,11 +396,12 @@ brotli = "2026-10-22T14:01:00Z"
 pypdf = "2026-10-28T17:01:00Z"
 
 [tool.uv.sources]
+litellm-proxy = { workspace = true }
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["enterprise", "litellm-proxy-extras", "packaging/litellm-proxy"]
 
 [tool.commitizen]
 version = "1.109.0"
