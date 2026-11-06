@@ -8,6 +8,7 @@ import io
 import os
 import time
 import traceback
+from datetime import datetime, timezone
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -97,6 +98,75 @@ def test_tpm_rpm_updated():
 
 
 # test_tpm_rpm_updated()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [False, True])
+@pytest.mark.parametrize("metadata_key", ["litellm_metadata", "metadata"])
+@pytest.mark.parametrize(
+    ("deployment_model", "hidden_model"),
+    [
+        ("openrouter/anthropic/claude-haiku-5.5", None),
+        ("openrouter/anthropic/claude-haiku-5.5", "claude-haiku-5.5"),
+        (None, "openrouter/anthropic/claude-haiku-5.5"),
+        (None, None),
+    ],
+)
+async def test_success_tokens_use_routing_deployment_key(
+    sync_mode: bool, metadata_key: str, deployment_model: str | None, hidden_model: str | None
+) -> None:
+    from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
+
+    cache: Final = DualCache()
+    handler: Final = LowestTPMLoggingHandler(router_cache=cache)
+    model: Final = "openrouter/anthropic/claude-haiku-5.5"
+    deployment: Final[DeploymentTypedDict] = {
+        "model_name": "messages",
+        "litellm_params": {"model": model, "tpm": 24},
+        "model_info": {"id": "streaming-deployment"},
+    }
+    original_payload: Final = create_standard_logging_payload()
+    payload: Final[StandardLoggingPayload] = {
+        **original_payload,
+        "model_group": "messages",
+        "model_id": "streaming-deployment",
+        "total_tokens": 25,
+        "hidden_params": {**original_payload["hidden_params"], "litellm_model_name": hidden_model},
+    }
+    kwargs: Final = {
+        "call_type": "anthropic_messages",
+        "stream": True,
+        "litellm_params": {metadata_key: {"deployment": deployment_model}},
+        "standard_logging_object": payload,
+    }
+    now: Final = datetime(2026, 1, 1, 19, 22, tzinfo=timezone.utc)
+
+    def cached_value(key: str) -> object | None:
+        return cache.get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache cache reads are untyped
+
+    with patch("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", return_value=now):
+        if sync_mode:
+            handler.log_success_event(kwargs, {}, now, now)  # pyright: ignore[reportUnknownMemberType]  # callback method is untyped
+        else:
+            await handler.async_log_success_event(kwargs, {}, now, now)  # pyright: ignore[reportUnknownMemberType]  # callback method is untyped
+
+        assert cached_value("streaming-deployment:None:tpm:19-22") is None
+        assert cached_value("streaming-deployment:claude-haiku-5.5:tpm:19-22") is None
+        if deployment_model is None and hidden_model is None:
+            assert cached_value(f"streaming-deployment:{model}:tpm:19-22") is None
+            return
+
+        assert cached_value(f"streaming-deployment:{model}:tpm:19-22") == 25
+        if sync_mode:
+            with pytest.raises(ValueError, match="No deployments available"):
+                handler.get_available_deployments(  # pyright: ignore[reportUnknownMemberType]  # router method is untyped
+                    "messages", [deployment]
+                )
+        else:
+            with pytest.raises(litellm.RateLimitError):
+                await handler.async_get_available_deployments(  # pyright: ignore[reportUnknownMemberType]  # router method is untyped
+                    "messages", [deployment]
+                )
 
 
 @pytest.mark.usefixtures("restore_verbose_logger_level")
