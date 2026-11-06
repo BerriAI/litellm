@@ -1,15 +1,23 @@
 """Tests for the cross-replica refresh coordinator: winner refreshes, losers wait then re-read."""
 
 import asyncio
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.caching.redis_cache import RedisCache
+from litellm.proxy.mcp_server.outbound_credentials.redis_distributed_lock import RedisDistributedLock
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
 from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator import (
     LockAcquisition,
     RedisRefreshCoordinator,
+)
+from litellm.proxy.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
+    runtime_refresh_coordinator,
 )
 
 _KEY = "mcp:refresh_lock:u:s"
@@ -53,6 +61,30 @@ def _advancing_sleep(clock, step=0.5):
         clock.t += step
 
     return sleep
+
+
+def test_runtime_factory_uses_legacy_redis_initializer(monkeypatch: pytest.MonkeyPatch) -> None:
+    override_client: Final = AsyncMock()
+
+    with pytest.warns(DeprecationWarning, match="overrides a RedisCache raw client accessor"):
+
+        class LegacyAsyncCache(RedisCache):
+            def init_async_client(self) -> AsyncMock:
+                return override_client
+
+    with patch("litellm._redis.get_redis_client", return_value=MagicMock()), patch(
+        "litellm._redis.get_redis_connection_pool", return_value=None
+    ):
+        redis_cache: Final = LegacyAsyncCache(host="127.0.0.1", port=6379)
+
+    cache_wrapper: Final = SimpleNamespace(redis_cache=redis_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache_wrapper)
+
+    coordinator: Final = runtime_refresh_coordinator()
+
+    assert isinstance(coordinator, RedisRefreshCoordinator)
+    assert isinstance(coordinator.lock, RedisDistributedLock)
+    assert coordinator.lock.client is override_client
 
 
 @pytest.mark.asyncio

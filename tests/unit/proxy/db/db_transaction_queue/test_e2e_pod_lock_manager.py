@@ -389,7 +389,7 @@ async def test_e2e_size_of_redis_buffer():
         password=os.getenv("REDIS_PASSWORD"),
     )
     fake_redis_client = fakeredis.FakeAsyncRedis()
-    redis_cache.redis_async_client = fake_redis_client
+    redis_cache._redis_async_client = fake_redis_client
 
     setattr(litellm.proxy.proxy_server, "use_redis_transaction_buffer", True)
     db_writer = DBSpendUpdateWriter(redis_cache=redis_cache)

@@ -48,7 +48,7 @@ def _fake_redis(monkeypatch):
 
     fake = fakeredis.FakeAsyncRedis()
     redis = RedisCache(host="localhost", port=6379)
-    monkeypatch.setattr(redis, "init_async_client", lambda: fake)
+    monkeypatch.setattr(redis, "_init_async_client", lambda: fake)
     return redis
 
 

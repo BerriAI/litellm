@@ -134,7 +134,7 @@ async def test_session_repin_lua_preserves_healthy_legacy_pins_and_replaces_unav
     key: Final = f"session-repin-legacy-{uuid.uuid4().hex}"
     replacement: Final = {"model_id": "replacement"}
     try:
-        redis.redis_client.set(redis.check_and_fix_namespace(key), stored, ex=60)
+        redis._redis_client.set(redis.check_and_fix_namespace(key), stored, ex=60)
         preserved: Final = await claim_affinity_pin(
             cache,
             key,
@@ -169,12 +169,12 @@ async def test_tier_pin_reads_shared_state_refreshes_ttl_and_forgets_deleted_pin
     try:
         for worker in workers:
             worker.in_memory_cache.set_cache(key, {"model": "old", "tier": "SIMPLE"}, ttl=60)
-        redis.redis_client.set(namespaced, stored, ex=10)
+        redis._redis_client.set(namespaced, stored, ex=10)
         first: Final = await read_affinity_pin(workers[0], key, 60)
         second: Final = await read_affinity_pin(workers[1], key, 60)
         assert first == second and first in ("current", {"model": "current", "tier": "REASONING"})
         assert all(worker.in_memory_cache.get_cache(key) == first for worker in workers)
-        assert 10 < redis.redis_client.ttl(namespaced) <= 60
+        assert 10 < redis._redis_client.ttl(namespaced) <= 60
         replacement: Final = {"model": "newer", "tier": "SIMPLE"}
         await redis.async_set_cache(key, replacement, ttl=10)
         assert await read_affinity_pin(workers[0], key, 60) == replacement
@@ -183,7 +183,7 @@ async def test_tier_pin_reads_shared_state_refreshes_ttl_and_forgets_deleted_pin
         for worker in workers:
             assert await read_affinity_pin(worker, key, 60) is None
             assert worker.in_memory_cache.get_cache(key) is None
-        assert redis.redis_client.exists(namespaced) == 0
+        assert redis._redis_client.exists(namespaced) == 0
     finally:
         await redis.async_delete_cache(key)
 
@@ -230,14 +230,14 @@ async def test_tier_pin_joins_pending_reads_without_reusing_request_state(mode: 
     current: Final = {"model": "current", "tier": "REASONING"}
     newer: Final = {"model": "newer", "tier": "COMPLEX"}
     try:
-        redis.redis_client.set(key, json.dumps(current), ex=10)
-        redis.redis_client.set(other_key, json.dumps("other-value"), ex=60)
+        redis._redis_client.set(key, json.dumps(current), ex=10)
+        redis._redis_client.set(other_key, json.dumps("other-value"), ex=60)
         assert await read_affinity_pin(cache, "pin", 60) == current
         cache.in_memory_cache.set_cache("pin", stale, ttl=60)
         assert cache.in_memory_cache.get_cache("pin") == stale
         if mode == "script_error":
-            redis.redis_client.delete(key)
-            redis.redis_client.rpush(key, "wrong-type")
+            redis._redis_client.delete(key)
+            redis._redis_client.rpush(key, "wrong-type")
         start: Final = len(sends)
         with request_redis_batch_scope() as request:
             batch: Final = request.batch(redis)
@@ -250,27 +250,27 @@ async def test_tier_pin_joins_pending_reads_without_reusing_request_state(mode: 
             assert len(wire) == (2 if mode == "separate" else 1)
             assert sum(b"MGET" in data for data in wire) == sum(b"EVALSHA" in data for data in wire) == 1
             if mode == "script_error":
-                assert redis.redis_client.type(key) == b"list"
-                redis.redis_client.delete(key)
+                assert redis._redis_client.type(key) == b"list"
+                redis._redis_client.delete(key)
             else:
-                assert 10 < redis.redis_client.ttl(key) <= 60
-            redis.redis_client.set(key, json.dumps(newer), ex=10)
+                assert 10 < redis._redis_client.ttl(key) <= 60
+            redis._redis_client.set(key, json.dumps(newer), ex=10)
             later_pending: Final = batch.mget(("other",))
             assert await read_affinity_pin(cache, "pin", 60) == newer
             assert await later_pending == {"other": "other-value"}
             assert cache.in_memory_cache.get_cache("pin") == newer
-            assert 10 < redis.redis_client.ttl(key) <= 60
-            assert redis.redis_client.get(key) == json.dumps(newer).encode()
-            redis.redis_client.delete(key)
+            assert 10 < redis._redis_client.ttl(key) <= 60
+            assert redis._redis_client.get(key) == json.dumps(newer).encode()
+            redis._redis_client.delete(key)
             assert await read_affinity_pin(cache, "pin", 60) is None
             assert cache.in_memory_cache.get_cache("pin") is None
-            assert redis.redis_client.exists(key) == 0
+            assert redis._redis_client.exists(key) == 0
     finally:
-        redis.redis_client.delete(key, other_key)
+        redis._redis_client.delete(key, other_key)
         for cached_key in tuple(litellm.in_memory_llm_clients_cache.cache_dict):
             if client_key in cached_key:
                 litellm.in_memory_llm_clients_cache.delete_cache(cached_key)
         await client.aclose()
         await pool.aclose()
         await redis.disconnect()
-        redis.redis_client.close()
+        redis._redis_client.close()

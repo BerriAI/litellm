@@ -570,9 +570,9 @@ def _get_cache_memory_stats(
             }
             # Try to get Redis connection pool info if available
             try:
-                if hasattr(redis_usage_cache, "redis_client") and redis_usage_cache.redis_client:
-                    if hasattr(redis_usage_cache.redis_client, "connection_pool"):
-                        pool_info: Final = redis_usage_cache.redis_client.connection_pool
+                if hasattr(redis_usage_cache, "_redis_client") and redis_usage_cache._redis_client:
+                    if hasattr(redis_usage_cache._redis_client, "connection_pool"):
+                        pool_info: Final = redis_usage_cache._redis_client.connection_pool
                         cache_stats["redis_usage_cache"]["connection_pool"] = {
                             "max_connections": (
                                 pool_info.max_connections if hasattr(pool_info, "max_connections") else None

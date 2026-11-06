@@ -85,7 +85,7 @@ class _FailingPublishRedisClient(Redis):
 class _ScriptedPubSubClient:
     """Pub/sub-capable client that is not a redis.asyncio.Redis.
 
-    Mirrors what RedisCache.init_pubsub_client returns for a cluster backend:
+    Mirrors what RedisCache._pubsub_client returns for a cluster backend:
     a node-level client exposing publish/pubsub without being an instance of
     the standalone Redis class.
     """
@@ -203,14 +203,14 @@ class _FakeRedisCache:
         self._client = client
         self.namespace = namespace
 
-    def init_pubsub_client(self) -> object:
+    def _pubsub_client(self) -> object:
         return self._client
 
 
 class _ExplodingRedisCache:
     namespace: Optional[str] = None
 
-    def init_pubsub_client(self) -> object:
+    def _pubsub_client(self) -> object:
         raise ConnectionError("cannot connect")
 
 
@@ -270,7 +270,7 @@ async def test_publish_swallows_client_init_errors() -> None:
 
 async def test_publish_reaches_cluster_derived_pubsub_clients() -> None:
     """LIT-8543: a cluster-backed cache returns a node-level client from
-    init_pubsub_client; publishes must go out on it instead of being skipped."""
+    _pubsub_client; publishes must go out on it instead of being skipped."""
     client = _ScriptedPubSubClient(pubsubs=[])
     cache = _FakeRedisCache(client)
 
@@ -775,7 +775,7 @@ async def test_stop_before_start_is_a_noop() -> None:
 
 async def test_subscriber_subscribes_on_cluster_derived_pubsub_client() -> None:
     """LIT-8543: the subscriber used to disable itself on cluster caches; now it
-    subscribes on the node-level client init_pubsub_client returns."""
+    subscribes on the node-level client _pubsub_client returns."""
     pubsub = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_proxymodeltable"})])
     cache = _FakeRedisCache(_ScriptedPubSubClient(pubsubs=[pubsub]))
     resyncs: List[str] = []

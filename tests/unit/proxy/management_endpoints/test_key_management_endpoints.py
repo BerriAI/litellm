@@ -5814,7 +5814,7 @@ class _SharedCoordinationRedis:
         self.published: tuple[str, ...] = ()
         self._subscriptions: tuple[_ChannelSubscription, ...] = ()
 
-    def init_pubsub_client(self) -> "_SharedCoordinationRedis":
+    def _pubsub_client(self) -> "_SharedCoordinationRedis":
         return self
 
     def pubsub(self) -> _ChannelSubscription:

@@ -107,7 +107,7 @@ class _SharedRedisFake:
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
         return self.values.get(self.check_and_fix_namespace(key))
 
-    def init_async_client(self) -> "_SharedRedisClientFake":
+    def _async_commands(self) -> "_SharedRedisClientFake":
         return _SharedRedisClientFake(self)
 
 

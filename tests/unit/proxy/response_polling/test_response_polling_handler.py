@@ -550,13 +550,13 @@ class TestResponsePollingHandler:
         """Test that delete_polling removes the entry from Redis"""
         mock_redis = AsyncMock()
         mock_async_client = AsyncMock()
-        mock_redis.redis_async_client = True  # hasattr check
-        # init_async_client is a sync method that returns an async client
-        mock_redis.init_async_client = Mock(return_value=mock_async_client)
+        mock_redis._redis_async_client = True  # hasattr check
+        # _init_async_client is a sync method that returns an async client
+        mock_redis._init_async_client = Mock(return_value=mock_async_client)
 
-        # Mock async_delete_cache to actually call init_async_client and delete
+        # Mock async_delete_cache to actually call _init_async_client and delete
         async def mock_async_delete_cache(key):
-            client = mock_redis.init_async_client()
+            client = mock_redis._init_async_client()
             await client.delete(key)
 
         mock_redis.async_delete_cache = mock_async_delete_cache

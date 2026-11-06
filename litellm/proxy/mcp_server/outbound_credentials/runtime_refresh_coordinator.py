@@ -31,9 +31,9 @@ def runtime_refresh_coordinator() -> RefreshCoordinator | None:
     redis_cache: Final = user_api_key_cache.redis_cache
     if redis_cache is None:
         return None
-    # The Redis client from init_async_client() is only partially typed; the lock validates every
+    # The Redis client from _async_client() is only partially typed; the lock validates every
     # reply it depends on, so the untyped boundary is contained here.
-    redis_client: Final = redis_cache.init_async_client()  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # litellm redis wrapper is untyped
+    redis_client: Final = redis_cache._async_client()  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownVariableType]  # raw redis-py client, no typed alternative yet
     lock: Final = RedisDistributedLock(
         redis_client,  # pyright: ignore[reportArgumentType,reportUnknownArgumentType]  # litellm redis wrapper is untyped
         namespace_key=redis_cache.check_and_fix_namespace,

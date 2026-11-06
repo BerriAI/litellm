@@ -1285,7 +1285,7 @@ from litellm.proxy.proxy_server import ProxyConfig
 @pytest.mark.skip(reason="local variable conflicts. needs to be refactored.")
 @mock.patch("litellm.proxy.proxy_server.litellm.Cache")
 def test_load_router_config(mock_cache, fake_env_vars):
-    mock_cache.return_value.cache.__dict__ = {"redis_client": None}
+    mock_cache.return_value.cache.__dict__ = {"_redis_client": None}
     mock_cache.return_value.supported_call_types = [
         "completion",
         "acompletion",
@@ -1341,7 +1341,7 @@ def test_load_router_config(mock_cache, fake_env_vars):
             )
         )
         assert litellm.cache is not None
-        assert "redis_client" in vars(
+        assert "_redis_client" in vars(
             litellm.cache.cache
         )  # it should default to redis on proxy
         assert litellm.cache.supported_call_types == [
@@ -1370,7 +1370,7 @@ def test_load_router_config(mock_cache, fake_env_vars):
         print(litellm.cache)
         print(litellm.cache.supported_call_types)
         print(vars(litellm.cache.cache))
-        assert "redis_client" in vars(
+        assert "_redis_client" in vars(
             litellm.cache.cache
         )  # it should default to redis on proxy
         assert litellm.cache.supported_call_types == [
