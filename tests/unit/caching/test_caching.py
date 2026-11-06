@@ -472,6 +472,47 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
 
 
+def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    plain_key: Final = cache.get_cache_key(**request)
+
+    assert cache.get_cache_key(**request, return_token_ids=True) != plain_key
+    assert cache.get_cache_key(**request, return_token_ids=False) == plain_key
+    assert cache.get_cache_key(**request, return_token_ids=None) == plain_key
+
+
+def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_body() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    plain_key: Final = cache.get_cache_key(**request)
+    other_extra_body_key: Final = cache.get_cache_key(**request, extra_body={"top_k": 5})
+
+    assert cache.get_cache_key(**request, extra_body={"return_token_ids": True}) != plain_key
+    assert cache.get_cache_key(**request, extra_body={"top_k": 5, "return_token_ids": True}) != other_extra_body_key
+    assert cache.get_cache_key(**request, extra_body={"return_token_ids": False}) == plain_key
+    assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
+
+
+def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.5-flash",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+    }
+
+    signed_ids_key: Final = cache.get_cache_key(**request)
+    short_ids_key: Final = cache.get_cache_key(**request, thought_signature_in_tool_call_id=False)
+
+    assert short_ids_key != signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id="false") == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=0) == short_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=True) == signed_ids_key
+    assert cache.get_cache_key(**request, thought_signature_in_tool_call_id=None) == signed_ids_key
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 

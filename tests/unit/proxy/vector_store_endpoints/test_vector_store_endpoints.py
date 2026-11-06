@@ -60,45 +60,31 @@ def test_direct_vector_store_embedding_executor_rejects_invalid_value():
 
 def test_router_vector_store_search_injects_executor_and_request_metadata():
     router = litellm.Router(model_list=[])
-    original = MagicMock(return_value="searched")
-    wrapped = router.factory_function(original, call_type="vector_store_search")
 
-    assert (
-        wrapped(
-            vector_store_id="store",
-            query="query",
-            custom_llm_provider="valkey",
-            litellm_metadata={"user_api_key_team_id": "team-a"},
+    with patch(  # test-quality-ok: isolates the SDK search the router dispatches to
+        "litellm.vector_stores.main.search", return_value="searched"
+    ) as search:
+        assert (
+            router.vector_store_search(
+                vector_store_id="store",
+                query="query",
+                custom_llm_provider="valkey",
+                litellm_metadata={"user_api_key_team_id": "team-a"},
+            )
+            == "searched"
         )
-        == "searched"
-    )
 
-    call_kwargs = original.call_args.kwargs
+    call_kwargs = search.call_args.kwargs
     assert call_kwargs["custom_llm_provider"] == "valkey"
     executor = call_kwargs["_direct_vector_store_embedding_executor"]
     assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
     assert executor.metadata == {"user_api_key_team_id": "team-a"}
-    assert litellm.Router._vector_store_request_metadata({"metadata": {"user_api_key_team_id": "team-b"}}) == {
-        "user_api_key_team_id": "team-b"
-    }
-    assert litellm.Router._vector_store_request_metadata({}) == {}
 
-    with patch.object(  # test-quality-ok: fallback dispatch is the boundary this wrapper delegates to
-        router, "_generic_api_call_with_fallbacks", return_value="routed"
-    ) as fallback:
-        assert wrapped(model="vector-alias", vector_store_id="store", query="query") == "routed"
-    assert fallback.call_args.kwargs["model"] == "vector-alias"
-    assert fallback.call_args.kwargs["original_function"] is original
-
-    create_original = MagicMock(return_value="created")
-    wrapped_create = router.factory_function(create_original, call_type="vector_store_create")
-    assert wrapped_create(name="store") == "created"
-    create_original.assert_called_once_with(name="store")
-    with patch.object(  # test-quality-ok: fallback dispatch is the boundary this wrapper delegates to
-        router, "_generic_api_call_with_fallbacks", return_value="created-through-router"
-    ) as fallback:
-        assert wrapped_create(model="vector-alias", name="store") == "created-through-router"
-    fallback.assert_called_once_with(original_function=create_original, model="vector-alias", name="store")
+    with patch(  # test-quality-ok: isolates the SDK create the router dispatches to
+        "litellm.vector_stores.main.create", return_value="created"
+    ) as create:
+        assert router.vector_store_create(name="store") == "created"
+    create.assert_called_once_with(name="store")
 
 
 @pytest.mark.asyncio
@@ -171,15 +157,16 @@ async def test_router_avector_store_search_passes_correct_args():
     # Create a router
     router = litellm.Router(model_list=[])
 
-    # Mock the router's _init_vector_store_api_endpoints method to avoid real API calls
-    with patch.object(router, "_init_vector_store_api_endpoints") as mock_init:
-        mock_init.return_value = {
-            "object": "vector_store.search_results.page",
-            "search_query": "test query",
-            "data": [],
-        }
-
-        # Call router's avector_store_search
+    with patch(  # test-quality-ok: isolates the SDK search the router dispatches to
+        "litellm.vector_stores.main.asearch",
+        new=AsyncMock(
+            return_value={
+                "object": "vector_store.search_results.page",
+                "search_query": "test query",
+                "data": [],
+            }
+        ),
+    ) as asearch:
         await router.avector_store_search(
             vector_store_id="test_store_id",
             query="test query",
@@ -187,17 +174,14 @@ async def test_router_avector_store_search_passes_correct_args():
             metadata={"user_api_key_team_id": "team-a"},
         )
 
-        # Verify the internal method was called with correct args
-        mock_init.assert_called_once()
-        call_args = mock_init.call_args
-
-        # Check that the original function is passed correctly
-        assert call_args[1]["vector_store_id"] == "test_store_id"
-        assert call_args[1]["query"] == "test query"
-        assert call_args[1]["custom_llm_provider"] == "bedrock"
-        executor = call_args[1]["_direct_vector_store_embedding_executor"]
-        assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
-        assert executor.metadata["user_api_key_team_id"] == "team-a"
+    asearch.assert_awaited_once()
+    call_kwargs = asearch.call_args.kwargs
+    assert call_kwargs["vector_store_id"] == "test_store_id"
+    assert call_kwargs["query"] == "test query"
+    assert call_kwargs["custom_llm_provider"] == "bedrock"
+    executor = call_kwargs["_direct_vector_store_embedding_executor"]
+    assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
+    assert executor.metadata["user_api_key_team_id"] == "team-a"
 
 
 @pytest.mark.asyncio

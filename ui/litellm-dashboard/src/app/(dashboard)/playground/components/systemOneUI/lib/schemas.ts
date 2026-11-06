@@ -1,4 +1,6 @@
+import type { ParseKeys } from "i18next";
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 
 export type DecisionEndpoint = "/v1/systemone" | "/typesafe/v1/systemone";
 
@@ -92,13 +94,16 @@ const scoreQuestionSchema = z.looseObject({
     .min(2, "Score criteria must contain at least 2 levels."),
 });
 
-const QUESTION_ERROR_MESSAGES: Partial<Record<z.core.$ZodIssue["code"], string>> = {
-  invalid_union: "Question type must be choice, noul, or score.",
-  invalid_type: "Question must be an object.",
+const QUESTION_ERROR_MESSAGES: Partial<Record<z.core.$ZodIssue["code"], ParseKeys>> = {
+  invalid_union: "playground.systemOne.schemas.questionType",
+  invalid_type: "playground.systemOne.schemas.questionObject",
 };
 
 const questionSchema = z.discriminatedUnion("type", [choiceQuestionSchema, noulQuestionSchema, scoreQuestionSchema], {
-  error: (iss) => QUESTION_ERROR_MESSAGES[iss.code],
+  error: (iss) => {
+    const key = QUESTION_ERROR_MESSAGES[iss.code];
+    return key === undefined ? undefined : i18n.t(key);
+  },
 });
 
 export const systemOneRequestSchema = z.looseObject(
@@ -125,7 +130,7 @@ const noulAnswerSchema = z.looseObject({ type: z.literal("noul"), noul: probabil
 const choiceAnswerShape = {
   type: z.literal("choice"),
   choice: z.string(),
-  confidence: probability.optional(),
+  confidence: probability.nullish(),
   probabilities,
 };
 const choiceAnswerSchema = z.looseObject(choiceAnswerShape);
@@ -133,7 +138,7 @@ const choiceAnswerSchema = z.looseObject(choiceAnswerShape);
 const scoreAnswerShape = {
   type: z.literal("score"),
   score: z.number().finite(),
-  confidence: probability.optional(),
+  confidence: probability.nullish(),
   legend: z.record(z.string(), decisionsJson).optional(),
   probabilities,
 };

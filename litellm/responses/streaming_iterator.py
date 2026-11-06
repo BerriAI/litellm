@@ -35,11 +35,13 @@ import litellm
 from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
+    RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError, RateLimitError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
     process_response_headers,
     provider_reported_usage_cost,
     set_response_cost_in_hidden_params,
@@ -51,7 +53,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -97,6 +99,12 @@ class ProjectQuotaCallback(Protocol):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
+    ) -> None: ...
+
+
+class TokenLimitCallback(Protocol):
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
     ) -> None: ...
 
 
@@ -177,6 +185,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
 _DECODED_JSON: Final = TypeAdapter(object)
+_HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -224,6 +233,11 @@ def spawn_logging_task(
 
 
 async def drain_logging_tasks(timeout: float = 5.0) -> None:
+    # A task that finished as its loop closed never ran its discard callback, and a
+    # task from another loop cannot be awaited here: forget both, wait on the rest.
+    running_loop: Final = asyncio.get_running_loop()
+    stale: Final = {task for task in _PENDING_LOGGING_TASKS if task.done() or task.get_loop() is not running_loop}
+    _PENDING_LOGGING_TASKS.difference_update(stale)
     if not _PENDING_LOGGING_TASKS:
         return
     _, pending = await asyncio.wait(tuple(_PENDING_LOGGING_TASKS), timeout=timeout)
@@ -365,6 +379,7 @@ def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
 
 
 PRE_OUTPUT_LIFECYCLE_EVENT_TYPES: Final = frozenset({"response.created", "response.in_progress", "response.queued"})
+SEQUENCE_NUMBER_STAMPED_ON_EMISSION: Final = -1
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -623,6 +638,24 @@ class BaseResponsesAPIStreamingIterator:
             self._handle_failure(e)
             raise
 
+    def _deferred_logging_dispatch(
+        self, logging_coroutine: Coroutine[object, object, None], logging_response: object
+    ) -> BilledRoundsDispatch | Coroutine[object, object, None]:
+        response: Final[object] = getattr(logging_response, "response", None)
+        if not isinstance(response, ResponsesAPIResponse):
+            return logging_coroutine
+        price: Final = (
+            UncachedPrice(0.0, None)
+            if self._completed_response_cache_hit
+            else self.logging_obj.uncached_price(response)
+        )
+        spend: Final = BilledRoundsSpend(
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage),
+            price.cost or 0.0,
+            price.cost_breakdown,
+        )
+        return BilledRoundsDispatch(logging_coroutine, spend)
+
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
             return
@@ -647,7 +680,9 @@ class BaseResponsesAPIStreamingIterator:
             if deferred_dispatch_armed:
                 # End-of-stream guardrail scans write guardrail_information after
                 # the terminal event; dispatching now would snapshot metadata early.
-                self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+                self.logging_obj._deferred_stream_complete_args = (
+                    self._deferred_logging_dispatch(logging_coroutine, logging_response),
+                )
             else:
                 spawn_logging_task(
                     asyncio.get_running_loop(), logging_coroutine, task_name="Responses stream success logging"
@@ -686,7 +721,9 @@ class BaseResponsesAPIStreamingIterator:
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
-        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else EMPTY_MAPPING
+        source: Final[Mapping[str, object]] = (
+            _HIDDEN_PARAMS.validate_python(source_hidden) if isinstance(source_hidden, Mapping) else {}
+        )
         processed: Final[object] = source.get("additional_headers") or self._hidden_params.get("additional_headers")
         raw: Final[object] = source.get("headers") or self._raw_response_headers
         headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
@@ -696,6 +733,7 @@ class BaseResponsesAPIStreamingIterator:
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
+            **_stamped_bill_hidden_params(source),
             **existing,
         }
 
@@ -1013,9 +1051,7 @@ class BaseResponsesAPIStreamingIterator:
         )
         if estimate is None:
             return
-        usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the success path above uses
-            estimate
-        )
+        usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(estimate)
         served_tier: Final[object] = getattr(self._created_response, "service_tier", None)
         assembled: Final = ModelResponse(
             model=self.model, usage=usage, service_tier=served_tier if isinstance(served_tier, str) else None
@@ -1742,6 +1778,11 @@ def _dump_json_safely(response: BaseModel) -> str | None:
         return None
 
 
+def _stamped_bill_hidden_params(source: Mapping[str, object]) -> Mapping[str, object]:
+    stamped: Final = UPSTREAM_USAGE_COST in source
+    return {key: source[key] for key in (UPSTREAM_USAGE_COST, "response_cost") if stamped and key in source}
+
+
 def _logging_copy(event: object) -> object:
     """Hand logging callbacks a copy, so their usage rewrite (Responses shape to chat shape) never
     reaches the event the caller is iterating. The round trip through ``model_dump`` sidesteps the
@@ -1869,7 +1910,7 @@ def stamp_responses_usage_cost(
         return
     if isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(getattr(usage_obj, "cost", None), (int, float)):
+    if bill > 0 or isinstance(usage_obj.cost, (int, float)):
         stamp_litellm_bill_on_usage(response_obj, usage_obj, float(bill))
 
 
@@ -1911,7 +1952,6 @@ def build_synthetic_response_events(
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
     ]
 
-    sequence_number = 0
     output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
     for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
@@ -2021,35 +2061,31 @@ def build_synthetic_response_events(
                             delta=summary_text[i : i + chunk_size],
                         )
                     )
-                sequence_number += 1
                 events.append(
                     openai_types.ReasoningSummaryTextDoneEvent(
                         type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=sequence_number,
+                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
                         text=summary_text,
                     )
                 )
-                sequence_number += 1
                 events.append(
                     openai_types.ReasoningSummaryPartDoneEvent(
                         type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=sequence_number,
+                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
                         part=openai_types.BaseLiteLLMOpenAIResponseObject(**summary_payload),
                     )
                 )
 
-        sequence_number += 1
         events.append(
             openai_types.OutputItemDoneEvent(
                 type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
-                sequence_number=sequence_number,
                 item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
             )
         )
@@ -2060,7 +2096,7 @@ def build_synthetic_response_events(
             response=transformed,
         )
     )
-    return events
+    return [event.model_copy(update={"sequence_number": number}) for number, event in enumerate(events)]
 
 
 # ---------------------------------------------------------------------------
@@ -2158,6 +2194,25 @@ class _RefusedTurn:
 ResponsesWsTurnAdmission: TypeAlias = Callable[[], Awaitable[Mapping[str, object]]]
 
 
+def with_token_limit_checks(
+    turn_admission: ResponsesWsTurnAdmission | None,
+    token_limit_callbacks: Sequence[TokenLimitCallback],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    requested_model: str | None,
+) -> ResponsesWsTurnAdmission | None:
+    if not token_limit_callbacks or user_api_key_dict is None:
+        return turn_admission
+
+    async def admit() -> Mapping[str, object]:
+        for callback in token_limit_callbacks:
+            await callback.enforce_token_limits_for_frame(
+                user_api_key_dict=user_api_key_dict, requested_model=requested_model
+            )
+        return MappingProxyType({}) if turn_admission is None else await turn_admission()
+
+    return admit
+
+
 async def _admit_frame_turn(
     turn_admission: ResponsesWsTurnAdmission | None, raw_message: str
 ) -> _AdmittedTurn | _RefusedTurn:
@@ -2173,22 +2228,24 @@ async def _admit_frame_turn(
         return _RefusedTurn(e)
 
 
-def _turn_refusal_frame(refusal: RateLimitError) -> str:
+def turn_refusal_frame(refusal: RateLimitError) -> str:
     return json.dumps(
         {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
     )
 
 
-def _turn_admission_error_frame(failure: Exception) -> str:
-    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+def _turn_admission_error_frame(failure: Exception, status: int) -> str:
+    return json.dumps({"type": "error", "status": status, "error": {"type": "server_error", "message": str(failure)}})
 
 
 def _turn_rejection_frame(rejection: Exception) -> str:
     match rejection:
         case RateLimitError():
-            return _turn_refusal_frame(rejection)
+            return turn_refusal_frame(rejection)
+        case ServiceUnavailableError():
+            return _turn_admission_error_frame(rejection, rejection.status_code)
         case _:
-            return _turn_admission_error_frame(rejection)
+            return _turn_admission_error_frame(rejection, 500)
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
@@ -3015,7 +3072,7 @@ class ResponsesWebSocketStreaming:
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
         try:
-            await self.websocket.send_text(_turn_refusal_frame(refusal))
+            await self.websocket.send_text(turn_refusal_frame(refusal))
         except Exception:  # noqa: BLE001, S110  # client may already be gone
             pass
 
@@ -3569,7 +3626,7 @@ class ManagedResponsesWebSocketHandler:
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
-            await self._send_frame(_turn_refusal_frame(e))
+            await self._send_frame(turn_refusal_frame(e))
             return
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
@@ -3613,6 +3670,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs["litellm_metadata"] = {
             **(turn_litellm_metadata if _is_json_object(turn_litellm_metadata) else {}),
             **verdict.reservation,
+            RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: self.logging_obj.litellm_call_id,
         }
 
         try:

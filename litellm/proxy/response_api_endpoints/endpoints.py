@@ -36,7 +36,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
-from litellm.exceptions import EndpointNotSupportedByModelError
+from litellm.exceptions import EndpointNotSupportedByModelError, RateLimitError
 from litellm.integrations.custom_guardrail import ModifyResponseException, guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
@@ -103,6 +103,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
     spawn_logging_task,
+    turn_refusal_frame,
 )
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -2161,7 +2162,7 @@ _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
-_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools", "tool_choice", "extra_body")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 _METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")
@@ -2627,6 +2628,12 @@ async def _responses_websocket_session(
             route_type="_aresponses_websocket",
             skip_guardrails=True,
         )
+    except RateLimitError as e:
+        verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
+            await websocket.send_text(turn_refusal_frame(e))
+        await websocket.close(code=1008, reason="Rate limit exceeded")
+        return
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:

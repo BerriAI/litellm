@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
+import reprlib
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
@@ -45,7 +46,13 @@ from litellm.types.llms.mistral import (
     MistralThinkingBlock,
     MistralToolCallMessage,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage, ChatCompletionTextObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionTextObject,
+    ChatCompletionToolChoiceFunctionParam,
+    ChatCompletionToolChoiceObjectParam,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
 
@@ -78,6 +85,10 @@ _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
 _REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
 _NON_LEVEL_EFFORT_REASON: Final = (
     "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
+)
+_UNUSABLE_TOOL_CHOICE_REASON: Final = (
+    "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
+    "or {'type': 'function', 'function': {'name': <tool name>}}."
 )
 _DOCUMENTED_MAGISTRAL_EFFORTS: Final = frozenset({"low", "medium", "high"})
 _REASONING_ON_THINKING_TYPES: Final = frozenset({"enabled", "adaptive"})
@@ -118,7 +129,7 @@ class MistralConfig(OpenAIGPTConfig):
 
     - `tools` (list or null): A list of available tools for the model. Use this to specify functions for which the model can generate JSON inputs.
 
-    - `tool_choice` (string - 'auto'/'any'/'none' or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
+    - `tool_choice` (string - 'auto'/'any'/'none', an object naming one function such as {"type": "function", "function": {"name": "my_function"}}, or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
 
     - `stop` (string or array of strings): Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
 
@@ -135,7 +146,7 @@ class MistralConfig(OpenAIGPTConfig):
     top_p: int | None = None
     max_tokens: int | None = None
     tools: list | None = None
-    tool_choice: Literal["auto", "any", "none"] | None = None
+    tool_choice: Literal["auto", "any", "none"] | ChatCompletionToolChoiceObjectParam | None = None
     random_seed: int | None = None
     safe_prompt: bool | None = None
     response_format: dict | None = None
@@ -147,7 +158,7 @@ class MistralConfig(OpenAIGPTConfig):
         top_p: int | None = None,
         max_tokens: int | None = None,
         tools: list | None = None,
-        tool_choice: Literal["auto", "any", "none"] | None = None,
+        tool_choice: Literal["auto", "any", "none"] | ChatCompletionToolChoiceObjectParam | None = None,
         random_seed: int | None = None,
         safe_prompt: bool | None = None,
         response_format: dict | None = None,
@@ -192,13 +203,40 @@ class MistralConfig(OpenAIGPTConfig):
             *(("prompt_cache_key",) if accepts_prompt_cache_key else ()),
         ]
 
-    def _map_tool_choice(self, tool_choice: str) -> str:
-        if tool_choice == "auto" or tool_choice == "none":
-            return tool_choice
-        elif tool_choice == "required":
-            return "any"
-        else:  # openai 'tool_choice' object param not supported by Mistral API
-            return "any"
+    @staticmethod
+    def _map_tool_choice(tool_choice: object) -> str | ChatCompletionToolChoiceObjectParam | None:
+        match tool_choice:
+            case str(choice) if choice in ("auto", "none"):
+                return choice
+            case "required" | "any":
+                return "any"
+            case {"type": "function", "function": {"name": str(name)}} if name:
+                return ChatCompletionToolChoiceObjectParam(
+                    type="function", function=ChatCompletionToolChoiceFunctionParam(name=name)
+                )
+            case _:
+                return None
+
+    def _tool_choice_to_send(
+        self, model: str, tool_choice: object, drop_params: bool
+    ) -> str | ChatCompletionToolChoiceObjectParam | UnsupportedParamsError | None:
+        mapped: Final = self._map_tool_choice(tool_choice)
+        if mapped is not None:
+            return mapped
+        if drop_params or litellm.drop_params is True:
+            warn_dropped_reasoning(
+                "tool_choice", tool_choice, model, _UNUSABLE_TOOL_CHOICE_REASON, drop_params_gated=True
+            )
+            return None
+        return UnsupportedParamsError(
+            message=(
+                f"Unsupported tool_choice={reprlib.repr(tool_choice)} for model={model}, since "
+                f"{_UNUSABLE_TOOL_CHOICE_REASON} "
+                "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=self.custom_llm_provider,
+            model=model,
+        )
 
     @staticmethod
     def _get_mistral_reasoning_system_prompt() -> str:
@@ -244,18 +282,20 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "stop":
-                optional_params["stop"] = value
-            if param == "tool_choice" and isinstance(value, str):
-                optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
+            if param == "tool_choice" and "tools" in non_default_params and non_default_params["tools"]:
+                match self._tool_choice_to_send(
+                    model,
+                    cast(object, value),  # cast-ok: untyped request params, the match narrows it
+                    drop_params,
+                ):
+                    case UnsupportedParamsError() as unusable_tool_choice:
+                        raise unusable_tool_choice
+                    case None:
+                        pass
+                    case tool_choice:
+                        optional_params["tool_choice"] = tool_choice
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
-            if param == "response_format":
-                optional_params["response_format"] = value
             if (
                 param == "reasoning_effort"
                 and "magistral" not in model.lower()
@@ -271,7 +311,7 @@ class MistralConfig(OpenAIGPTConfig):
                 # Flag that we need to add reasoning system prompt
                 optional_params["_add_reasoning_prompt"] = True
                 _warn_unless_reasoning_prompt_honors(param, OPAQUE_VALUE.validate_python(value), model)
-            if param in ("parallel_tool_calls", "prompt_cache_key"):
+            if param in ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key"):
                 optional_params[param] = value
         return optional_params
 
@@ -755,7 +795,8 @@ class MistralConfig(OpenAIGPTConfig):
         if _name is not None:
             # Remove name if not a tool message
             if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)
+                message_without_name: Final = {k: v for k, v in message.items() if k != "name"}
+                return cast(AllMessageValues, message_without_name)  # cast-ok: the same message minus name
 
         return message
 
