@@ -2431,6 +2431,15 @@ def test_a_deployment_turns_off_the_native_output_a_row_defaults_to_with_the_bed
     assert bedrock_chat_opts_into_native_structured_output(model, True, model_info=model_info) is native
 
 
+@pytest.mark.parametrize("model", ["deepseek.v3.2", "qwen.qwen3-32b-v1:0", "mistral.mistral-large-3-675b-instruct"])
+def test_the_bedrock_key_false_leaves_a_non_claude_rows_native_default_alone(local_model_cost_map, model):
+    opted_out: Final = {"supports_bedrock_native_structured_output": False}
+
+    assert bedrock_supports_native_structured_output(model)
+    assert bedrock_supports_native_structured_output(model, model_info=opted_out)
+    assert bedrock_chat_opts_into_native_structured_output(model, False, model_info=opted_out)
+
+
 def test_a_deployment_setting_only_the_native_key_false_still_opts_in_through_the_rows_bedrock_key(
     local_model_cost_map,
 ):

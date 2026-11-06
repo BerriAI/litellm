@@ -784,6 +784,15 @@ def _bodies_sent_for_a_chat_without_thinking(
     return tuple(_JSON.validate_json(request.body) for request in wire.drain())
 
 
+def test_the_bedrock_opt_out_leaves_a_non_claude_model_on_native_output(gateway: Gateway) -> None:
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        opted_out: Final = _deployment(
+            scenario, wire, "converse", _DEEPSEEK, {"supports_bedrock_native_structured_output": False}
+        )
+        (only_call,) = _bodies_sent_for_a_chat_without_thinking(gateway, wire, opted_out)
+        assert _native_schema(only_call, False) == _SCHEMA, only_call
+
+
 @pytest.mark.parametrize("backend", [_OPUS_4_8, _OPUS_5], ids=["opus_4_8", "opus_5"])
 @pytest.mark.parametrize("route", ["converse", "invoke"])
 def test_the_opt_out_the_rejection_warning_advises_skips_the_call_bedrock_rejects(

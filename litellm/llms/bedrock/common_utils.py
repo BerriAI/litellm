@@ -300,9 +300,9 @@ def _bedrock_native_output_enabled(
     deployment_flag: Final = (model_info or {}).get("supports_native_structured_output")
     if isinstance(deployment_flag, bool):
         return deployment_flag
-    return _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) and not _bedrock_native_output_opted_out(model, model_info)
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) and not (
+        _is_claude(model) and _bedrock_native_output_opted_out(model, model_info)
+    )
 
 
 def bedrock_model_always_takes_native_output(model: str) -> bool:
