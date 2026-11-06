@@ -104,6 +104,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    async_pre_call_deployment_hook,
     calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
@@ -1026,11 +1027,17 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_image_token_cost": {"type": "number"},
             "audio_transcription_config": {"type": "string"},
             "deprecation_date": {"type": "string"},
+            "successor_model": {"type": "string"},
+            "deprecation_source": {"type": "string"},
             "input_cost_per_audio_per_second": {"type": "number"},
             "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
             "google_maps_grounding_cost_per_query": {"type": "number"},
             "input_cost_per_audio_token": {"type": "number"},
             "input_cost_per_audio_token_flex": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens_flex": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens_priority": {"type": "number"},
+            "input_cost_per_audio_token_above_200k_tokens_batches": {"type": "number"},
             "input_cost_per_image_token": {"type": "number"},
             "input_cost_per_character": {"type": "number"},
             "input_cost_per_character_above_128k_tokens": {"type": "number"},
@@ -1042,6 +1049,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "input_cost_per_token_above_100k_tokens_batches": {"type": "number"},
             "input_cost_per_token_above_200k_tokens": {"type": "number"},
             "input_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "input_cost_per_token_above_200k_tokens_flex": {"type": "number"},
             "input_cost_per_token_above_256k_tokens": {"type": "number"},
             "input_cost_per_token_above_272k_tokens": {"type": "number"},
             "input_cost_per_token_above_512k_tokens": {"type": "number"},
@@ -1072,6 +1080,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "regional_endpoint_uplift_multiplier": {"type": "number"},
             "regional_processing_uplift_multiplier_eu": {"type": "number"},
             "regional_processing_uplift_multiplier_us": {"type": "number"},
+            "fedramp_uplift_multiplier": {"type": "number"},
             "input_cost_per_pixel": {"type": "number"},
             "input_cost_per_query": {"type": "number"},
             "input_cost_per_request": {"type": "number"},
@@ -1141,6 +1150,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_image_4K": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_image_token_priority": {"type": "number"},
             "output_cost_per_video_token": {"type": "number"},
             "output_cost_per_pixel": {"type": "number"},
             "output_cost_per_second": {"type": "number"},
@@ -1157,6 +1167,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_token_above_128k_tokens": {"type": "number"},
             "output_cost_per_token_above_200k_tokens": {"type": "number"},
             "output_cost_per_token_above_200k_tokens_batches": {"type": "number"},
+            "output_cost_per_token_above_200k_tokens_flex": {"type": "number"},
             "output_cost_per_token_above_256k_tokens": {"type": "number"},
             "output_cost_per_token_above_272k_tokens": {"type": "number"},
             "output_cost_per_token_above_512k_tokens": {"type": "number"},
@@ -1234,6 +1245,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_anthropic_thinking_payload": {"type": "boolean"},
             "supports_legacy_thinking": {"type": "boolean"},
             "thinking_always_on": {"type": "boolean"},
+            "thinking_on_by_default": {"type": "boolean"},
             "supports_mid_conversation_system": {"type": "boolean"},
             "supports_sampling_params": {"type": "boolean"},
             "supports_output_config": {"type": "boolean"},
@@ -1443,6 +1455,27 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
+    row: Final = {
+        "litellm_provider": "vertex_ai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "input_cost_per_token_above_200k_tokens_flex": 3e-6,
+        "output_cost_per_token_above_200k_tokens_flex": 4e-6,
+        "input_cost_per_token_above_200k_tokens_batches": 3e-6,
+        "output_cost_per_token_above_200k_tokens_batches": 4e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 5e-6,
+        "input_cost_per_audio_token_above_200k_tokens_flex": 6e-6,
+        "input_cost_per_audio_token_above_200k_tokens_priority": 7e-6,
+        "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
+        "output_cost_per_image_token_priority": 9e-6,
+        "output_cost_per_image_token_batches": 10e-6,
+    }
+
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
 
 
 def test_cost_map_schema_accepts_12hr_cache_write_rates_for_batch_and_ultrafast_tiers() -> None:
@@ -1881,7 +1914,7 @@ class TestProxyFunctionCalling:
             ("gpt-4-turbo", "litellm_proxy/gpt-4-turbo", True),
             ("gpt-4-1106-preview", "litellm_proxy/gpt-4-1106-preview", True),
             # Azure OpenAI models
-            ("azure/gpt-4", "litellm_proxy/azure/gpt-4", True),
+            ("azure/gpt-4.1", "litellm_proxy/azure/gpt-4.1", True),
             ("azure/gpt-3.5-turbo", "litellm_proxy/azure/gpt-3.5-turbo", True),
             (
                 "azure/gpt-4-1106-preview",
@@ -1974,7 +2007,7 @@ class TestProxyFunctionCalling:
             ),
             (
                 "litellm_proxy/together-mistral",
-                "together_ai/mistralai/Mistral-7B-Instruct-v0.1",
+                "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
                 False,
             ),
             # Ollama with custom names (cannot be resolved)
@@ -2391,7 +2424,7 @@ def test_register_model_price_is_used_for_completion_cost() -> None:
 
 @respx.mock
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
-def test_completion_registers_test_owned_model_prices() -> None:
+def test_completion_custom_prices_price_the_call_without_writing_the_cost_map() -> None:
     model: Final = "migration-owned-pricing-model"
     messages: Final = [{"role": "user", "content": "price control"}]
     litellm.register_model(
@@ -2434,8 +2467,9 @@ def test_completion_registers_test_owned_model_prices() -> None:
     )
 
     assert json.loads(route.calls[0].request.content) == {"model": model, "messages": messages}
-    assert litellm.model_cost[model]["input_cost_per_token"] == 0.001
-    assert litellm.model_cost[model]["output_cost_per_token"] == 0.002
+    assert response._hidden_params["response_cost"] == pytest.approx(8 * 0.001 + 5 * 0.002)
+    assert litellm.model_cost[model]["input_cost_per_token"] == 0.0001
+    assert litellm.model_cost[model]["output_cost_per_token"] == 0.0002
     assert response._hidden_params["response_cost"] == pytest.approx(0.018)
 
 
@@ -8360,6 +8394,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
         ):
@@ -11099,7 +11134,6 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
 
-
 @pytest.mark.parametrize(
     ("custom_llm_provider", "model"),
     [
@@ -11593,3 +11627,25 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+class _RecordingPreCallDeploymentHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_call_types: tuple[CallTypes | None, ...] = ()
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        self.seen_call_types = (*self.seen_call_types, call_type)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_hands_responses_compact_its_call_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    hook: Final = _RecordingPreCallDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+
+    await async_pre_call_deployment_hook({"model": "gpt-5.4-mini"}, "acompact_responses")
+
+    assert hook.seen_call_types == (CallTypes.acompact_responses,)

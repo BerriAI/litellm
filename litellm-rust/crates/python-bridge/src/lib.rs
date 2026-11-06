@@ -12,6 +12,8 @@ mod marshal;
 mod model_registry;
 mod preflight;
 mod python_settings;
+mod redis;
+mod router;
 mod routes;
 mod secrets;
 mod tokenizer;
@@ -35,6 +37,16 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::redis::client::NativeRedisClient;
+    #[pymodule_export]
+    use crate::redis::client::native_redis_breaker_states;
+    #[pymodule_export]
+    use crate::redis::store::request::{NativeRequestRedis, NativeSend};
+    #[pymodule_export]
+    use crate::redis::store::{NativePending, NativeRedisStoreError};
+    #[pymodule_export]
+    use crate::router::{RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -66,10 +78,6 @@ mod _native {
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
-            "NativeCacheHandle",
-            py.get_type::<crate::cache::NativeCacheHandle>(),
-        )?;
-        dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
         )
@@ -92,7 +100,6 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
-                "NativeCacheHandle",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",
@@ -113,6 +120,12 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeRedisClient",
+                "NativeRequestRedis",
+                "NativeSend",
+                "NativePending",
+                "NativeRedisStoreError",
+                "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",
                 "NativeDatabase",
@@ -120,6 +133,8 @@ mod tests {
                 "bundled_model_cost_map",
                 "TokenCounter",
                 "Tokenizer",
+                "RouterCoreHandle",
+                "RouterCall",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",

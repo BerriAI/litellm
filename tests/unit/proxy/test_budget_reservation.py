@@ -3057,6 +3057,7 @@ async def test_streaming_cancel_after_only_keepalive_pings_reconciles_to_input_c
 @pytest.mark.asyncio
 async def test_streaming_cancel_while_holding_back_provider_output_keeps_reservation(
     spend_counter_state,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -3086,9 +3087,17 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
             }
         ]
     )
-    response = await router._aanthropic_messages_streaming_iterator(
-        response=AnthropicMessagesStreamingResponse(completion_stream=held_back, hidden_params={"additional_headers": {}}),
-        initial_kwargs={"model": "claude-haiku-4-5"},
+    provider_response = AnthropicMessagesStreamingResponse(
+        completion_stream=held_back, hidden_params={"additional_headers": {}}
+    )
+    monkeypatch.setattr(  # test-quality-ok: the provider call the router streams from
+        litellm, "anthropic_messages", AsyncMock(return_value=provider_response)
+    )
+    response = await router.aanthropic_messages(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        stream=True,
     )
 
     async def ping_then_cancel(user_api_key_dict, response, request_data):

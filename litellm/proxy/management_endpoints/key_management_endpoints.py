@@ -5482,7 +5482,9 @@ async def generate_key_helper_fn(
                 if query_type == "insert_data":
                     user_row = cast(  # cast-ok: table_name="user" is the insert_data branch returning the user row
                         "prisma_models.LiteLLM_UserTable | None",
-                        await prisma_client.insert_data(data=user_data, table_name="user"),
+                        await prisma_client.insert_data(
+                            data=user_data, table_name="user", allow_existing_user=request_type != "user"
+                        ),
                     )
 
                     if user_row is None:

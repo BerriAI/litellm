@@ -849,31 +849,19 @@ async def test_affinity_falls_back_to_same_encryption_boundary_on_model_group_sw
         num_retries=0,
     )
 
-    def first_call_picks_account_a(seq):
-        for d in seq:
-            if d["model_info"]["id"] == "gpt-5.3-codex-account-a":
-                return d
-        return seq[0]
-
-    with (
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-            new_callable=AsyncMock,
-            return_value=first_resp,
-        ),
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=first_call_picks_account_a,
-        ),
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        return_value=first_resp,
     ):
         r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
 
-    assert r1._hidden_params["model_id"] == "gpt-5.3-codex-account-a"
+    origin_account = r1._hidden_params["model_id"].removeprefix("gpt-5.3-codex-")
+    assert origin_account in ("account-a", "account-b")
     encoded_id = _extract_encoded_item_id(r1)
     assert encoded_id.startswith("encitem_")
 
-    # simple_shuffle.random.choice NOT patched: prove affinity narrows the
-    # candidate pool to a single deployment regardless of which one shuffle picks.
+    # Affinity narrows the candidate pool to the origin's account regardless of which one shuffle picks.
     with patch(
         "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
         new_callable=AsyncMock,
@@ -890,7 +878,7 @@ async def test_affinity_falls_back_to_same_encryption_boundary_on_model_group_sw
             ],
         )
 
-    assert r2._hidden_params["model_id"] == "gpt-5.4-account-a"
+    assert r2._hidden_params["model_id"] == f"gpt-5.4-{origin_account}"
 
 
 @pytest.mark.asyncio
@@ -977,25 +965,15 @@ async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
         num_retries=0,
     )
 
-    def pick_account_a(seq):
-        for d in seq:
-            if d["model_info"]["id"] == "gpt-5.3-codex-account-a":
-                return d
-        return seq[0]
-
-    with (
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-            new_callable=AsyncMock,
-            return_value=first_resp,
-        ),
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=pick_account_a,
-        ),
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        return_value=first_resp,
     ):
         r1 = await router.aresponses(model="gpt-5.3-codex", input="hi")
 
+    origin_account = r1._hidden_params["model_id"].removeprefix("gpt-5.3-codex-")
+    assert origin_account in ("account-a", "account-b")
     encoded_id = _extract_encoded_item_id(r1)
     assert encoded_id.startswith("encitem_")
 
@@ -1015,7 +993,7 @@ async def test_affinity_falls_back_to_same_boundary_on_alias_switch():
             ],
         )
 
-    assert r2._hidden_params["model_id"] == "gpt-5.2-codex-account-a"
+    assert r2._hidden_params["model_id"] == f"gpt-5.2-codex-{origin_account}"
 
 
 def test_boundary_fallback_no_router_ref_returns_empty():
