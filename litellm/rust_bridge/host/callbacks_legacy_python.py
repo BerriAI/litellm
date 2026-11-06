@@ -419,6 +419,7 @@ def stream_success(
     start: datetime.datetime,
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
+    stream_teardown: bool,
 ) -> None:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -443,7 +444,7 @@ def stream_success(
         raw_bytes=chunks,
         end_time=end,
     )
-    if getattr(logger, "_on_deferred_stream_complete", None) is not None:
+    if not stream_teardown and getattr(logger, "_on_deferred_stream_complete", None) is not None:
         logger._deferred_stream_complete_args = (coroutine,)  # pyright: ignore[reportAttributeAccessIssue]  # the proxy's deferred stream release reads this slot
         return
     try:
