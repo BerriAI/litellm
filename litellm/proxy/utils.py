@@ -4367,6 +4367,8 @@ class ProxyLogging:
         data: dict,
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
+        *,
+        guardrails_only: bool = False,
     ):
         """
         Allow user to modify outgoing data
@@ -4462,6 +4464,8 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
+                if guardrails_only and not callback.enforces_request_content:
+                    continue
                 callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )

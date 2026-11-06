@@ -4997,6 +4997,28 @@ wheels = [
 ]
 
 [[package]]
+name = "liteflow"
+version = "0.1.0a1"
+source = { url = "https://github.com/BerriAI/liteflow/archive/27bcbce4e84fb73b1d4bdf2fa108df53e9b50c2d.tar.gz" }
+dependencies = [
+    { name = "httpx" },
+    { name = "openai" },
+    { name = "pydantic", version = "2.13.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
+    { name = "pydantic", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
+]
+sdist = { hash = "sha256:c54fc9065d3a8462b6d6a4c3487d7ae3dd8a087a0aa8a51a46c5e62fc3e73072" }
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "openai", specifier = ">=1.99,<3" },
+    { name = "pydantic", specifier = ">=2.8,<3" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<9" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13,<15" },
+]
+provides-extras = ["test", "cli"]
+
+[[package]]
 name = "litellm"
 version = "1.109.0"
 source = { editable = "." }
@@ -5083,6 +5105,7 @@ proxy = [
     { name = "hiredis", version = "3.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
     { name = "httpx2" },
     { name = "inquirerpy" },
+    { name = "liteflow" },
     { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
@@ -5254,6 +5277,7 @@ proxy-dev = [
     { name = "backports-zstd", marker = "python_full_version < '3.14'" },
     { name = "httptools" },
     { name = "hypercorn" },
+    { name = "liteflow" },
     { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
@@ -5323,6 +5347,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
     { name = "keyring", marker = "extra == 'cli'", specifier = ">=25.6.0,<26.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = ">=4.7,<5.0" },
+    { name = "liteflow", marker = "extra == 'proxy'", url = "https://github.com/BerriAI/liteflow/archive/27bcbce4e84fb73b1d4bdf2fa108df53e9b50c2d.tar.gz" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
@@ -5490,6 +5515,7 @@ proxy-dev = [
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = "==1.8.0" },
     { name = "httptools", specifier = ">=0.7.1,<0.8" },
     { name = "hypercorn", specifier = "==0.17.3" },
+    { name = "liteflow", url = "https://github.com/BerriAI/liteflow/archive/27bcbce4e84fb73b1d4bdf2fa108df53e9b50c2d.tar.gz" },
     { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" },
     { name = "opentelemetry-api", specifier = "==1.45.1" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.45.1" },

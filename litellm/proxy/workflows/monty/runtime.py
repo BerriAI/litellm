@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Final
 from pydantic import JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
+from ._compat import timeout
 from .compiler import escape_diagnostics
 from .models import CompiledProgram, JsonSchema, MontyErrorKind, MontyFailure, MontyLimits, MontySuccess
 from .validation import ValidatorProcess
@@ -147,7 +148,9 @@ class MontyRuntime:
         self._pool: AsyncMonty | None = None
         self._slots = asyncio.Semaphore(limits.max_concurrent_workers)
         self._admitted = 0
-        self._validators = tuple(ValidatorProcess() for _ in range(limits.max_concurrent_workers))
+        self._validators = tuple(
+            ValidatorProcess(limits.worker_address_space_bytes) for _ in range(limits.max_concurrent_workers)
+        )
 
     async def start(self) -> MontyFailure | None:
         if self._pool is not None:
@@ -200,23 +203,20 @@ class MontyRuntime:
             return MontyFailure(MontyErrorKind.QUEUE_FULL, "Monty execution queue is full")
         self._admitted += 1
         try:
-            async with asyncio.timeout_at(asyncio.get_running_loop().time() + deadline_monotonic - time.monotonic()):
-                async with self._slots:
-                    worker: Final = next(worker for worker in self._validators if not worker.busy)
-                    worker.busy = True
-                    try:
-                        validated: Final = await self._validate(
-                            input, compiled.input_schema, worker, deadline_monotonic
-                        )
-                        if isinstance(validated, MontyFailure):
-                            return validated
-                        return await self._execute(compiled, validated, deadline_monotonic, started, worker)
-                    except asyncio.CancelledError:
-                        await worker.close()
-                        raise
-                    finally:
-                        worker.busy = False
-        except TimeoutError:
+            async with timeout(max(0, deadline_monotonic - time.monotonic())), self._slots:
+                worker: Final = next(worker for worker in self._validators if not worker.busy)
+                worker.busy = True
+                try:
+                    validated: Final = await self._validate(input, compiled.input_schema, worker, deadline_monotonic)
+                    if isinstance(validated, MontyFailure):
+                        return validated
+                    return await self._execute(compiled, validated, deadline_monotonic, started, worker)
+                except asyncio.CancelledError:
+                    await worker.close()
+                    raise
+                finally:
+                    worker.busy = False
+        except asyncio.TimeoutError:
             return MontyFailure(MontyErrorKind.TIMEOUT, "node deadline expired")
         finally:
             self._admitted -= 1

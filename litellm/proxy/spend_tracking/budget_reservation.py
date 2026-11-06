@@ -257,7 +257,22 @@ async def reserve_budget_for_request(
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
-    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
+    model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
+    if model is None:
+        return None
+    if (
+        isinstance(model, str)
+        and model.startswith("workflow/")
+        and RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=(
+                "/v1/chat/completions",
+                "/chat/completions",
+                "/engines/{model:path}/chat/completions",
+                "/openai/deployments/{model:path}/chat/completions",
+            ),
+        )
+    ):
         return None
 
     counters: Final = await _get_budget_counters(
@@ -458,7 +473,7 @@ async def release_or_invalidate_budget_reservation(
             budget_reservation["finalized"] = True
 
 
-async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
+async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object] | None) -> None:
     """Release a reservation no logging callback took ownership of, once the request ended.
 
     A handler whose litellm call never builds a logging object (batch cancel, file

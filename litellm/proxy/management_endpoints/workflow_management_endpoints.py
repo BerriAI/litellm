@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from typing_extensions import ReadOnly
 
 try:
     from prisma.errors import UniqueViolationError
@@ -31,6 +32,7 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.deps.repositories import WorkflowDefinitionRepositoryDep, WorkflowExecutionRepositoryDep
 from litellm.repositories.table_repositories import (
     WorkflowEventRepository,
     WorkflowMessageRepository,
@@ -120,6 +122,7 @@ class _RunCreateData(TypedDict, total=False):
 
 
 class _RunWhere(TypedDict, total=False):
+    engine_owned: ReadOnly[bool]
     workflow_type: str
     status: str | Mapping[str, Sequence[str]]
     created_by: str
@@ -201,6 +204,8 @@ async def _require_run(
     prisma_client: object,
     run_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    *,
+    mutation: bool = False,
 ) -> _RunRow:
     """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
     run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
@@ -210,6 +215,12 @@ async def _require_run(
         caller: Final = _caller_key(user_api_key_dict)
         if not caller or run.created_by != caller:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    if getattr(run, "engine_owned", False) is True:
+        if mutation:
+            raise HTTPException(
+                status_code=403, detail="Gateway executions cannot be changed through tracking endpoints"
+            )
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     return run
 
 
@@ -263,17 +274,36 @@ async def list_workflow_runs(
     status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=250),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    workflow_id: str | None = None,
+    team_id: str | None = None,
+    after: str | None = None,
+    definitions: WorkflowDefinitionRepositoryDep = None,
+    executions: WorkflowExecutionRepositoryDep = None,
 ):
     """List workflow runs. Filter by workflow_type and/or status.
 
     Non-admin callers only see runs created by their own API key.
     """
+    if workflow_id is not None:
+        from litellm.proxy.management_endpoints.workflow_execution_endpoints import list_engine_runs
+
+        return await list_engine_runs(
+            workflow_id=workflow_id,
+            team_id=team_id,
+            status=status,
+            limit=limit,
+            after=after,
+            caller=user_api_key_dict,
+            definitions=definitions,
+            executions=executions,
+        )
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    where: Final[_RunWhere] = {}
+    where: Final[_RunWhere] = {"engine_owned": False}
     if workflow_type:
         where["workflow_type"] = workflow_type
     if status:
@@ -318,7 +348,7 @@ async def get_workflow_run(
             where={"run_id": run_id},
             include={"events": {"order_by": {"sequence_number": "desc"}, "take": 1}},
         )
-        if run is None:
+        if run is None or getattr(run, "engine_owned", False) is True:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         if not user_api_key_has_admin_view(user_api_key_dict):
             caller: Final = _caller_key(user_api_key_dict)
@@ -360,7 +390,7 @@ async def update_workflow_run(
         raise HTTPException(status_code=400, detail="No fields to update")
 
     # Enforce ownership before writing.
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, user_api_key_dict, mutation=True)
 
     try:
         run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.update(
@@ -398,7 +428,7 @@ async def append_workflow_event(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, user_api_key_dict, mutation=True)
 
     new_status: Final = _EVENT_STATUS_MAP.get(data.event_type)
 
@@ -487,7 +517,7 @@ async def append_workflow_message(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, user_api_key_dict, mutation=True)
 
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:

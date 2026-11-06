@@ -126,6 +126,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.proxy.workflows.runner import WorkflowRunner
     from litellm.repositories.database import Database
     from litellm.tracing import TraceReceiver
 
@@ -135,6 +136,7 @@ else:
 
 
 class ProxyLifespanState(TypedDict):
+    workflow_runner: NotRequired[ReadOnly["WorkflowRunner | None"]]
     tracing_receiver: ReadOnly["TraceReceiver | None"]
     database: ReadOnly["Database | None"]
 
@@ -660,6 +662,21 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UPDATE.value,
     )
 
+    workflow_definition_routes = (
+        "/v1/workflows",
+        "/v1/workflows/{workflow_id}",
+        "/v1/workflows/{workflow_id}/validate",
+        "/v1/workflows/{workflow_id}/publish",
+    )
+
+    workflow_execution_routes = (
+        "/v1/workflows/{workflow_id}/test",
+        "/v1/workflows/{workflow_id}/runs",
+        "/v1/workflows/runs/{run_id}/steps",
+        "/v1/workflows/runs/{run_id}/definition",
+        "/v1/workflows/runs/{run_id}/cancel",
+    )
+
     management_routes = (
         [
             # user
@@ -723,6 +740,8 @@ class LiteLLMRoutes(enum.Enum):
         + mcp_management_routes
         + list(agent_management_routes)
         + list(skill_hub_routes)
+        + list(workflow_definition_routes)
+        + list(workflow_execution_routes)
     )
 
     spend_tracking_routes = [
@@ -966,6 +985,8 @@ class LiteLLMRoutes(enum.Enum):
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
         *skill_hub_routes,
+        *workflow_definition_routes,
+        *workflow_execution_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2581,6 +2602,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     include_call_id_in_error_body: bool | None = Field(
         None,
         description="opt-in to copy the x-litellm-call-id response header's value into JSON error bodies, as error.litellm_call_id on the OpenAI-shaped and /v1/messages routes and as a top-level litellm_call_id on pass-through routes, so an error a client prints names the request to look up. Off by default",
+    )
+    enable_workflows: bool = Field(
+        default=False,
+        description="Enable LiteFlow workflow authoring and execution. Off by default; restart the proxy after changing this setting.",
     )
     enable_claude_code_gateway: bool | None = Field(
         None,

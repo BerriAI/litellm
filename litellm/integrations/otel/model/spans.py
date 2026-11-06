@@ -355,6 +355,8 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_ShadowEvalJob",
         "LiteLLM_ShadowEvalAttempt",
         "LiteLLM_ShadowEvalFunnel",
+        "LiteLLM_WorkflowDefinition",
+        "LiteLLM_WorkflowSnapshot",
         "LiteLLM_WorkflowRun",
         "LiteLLM_WorkflowEvent",
         "LiteLLM_WorkflowMessage",

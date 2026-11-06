@@ -4849,7 +4849,12 @@ async def _run_post_custom_auth_checks(
 
 
 async def authorize_internal_virtual_key(
-    key_hash: str, request: Request, request_data: dict[str, object]
+    key_hash: str,
+    request: Request,
+    request_data: dict[str, object],  # mutable-ok: existing auth enriches this attempt-owned request body
+    *,
+    route: str | None = None,
+    expected_team_id: str | None = None,
 ) -> UserAPIKeyAuth:
     """Authorize a server-owned job against its persisted virtual-key assignment, never a client-supplied bearer hash."""
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
@@ -4858,33 +4863,58 @@ async def authorize_internal_virtual_key(
         await IdentityStore(prisma_client, user_api_key_cache, proxy_logging_obj=proxy_logging_obj).resolve(
             hashed_token=key_hash
         )
+    ).model_copy(deep=True)
+    if expected_team_id is not None and identity.team_id != expected_team_id:
+        raise HTTPException(status_code=403, detail="The execution key no longer belongs to its original team")
+    execution_route: Final = route if route is not None else get_request_route(request=request)
+    await pre_db_read_auth_checks(request_data=request_data, request=request, route=execution_route)
+    identity.end_user_id = await resolve_and_validate_end_user_id(
+        raw_end_user_id=identity.end_user_id or get_end_user_id_from_request_body(request_data, request.headers),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        route=execution_route,
+        key_end_user_budget_id=get_key_end_user_budget_id(identity.metadata),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # legacy key metadata; existing budget owner validates the ID
     )
-    route: Final = get_request_route(request=request)
-    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route)
+    end_user_object: Final[LiteLLM_EndUserTable | None] = (
+        (
+            await _lookup_end_user_and_apply_budget(
+                valid_token=identity,
+                route=execution_route,
+                parent_otel_span=None,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )[1]
+        if identity.end_user_id is not None
+        else None
+    )
     auth: Final = await validate_resolved_virtual_key(
         request=request,
         request_data=request_data,
         valid_token=identity,
         api_key=key_hash,
-        route=route,
+        route=execution_route,
         start_time=datetime.now(timezone.utc),
         parent_otel_span=None,
-        end_user_id=None,
+        end_user_id=identity.end_user_id,
         end_user_params={},
-        _end_user_object=None,
+        _end_user_object=end_user_object,
     )
     auth.budget_reservation = None
     recovered: Final = await _authorize_authenticated_request(
         user_api_key_auth_obj=auth,
         request=request,
         request_data=request_data,
-        route=route,
+        route=execution_route,
         api_key=key_hash,
         force_virtual_key_checks=True,
     )
     if recovered is not None:
         return recovered
     _seed_request_destinations(auth, request)
-    auth.request_route = route
+    auth.request_route = execution_route
     request.state.principal = _resolve_request_principal(request, auth)
     return auth

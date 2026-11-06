@@ -4,6 +4,7 @@ import json
 import logging
 import math
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from contextvars import Context
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -29,7 +30,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
@@ -94,6 +95,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
+from litellm.models.workflow_execution import ExecutionError
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
@@ -725,6 +727,8 @@ def serialize_http_exception_detail(
 
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_WORKFLOW_FIELDS: Final = TypeAdapter(dict[str, object])
+_WORKFLOW_JSON: Final = TypeAdapter[JsonValue](JsonValue)
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
@@ -2190,10 +2194,63 @@ def _metadata_logged_on(logged_on: LiteLLMLoggingObj) -> Mapping[str, object]:
     )
 
 
+async def process_workflow_request(
+    *,
+    request: Request,
+    workflow_model: str,
+    caller: UserAPIKeyAuth,
+    messages: JsonValue,
+    execute: Callable[[JsonValue], Awaitable[ModelResponse | ExecutionError]],
+) -> ModelResponse | ExecutionError:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
+
+    await release_unbound_budget_reservation(caller.budget_reservation)
+    auth: Final = caller.model_copy(update={"budget_reservation": None})
+
+    async def process() -> ModelResponse | ExecutionError:
+        try:
+            prepared: Final = _WORKFLOW_FIELDS.validate_python(
+                await add_litellm_data_to_request(
+                    data={"model": workflow_model, "messages": messages, "stream": False},
+                    request=request,
+                    general_settings=_WORKFLOW_FIELDS.validate_python(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType]  # legacy proxy global validated at this boundary
+                    user_api_key_dict=auth,
+                    version=proxy_server.version,
+                    proxy_config=proxy_server.proxy_config,
+                )
+            )
+            data: Final = _WORKFLOW_FIELDS.validate_python(
+                check_and_merge_model_level_guardrails(
+                    data=prepared, llm_router=proxy_server.llm_router, trust_client_model_info=False
+                )
+            )
+            guarded: Final = _WORKFLOW_FIELDS.validate_python(
+                await proxy_server.proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy hook body is validated at this boundary
+                    user_api_key_dict=auth, data=data, call_type="acompletion", guardrails_only=True
+                )
+            )
+            await proxy_server.proxy_logging_obj.during_call_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy hook accepts the validated body
+                data=guarded, user_api_key_dict=auth, call_type="acompletion", guardrails_only=True
+            )
+            result: Final = await execute(_WORKFLOW_JSON.validate_python(guarded["messages"]))
+            if isinstance(result, ExecutionError):
+                return result
+            response: Final = await proxy_server.proxy_logging_obj.post_call_success_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy hook accepts the validated body
+                data=guarded, user_api_key_dict=auth, response=result, guardrails_only=True
+            )
+            return response if isinstance(response, ModelResponse) else ModelResponse.model_validate(response)
+        except Exception:  # noqa: BLE001  # workflow policy failures are values and must not expose guarded content
+            return ExecutionError("request_rejected", "The gateway could not complete the workflow")
+
+    return await Context().run(asyncio.create_task, process())
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
         self.served_model = served_model
+        self.logging_obj: LiteLLMLoggingObj | None = None
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
 
@@ -2636,6 +2693,7 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+        self.logging_obj = logging_obj
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
