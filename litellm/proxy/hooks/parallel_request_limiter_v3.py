@@ -3127,9 +3127,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        model: Final = self._rate_limited_model(requested_model)
-        if model is None:
-            return descriptors
+        return [
+            *descriptors,
+            *(
+                descriptor
+                for model in self._rate_limited_models(self._rate_limited_model(requested_model))
+                if (descriptor := self._organization_model_rate_limit_descriptor(user_api_key_dict, model)) is not None
+            ),
+        ]
+
+    def _organization_model_rate_limit_descriptor(
+        self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel
+    ) -> RateLimitDescriptor | None:
         model_specific_tpm_limit: Final = model.limit_in(
             get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_tpm_limit")
         )
@@ -3137,19 +3146,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_rpm_limit")
         )
         if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
-            return descriptors
-        descriptors.append(
-            RateLimitDescriptor(
-                key="model_per_organization",
-                value=f"{user_api_key_dict.org_id}:{model.group}",
-                rate_limit={
-                    "requests_per_unit": model_specific_rpm_limit,
-                    "tokens_per_unit": model_specific_tpm_limit,
-                    "window_size": self.window_size,
-                },
-            )
+            return None
+        return RateLimitDescriptor(
+            key="model_per_organization",
+            value=f"{user_api_key_dict.org_id}:{model.group}",
+            rate_limit={
+                "requests_per_unit": model_specific_rpm_limit,
+                "tokens_per_unit": model_specific_tpm_limit,
+                "window_size": self.window_size,
+            },
         )
-        return descriptors
 
     def _add_model_per_key_rate_limit_descriptor(
         self,
@@ -3830,7 +3836,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         requested_model: str | None,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: _RateLimitDescriptorSink,
+    ) -> None:
+        for candidate in expand_model_latest_alias(requested_model) if requested_model else (None,):
+            self._add_single_project_model_rate_limit_descriptor(user_api_key_dict, candidate, descriptors)
+
+    def _add_single_project_model_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        descriptors: _RateLimitDescriptorSink,
     ) -> None:
         """Add project model rate limit descriptor from project_metadata if applicable."""
         model: Final = self._rate_limited_model(requested_model)
@@ -3857,6 +3872,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
     def add_project_io_token_rate_limit_descriptors_from_metadata(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        descriptors: _RateLimitDescriptorSink,
+    ) -> None:
+        for candidate in expand_model_latest_alias(requested_model) if requested_model else (None,):
+            self._add_single_project_io_token_rate_limit_descriptors(user_api_key_dict, candidate, descriptors)
+
+    def _add_single_project_io_token_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         requested_model: str | None,
@@ -5297,20 +5321,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     targets.append(("model_per_key", f"{user_api_key}:{group}"))
                 if user_api_key_team_id:
                     targets.append(("model_per_team", f"{user_api_key_team_id}:{group}"))
-            if user_api_key_organization_id:
-                targets.append(
-                    (
-                        "model_per_organization",
-                        f"{user_api_key_organization_id}:{model_group}",
+                if user_api_key_organization_id:
+                    targets.append(
+                        (
+                            "model_per_organization",
+                            f"{user_api_key_organization_id}:{group}",
+                        )
                     )
-                )
-            if user_api_key_project_id:
-                targets.append(
-                    (
-                        "model_per_project",
-                        f"{user_api_key_project_id}:{model_group}",
+                if user_api_key_project_id:
+                    targets.append(
+                        (
+                            "model_per_project",
+                            f"{user_api_key_project_id}:{group}",
+                        )
                     )
-                )
         if agent_id:
             targets.append(("agent", agent_id))
             if session_id:
