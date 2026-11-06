@@ -65,7 +65,6 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
-    publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
@@ -6808,41 +6807,6 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
-@with_service_target(SPEND_COUNTERS_TARGET)
-async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
-    """
-    Set a Redis-backed spend counter to `value`, mirror it into the short-lived
-    spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
-    to every worker (LIT-3803 pattern: setting, not deleting, means a worker's
-    own self-delivered broadcast still carries the reset value forward).
-
-    Without the floor marker, `_authoritative_floor_spend` can re-derive a
-    stale, pre-reset value from a marker another worker cached moments earlier
-    and raise the just-reset counter right back up via `_repair_stale_spend_counter`.
-    Without the broadcast, a worker that already cached the pre-reset key object
-    or floor marker keeps enforcing against it until its own TTL expires.
-    """
-    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
-
-    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
-        except Exception as redis_err:
-            verbose_proxy_logger.warning(
-                "Failed to update spend counter %s in Redis: %s. "
-                "Budget checks may use stale value until counter expires.",
-                counter_key,
-                redis_err,
-            )
-
-    floor_key: Final = f"spend_db_floor:{counter_key}"
-    spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
-
-    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
-    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
-
-
 def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
     """Coerce a key's stored `budget_limits` into a tuple of plain window dicts.
 
@@ -6927,6 +6891,8 @@ async def _reset_key_budget_windows(
     pre-reset boundary, re-sum the unchanged historical spend, and put the
     counter right back where it was before the write ever landed.
     """
+    from litellm.proxy.proxy_server import set_spend_counter_with_floor_and_broadcast
+
     windows: Final = _budget_limit_windows(budget_limits)
     if not windows:
         return
@@ -6945,7 +6911,7 @@ async def _reset_key_budget_windows(
         duration = window.get("budget_duration")
         if isinstance(duration, str) and duration:
             counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
 @router.post(
@@ -6968,6 +6934,7 @@ async def reset_key_spend_fn(
             hash_token,
             prisma_client,
             proxy_logging_obj,
+            set_spend_counter_with_floor_and_broadcast,
             user_api_key_cache,
         )
 
@@ -7019,7 +6986,7 @@ async def reset_key_spend_fn(
         # amount for every enforcement check immediately instead of the stale
         # pre-reset value.
         _counter_key: Final = f"spend:key:{hashed_api_key}"
-        await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        await set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
         await _reset_key_budget_windows(
             prisma_client=prisma_client,
             hashed_api_key=hashed_api_key,

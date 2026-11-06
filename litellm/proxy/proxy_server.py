@@ -516,6 +516,7 @@ from litellm.proxy.common_utils.anthropic_error_payload import (
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
+    publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
@@ -4449,6 +4450,39 @@ async def invalidate_spend_counter(counter_key: str) -> None:
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
+    """
+    Set a Redis-backed spend counter to `value`, mirror it into the short-lived
+    spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
+    to every worker (LIT-3803 pattern: setting, not deleting, means a worker's
+    own self-delivered broadcast still carries the reset value forward).
+
+    Without the floor marker, `_authoritative_floor_spend` can re-derive a
+    stale, pre-reset value from a marker another worker cached moments earlier
+    and raise the just-reset counter right back up via `_repair_stale_spend_counter`.
+    Without the broadcast, a worker that already cached the pre-reset key object
+    or floor marker keeps enforcing against it until its own TTL expires.
+    """
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
+        except Exception as redis_err:
+            verbose_proxy_logger.warning(
+                "Failed to update spend counter %s in Redis: %s. "
+                "Budget checks may use stale value until counter expires.",
+                counter_key,
+                redis_err,
+            )
+
+    floor_key: Final = f"spend_db_floor:{counter_key}"
+    spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+
+    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
+    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
 
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:

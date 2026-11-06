@@ -427,10 +427,7 @@ async def update_tag(
     - model_max_budget: Optional[dict] - Max budget for a specific model
     - budget_duration: Optional[str] - Frequency of resetting tag budget
     """
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _set_spend_counter_with_floor_and_broadcast,  # pyright: ignore[reportPrivateUsage]  # Share key reset counter writes
-    )
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, set_spend_counter_with_floor_and_broadcast
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -476,7 +473,7 @@ async def update_tag(
         await _evict_tag_cache_keys((tag_cache_key(tag.name),))
 
         if tag.spend is not None:
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:tag:{tag.name}", value=tag.spend)
+            await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:tag:{tag.name}", value=tag.spend)
 
         # Build response
         tag_config: Final = TagConfig(
