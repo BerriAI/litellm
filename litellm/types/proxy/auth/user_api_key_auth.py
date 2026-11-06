@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
@@ -132,6 +132,34 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
+    _access_group_rule_grants: tuple[str, ...] = PrivateAttr(default=())
+    _deferred_model_checks: tuple[Callable[[], Awaitable[object]], ...] = PrivateAttr(default=())
+
+    def defer_model_checks(self, checks: tuple[Callable[[], Awaitable[object]], ...]) -> None:
+        self._deferred_model_checks = checks
+
+    async def run_deferred_model_checks(self) -> None:
+        for check in self._deferred_model_checks:
+            await check()
+
+    @property
+    def access_group_rule_grants(self) -> tuple[str, ...]:
+        return self._access_group_rule_grants
+
+    def with_access_group_rule_grants(self, grants: tuple[str, ...]) -> "UserAPIKeyAuth":
+        if not grants:
+            return self
+        auth: Final = self.model_copy(
+            update={"access_group_ids": list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))}
+        )
+        auth._access_group_rule_grants = tuple(dict.fromkeys((*self._access_group_rule_grants, *grants)))
+        return auth
+
+    def apply_access_group_rule_grants(self, grants: tuple[str, ...]) -> None:
+        if grants:
+            self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
+            self._access_group_rule_grants = tuple(dict.fromkeys((*self._access_group_rule_grants, *grants)))
+
     user_role: LitellmUserRoles | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None

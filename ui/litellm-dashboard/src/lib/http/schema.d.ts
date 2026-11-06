@@ -26181,6 +26181,17 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** AccessGroupRule */
+        AccessGroupRule: {
+            /** Access Group */
+            access_group: string;
+            /** Attribute */
+            attribute: string;
+            /** Contains */
+            contains?: string | number | boolean | null;
+            /** Equals */
+            equals?: string | number | boolean | null;
+        };
         /** AccessGroupUpdateRequest */
         AccessGroupUpdateRequest: {
             /** Access Agent Ids */
@@ -30743,6 +30754,8 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
+            /** Access Group Rules */
+            access_group_rules?: components["schemas"]["AccessGroupRule"][] | null;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot

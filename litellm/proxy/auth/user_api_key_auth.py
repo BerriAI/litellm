@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
+from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -4210,6 +4211,8 @@ async def _authorize_authenticated_request(
     """
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
+    remaining_grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
+    user_api_key_auth_obj.apply_access_group_rule_grants(remaining_grants)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
     _resolve_codex_native_chatgpt_model(request_data, user_api_key_auth_obj, request, route)
@@ -4228,7 +4231,43 @@ async def _authorize_authenticated_request(
             prepare_agent_invocation,
         )
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
-        from litellm.proxy.proxy_server import general_settings, prisma_client, user_model
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # legacy deployment entries are consumed by the existing model check
+            llm_router,
+            prisma_client,
+            user_model,
+        )
+
+        if _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get("access_group_rules"):
+            model_for_rules: Final = _get_model_from_request_context(
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_router=llm_router,
+                team_id=user_api_key_auth_obj.team_id,
+            )
+            group_grants_model: Final = bool(
+                model_for_rules
+                and remaining_grants
+                and await key_access_group_grants_model(
+                    model=model_for_rules,
+                    valid_token=user_api_key_auth_obj,
+                    team_object=None,
+                    llm_router=llm_router,
+                )
+            )
+            if not group_grants_model:
+                await user_api_key_auth_obj.run_deferred_model_checks()
+            await enforce_key_and_fallback_model_access(
+                valid_token=user_api_key_auth_obj,
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+                defer_for_access_group_rules=False,
+            )
 
         store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
         if user_api_key_auth_obj.agent_id is not None:
@@ -4684,11 +4723,20 @@ async def enforce_key_and_fallback_model_access(
     request: Request | None,
     llm_model_list: list | None,
     llm_router: litellm.Router | None,
+    defer_for_access_group_rules: bool = True,
 ) -> None:
     """
     Key-level model allowlist and client fallbacks (same as standard auth).
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy settings are validated at this boundary
+    )
+
+    if defer_for_access_group_rules and _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get(
+        "access_group_rules"
+    ):
+        return
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
     _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)

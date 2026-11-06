@@ -24,6 +24,10 @@ from fastapi import WebSocket, HTTPException, status
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from tests._master_key import MASTER_KEY
+from starlette.requests import Request as StarletteRequest
+from litellm.proxy._types import LiteLLM_AccessGroupTable, ProxyException
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request, enforce_key_and_fallback_model_access
 
 
 class Request:
@@ -31,6 +35,68 @@ class Request:
         self.client = MagicMock()
         self.client.host = client_ip
         self.headers: Dict[str, str] = {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,enabled,allowed",
+    (("group-model", True, True), ("outside", True, False), ("group-model", False, False), ("explicit", False, True)),
+)
+async def test_metadata_access_group_rules_are_enforced_at_central_authorization(
+    monkeypatch: pytest.MonkeyPatch, model: str, enabled: bool, allowed: bool
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
+    )
+    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {"access_group_rules": [{"attribute": "metadata.department", "equals": "science", "access_group": "science"}]}
+        if enabled
+        else {},
+    )
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    principal: Final = UserAPIKeyAuth(models=["explicit"], metadata={"department": "science"})
+    request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    if not enabled and not allowed:
+        with pytest.raises(ProxyException, match="model"):
+            await enforce_key_and_fallback_model_access(
+                valid_token=principal,
+                request_data={"model": model},
+                route="/chat/completions",
+                request=request,
+                llm_model_list=None,
+                llm_router=None,
+            )
+        return
+    await enforce_key_and_fallback_model_access(
+        valid_token=principal,
+        request_data={"model": model},
+        route="/chat/completions",
+        request=request,
+        llm_model_list=None,
+        llm_router=None,
+    )
+    if allowed:
+        assert (
+            await _authorize_authenticated_request(
+                principal, request, {"model": model}, "/chat/completions", "synthetic"
+            )
+            is None
+        )
+        assert principal.access_group_ids == (["science-id"] if enabled else None)
+    else:
+        with pytest.raises(ProxyException, match="model"):
+            await _authorize_authenticated_request(
+                principal, request, {"model": model}, "/chat/completions", "synthetic"
+            )
 
 
 @pytest.mark.parametrize(

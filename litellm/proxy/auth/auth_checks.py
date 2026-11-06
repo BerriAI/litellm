@@ -5841,7 +5841,7 @@ async def get_authorized_resources_from_key_access_groups(
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized:
+        if team_authorized or key_authorized or ag_id in valid_token.access_group_rule_grants:
             authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
     return list(set(authorized_resources))
