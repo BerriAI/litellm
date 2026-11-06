@@ -17,6 +17,8 @@ from litellm.utils import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_llm import CustomLLM
+from litellm.llms.aiml.image_generation.transformation import AimlImageGenerationConfig
 
 
 COHERE_CHAT_RESPONSE: Final = {
@@ -536,6 +538,24 @@ def test_get_optional_params_image_gen():
     print(response)
 
     assert "aws_region_name" in response
+
+
+@pytest.mark.parametrize("with_params", [False, True])
+def test_image_params_keep_builtin_mapping_when_custom_name_collides(monkeypatch, with_params):
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "aiml", "custom_handler": CustomLLM()}])
+    supplied: Final = {"n": 2, "size": "1024x1024"} if with_params else {}
+    result: Final = get_optional_params_image_gen(
+        model="flux-pro/v1.1", custom_llm_provider="aiml", provider_config=AimlImageGenerationConfig(), **supplied
+    )
+    assert result == ({"num_images": 2, "image_size": {"width": 1024, "height": 1024}} if with_params else {})
+
+
+def test_image_params_keep_builtin_validation_when_custom_name_collides(monkeypatch):
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "aiml", "custom_handler": CustomLLM()}])
+    with pytest.raises(litellm.UnsupportedParamsError, match="quality"):
+        get_optional_params_image_gen(
+            model="flux-pro/v1.1", custom_llm_provider="aiml", provider_config=AimlImageGenerationConfig(), quality="high"
+        )
 
 
 def test_bedrock_optional_params_embeddings_provider_specific_params():

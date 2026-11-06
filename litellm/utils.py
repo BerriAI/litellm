@@ -4046,8 +4046,12 @@ def get_optional_params_image_gen(
                     )
             return non_default_params
 
-    custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
-    if provider_config is not None and custom_handler is None:
+    custom_handler: Final = (
+        ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
+        if custom_llm_provider not in LlmProvidersSet
+        else None
+    )
+    if provider_config is not None:
         supported_params = provider_config.get_supported_openai_params(model=model or "")
         _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
