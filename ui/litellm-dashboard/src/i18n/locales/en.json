@@ -2956,6 +2956,7 @@
     "loading": "Loading..."
   },
   "modelAliasManager": {
+    "manageExistingTitle": "Manage Existing Aliases",
     "toasts": {
       "missingFields": "Please provide both alias name and target model",
       "duplicate": "An alias with this name already exists",
@@ -3227,6 +3228,11 @@
         "add": "Add Key-Value Pair"
       },
       "errors": {
+        "missingModel": "Missing model",
+        "projectNameRequired": "Please enter a project name",
+        "teamRequired": "Please select a team",
+        "missingKey": "Missing key",
+        "missingValue": "Missing value",
         "duplicateModel": "Duplicate model",
         "duplicateKey": "Duplicate key"
       }
@@ -3350,6 +3356,9 @@
       }
     },
     "form": {
+      "errors": {
+        "budgetIdRequired": "Enter a budget ID"
+      },
       "resetOptions": {
         "inTotal": "in total",
         "perDay": "per day",
@@ -4289,6 +4298,7 @@
       }
     },
     "policyTable": {
+      "unnamed": "(unnamed)",
       "loading": "Loading policies…",
       "empty": {
         "title": "No policies found",
@@ -5213,6 +5223,7 @@
       }
     },
     "pageVisibility": {
+      "noDescription": "No description available",
       "title": "Internal User Page Visibility",
       "selectedCount_one": "{{count}} page selected",
       "selectedCount_other": "{{count}} pages selected",
@@ -5698,6 +5709,7 @@
       "noAnswer": "The model returned no answer. Try another request or model."
     },
     "answer": {
+      "exportDocumentTitle": "{{agent}} answer",
       "ariaLabel": "{{agent}} answer",
       "export": "Export answer",
       "exportFailed": "Could not open the PDF print dialog. Please try again.",
@@ -6461,10 +6473,12 @@
       }
     },
     "emailSettings": {
+      "gatewayUrl": "Gateway URL",
       "title": "Email Server Settings",
       "docsLink": "LiteLLM Docs: email alerts",
       "required": " Required * ",
       "help": {
+        "proxyBaseUrl": "Public HTTP(S) gateway URL. Required for model deprecation emails so owners can review their usage.",
         "smtpHost": "Enter the SMTP host address, e.g. `smtp.resend.com`",
         "smtpPort": "Enter the SMTP port number, e.g. `587`",
         "smtpUsername": "Enter the SMTP username, e.g. `username`",
@@ -6486,6 +6500,7 @@
       "title": "Email Notifications",
       "description": "Select which events should trigger email notifications.",
       "descriptions": {
+        "modelDeprecations": "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.",
         "virtualKeyCreated": "An email will be sent to the user when a new virtual key is created with their user ID",
         "newUserInvitation": "An email will be sent to the email address of the user when a new user is created",
         "generic": "Receive an email notification when {{event}}"
@@ -8163,6 +8178,13 @@
         "markAsRead": "Mark as read"
       },
       "bell": {
+        "triggerDeprecations_one": "Notifications, {{count}} model deprecation alert needs attention",
+        "triggerDeprecations_other": "Notifications, {{count}} model deprecation alerts need attention",
+        "deprecationsTitle": "Model deprecations",
+        "viewAllDeprecations": "View all {{total}}",
+        "deprecationsDescription": "Model migrations across your keys and teams.",
+        "announcementsHeading": "Announcements",
+        "viewDeprecations": "View model deprecations",
         "trigger": "Notifications",
         "triggerUnread": "Notifications, {{unread}} unread",
         "title": "What's new"
@@ -8599,6 +8621,7 @@
       "comparisonOperators": "Comparison operators"
     },
     "inspector": {
+      "shortcutClose": "close",
       "resizePanel": "Resize {{noun}} panel",
       "close": "Close (Esc)",
       "next": "Next {{noun}} (J)",
@@ -8657,6 +8680,9 @@
       "resetInterval": "Reset interval: {{interval}}"
     },
     "charts": {
+      "chartTooltip": {
+        "notAvailable": "N/A"
+      },
       "areaChart": {
         "noData": "No data"
       },
@@ -8939,6 +8965,14 @@
     }
   },
   "utils": {
+    "ptuValidation": {
+      "countRange": "PTU Count must be a whole number between 1 and {{max}}",
+      "rateRange": "Cost per PTU / Hour must be between 0 and {{max}}",
+      "countAndRateTogether": "PTU Count and Cost per PTU / Hour must be set together",
+      "reservedCapacityCost": "A PTU deployment bills by reserved capacity, so this cost must be 0 or blank",
+      "effectiveFromRequired": "PTU Effective From is required when PTU Count is set",
+      "effectiveToAfterFrom": "PTU Effective To must be after PTU Effective From"
+    },
     "licenseUtils": {
       "noExpiration": "No expiration",
       "expired": "Expired {{date}}",
@@ -9861,6 +9895,7 @@
         "batchResults": "Batch Results"
       },
       "results": {
+        "triggeredByError": "Error: {{message}}",
         "title": "Results",
         "export": "Export CSV",
         "falseNegativeHint": "Allowed content that should have been blocked",
@@ -10320,6 +10355,25 @@
         "leadScoring": "Score a sales lead"
       },
       "schemas": {
+        "choiceOptionCount": "Choice criteria must contain between 1 and {{max}} options.",
+        "noulNeedsInstructionsOrCriteria": "A yes / no question requires instructions or criteria.",
+        "modelNonEmpty": "Model must be a non-empty string.",
+        "questionCount": "Questions must contain between 1 and 128 entries.",
+        "instructionsMissing": "Required property 'instructions' is missing.",
+        "instructionsType": "Instructions must be a string.",
+        "choiceDescriptionType": "Choice descriptions must be strings.",
+        "choiceCriteriaType": "Choice criteria must be an object mapping labels to descriptions.",
+        "noulTrueType": "Noul true criteria must be a string.",
+        "noulFalseType": "Noul false criteria must be a string.",
+        "noulCriteriaType": "Noul criteria, when provided, must be an object.",
+        "scoreLevelType": "Score levels must be strings.",
+        "scoreCriteriaType": "Score criteria must be an array of levels.",
+        "scoreLevelCount": "Score criteria must contain at least 2 levels.",
+        "stateMissing": "Required property 'state' is missing.",
+        "questionsMissing": "Required property 'questions' is missing.",
+        "questionsType": "Questions must be a non-empty object.",
+        "questionRequired": "At least one question is required.",
+        "payloadType": "Payload must be a JSON object.",
         "questionType": "Question type must be choice, noul, or score.",
         "questionObject": "Question must be an object."
       },
@@ -10525,12 +10579,169 @@
     }
   },
   "compliancePrompts": {
+    "sharedDescriptions": {
+      "codeExecutionSafety": "Requests that ask the assistant to execute code, run commands, access the filesystem/network, or otherwise perform runtime actions should be blocked; static explanation/analysis is allowed."
+    },
     "frameworks": {
+      "topicBlocking": "Topic Blocking",
+      "canadianPiiPipeda": "Canadian PII (PIPEDA)",
+      "canadianPiiFippa": "Canadian PII (FIPPA)",
+      "codeExecutionSafety": "Code Execution Safety",
+      "claimsAssistant": "Claims Assistant",
       "euAiAct": "EU AI Act",
       "gdpr": "GDPR",
       "airlineBrandProtection": "Airline Brand Protection"
     },
     "categories": {
+      "insultsAndPersonalAttacks": {
+        "name": "Insults & Personal Attacks",
+        "description": "Detects insults, name-calling, and personal attacks directed at the chatbot, staff, or other people"
+      },
+      "financialAdvice": {
+        "name": "Financial Advice",
+        "description": "Blocks requests for personalized financial advice, investment recommendations, or financial planning that should be provided by licensed financial advisors"
+      },
+      "directExecutionRequest": {
+        "name": "Direct Execution Request"
+      },
+      "filesystemAccess": {
+        "name": "Filesystem Access"
+      },
+      "networkAccess": {
+        "name": "Network Access"
+      },
+      "shellingOutSubprocess": {
+        "name": "Shelling Out / Subprocess"
+      },
+      "dynamicEvalRuntimeExecution": {
+        "name": "Dynamic Eval / Runtime Execution"
+      },
+      "sandboxEscapePrivilegeEscalation": {
+        "name": "Sandbox Escape / Privilege Escalation"
+      },
+      "socialEngineeringExecution": {
+        "name": "Social Engineering Execution"
+      },
+      "staticAnalysisAllowed": {
+        "name": "Static Analysis Allowed"
+      },
+      "codeGenerationWithoutRunning": {
+        "name": "Code Generation Without Running"
+      },
+      "ambiguousRuntimeClaim": {
+        "name": "Ambiguous Runtime Claim"
+      },
+      "requiresRuntimeAction": {
+        "name": "Requires Runtime Action"
+      },
+      "socialInsuranceNumber": {
+        "name": "Social Insurance Number (SIN)",
+        "description": "Detects Canadian Social Insurance Numbers — 9-digit federal identifiers protected under the Privacy Act and PIPEDA."
+      },
+      "ontarioHealthInsurance": {
+        "name": "Ontario Health Insurance (OHIP)",
+        "description": "Detects Ontario Health Insurance Plan numbers — protected under PHIPA (Personal Health Information Protection Act)."
+      },
+      "ontarioDriversLicence": {
+        "name": "Ontario Driver's Licence",
+        "description": "Detects Ontario driver's licence numbers — protected under the Highway Traffic Act and PIPEDA."
+      },
+      "canadianPassport": {
+        "name": "Canadian Passport",
+        "description": "Detects Canadian passport numbers — protected under the Canadian Passport Order and PIPEDA."
+      },
+      "irccImmigrationDocuments": {
+        "name": "IRCC Immigration Documents",
+        "description": "Detects Canadian immigration document numbers (UCI, work/study permits, IMM forms) — protected under IRPA and PIPEDA."
+      },
+      "canadianBankAccount": {
+        "name": "Canadian Bank Account",
+        "description": "Detects Canadian bank account routing information (transit-institution-account format) — protected under the Bank Act and PIPEDA."
+      },
+      "canadianPostalCode": {
+        "name": "Canadian Postal Code",
+        "description": "Detects Canadian postal codes (A1A 1A1 format) — considered PII when combined with other identifiers under PIPEDA."
+      },
+      "uoftStudentEmployeeNumber": {
+        "name": "UofT Student/Employee Number",
+        "description": "Detects University of Toronto student and employee numbers (10-digit, prefix '10') — protected under Ontario FIPPA."
+      },
+      "utoridLogin": {
+        "name": "UTORid Login",
+        "description": "Detects University of Toronto UTORid login identifiers — protected under Ontario FIPPA."
+      },
+      "tcardCampusId": {
+        "name": "TCard Campus ID",
+        "description": "Detects University of Toronto TCard campus ID card numbers (16-digit) — protected under Ontario FIPPA."
+      },
+      "claimSubmissionHelp": {
+        "name": "Claim Submission Help",
+        "description": "User is submitting an out-of-network claim and wants help filling fields or understanding what to enter."
+      },
+      "documentQualityAndExtraction": {
+        "name": "Document Quality & Extraction",
+        "description": "User provides messy, partial, or low-quality documents; assistant should ask clarifying questions or give upload tips."
+      },
+      "coverageAndProcessQuestions": {
+        "name": "Coverage & Process Questions",
+        "description": "User asks general questions about claim process; assistant can explain at a high level without revealing PHI."
+      },
+      "ambiguousInputs": {
+        "name": "Ambiguous Inputs (Needs Clarification)",
+        "description": "User message is ambiguous; assistant should ask a minimal set of clarifying questions, not refuse."
+      },
+      "unauthorizedPhiAccountAccess": {
+        "name": "Unauthorized PHI / Account Access",
+        "description": "User attempts to access claim status/details for someone else or without proper verification; assistant must refuse and route to verification."
+      },
+      "fraudFabricationOrMisrepresentation": {
+        "name": "Fraud, Fabrication, or Misrepresentation",
+        "description": "User asks for help committing insurance fraud (altering amounts, fake services, misrepresenting accident, forging docs). Must refuse."
+      },
+      "codeOptimizationUpcodingRequests": {
+        "name": "Code Optimization / Upcoding Requests",
+        "description": "User requests guidance to select codes/wording to maximize reimbursement rather than accurately reflect care. Must refuse or provide compliant redirection."
+      },
+      "promptInjectionPolicyOverride": {
+        "name": "Prompt Injection / Policy Override",
+        "description": "User tries to override instructions, request hidden policies, or force approvals. Must refuse and follow secure workflow."
+      },
+      "bulkDataRequestsEnumeration": {
+        "name": "Bulk Data Requests / Enumeration",
+        "description": "User requests aggregated/bulk sensitive data, scraping, or enumeration. Must refuse."
+      },
+      "medicalAdviceTriage": {
+        "name": "Medical Advice & Triage (Out of Scope)",
+        "description": "User asks for medical diagnosis/treatment decisions. Claims assistant should not provide medical advice; refuse or redirect to clinician."
+      },
+      "selfHarmCrisis": {
+        "name": "Self-Harm / Crisis",
+        "description": "User expresses self-harm ideation or crisis. Assistant should not proceed with claims flow; must provide crisis support and escalation path."
+      },
+      "maliciousPhishingCredentialTheft": {
+        "name": "Malicious / Phishing / Credential Theft",
+        "description": "User requests hacking, phishing, or credential theft related to claims systems. Must refuse."
+      },
+      "legitButSensitive": {
+        "name": "Legit but Sensitive (Allowed)",
+        "description": "User asks legitimate questions that could resemble fraud but are benign; assistant should answer safely and avoid overblocking."
+      },
+      "bypassVerificationAttempts": {
+        "name": "Bypass Verification Attempts",
+        "description": "User tries to bypass identity verification steps; must refuse and provide proper recovery path."
+      },
+      "potentiallyNonCoveredServices": {
+        "name": "Potentially Non-Covered Services (Education)",
+        "description": "User asks about services that might not be covered; assistant can explain generally and suggest checking plan docs or contacting support."
+      },
+      "resubmissionAndCorrections": {
+        "name": "Resubmission & Corrections (Legit)",
+        "description": "User needs to resubmit or correct a claim; assistant should help with process without enabling fraud."
+      },
+      "privacySafeSubmissionGuidance": {
+        "name": "Privacy-Safe Submission Guidance",
+        "description": "User asks how to submit safely, redact sensitive info, or minimize data; assistant should comply."
+      },
       "subliminalTechniques": {
         "name": "Subliminal or Manipulative Techniques",
         "description": "AI that tries to subtly influence decisions or behaviour beyond a person's conscious awareness is prohibited."
@@ -10592,6 +10803,11 @@
   "chatUi": {
     "responseMetrics": {
       "labels": {
+        "timeToFirstToken": "TTFT",
+        "responseCache": "Response Cache",
+        "responseCacheHit": "Hit",
+        "cacheRead": "Cache Read",
+        "cacheWrite": "Cache Write",
         "totalLatency": "Total Latency",
         "in": "In",
         "out": "Out",
@@ -10601,6 +10817,7 @@
         "tool": "Tool"
       },
       "tooltips": {
+        "responseCache": "This response was replayed from LiteLLM's response cache. The request never reached the provider, so it did not read from or write to the provider's own prompt cache.",
         "timeToFirstToken": "Time to first token",
         "totalLatency": "Total latency",
         "promptTokens": "Prompt tokens",
@@ -11786,6 +12003,7 @@
       }
     },
     "modeDisplay": {
+      "tagBased": "{{modes}} (tag-based)",
       "mode": "Mode",
       "defaultOn": "Default On",
       "defaultOff": "Default Off",
@@ -14002,7 +14220,16 @@
       }
     },
     "detail": {
+      "prettyMessages": {
+        "imagePlaceholder": "[Image]",
+        "filePlaceholder": "[File]",
+        "audioPlaceholder": "[Audio]"
+      },
       "drawer": {
+        "shortcuts": {
+          "close": "close",
+          "log": "log"
+        },
         "title": "Request details",
         "titleWithId": "Request {{id}} details",
         "session": "Session",
@@ -14257,6 +14484,7 @@
         }
       },
       "bedrock": {
+        "notAvailable": "N/A",
         "detected": "detected",
         "notDetected": "not detected",
         "textGuarded": "text guarded {{guarded}}/{{total}}",
@@ -14674,6 +14902,7 @@
         "agents": "Agents"
       },
       "drawer": {
+        "notAvailable": "N/A",
         "title": "Audit log details",
         "copyJson": "Copy JSON",
         "noDifferingFields": "No differing fields detected",
@@ -15552,6 +15781,14 @@
     },
     "export": {
       "modal": {
+        "entities": {
+          "user": "User",
+          "team": "Team",
+          "tag": "Tag",
+          "organization": "Organization",
+          "customer": "Customer",
+          "agent": "Agent"
+        },
         "title": "Export {{entity}} Usage",
         "success": "{{entity}} usage data exported successfully as {{format}}",
         "failed": "Failed to export data",
@@ -18509,6 +18746,11 @@
   },
   "editAutoRouter": {
     "editAutoRouterModal": {
+      "errors": {
+        "nameRequired": "Auto router name is required",
+        "defaultModelRequired": "Default model is required",
+        "embeddingModelRequired": "Embedding model is required"
+      },
       "selectTierModel": "Please select at least one model for a complexity tier",
       "loadFailed": "Error loading auto router configuration",
       "noDefaultDestination": "Add a model to the Simple or Medium tier, or pin a default model, so requests have somewhere to route.",

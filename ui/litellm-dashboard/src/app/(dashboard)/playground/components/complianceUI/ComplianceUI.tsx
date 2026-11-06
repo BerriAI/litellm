@@ -653,7 +653,7 @@ export default function ComplianceUI({
           ...row,
           actualResult: "blocked" as const,
           isMatch: false,
-          triggeredBy: `Error: ${errorMessage}`,
+          triggeredBy: t("playground.compliance.results.triggeredByError", { message: errorMessage }),
           status: "complete" as const,
         })),
       );
@@ -670,6 +670,7 @@ export default function ComplianceUI({
     backendMode,
     fixedModel,
     requestProxyBaseUrl,
+    t,
   ]);
 
   const completedResults = testResults.filter((r) => r.status === "complete");

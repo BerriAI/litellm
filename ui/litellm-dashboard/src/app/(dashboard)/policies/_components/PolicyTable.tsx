@@ -1,6 +1,7 @@
 "use client";
 
 import { SortingState } from "@tanstack/react-table";
+import type { TFunction } from "i18next";
 import { Inbox } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -11,11 +12,12 @@ import { Policy } from "@/components/policies/types";
 import { getPolicyTableColumns, PolicyRow } from "./PolicyTableColumns";
 
 /** One row per DB policy name plus one row per config policy, so a config policy never hides same-named DB versions; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
-function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
+function groupPoliciesByName(policies: Policy[], t: TFunction): PolicyRow[] {
+  const unnamed = t("policies.policyTable.unnamed");
   const dbPolicies = policies.filter((policy) => policy.definition_location !== "config");
-  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || "(unnamed)")));
+  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || unnamed)));
   const dbRows = names.map((policyName) => {
-    const versions = dbPolicies.filter((policy) => (policy.policy_name || "(unnamed)") === policyName);
+    const versions = dbPolicies.filter((policy) => (policy.policy_name || unnamed) === policyName);
     const primary =
       versions.find((version) => version.version_status === "production") ??
       [...versions].sort((a, b) => (b.version_number ?? 0) - (a.version_number ?? 0))[0];
@@ -23,7 +25,7 @@ function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
   });
   const configRows = policies
     .filter((policy) => policy.definition_location === "config")
-    .map((policy) => ({ policy_name: policy.policy_name || "(unnamed)", primaryPolicy: policy, versionCount: 1 }));
+    .map((policy) => ({ policy_name: policy.policy_name || unnamed, primaryPolicy: policy, versionCount: 1 }));
   return [...dbRows, ...configRows];
 }
 
@@ -62,7 +64,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
-  const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
+  const rows = useMemo(() => groupPoliciesByName(policies, t), [policies, t]);
 
   const columns = useMemo(() => {
     const deps = { isAdmin, onViewClick, onEditClick, onDeleteClick, t };
