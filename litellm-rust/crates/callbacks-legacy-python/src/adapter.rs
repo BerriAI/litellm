@@ -14,7 +14,7 @@ use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::{PyDateTime, PyDict, PyList},
+    types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
 
@@ -22,7 +22,7 @@ use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
-    python::Streaming,
+    python::{Logging, Streaming},
     setup,
 };
 
@@ -158,13 +158,20 @@ impl LegacyLogging {
         }
     }
 
-    fn input_description(&self) -> &'static str {
-        match self.operation {
+    fn logged_input<'py>(
+        &self,
+        py: Python<'py>,
+        body: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let description = match self.operation {
             LoggingOperation::Completion => "Chat completions",
             LoggingOperation::Responses => "Responses",
-            LoggingOperation::Messages => "Messages",
+            LoggingOperation::Messages => {
+                return Logging::MessagesInput.call(py, (body, self.call.kwargs().bind(py)));
+            }
             LoggingOperation::Ocr => "OCR document processing",
-        }
+        };
+        Ok(PyString::new(py, description).into_any())
     }
 
     /// The key `pre_call` logs. Python's Messages handler logs an empty string, never the key.
@@ -469,9 +476,10 @@ impl LegacyLogging {
             headers: headers.clone().unbind(),
             context: context.clone(),
         });
+        let input = self.logged_input(py, &body)?;
         self.logger()?.pre_call(
             py,
-            self.input_description(),
+            &input,
             self.logged_api_key(context),
             &body,
             &headers,
@@ -1276,7 +1284,10 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
     #[rstest]
     #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
     #[case::responses(crate::LoggingOperation::Responses, "Responses")]
-    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
+    #[case::messages(
+        crate::LoggingOperation::Messages,
+        r#"[{'role': 'user', 'content': '{"pages": [1]}'}]"#
+    )]
     #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
         #[case] operation: crate::LoggingOperation,
@@ -1317,7 +1328,7 @@ prepared = {'pages': replacement}
                 &locals,
                 c"
 assert logger.pre['complete_input_dict']['pages'] is replacement
-assert logger.pre_input == description
+assert str(logger.pre_input) == description
 assert original == [0]
 ",
             );
