@@ -87,6 +87,14 @@ const configManaged = (label: string, config: Record<string, unknown>): Presenta
 
 /** How each strategy renders itself, given its own config object. */
 const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Presentation> = {
+  switchyard: (config) => ({
+    typeLabel: "Switchyard",
+    targets: dedupe(
+      [asRecord(config.models).capable, asRecord(config.models).efficient].filter(
+        (model): model is string => typeof model === "string",
+      ),
+    ),
+  }),
   complexity: (config) => ({
     typeLabel: complexityTypeLabel(config),
     targets: dedupe(Object.values(asRecord(config.tiers)).flatMap(normalizeTierModels)),
@@ -131,7 +139,8 @@ export const toAutoRouterRow = (
     canDelete: canDelete && mayActOnRow,
     editBlockedReason,
     createdAt: info.created_at ?? undefined,
-    defaultModel: (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
+    defaultModel:
+      strategy.kind === "switchyard" ? null : (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
     deployment,
     ...PRESENTERS[strategy.kind](asRecord(params[strategy.configKey])),
   };

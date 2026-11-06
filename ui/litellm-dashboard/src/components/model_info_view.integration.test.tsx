@@ -601,6 +601,18 @@ describe("ModelInfoView", () => {
     expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
   });
 
+  it("shows the server's reason when saving the model settings is rejected", async () => {
+    const rejection = new Error("A strategy router cannot route to itself");
+    mockModelPatchUpdateCall.mockRejectedValueOnce(rejection);
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith(rejection));
+  });
+
   it("should display edit settings button when user can edit model", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
