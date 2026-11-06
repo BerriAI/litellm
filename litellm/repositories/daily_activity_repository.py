@@ -216,8 +216,10 @@ class DailyActivityRepository:
         rows: Final = _KEY_SPEND_ADAPTER.validate_python(await self._query(query))
         return tuple(row.api_key for row in rows)
 
-    async def key_page(self, scope: DailyActivityScope, *, offset: int, limit: int) -> KeyPage:
-        query: Final = build_key_page_sql(scope, offset=offset, limit=limit)
+    async def key_page(
+        self, scope: DailyActivityScope, *, offset: int, limit: int, bounded_identifiers: bool = False
+    ) -> KeyPage:
+        query: Final = build_key_page_sql(scope, offset=offset, limit=limit, bounded_identifiers=bounded_identifiers)
         result: Final = await self._query(query)
         total_api_keys_value: Final = result[0].get("total_api_keys") if result else 0
         total_api_keys: Final = (
@@ -226,8 +228,10 @@ class DailyActivityRepository:
         rows: Final = _KEY_SPEND_ADAPTER.validate_python(tuple(row for row in result if row.get("api_key") is not None))
         return KeyPage(rows=rows, total_api_keys=total_api_keys)
 
-    async def user_page(self, scope: DailyActivityScope, *, offset: int, limit: int) -> UserPage:
-        query: Final = build_user_page_sql(scope, offset=offset, limit=limit)
+    async def user_page(
+        self, scope: DailyActivityScope, *, offset: int, limit: int, bounded_identifiers: bool = False
+    ) -> UserPage:
+        query: Final = build_user_page_sql(scope, offset=offset, limit=limit, bounded_identifiers=bounded_identifiers)
         result: Final = await self._query(query)
         total_users_value: Final = result[0].get("total_users") if result else 0
         total_users: Final = (

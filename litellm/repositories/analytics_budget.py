@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Generator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, contextmanager
+from collections.abc import AsyncGenerator, Generator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import timedelta
 from threading import BoundedSemaphore
@@ -75,6 +75,23 @@ def _milliseconds(limit: int) -> int:
     return limit if remaining is None else min(limit, max(1, int(remaining * 1000)))
 
 
+@asynccontextmanager
+async def _bounded_transaction(
+    manager: AbstractAsyncContextManager[AnalyticsTransaction],
+) -> AsyncGenerator[AnalyticsTransaction, None]:
+    transaction: Final = await manager.__aenter__()
+    try:
+        yield transaction
+    except BaseException as error:
+        suppressed: Final = await asyncio.wait_for(
+            manager.__aexit__(type(error), error, error.__traceback__), timeout=1
+        )
+        if not suppressed:
+            raise
+    else:
+        await asyncio.wait_for(manager.__aexit__(None, None, None), timeout=1)
+
+
 class BoundedAnalyticsDatabase:
     def __init__(self, database: AnalyticsDatabase, *, background: bool = False) -> None:
         self._database = database
@@ -86,7 +103,9 @@ class BoundedAnalyticsDatabase:
             raise AnalyticsCapacityError("Analytics capacity is busy. Try again shortly")
         try:
             remaining: Final = _remaining_seconds()
-            return await asyncio.wait_for(self._query(query, args), timeout=remaining)
+            return await asyncio.wait_for(
+                self._query(query, args), timeout=6.25 if remaining is None else min(6.25, remaining)
+            )
         except RawQueryError as error:
             if _PostgresError.model_validate(error.meta or {}).code not in ("57014", "55P03"):
                 raise
@@ -101,9 +120,11 @@ class BoundedAnalyticsDatabase:
             self._admission.release()
 
     async def _query(self, query: str, args: tuple[object, ...]) -> Sequence[Mapping[str, object]]:
-        async with self._database.tx(
-            max_wait=timedelta(milliseconds=_milliseconds(250)),
-            timeout=timedelta(milliseconds=_milliseconds(6000)),
+        async with _bounded_transaction(
+            self._database.tx(
+                max_wait=timedelta(milliseconds=_milliseconds(250)),
+                timeout=timedelta(milliseconds=_milliseconds(6000)),
+            )
         ) as transaction:
             configuration: Final = await transaction.query_raw(_CONFIGURE, self._background, _milliseconds(5000))
             if not configuration or not _Admission.model_validate(configuration[0]).acquired:
