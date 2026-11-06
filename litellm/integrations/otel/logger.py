@@ -98,7 +98,9 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.services import ServiceLoggerPayload
     from litellm.types.utils import (
+        CallTypes,
         CallTypesLiteral,
+        LLMResponseTypes,
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
@@ -949,6 +951,56 @@ class OpenTelemetryV2(CustomLogger):
             return
         stamp_error(span, _span_error_from_exception(original_exception, traceback_str=traceback_str))
         return
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        response: "LLMResponseTypes",
+        call_type: "CallTypes | None",
+    ) -> "LLMResponseTypes | None":
+        """Publish suppressed GenAI attributes in-line before returning to the caller.
+
+        ``async_log_success_event`` is dispatched through ``GLOBAL_LOGGING_WORKER``
+        in a background task after ``acompletion`` returns, by which time an outer
+        framework instrumentation (e.g. Agno, LangChain, DSPy) has already closed
+        its invocation. Publishing here ensures ``ContextData`` is enriched before
+        the outer ``invocation.stop()`` runs.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(logging_obj, LiteLLMLoggingObj):
+            return None
+        details: Final = logging_obj.model_call_details
+        call: Final = LLMCallEvent.from_dict(details)
+        carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id is not None else None
+        ctx_data: Final = (
+            carrier.outer_ctx_data
+            if carrier is not None and carrier.outer_ctx_data is not None
+            else get_active_genai_context_data(
+                call.operation,
+                call_type=as_str(details.get("call_type")),
+                context=_llm_call_parent_context(call),
+            )
+        )
+        if ctx_data is None:
+            return None
+        start_time: Final = logging_obj.start_time
+        end_time: Final = datetime.now()  # noqa: DTZ005  # matches naive logging_obj.start_time
+        payload: Final = logging_obj._process_hidden_params_and_response_cost(
+            response,
+            start_time,
+            end_time,
+            build_logging_payload=True,
+            publish_logging_payload=False,
+        )
+        if payload is not None:
+            self._close_llm_call_with_suppression(
+                {**details, "standard_logging_object": payload},
+                start_time,
+                end_time,
+            )
+        return None
 
     def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
         # Emitted by the guardrail-recording code the moment a guardrail finishes,
