@@ -30,7 +30,12 @@ from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, end_attempt, reads_deployment_usage
+from litellm.router_utils.deployment_usage_counter import (
+    DeploymentUsageCounter,
+    UsageCharge,
+    end_attempt,
+    reads_deployment_usage,
+)
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 if TYPE_CHECKING:
@@ -348,18 +353,31 @@ def pick_sync(
             return None
 
 
-async def routing_pre_call_checks(
+def _checks_among(callbacks: Iterable[object]) -> tuple[CustomLogger, ...]:
+    return tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
+
+
+async def charge_for_checks(
     callbacks: Iterable[object], deployment: Mapping[str, object], counter: DeploymentUsageCounter
+) -> UsageCharge | None:
+    """The attempt's request counted against the picked deployment, once, when a routing callback
+    reads the usage counters. Charged before the deployment's slot is taken, so the cache round trip
+    never holds a slot another request is waiting for."""
+    return await counter.charge_request(deployment) if reads_deployment_usage(_checks_among(callbacks)) else None
+
+
+async def pre_call_checks_with(
+    callbacks: Iterable[object],
+    deployment: Mapping[str, object],
+    counter: DeploymentUsageCounter,
+    charge: UsageCharge | None,
 ) -> None:
-    """``async_routing_strategy_pre_call_checks``: the attempt's request is counted against the picked
-    deployment once, then every ``CustomLogger`` among the router's routing callbacks
-    (``_routing_callbacks``) checks it before the call. A check's error hands the request back and
-    fails the attempt; the core records that failure like any other."""
-    checks: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
-    charge: Final = await counter.charge_request(deployment) if reads_deployment_usage(checks) else None
+    """Every ``CustomLogger`` among the router's routing callbacks (``_routing_callbacks``) checks the
+    picked deployment before the call. A check's error hands the charged request back and fails the
+    attempt; the core records that failure like any other."""
     handed: Final = deployment if isinstance(deployment, dict) else dict(deployment)
     try:
-        for callback in checks:
+        for callback in _checks_among(callbacks):
             await callback.async_pre_call_check(handed, None)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
     except Exception:
         if charge is not None:
@@ -368,6 +386,13 @@ async def routing_pre_call_checks(
     finally:
         if charge is not None:
             end_attempt(charge)
+
+
+async def routing_pre_call_checks(
+    callbacks: Iterable[object], deployment: Mapping[str, object], counter: DeploymentUsageCounter
+) -> None:
+    """``async_routing_strategy_pre_call_checks``: ``charge_for_checks`` then ``pre_call_checks_with``."""
+    await pre_call_checks_with(callbacks, deployment, counter, await charge_for_checks(callbacks, deployment, counter))
 
 
 def routing_pre_call_checks_sync(

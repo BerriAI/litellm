@@ -124,6 +124,7 @@ from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies
 from litellm.router_rust.steps.selection import (
     SELECTOR_ATTRIBUTES,
     StrategySelectors,
+    charge_for_checks,
     group_documents,
     group_settings,
     member_map,
@@ -132,6 +133,7 @@ from litellm.router_rust.steps.selection import (
     pick_async,
     pick_sync,
     picked_id,
+    pre_call_checks_with,
     routing_pre_call_checks,
     routing_pre_call_checks_sync,
 )
@@ -5174,15 +5176,27 @@ class _Driver:
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
             # The deployment's max_parallel_requests slot; an open chat stream takes it along.
             port = self._core._port  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core  # rebind-ok: the same port on every attempt
-            with enter_deployment_slot(port, self._plan, deployment, call.kwargs) as slot:
-                # A search tool is no deployment: nothing to check; Python's `_arerank` and
-                # `amoderation` run no routing pre-call checks either.
-                if self._plan.kind not in _NO_ROUTING_PRE_CALL_CHECKS:
+            # A search tool is no deployment: nothing to check; Python's `_arerank` and
+            # `amoderation` run no routing pre-call checks either.
+            checked: Final = self._plan.kind not in _NO_ROUTING_PRE_CALL_CHECKS
+            checks: Final = self._core._checks  # pyright: ignore[reportPrivateUsage]  # see above
+            picked_deployment: Final = as_str_mapping(step.get("deployment")) or {}
+            charge: Final = (
+                await charge_for_checks(checks.routing_callbacks(), picked_deployment, checks.usage_counter)
+                if checked
+                else None
+            )
+            try:
+                slot_taken: Final = enter_deployment_slot(port, self._plan, deployment, call.kwargs)
+            except Exception as refused:  # noqa: BLE001  # a full deployment's 429, handed to the Rust call loop
+                if charge is not None:
+                    await checks.usage_counter.refund_request(charge)
+                return await self._refused(step, deployment, call, refused)
+            with slot_taken as slot:
+                if checked:
                     try:
-                        await routing_pre_call_checks(
-                            self._core._checks.routing_callbacks(),  # pyright: ignore[reportPrivateUsage]  # see above
-                            as_str_mapping(step.get("deployment")) or {},
-                            self._core._checks.usage_counter,  # pyright: ignore[reportPrivateUsage]  # see above
+                        await pre_call_checks_with(
+                            checks.routing_callbacks(), picked_deployment, checks.usage_counter, charge
                         )
                     except Exception as refused:  # noqa: BLE001  # handed to the Rust call loop as the attempt's failure
                         # Only `_acompletion` hands the check its logging object.
