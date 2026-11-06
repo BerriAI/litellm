@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import Final, Literal, cast
 
 import pytest
+import respx
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
@@ -41,6 +42,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -6559,3 +6561,36 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_is_dropped_with_its_hosted_mcp_tool_under_drop_params(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[
+            {
+                "type": "mcp",
+                "server_label": "deepwiki",
+                "server_url": "https://mcp.deepwiki.com/mcp",
+                "require_approval": "never",
+            },
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        ],
+        tool_choice={"type": "mcp", "server_label": "deepwiki"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = gemini.calls.last.request.content.decode()
+    assert "get_weather" in sent
+    assert "deepwiki" not in sent
