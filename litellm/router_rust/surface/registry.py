@@ -42,6 +42,7 @@ router and every ``registry()`` query dispatches the way it does on the Python c
 
 import copy
 import dataclasses
+import json
 import os
 import re
 import threading
@@ -50,7 +51,7 @@ from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast  # noqa: TID251  # entries as a caller wrote them
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm import exceptions as litellm_exceptions
 from litellm import get_secret_str
@@ -64,6 +65,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
+    declared_provider,
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
@@ -93,7 +95,7 @@ from litellm.litellm_core_utils.routing_groups import apply_routing_group_priori
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.responses.bridge_check import keep_registered_mode
-from litellm.router_api import RouterRegistry
+from litellm.router_api import RouterRegistry, deployment_id
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
 from litellm.router_rust.surface.indexes import HostedIndexes
 from litellm.router_rust.surface.model_info import HostModelInfo
@@ -140,6 +142,7 @@ if TYPE_CHECKING:
     from litellm.router_rust.steps.prerouting import PreRoutingStrategies
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.rust_bridge._native import RouterCoreHandle
+    from litellm.types.utils import ModelInfo as ModelMapInfo
 
 # The PTU share teams and the team ceilings read so far.
 _PTUMemo: TypeAlias = tuple[
@@ -579,6 +582,34 @@ def _index_key(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _round_trips(value: object) -> bool:
+    """Whether JSON reads ``value`` back equal to itself."""
+    try:
+        loaded: Final[object] = json.loads(json.dumps(value, default=str))  # pyright: ignore[reportAny]  # plain JSON
+    except (TypeError, ValueError):
+        return False
+    return loaded == value
+
+
+def _has_non_str_keys(value: object) -> bool:
+    """Whether ``value`` holds a dict key that is not a string, which a JSON record reads back as one."""
+    pending: list[object] = [value]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, Mapping):
+            for key, item in current.items():
+                if not isinstance(key, str):
+                    return True
+                pending.append(item)
+        elif isinstance(current, list | tuple):
+            pending.extend(current)
+    return False
+
+
 class HostRegistry(HostModelInfo):
     """The live model_list and its indexes, kept the way the Python router core keeps them."""
 
@@ -597,7 +628,13 @@ class HostRegistry(HostModelInfo):
         self._deployment_index_lock: Final = threading.RLock()
         self._core_model_group_alias: dict[str, str | RouterModelGroupAliasItem] = model_group_alias  # mutable-ok: the live alias map  # fmt: skip
         # The live model_list: router-core's deployments read back, every write a changeset.
-        self._core_model_list: Final[HostedModelList] = HostedModelList(self._live_handle, self._hand_changes)
+        self._core_model_list: Final[HostedModelList] = HostedModelList(
+            self._live_handle, self._hand_changes, self.live_params, self.live_info
+        )
+        # The litellm_params values a deployment's JSON cannot carry (an Exception or model object as
+        # ``mock_response``, a callable ``azure_ad_token_provider``), by deployment id: an attempt is called with them, as Python's list held them.
+        self._live_params: Final[dict[str, Mapping[str, object]]] = {}  # mutable-ok: written as deployments register
+        self._live_info: Final[dict[str, Mapping[str, object]]] = {}  # mutable-ok: written as deployments register
         # The indexes the registry hands out: router-core's, read back, every write a changeset.
         self._indexes: Final = HostedIndexes(self._live_handle, self._hand_changes)
         self._core_deployment_latency_map: dict[str, float] = {}  # mutable-ok: the live latency map
@@ -644,7 +681,7 @@ class HostRegistry(HostModelInfo):
         self._cached_get_model_group_info: Callable[[str], ModelGroupInfo | None] = lru_cache(  # pyright: ignore[reportIncompatibleMethodOverride]  # the per-router cache shadows the uncached method, as the core keeps it
             maxsize=DEFAULT_MAX_LRU_CACHE_SIZE
         )(self._core_get_model_group_info)
-        self._core_cached_deployment_model_info: Callable[[str, str], object] = lru_cache(
+        self._core_cached_deployment_model_info: Callable[[str, str], ModelMapInfo | None] = lru_cache(
             maxsize=DEFAULT_MAX_LRU_CACHE_SIZE
         )(self._core_get_deployment_model_info)
         self.cached_deployment_tracks_usage: Callable[[str, str], bool] = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
@@ -854,6 +891,7 @@ class HostRegistry(HostModelInfo):
             self.build_runner(entries, build.path, resolve_secrets, install, partial(self._answer_shown, build))
         finally:
             self._core_model_list.end_build()
+            self._drop_removed_live_values()
         if build.failure is not None:
             # router-core served what it built before the entry that raised (`set_model_list`
             # cleared the list first), so the router is left as the Python core leaves it.
@@ -872,9 +910,11 @@ class HostRegistry(HostModelInfo):
         """The answer to one of router-core's build steps. A ``set_model_list`` deployment that
         fails is left out when the router ignores invalid deployments (``_create_deployment``),
         and retried on the next price data reload when its provider did not resolve."""
-        if build.failure is not None:
-            return {"invalid": True}
         kind: Final = step["kind"]
+        if build.failure is not None:
+            # The build already failed: every later step is skipped, a secrets step unresolved.
+            refs_left: Final = step.get("refs")
+            return [None] * len(refs_left) if kind == "secrets" and isinstance(refs_left, list) else {"invalid": True}  # pyright: ignore[reportUnknownArgumentType]  # only the count is read
         index: Final = int(str(step["index"]))
         refs: Final = step.get("refs")
         if kind == "secrets" and isinstance(refs, list) and not any(_ref_env_only(ref) for ref in refs):
@@ -969,7 +1009,13 @@ class HostRegistry(HostModelInfo):
         routed: Final = as_str_mapping(step["entry"]) or {}
         routed_info: Final = as_str_mapping(routed.get("model_info")) or {}
         if "id" not in entry.model_info:
-            entry.model_info["id"] = routed_info.get("id")
+            # router-core hashes the JSON form; a value JSON reads back changed hashes as the
+            # Python core hashes it (`deployment_id` over the params as given).
+            entry.model_info["id"] = (
+                routed_info.get("id")
+                if _round_trips(entry.litellm_params)
+                else deployment_id(entry.model_name, entry.litellm_params)
+            )
         if entry.per_organization:
             entry.litellm_params["organization"] = (as_str_mapping(routed.get("litellm_params")) or {}).get(
                 "organization"
@@ -1159,6 +1205,40 @@ class HostRegistry(HostModelInfo):
             deployment.litellm_params.rpm = getattr(deployment, "rpm")  # noqa: B009  # an extra field of the entry  # rebind-ok: the core sets it on the deployment it adds
         if deployment.litellm_params.tpm is None and getattr(deployment, "tpm", None) is not None:
             deployment.litellm_params.tpm = getattr(deployment, "tpm")  # noqa: B009  # an extra field of the entry  # rebind-ok: see above
+        live: Final = {
+            key: value
+            for key, value in {
+                **deployment.litellm_params.__dict__,
+                **(deployment.litellm_params.__pydantic_extra__ or {}),
+            }.items()
+            # Values JSON cannot carry: errors, callables, a str subclass that marks the value (an
+            # admin's secret reference, which only the deployment's own key may resolve), and any
+            # other value JSON reads back changed (a set, a tuple, a datetime), which the Python
+            # core keeps as given. A model is read back as its dump, as on the Python core.
+            if isinstance(value, BaseException)
+            or callable(value)
+            or (isinstance(value, str) and type(value) is not str)
+            or not (isinstance(value, BaseModel) or _round_trips(value))
+        }
+        # model_info values JSON reads back changed: a dict with keys that are not strings.
+        live_info: Final = {
+            key: value
+            for key, value in {
+                **deployment.model_info.__dict__,
+                **(deployment.model_info.__pydantic_extra__ or {}),
+            }.items()
+            if _has_non_str_keys(value)
+        }
+        model_id: Final = deployment.model_info.id
+        if model_id is not None:
+            if live:
+                self._live_params[model_id] = live
+            else:
+                self._live_params.pop(model_id, None)
+            if live_info:
+                self._live_info[model_id] = live_info
+            else:
+                self._live_info.pop(model_id, None)
         data_sources: Final = deployment.litellm_params.get("dataSources", []) or []
         for source, key, value in data_source_values:
             data_sources[source]["parameters"][key] = value
@@ -1270,6 +1350,17 @@ class HostRegistry(HostModelInfo):
             raise RuntimeError("the host registry writes deployments through its Rust core")
         self.changes_runner(changes)
         self._core_model_list.refresh()
+        self._drop_removed_live_values()
+
+    def _drop_removed_live_values(self) -> None:
+        """Forget the live values of ids no deployment carries any more, so a router that rotates
+        ids does not keep the removed deployments' errors and callables."""
+        handle: Final = self._live_handle()
+        if handle is None or not (self._live_params or self._live_info):
+            return
+        for held in (self._live_params, self._live_info):
+            for model_id in [id for id in held if handle.deployment(id) is None]:
+                del held[model_id]
 
     def refresh(self) -> None:
         """Read router-core's list again after a write (only what was appended, when that is all
@@ -1447,6 +1538,14 @@ class HostRegistry(HostModelInfo):
         idx: Final[object] = None if handle is None or key is None else handle.id_position(key)
         return None if idx is None else self._core_model_list[idx]  # pyright: ignore[reportArgumentType, reportCallIssue]  # a position, or what a caller wrote, read as Python reads it
 
+    def live_params(self, model_id: object) -> Mapping[str, object]:
+        """The litellm_params values of deployment ``model_id`` that its JSON record cannot carry."""
+        return self._live_params.get(model_id, {}) if isinstance(model_id, str) else {}
+
+    def live_info(self, model_id: object) -> Mapping[str, object]:
+        """The model_info values a deployment's JSON record reads back changed, by id."""
+        return self._live_info.get(model_id, {}) if isinstance(model_id, str) else {}
+
     def _core_get_deployment(self, model_id: str) -> Deployment | None:
         entry: Final = self._core_get_model_info(model_id)
         return None if entry is None else Deployment(**entry)  # pyright: ignore[reportArgumentType]  # a stored entry
@@ -1541,8 +1640,14 @@ class HostRegistry(HostModelInfo):
             for name in (self._core_routing_groups or {})
             if (group := self.get_routing_group(name)) is not None
         ]
+        # The provider is inferred only for a name no deployment or alias serves: inferring it for an
+        # authenticating provider's name would start its sign-in (`_get_wildcard_deployments`).
         wildcard: Final = (
-            [model_name, f"{inferred_provider(model_name)}/{model_name}"] if model_name is not None else []
+            []
+            if model_name is None
+            else [model_name]
+            if model_name in alias_map or model_name in self._core_model_names
+            else [model_name, f"{inferred_provider(model_name)}/{model_name}"]
         )
         return {"aliases": aliases, "groups": groups, "wildcard": wildcard, "only": only}
 
@@ -1561,7 +1666,8 @@ class HostRegistry(HostModelInfo):
         info: Final = _model_info_of(model)
         if team_id is not None and info.get("team_id") == team_id and model_name == info.get("team_public_model_name"):
             return True
-        if model_name is not None and model.get("model_name") == model_name:  # pyright: ignore[reportUnnecessaryComparison]  # the core checks it
+        # A record with no model_name raises KeyError, as the Python core's lookup does.
+        if model_name is not None and model["model_name"] == model_name:  # pyright: ignore[reportUnnecessaryComparison]  # the core checks it
             model_team_id: Final = info.get("team_id")
             return team_id is None or model_team_id is None or model_team_id == team_id
         return False
@@ -1974,6 +2080,38 @@ class HostRegistry(HostModelInfo):
             return None
         model: Final = _params_of(deployment).get("model")
         return None if model is None else str(model)
+
+    def _core_get_routable_upstream_provider(self, model_name: str, team_id: str | None = None) -> str | None:
+        """The provider the deployment ``_core_get_routable_upstream_model`` reads declares: its
+        ``litellm_params.custom_llm_provider``, else its model's ``provider/`` prefix. None when it declares neither."""
+        deployment: Final = next(iter(self._routable_deployments(model_name, team_id)), None)
+        if deployment is None:
+            return None
+        params: Final = _params_of(deployment)
+        model: Final = params.get("model")
+        provider: Final = params.get("custom_llm_provider")
+        return declared_provider(
+            model if isinstance(model, str) else None, provider if isinstance(provider, str) else None
+        )
+
+    def _core_get_routable_deployment_model_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> "tuple[ModelMapInfo | None, ...]":
+        """Each deployment a request from ``team_id`` to ``model_name`` can route to, read one at a time the way
+        cost tracking reads it: its upstream model's cost map entry merged with its own ``model_info``, None where
+        neither is known. Nothing is merged across deployments, so a caller can tell a deployment that lacks a
+        capability from one that says nothing."""
+        return tuple(
+            self._routable_deployment_model_info(deployment)
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
+    def _routable_deployment_model_info(self, deployment: Mapping[str, object]) -> "ModelMapInfo | None":
+        deployment_id: Final = _model_info_of(deployment).get("id")
+        model: Final = _params_of(deployment).get("model")
+        if not isinstance(deployment_id, str) or not isinstance(model, str):
+            return None
+        return self._core_cached_deployment_model_info(deployment_id, model)
 
     def _core_map_team_model(
         self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None

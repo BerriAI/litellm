@@ -218,6 +218,12 @@ class OptionalChecks:
         self.optional_callbacks.append(callback)
         self._host.callbacks.add_litellm_callback(callback)
 
+    def adopt(self, callback: object) -> None:
+        """Own a check already registered with the host: list it in ``optional_callbacks``."""
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        self.optional_callbacks.append(callback)
+
     def ensure_deployment_affinity_callback(self) -> None:
         """``_ensure_deployment_affinity_callback``: the affinity check with every global flag off."""
         if any(isinstance(cb, DeploymentAffinityCheck) for cb in self.optional_callbacks or ()):
@@ -323,7 +329,9 @@ class OptionalChecks:
         if self.optional_callbacks is None or not any(type(cb) is callback_cls for cb in self.optional_callbacks):
             return
         self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
-        others: Final = tuple(owner for owner in live_check_owners if id(owner) != id(self._owner))
+        others: Final = tuple(
+            owner for owner in live_check_owners if id(owner) != id(self._owner) and _router_alive(owner)
+        )
         if any(any(type(cb) is callback_cls for cb in (owner.optional_callbacks or ())) for owner in others):
             return
         callbacks: Final = _callbacks(self._host)
@@ -552,21 +560,41 @@ class RustOptionalChecks:
     def optional_callbacks(self) -> "list[object] | None":  # mutable-ok: the router's live list
         return self._opt.optional_callbacks
 
+    @optional_callbacks.setter
+    def optional_callbacks(self, value: "list[object] | None") -> None:  # mutable-ok: the list a caller assigns
+        """Assigning the list replaces it, as on the Python router: the checks read the new one."""
+        self._opt.optional_callbacks = value
+
     @property
     def router_budget_logger(self) -> RouterBudgetLimiting | None:
         return self._opt.router_budget_logger
+
+    # The affinity settings are plain attributes on the Python router: an assignment is what an
+    # affinity check added afterwards (`add_optional_pre_call_checks`) is built with.
 
     @property
     def deployment_affinity_ttl_seconds(self) -> object:
         return self._opt.deployment_affinity_ttl_seconds
 
+    @deployment_affinity_ttl_seconds.setter
+    def deployment_affinity_ttl_seconds(self, value: object) -> None:
+        self._opt.deployment_affinity_ttl_seconds = value
+
     @property
     def session_affinity_repin_on_failover(self) -> object:
         return self._opt.session_affinity_repin_on_failover
 
+    @session_affinity_repin_on_failover.setter
+    def session_affinity_repin_on_failover(self, value: object) -> None:
+        self._opt.session_affinity_repin_on_failover = value
+
     @property
     def model_group_affinity_config(self) -> "dict[str, list[str]] | None":  # mutable-ok: the argument as passed
         return self._opt.model_group_affinity_config
+
+    @model_group_affinity_config.setter
+    def model_group_affinity_config(self, value: "dict[str, list[str]] | None") -> None:
+        self._opt.model_group_affinity_config = value
 
     def add_optional_pre_call_checks(self, optional_pre_call_checks: "Sequence[object] | None") -> None:
         self._opt.add(optional_pre_call_checks)
@@ -648,3 +676,9 @@ __all__ = [
     "filtered_ids",
     "register_router_selector",
 ]
+
+
+def _router_alive(owner: object) -> bool:
+    """A core whose public ``Router`` was dropped holds no check: it only waits for the collector."""
+    handle: Final = vars(owner).get("_core_owner") if hasattr(owner, "__dict__") else None
+    return not callable(handle) or handle() is not None

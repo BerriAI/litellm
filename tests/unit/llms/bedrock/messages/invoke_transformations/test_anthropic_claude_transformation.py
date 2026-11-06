@@ -4042,7 +4042,10 @@ _NATIVE_OUTPUT_REJECTION: Final = {
     "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
 }
 _STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
-_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
+_OPTED_OUT: Final = {
+    "supports_native_structured_output": False,
+    "supports_bedrock_native_structured_output": False,
+}
 _CONSTRAINED_SCHEMA: Final = {
     "type": "object",
     "properties": {
@@ -4123,6 +4126,8 @@ async def _send_bedrock_messages(
         ("anthropic.claude-3-haiku-20240307-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
         ("us.anthropic.claude-opus-4-1-20250805-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
         ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("jp.anthropic.claude-opus-4-6-v1", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("au.anthropic.claude-opus-4-8", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
         ("eu.anthropic.claude-opus-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
         ("global.anthropic.claude-sonnet-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
         ("us.anthropic.claude-newfamily-6", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
@@ -4133,7 +4138,8 @@ async def test_bedrock_invoke_messages_forward_per_turn_control_beta_only_where_
     model: str, headers: dict[str, str], forwarded: bool
 ) -> None:
     """On 2026-11-05 Bedrock InvokeModel answered 400 ``invalid beta flag`` to per-turn-control-2026-07-01 on Claude 3
-    Haiku and 200 on every Claude 4.5 and newer model a QA account reached in 13 regions."""
+    Haiku and 200 on every Claude 4.5 and newer model a QA account reached in 13 regions and in the jp., au. and in.
+    profiles."""
     bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE),))
 
     await litellm.anthropic_messages(
@@ -4220,21 +4226,21 @@ async def test_bedrock_messages_native_output_rejection_and_signature_400_each_g
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("model", "model_info", "error"),
+    ("model", "model_info", "error", "should_retry"),
     [
-        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
-        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
-        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}, False),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION, True),
+        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION, False),
     ],
-    ids=["other_400", "native_model", "deployment_opt_out"],
+    ids=["other_400", "native_rejection", "deployment_opt_out"],
 )
-async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
-    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
+async def test_bedrock_messages_retries_only_native_output_rejections(
+    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object], should_retry: bool
 ) -> None:
     bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
 
-    assert isinstance(raised, litellm.BadRequestError)
-    assert len(bedrock.bodies) == 1
+    assert (raised is None) is should_retry
+    assert len(bedrock.bodies) == (2 if should_retry else 1)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

@@ -1,4 +1,4 @@
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import i18n from "@/i18n/i18n";
 import { isForecastClassifier } from "./forecast_classifier_config";
 import type { ClassifierType, ComplexityTiers } from "./ComplexityRouterConfig";
@@ -126,29 +126,27 @@ export interface TierRestriction {
 export const CUSTOM_TIER_RESTRICTIONS = {
   displayNames: {
     omit: ["tier_labels"],
-    reason: "Display names rename the built-in tiers, which your tier set replaces. Name each tier directly",
+    reason: "addModel.tierRows.restrictions.displayNames",
   },
   escalation: {
     omit: ["escalation_keywords"],
-    reason: "Escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.escalation",
   },
   stallEscalation: {
     omit: ["stall_escalation_enabled", "stall_escalation_window", "stall_escalation_repeat_threshold"],
-    reason: "Stall escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.stallEscalation",
   },
   adaptive: {
     omit: ["adaptive", "adaptive_weights", "tier_distance_penalty", "adaptive_eligible"],
-    reason: "Adaptive routing scores models along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.adaptive",
   },
   sessionAffinity: {
     omit: [],
-    reason: "Session pinning escalates along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.sessionAffinity",
   },
   heuristicClassifier: {
     omit: ["heuristic_first_max_tier", "hybrid_boundary_margin", "local_heuristic"],
-    reason:
-      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM or JEV classifier. " +
-      "Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
+    reason: "addModel.tierRows.restrictions.heuristicClassifier",
   },
   heuristicScoring: {
     omit: [
@@ -159,17 +157,17 @@ export const CUSTOM_TIER_RESTRICTIONS = {
       "reasoning_override_min_score",
       "custom_technical_keywords",
     ],
-    reason: "The heuristic scorer never runs under an edited tier set, so its inputs have no effect",
+    reason: "addModel.tierRows.restrictions.heuristicScoring",
   },
   classificationRubric: {
     omit: [],
-    reason: "The preset calibration examples are written against the built-in tiers, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.classificationRubric",
   },
   classifierFallback: {
     omit: ["classifier_fallback"],
-    reason: "Fallback Tier is where an edited tier set routes when the classifier fails",
+    reason: "addModel.tierRows.restrictions.classifierFallback",
   },
-} as const satisfies Record<string, TierRestriction>;
+} as const satisfies Record<string, { omit: readonly string[]; reason: ParseKeys }>;
 
 export const CUSTOM_TIER_OMITTED_KEYS: readonly string[] = Object.values(CUSTOM_TIER_RESTRICTIONS).flatMap(
   (restriction) => restriction.omit,

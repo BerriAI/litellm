@@ -26,6 +26,7 @@ import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/reac
 import { KeyRound } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -39,28 +40,28 @@ interface VirtualKeysTableProps {
 const FILTER_COLUMNS = ["team_id", "org_id", "user_id", "key_hash", "status"] as const;
 type FilterColumn = (typeof FILTER_COLUMNS)[number];
 
-const FILTER_LABELS: Record<FilterColumn, string> = {
-  team_id: "Team",
-  org_id: "Organization",
-  user_id: "User ID",
-  key_hash: "Key ID",
-  status: "Status",
+const FILTER_LABELS: Record<FilterColumn, ParseKeys> = {
+  team_id: "apiKeys.virtualKeysTable.filterLabels.team",
+  org_id: "apiKeys.virtualKeysTable.filterLabels.organization",
+  user_id: "apiKeys.virtualKeysTable.filterLabels.userId",
+  key_hash: "apiKeys.virtualKeysTable.filterLabels.keyId",
+  status: "apiKeys.virtualKeysTable.filterLabels.status",
 };
 
 const KEY_STATUS_VALUES = ["active", "expired", "revoked", "deleted"] as const;
 type KeyStatusFilter = (typeof KEY_STATUS_VALUES)[number];
 const ALL_STATUSES = "all";
 
-const KEY_STATUS_LABELS: Record<KeyStatusFilter, string> = {
-  active: "Active",
-  expired: "Expired",
-  revoked: "Revoked (blocked)",
-  deleted: "Deleted",
+const KEY_STATUS_LABELS: Record<KeyStatusFilter, ParseKeys> = {
+  active: "apiKeys.virtualKeysTable.statuses.active",
+  expired: "apiKeys.virtualKeysTable.statuses.expired",
+  revoked: "apiKeys.virtualKeysTable.statuses.revoked",
+  deleted: "apiKeys.virtualKeysTable.statuses.deleted",
 };
 
-const STATUS_FILTER_ITEMS = [
-  { value: ALL_STATUSES, label: "All statuses" },
-  ...KEY_STATUS_VALUES.map((value) => ({ value, label: KEY_STATUS_LABELS[value] })),
+const STATUS_FILTER_ITEMS: readonly { value: string; labelKey: ParseKeys }[] = [
+  { value: ALL_STATUSES, labelKey: "apiKeys.virtualKeysTable.statuses.all" },
+  ...KEY_STATUS_VALUES.map((value) => ({ value, labelKey: KEY_STATUS_LABELS[value] })),
 ];
 
 const isKeyStatusFilter = (value: unknown): value is KeyStatusFilter =>
@@ -216,12 +217,14 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         return organizations.find((org) => org.organization_id === raw)?.organization_alias || raw;
       }
       if (columnId === "status" && isKeyStatusFilter(raw)) {
-        return KEY_STATUS_LABELS[raw];
+        return t(KEY_STATUS_LABELS[raw]);
       }
       return raw;
     },
-    [allTeams, organizations],
+    [allTeams, organizations, t],
   );
+  const filterLabels = Object.fromEntries(FILTER_COLUMNS.map((column) => [column, t(FILTER_LABELS[column])]));
+  const statusFilterItems = STATUS_FILTER_ITEMS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
 
   if (selectedKeyId) {
     if (!selectedKey && !selectedKeyLoadFailed) {
@@ -285,7 +288,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
-              filterLabels={FILTER_LABELS}
+              filterLabels={filterLabels}
               formatFilterValue={formatFilterValue}
             />
             <DataTableFilterDrawer
@@ -331,7 +334,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                   </DataTableFilterField>
                   <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.status")}>
                     <Select
-                      items={STATUS_FILTER_ITEMS}
+                      items={statusFilterItems}
                       value={(get("status") as string) || ALL_STATUSES}
                       onValueChange={(value) => set("status", value === ALL_STATUSES ? undefined : value)}
                     >
@@ -339,7 +342,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                         <SelectValue placeholder={t("apiKeys.virtualKeysTable.filters.statusPlaceholder")} />
                       </SelectTrigger>
                       <SelectContent>
-                        {STATUS_FILTER_ITEMS.map((item) => (
+                        {statusFilterItems.map((item) => (
                           <SelectItem key={item.value} value={item.value}>
                             {item.label}
                           </SelectItem>
