@@ -5034,11 +5034,15 @@ class BedrockConverseMessagesProcessor:
         drop_params: bool = False,
         model_info: Mapping[str, object] | None = None,
     ) -> list[BedrockMessageBlock]:
-        from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
+        from litellm.llms.bedrock.common_utils import (
+            bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_rejects_signed_thinking,
+        )
 
         contents: list[BedrockMessageBlock] = []
         msg_i = 0
         to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+        drop_signed_thinking: Final = bedrock_converse_rejects_signed_thinking(model, base_model)
 
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
@@ -5194,7 +5198,9 @@ class BedrockConverseMessagesProcessor:
                 thinking_blocks = assistant_message_block.get("thinking_blocks")
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        _thinking_in_replay_order(_assistant_content, thinking_blocks), to_claude=to_claude
+                        _thinking_in_replay_order(_assistant_content, thinking_blocks),
+                        to_claude=to_claude,
+                        drop_signed=drop_signed_thinking,
                     )
                 )
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5226,8 +5232,8 @@ class BedrockConverseMessagesProcessor:
                             deployment_model=deployment_model,
                             model_info=model_info,
                         )
-                        if _cache_point_block is not None and not (
-                            drop_params and _as_thinking_block(element) is not None
+                        if _cache_point_block is not None and BedrockConverseMessagesProcessor.keeps_cache_point(
+                            element, drop_params=drop_params, drop_signed=drop_signed_thinking
                         ):
                             assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
@@ -5286,6 +5292,7 @@ class BedrockConverseMessagesProcessor:
         thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
         *,
         to_claude: bool = False,
+        drop_signed: bool = False,
     ) -> list[BedrockContentBlock]:
         return [
             BedrockContentBlock(
@@ -5295,7 +5302,26 @@ class BedrockConverseMessagesProcessor:
             )
             for thinking_block in thinking_blocks
             if not (to_claude and is_encrypted_reasoning_block(thinking_block))
+            and not (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
         ]
+
+    @staticmethod
+    def keeps_cache_point(element: object, *, drop_params: bool, drop_signed: bool) -> bool:
+        match _as_thinking_block(element):
+            case None:
+                return True
+            case thinking_block:
+                return not (
+                    drop_params or (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
+                )
+
+    @staticmethod
+    def _is_signed(thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock) -> bool:
+        match thinking_block:
+            case {"signature": signature} if signature:
+                return True
+            case _:
+                return False
 
     @staticmethod
     def _to_reasoning_content_block(
@@ -5455,11 +5481,15 @@ def _bedrock_converse_messages_pt(
     - Please ensure that function response turn comes immediately after a function call turn
     - Conversation blocks and tool result blocks cannot be provided in the same turn. Issue: https://github.com/BerriAI/litellm/issues/6053
     """
-    from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_rejects_signed_thinking,
+    )
 
     contents: list[BedrockMessageBlock] = []
     msg_i = 0
     to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+    drop_signed_thinking: Final = bedrock_converse_rejects_signed_thinking(model, base_model)
 
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
@@ -5616,7 +5646,9 @@ def _bedrock_converse_messages_pt(
             thinking_blocks = assistant_message_block.get("thinking_blocks")
             converted_thinking_blocks = (
                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                    _thinking_in_replay_order(_assistant_content, thinking_blocks), to_claude=to_claude
+                    _thinking_in_replay_order(_assistant_content, thinking_blocks),
+                    to_claude=to_claude,
+                    drop_signed=drop_signed_thinking,
                 )
             )
             assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5649,8 +5681,8 @@ def _bedrock_converse_messages_pt(
                             deployment_model=deployment_model,
                             model_info=model_info,
                         )
-                        if _cache_point_block is not None and not (
-                            drop_params and _as_thinking_block(element) is not None
+                        if _cache_point_block is not None and BedrockConverseMessagesProcessor.keeps_cache_point(
+                            element, drop_params=drop_params, drop_signed=drop_signed_thinking
                         ):
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
