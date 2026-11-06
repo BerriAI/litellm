@@ -463,7 +463,7 @@ impl Health {
         let deployment_policy = deployment.model_info.allowed_fails_policy.as_ref();
         let deployment_fails = deployment_allowed_fails(deployment_policy, failure);
         if shape.single_deployment
-            && status == 402
+            && matches!(status, 402 | 404)
             && deployment_fails.is_none()
             && policy_fails.is_none()
         {
