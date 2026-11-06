@@ -19,6 +19,7 @@ const renderWithFreshI18n = async () => {
       <Duration />
     </I18nextProvider>,
   );
+  return i18n;
 };
 
 afterEach(() => {
@@ -36,11 +37,14 @@ describe("Intl.DurationFormat polyfill", () => {
       return vi.importActual(POLYFILL);
     });
 
-    await renderWithFreshI18n();
+    const i18n = await renderWithFreshI18n();
     expect(screen.getByTestId("duration")).not.toHaveTextContent("1m 15s");
 
     arrive();
     expect(await screen.findByText("1m 15s")).toBeInTheDocument();
+    expect(i18n.t("format.duration", { val: 0 })).toBe("0s");
+    expect(i18n.t("format.duration", { val: -500 })).toBe("0s");
+    expect(i18n.t("format.duration", { val: Number.POSITIVE_INFINITY })).toBe("0s");
   });
 
   it("never loads the polyfill in a browser that has Intl.DurationFormat", async () => {
