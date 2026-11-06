@@ -29,7 +29,6 @@ from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
-    _response_read_reuses_addressed_id,
     _spend_tables_left_to_send,
     _SpendTableName,
 )
@@ -45,32 +44,79 @@ from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpush
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
-@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses", "aresponses", "acompletion"])
-@pytest.mark.parametrize("logged_id", ["resp-original", "resp-read", "resp-original_background_cost"])
-def test_response_reads_cannot_claim_the_addressed_create_row(call_type: str, logged_id: str) -> None:
-    payload: Final = {"call_type": call_type, "request_id": logged_id}
-    request: Final = {
+async def _record_response_spend(
+    call_type: str, logged_id: str, response_cost: float | None, request_fields: dict[str, object]
+) -> list[tuple[str, str, float]]:
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "success"
+    started: Final = datetime(2026, 7, 25, 10, 0, tzinfo=timezone.utc)
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        await writer.update_database(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "gpt-4o-mini",
+                "custom_llm_provider": "openai",
+                "call_type": call_type,
+                "response_cost": response_cost,
+                **request_fields,
+            },
+            completion_response={"id": logged_id},
+            start_time=started,
+            end_time=started + timedelta(seconds=1),
+            response_cost=response_cost,
+        )
+        await drain_logging_tasks()
+    return [(row["request_id"], row["call_type"], row["spend"]) for row in prisma.spend_log_transactions]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "logged_id", "response_cost", "expected_rows"),
+    [
+        ("aget_responses", "resp-original", 0.0, []),
+        ("acancel_responses", "resp-original", 0.0, []),
+        ("aget_responses", "resp-original", None, []),
+        ("acancel_responses", "resp-original", None, []),
+        ("aget_responses", "resp-read", 0.0, [("resp-read", "aget_responses", 0.0)]),
+        ("acancel_responses", "resp-read", 0.0, [("resp-read", "acancel_responses", 0.0)]),
+        ("aget_responses", "resp-original", 0.2, [("resp-original", "aget_responses", 0.2)]),
+        ("acancel_responses", "resp-original", 0.2, [("resp-original", "acancel_responses", 0.2)]),
+        ("aresponses", "resp-original", 0.0, [("resp-original", "aresponses", 0.0)]),
+        ("acompletion", "resp-original", 0.0, [("resp-original", "acompletion", 0.0)]),
+    ],
+)
+async def test_response_reads_cannot_claim_the_addressed_create_row(
+    call_type: str, logged_id: str, response_cost: float | None, expected_rows: list[tuple[str, str, float]]
+) -> None:
+    request_fields: Final[dict[str, object]] = {
         "litellm_params": {"proxy_server_request": {"body": {"_litellm_addressed_response_id": "resp-original"}}}
     }
-    assert _response_read_reuses_addressed_id(payload, request) is (
-        call_type in {"aget_responses", "acancel_responses"} and logged_id == "resp-original"
-    )
+    assert await _record_response_spend(call_type, logged_id, response_cost, request_fields) == expected_rows
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_fields",
     [
         {},
-        {"litellm_params": None},
+        {"litellm_params": {}},
         {"litellm_params": {"proxy_server_request": None}},
         {"litellm_params": {"proxy_server_request": {"body": {}}}},
         {"litellm_params": {"proxy_server_request": {"body": {"_litellm_addressed_response_id": 12}}}},
     ],
 )
-def test_response_reads_without_an_addressed_id_do_not_collide(request_fields: dict[str, object]) -> None:
-    assert not _response_read_reuses_addressed_id(
-        {"call_type": "aget_responses", "request_id": "resp-id"}, request_fields
-    )
+async def test_response_reads_without_an_addressed_id_do_not_collide(request_fields: dict[str, object]) -> None:
+    assert await _record_response_spend("aget_responses", "resp-id", 0.0, request_fields) == [
+        ("resp-id", "aget_responses", 0.0)
+    ]
 
 
 @pytest.fixture(autouse=True)
