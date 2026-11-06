@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import type { FieldErrors } from "react-hook-form";
 import { z } from "zod";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -56,6 +57,19 @@ const tagEditSchema = z.object(tagEditShape);
 
 type TagEditFormValues = z.output<typeof tagEditSchema>;
 
+const budgetFieldNames = ["max_budget", "budget_duration", "tpm_limit", "rpm_limit"] as const;
+
+const withoutBudgetFields = (values: TagEditFormValues): TagEditFormValues => ({
+  ...values,
+  max_budget: undefined,
+  budget_duration: undefined,
+  tpm_limit: undefined,
+  rpm_limit: undefined,
+});
+
+const onlyBudgetFieldErrors = (errors: FieldErrors<TagEditFormValues>): boolean =>
+  Object.keys(errors).every((name) => (budgetFieldNames as readonly string[]).includes(name));
+
 const numericPayload = (value: string | number | null | undefined): number | null | undefined => {
   if (value === undefined) return undefined;
   if (isBlank(value)) return null;
@@ -85,16 +99,18 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, userModels, onCancel, on
   });
 
   const submitVisibleValues = (values: TagEditFormValues): Promise<void> =>
-    onSave(
-      budgetSectionOpen
-        ? values
-        : { ...values, max_budget: undefined, budget_duration: undefined, tpm_limit: undefined, rpm_limit: undefined },
-    );
+    onSave(budgetSectionOpen ? values : withoutBudgetFields(values));
+
+  const submitIgnoringHiddenBudgetErrors = (errors: FieldErrors<TagEditFormValues>): Promise<void> | undefined => {
+    if (budgetSectionOpen || !onlyBudgetFieldErrors(errors)) return undefined;
+    form.clearErrors([...budgetFieldNames]);
+    return submitVisibleValues(form.getValues());
+  };
 
   const modelOptions = userModels.map((modelId) => ({ label: getModelDisplayName(modelId), value: modelId }));
 
   return (
-    <form onSubmit={form.handleSubmit(submitVisibleValues)} noValidate>
+    <form onSubmit={form.handleSubmit(submitVisibleValues, submitIgnoringHiddenBudgetErrors)} noValidate>
       <FieldGroup>
         <FormField control={form.control} name="name" label={t("tagManagement.editForm.fields.name")}>
           {({ ref, ...field }) => <Input {...field} ref={ref} />}

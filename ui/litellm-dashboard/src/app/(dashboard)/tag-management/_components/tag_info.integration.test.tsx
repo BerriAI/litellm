@@ -215,7 +215,7 @@ describe("TagInfoView save payload", () => {
 
   it("shows the current limits when editing from the Edit Tag button rather than the row action", async () => {
     const user = userEvent.setup();
-    render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin />);
+    render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag={false} />);
 
     await user.click(await screen.findByRole("button", { name: "Edit Tag" }));
     await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
@@ -255,6 +255,21 @@ describe("TagInfoView save payload", () => {
     expect(mockTagUpdateCall).toHaveBeenCalledWith(
       "sk-test",
       expect.objectContaining({ description: null, rpm_limit: 30 }),
+    );
+  });
+
+  it("still saves when an invalid limit was left behind in a collapsed budget section", async () => {
+    const { user } = await renderEditor();
+    const toggle = () => screen.getByRole("button", { name: /Budget & Rate Limits/ });
+
+    await user.click(toggle());
+    fireEvent.change(await screen.findByLabelText("RPM Limit"), { target: { value: "1.5" } });
+    await user.click(toggle());
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(mockTagUpdateCall).toHaveBeenCalledWith(
+      "sk-test",
+      expect.objectContaining({ name: "prod-tag", rpm_limit: undefined, tpm_limit: undefined, max_budget: undefined }),
     );
   });
 

@@ -119,4 +119,21 @@ describe("CreateTagModal", () => {
     expect(screen.queryByText(/not currently supported/)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /GitHub issue/ })).not.toBeInTheDocument();
   });
+
+  it("still creates the tag when an invalid limit was left behind in a collapsed budget section", async () => {
+    const user = userEvent.setup();
+    render(<CreateTagModal {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText("Tag Name"), { target: { value: "limited-tag" } });
+    const toggle = () => screen.getByRole("button", { name: /Budget & Rate Limits/ });
+    await user.click(toggle());
+    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "-1" } });
+    await user.click(toggle());
+
+    await user.click(screen.getByRole("button", { name: /Create Tag/i }));
+
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ tag_name: "limited-tag", tpm_limit: undefined }),
+    );
+  });
 });
