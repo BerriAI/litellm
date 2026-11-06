@@ -95,8 +95,6 @@ if TYPE_CHECKING:
         AllMessageValues,
         ChatCompletionFileObject,
         ChatCompletionImageObject,
-        ChatCompletionRedactedThinkingBlock,
-        ChatCompletionThinkingBlock,
         ChatCompletionToolReferenceObject,
         OpenAIMessageContentListBlock,
     )
@@ -485,10 +483,10 @@ def _as_chat_reasoning_items(
 
 
 def _with_stream_block_index(
-    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+    block: Mapping[str, object],
     index: int,
 ) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
-    if block["type"] == "redacted_thinking":
+    if block.get("type") == "redacted_thinking":
         data: Final = block.get("data")
         return ChatCompletionRedactedThinkingBlock(
             type="redacted_thinking",

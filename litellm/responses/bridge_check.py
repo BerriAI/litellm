@@ -296,21 +296,27 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def chat_completion_ends_in_responses_api(model: str | None, custom_llm_provider: str | None) -> bool:
+def chat_completion_ends_in_responses_api(
+    model: str | None,
+    custom_llm_provider: str | None,
+    deployment_model_info: Mapping[str, object] | None = None,
+) -> bool:
     """Whether chat completion for this model is served by a Responses API.
 
     Encrypted reasoning can be replayed only there. A normal chat provider cannot
-    verify the block, so the messages adapter strips it. ``chatgpt`` and a
-    ``responses/`` model keep it.
+    verify the block, so the messages adapter strips it. ``chatgpt``, a ``responses/``
+    model, and a deployment pinned to ``mode: responses`` keep it.
     """
-    if model is None and custom_llm_provider is None:
+    if not model:
         return False
     try:
-        resolved_model, provider = resolve_model_and_provider_for_metadata(model or "", custom_llm_provider)
+        resolved_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider)
     except Exception as error:  # noqa: BLE001  # unknown model names must not fail message translation
         verbose_logger.debug("responses replay check failed for %s: %s", model, error)
-        return custom_llm_provider == LlmProviders.CHATGPT.value or (
-            isinstance(model, str) and (model == "chatgpt" or model.startswith("chatgpt/"))
-        )
-    model_info, _resolved = responses_api_bridge_check(model=resolved_model, custom_llm_provider=provider)
+        return False
+    model_info, _resolved = responses_api_bridge_check(
+        model=resolved_model,
+        custom_llm_provider=provider,
+        deployment_model_info=deployment_model_info,
+    )
     return model_info.get("mode") == "responses"
