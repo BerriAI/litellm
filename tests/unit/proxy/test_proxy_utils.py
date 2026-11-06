@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 from datetime import datetime
 from typing import Any, Dict, Final, List, Optional, TypeAlias, Union
@@ -11,6 +12,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3057,6 +3059,34 @@ async def test_pre_call_hook_guardrail_block_drops_the_prompt_from_the_stored_re
         "body": {"model": "gpt-4", "redacted": "blocked by guardrail"},
         "headers": {"x-trace": "1"},
     }
+
+
+class _PayloadReplacingCallback(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return copy.deepcopy(data)
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_guardrail_block_after_payload_replacement_redacts_the_callers_snapshot(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    prompt: Final = "my token is sk-live-abcd1234efgh"
+    data: Final = {
+        "model": "gpt-4",
+        "prompt": prompt,
+        "proxy_server_request": {"body": {"model": "gpt-4", "prompt": prompt}},
+    }
+    block: Final = GuardrailRaisedException(guardrail_name="raiser", message="blocked", blocked_content=True)
+    monkeypatch.setattr(litellm, "callbacks", [_PayloadReplacingCallback(), _RaisingPreCallGuardrail(block, False)])
+    with pytest.raises(GuardrailRaisedException):
+        await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            data=data,
+            call_type="acompletion",
+        )
+
+    assert data["proxy_server_request"]["body"] == {"model": "gpt-4", "redacted": "blocked by guardrail"}
 
 
 @pytest.mark.asyncio

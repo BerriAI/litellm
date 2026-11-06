@@ -3198,6 +3198,7 @@ class ProxyLogging:
         if data is None:
             return None
 
+        entry_data: Final = data
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
         prompt_id: Final[str | None] = data.get("prompt_id", None)
 
@@ -3381,6 +3382,7 @@ class ProxyLogging:
                 self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
                 if is_guardrail_intervention(e):
                     redact_proxy_server_request_body_snapshot(data)  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook takes a bare dict
+                    redact_proxy_server_request_body_snapshot(entry_data)  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook takes a bare dict
             raise
 
     async def _run_parallel_pre_call_guardrails(
