@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from openai.types.responses import ResponseInputMessageItem, ResponseInputText, ResponseOutputMessage, ResponseOutputText
 
 import litellm
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
@@ -96,6 +97,35 @@ class TestChatGPTResponsesAPITransformation:
             user_item,
             {**system_blocks_item, "role": "developer"},
             developer_item,
+        ]
+
+    def test_chatgpt_accepts_sdk_response_objects_replayed_as_input(self) -> None:
+        prior_reply: Final = ResponseOutputMessage(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            status="completed",
+            content=[ResponseOutputText(type="output_text", text="Hi!", annotations=[])],
+        )
+        system_item: Final = ResponseInputMessageItem(
+            id="msg_2",
+            type="message",
+            role="system",
+            content=[ResponseInputText(type="input_text", text="Answer in French.")],
+        )
+        user_item: Final = {"role": "user", "content": "Again"}
+        request: Final = ChatGPTResponsesAPIConfig().transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[prior_reply, system_item, user_item],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            prior_reply.model_dump(exclude_none=True),
+            {**system_item.model_dump(exclude_none=True), "role": "developer"},
+            user_item,
         ]
 
     @pytest.mark.parametrize(
