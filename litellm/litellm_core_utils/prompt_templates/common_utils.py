@@ -2,10 +2,12 @@
 Common utility functions used for translating messages across providers
 """
 
+import importlib
 import json
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from pydantic import TypeAdapter
@@ -221,6 +223,122 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(conte
 _extract_reasoning_content: Final = extract_reasoning_content
 _get_image_mime_type_from_url: Final = get_image_mime_type_from_url
 _parse_content_for_reasoning: Final = parse_content_for_reasoning
+
+_MOVED_PRIVATE_NAME_MODULES: Final = MappingProxyType(
+    {
+        **dict.fromkeys(
+            ("_decode_vector_store_ids_in_tools",),
+            "file_id_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_EMPTY_SCHEMA",
+                "_LOCAL_SCHEMA_REF_PREFIXES",
+                "_MAX_SCHEMA_FLATTEN_DEPTH",
+                "_MAX_SCHEMA_NESTING",
+                "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+                "_REGEX_LOOKAROUND_RE",
+                "_SCHEMA_LIST",
+                "_SUBSCHEMA_KEYWORDS",
+                "_SUBSCHEMA_LIST_KEYWORDS",
+                "_SUBSCHEMA_MAP_KEYWORDS",
+                "_TOP_LEVEL_SCHEMA_COMBINATORS",
+                "_any_of",
+                "_combinator_required_names",
+                "_dropped_pattern_properties",
+                "_flatten_schema_against_root",
+                "_grammar_branches",
+                "_is_not_python_regex",
+                "_is_object_schema",
+                "_is_open_object",
+                "_is_union",
+                "_keyword_value_rebuilt",
+                "_list_at",
+                "_may_be_string",
+                "_mergeable_branch",
+                "_named_schemas",
+                "_node_without_rejected_regex",
+                "_optional_property_names",
+                "_property_schemas",
+                "_refs_in",
+                "_resolve_local_schema_ref",
+                "_root_definitions",
+                "_schema_at",
+                "_schema_branches",
+                "_schema_levels",
+                "_schema_nodes",
+                "_schema_properties",
+                "_schema_required_names",
+                "_schema_without_rejected_regex",
+                "_subschemas",
+                "_uses_regex_lookaround",
+            ),
+            "json_schema_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_AcceptedBreakpointT",
+                "_BREAKPOINT_BLOCKS",
+                "_BREAKPOINT_BLOCK_LIST_KEYS",
+                "_BREAKPOINT_FIELDS",
+                "_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT",
+                "_MarkedT",
+                "_PROMPT_CACHE_BREAKPOINT",
+                "_accepted_prompt_cache_breakpoint",
+                "_breakpoint_fields_or_none",
+                "_breakpoints_stripped_from",
+                "_cache_control_for_prompt_cache_breakpoint",
+                "_part_with_chat_completion_prompt_cache_breakpoint",
+                "_without_prompt_cache_breakpoint",
+            ),
+            "prompt_cache_breakpoint_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_carries_encrypted_reasoning",
+                "_converse_wrapped_payload",
+                "_encrypted_reasoning_field",
+                "_provider_text_or_none",
+                "_readable_thinking_text",
+                "_reasoning_item_from_block_group",
+                "_reasoning_replay_group_key",
+                "_strip_encrypted_reasoning_from_blocks",
+            ),
+            "reasoning_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_DECODED_JSON",
+                "_attempt_json_repair",
+            ),
+            "tool_call_json_repair",
+        ),
+        **dict.fromkeys(
+            (
+                "_BASE64_PAYLOAD",
+                "_TPMMediaProjection",
+                "_TPM_EMBEDDING_FILE_MIME_PREFIXES",
+                "_is_base64_data_uri",
+                "_is_json_array",
+                "_tpm_blank_fields",
+                "_tpm_code_output_media",
+                "_tpm_document_media",
+                "_tpm_embedding_file",
+                "_tpm_embedding_file_block",
+                "_tpm_embedding_item",
+                "_tpm_embedding_leaf",
+                "_tpm_file_media",
+                "_tpm_image_part",
+                "_tpm_input_media",
+                "_tpm_media_leaf",
+                "_tpm_media_list",
+                "_tpm_replace_field",
+                "_tpm_tool_result_media",
+            ),
+            "tpm_media_utils",
+        ),
+    }
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -1577,3 +1695,10 @@ def invalid_type_message(field_path: str, value: object) -> str:
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
+
+
+def __getattr__(name: str) -> object:
+    module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}"), name)

@@ -1,10 +1,12 @@
 import copy
+import importlib
 import json
 from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -983,3 +985,131 @@ def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_unt
 
     assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
     assert messages == messages_before
+
+
+_MOVED_PRIVATE_NAMES_BY_MODULE: Final = (
+    (
+        "file_id_utils",
+        ("_decode_vector_store_ids_in_tools",),
+    ),
+    (
+        "json_schema_utils",
+        (
+            "_EMPTY_SCHEMA",
+            "_LOCAL_SCHEMA_REF_PREFIXES",
+            "_MAX_SCHEMA_FLATTEN_DEPTH",
+            "_MAX_SCHEMA_NESTING",
+            "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+            "_REGEX_LOOKAROUND_RE",
+            "_SCHEMA_LIST",
+            "_SUBSCHEMA_KEYWORDS",
+            "_SUBSCHEMA_LIST_KEYWORDS",
+            "_SUBSCHEMA_MAP_KEYWORDS",
+            "_TOP_LEVEL_SCHEMA_COMBINATORS",
+            "_any_of",
+            "_combinator_required_names",
+            "_dropped_pattern_properties",
+            "_flatten_schema_against_root",
+            "_grammar_branches",
+            "_is_not_python_regex",
+            "_is_object_schema",
+            "_is_open_object",
+            "_is_union",
+            "_keyword_value_rebuilt",
+            "_list_at",
+            "_may_be_string",
+            "_mergeable_branch",
+            "_named_schemas",
+            "_node_without_rejected_regex",
+            "_optional_property_names",
+            "_property_schemas",
+            "_refs_in",
+            "_resolve_local_schema_ref",
+            "_root_definitions",
+            "_schema_at",
+            "_schema_branches",
+            "_schema_levels",
+            "_schema_nodes",
+            "_schema_properties",
+            "_schema_required_names",
+            "_schema_without_rejected_regex",
+            "_subschemas",
+            "_uses_regex_lookaround",
+        ),
+    ),
+    (
+        "prompt_cache_breakpoint_utils",
+        (
+            "_AcceptedBreakpointT",
+            "_BREAKPOINT_BLOCKS",
+            "_BREAKPOINT_BLOCK_LIST_KEYS",
+            "_BREAKPOINT_FIELDS",
+            "_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT",
+            "_MarkedT",
+            "_PROMPT_CACHE_BREAKPOINT",
+            "_accepted_prompt_cache_breakpoint",
+            "_breakpoint_fields_or_none",
+            "_breakpoints_stripped_from",
+            "_cache_control_for_prompt_cache_breakpoint",
+            "_part_with_chat_completion_prompt_cache_breakpoint",
+            "_without_prompt_cache_breakpoint",
+        ),
+    ),
+    (
+        "reasoning_utils",
+        (
+            "_carries_encrypted_reasoning",
+            "_converse_wrapped_payload",
+            "_encrypted_reasoning_field",
+            "_provider_text_or_none",
+            "_readable_thinking_text",
+            "_reasoning_item_from_block_group",
+            "_reasoning_replay_group_key",
+            "_strip_encrypted_reasoning_from_blocks",
+        ),
+    ),
+    (
+        "tool_call_json_repair",
+        (
+            "_DECODED_JSON",
+            "_attempt_json_repair",
+        ),
+    ),
+    (
+        "tpm_media_utils",
+        (
+            "_BASE64_PAYLOAD",
+            "_TPMMediaProjection",
+            "_TPM_EMBEDDING_FILE_MIME_PREFIXES",
+            "_is_base64_data_uri",
+            "_is_json_array",
+            "_tpm_blank_fields",
+            "_tpm_code_output_media",
+            "_tpm_document_media",
+            "_tpm_embedding_file",
+            "_tpm_embedding_file_block",
+            "_tpm_embedding_item",
+            "_tpm_embedding_leaf",
+            "_tpm_file_media",
+            "_tpm_image_part",
+            "_tpm_input_media",
+            "_tpm_media_leaf",
+            "_tpm_media_list",
+            "_tpm_replace_field",
+            "_tpm_tool_result_media",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(("module_name", "names"), _MOVED_PRIVATE_NAMES_BY_MODULE)
+def test_moved_private_helpers_still_import_from_common_utils(module_name: str, names: tuple[str, ...]) -> None:
+    new_home: Final = importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+    unreachable: Final = [name for name in names if getattr(common_utils, name, None) is not getattr(new_home, name)]
+    assert unreachable == []
+
+
+def test_unknown_private_name_still_raises_attribute_error_on_common_utils() -> None:
+    missing_name: Final = "_not_a_moved_helper"
+    with pytest.raises(AttributeError, match=missing_name):
+        getattr(common_utils, missing_name)
