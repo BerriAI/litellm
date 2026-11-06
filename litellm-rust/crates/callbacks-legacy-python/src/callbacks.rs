@@ -59,6 +59,8 @@ pub trait LegacyCallbacks {
 
     fn defers_async_logging(&self, py: Python<'_>) -> bool;
 
+    fn claim_async_success_log(&self, py: Python<'_>) -> PyResult<bool>;
+
     fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()>;
 
     fn sync_success_for_async_call(
@@ -201,6 +203,12 @@ impl LegacyCallbacks for PythonLogger {
             .call(py, (self.object(py),))
             .and_then(|value| value.extract())
             .unwrap_or(false)
+    }
+
+    fn claim_async_success_log(&self, py: Python<'_>) -> PyResult<bool> {
+        Logging::ClaimAsyncSuccess
+            .call(py, (self.object(py),))?
+            .extract()
     }
 
     fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()> {

@@ -50,6 +50,8 @@ pub(crate) enum Logging {
     RecordApiWindow,
     #[strum(serialize = "defers_async_logging")]
     DefersAsync,
+    #[strum(serialize = "claim_async_success_log")]
+    ClaimAsyncSuccess,
     #[strum(serialize = "defer_success")]
     DeferSuccess,
     #[strum(serialize = "sync_success_for_async_call")]

@@ -252,6 +252,7 @@ impl LegacyLogging {
             return pending().sync(py);
         }
         if !self.internal
+            && logger.claim_async_success_log(py)?
             && self
                 .call
                 .kwargs()
@@ -1904,6 +1905,46 @@ mod terminal_tests {
 assert all(value is response for name, value in logger.calls if name.endswith('_handler'))
 assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_async_logging', False)
 ",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::deferred(
+        c"logger._defer_async_logging = True",
+        c"logger._native_pending_logging.release(True)",
+        &["sync_success_for_async_call", "sync_success_for_async_call", "async_success_handler", "enqueued"]
+    )]
+    #[case::immediate(
+        c"",
+        c"",
+        &["async_success_handler", "enqueued", "sync_success_for_async_call", "sync_success_for_async_call"]
+    )]
+    fn a_fallback_attempt_on_the_same_logger_leaves_the_first_success_claimed(
+        #[case] script: &CStr,
+        #[case] release: &CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"refused = object()\nresponse = refused");
+            run(py, &locals, script);
+            let mut first = logged(py, &locals, true);
+            succeed(py, &locals, &mut first);
+            run(py, &locals, c"response = object()");
+            let mut fallback = logged(py, &locals, true);
+            succeed(py, &locals, &mut fallback);
+            run(py, &locals, release);
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+            run(
+                py,
+                &locals,
+                c"assert [value for name, value in logger.calls if name == 'async_success_handler'] == [refused]",
             );
         });
     }

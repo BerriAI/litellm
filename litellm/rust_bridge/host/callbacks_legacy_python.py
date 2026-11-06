@@ -139,6 +139,8 @@ class LoggingSurface(Protocol):
         additional_args: dict[str, object] = ...,
     ) -> object: ...
 
+    def claim_async_success_log(self) -> bool: ...
+
     def handle_sync_success_callbacks_for_async_calls(
         self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
@@ -267,6 +269,10 @@ def record_api_window(logger: Logging, start: float, end: float) -> None:
 
 def defers_async_logging(logger: LoggingSurface) -> bool:
     return bool(getattr(logger, "defer_async_logging", False))
+
+
+def claim_async_success_log(logger: LoggingSurface) -> bool:
+    return logger.claim_async_success_log()
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
