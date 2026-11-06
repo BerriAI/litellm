@@ -12,6 +12,7 @@ import {
 import { z } from "zod";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import i18n from "@/i18n/i18n";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,11 +25,20 @@ export interface MetadataPair {
 }
 
 export const metadataPairsSchema = z
-  .array(z.object({ key: z.string().min(1, "Missing key"), value: z.string().optional() }))
+  .array(
+    z.object({
+      key: z.string().min(1, { error: () => i18n.t("metadataKeyValueFields.errors.missingKey") }),
+      value: z.string().optional(),
+    }),
+  )
   .superRefine((pairs, ctx) => {
     pairs.forEach((pair, index) => {
       if (pair.key && pairs.filter((other) => other.key === pair.key).length > 1) {
-        ctx.addIssue({ code: "custom", message: "Duplicate key", path: [index, "key"] });
+        ctx.addIssue({
+          code: "custom",
+          message: i18n.t("metadataKeyValueFields.errors.duplicateKey"),
+          path: [index, "key"],
+        });
       }
     });
   });

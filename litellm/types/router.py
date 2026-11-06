@@ -427,6 +427,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
+    allow_legacy_cloud_file_ids: bool | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
@@ -1154,9 +1155,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Asynchronously retrieves the available deployment based on the given parameters.
@@ -1177,9 +1178,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Synchronously retrieves the available deployment based on the given parameters.

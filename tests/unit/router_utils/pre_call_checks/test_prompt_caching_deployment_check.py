@@ -1480,3 +1480,58 @@ async def test_a_pin_written_without_tools_is_read_when_tools_is_an_empty_list()
     )
 
     assert filtered == [deployments[0]]
+
+
+class _LoggedMessagesProbe(CustomLogger):
+    def __init__(self) -> None:
+        self.logged_messages: list[object] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_messages.append((kwargs["standard_logging_object"]["messages"], kwargs["messages"]))
+
+
+@pytest.mark.asyncio
+async def test_pin_is_written_with_message_logging_off_while_loggers_still_see_redacted_messages(
+    monkeypatch, local_model_cost_map
+):
+    """
+    `turn_off_message_logging` redacted the shared success-event payload before the check read it, so the
+    pin was keyed off `redacted-by-litellm`, never written, and a cacheable conversation bounced across the
+    group. The pin must land whatever the flag says, while a real logger alongside still sees only the
+    redacted messages.
+    """
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    probe = _LoggedMessagesProbe()
+    monkeypatch.setattr(litellm, "callbacks", [probe])
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-1", "dep-2")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    messages = _messages(word_count=5000)
+
+    first = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok")
+    served_by = first._hidden_params["model_id"]
+
+    affinity_key = PromptCachingCache.get_prompt_caching_cache_key(messages, None)
+    pin = await _eventually(lambda: router.prompt_caching_pin_cache.get_cache(key=affinity_key))
+    assert pin == {"model_id": served_by}, pin
+
+    subsequent = [
+        (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
+            "model_id"
+        ]
+        for _ in range(4)
+    ]
+    assert subsequent == [served_by] * 4
+
+    await _eventually(lambda: len(probe.logged_messages) == 5)
+    redacted = [{"role": "user", "content": "redacted-by-litellm"}]
+    assert probe.logged_messages == [(redacted, redacted)] * 5, probe.logged_messages
