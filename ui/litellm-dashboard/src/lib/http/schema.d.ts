@@ -36296,6 +36296,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -52391,6 +52393,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
