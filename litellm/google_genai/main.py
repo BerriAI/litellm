@@ -45,6 +45,12 @@ _CUSTOM_GENERATE_CONTENT_BODY: Final = TypeAdapter(dict[str, object])
 #################################################
 
 
+def _custom_generate_content_handler(provider: str) -> CustomLLM | None:
+    if provider in tuple(built_in.value for built_in in litellm.LlmProviders):
+        return None
+    return ProviderConfigManager.get_custom_llm_handler(provider)
+
+
 def _mark_async_entrypoint(logging_obj: LiteLLMLoggingObj | None, marker: str, is_async: bool) -> None:
     if logging_obj is not None:
         logging_obj.model_call_details.setdefault("litellm_params", {})[marker] = is_async
@@ -150,7 +156,7 @@ class GenerateContentHelper:
                 provider=litellm.LlmProviders(custom_llm_provider),
                 litellm_params=litellm_params.model_dump(include={"base_model", "api_base"}),
             )
-            if custom_llm_provider not in litellm._custom_providers  # pyright: ignore[reportPrivateUsage]  # established custom provider registry
+            if _custom_generate_content_handler(custom_llm_provider) is None
             else None
         )
 
@@ -162,7 +168,7 @@ class GenerateContentHelper:
             litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
                 kwargs=kwargs,
                 model=model,
-                optional_params=_CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {}),
+                optional_params={"generationConfig": _CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {})},
                 litellm_params={"litellm_call_id": litellm_call_id},
                 custom_llm_provider=custom_llm_provider,
             )
@@ -383,11 +389,7 @@ def generate_content(
             **kwargs,
         )
 
-        custom_handler: Final = (
-            ProviderConfigManager.get_custom_llm_handler(setup_result.custom_llm_provider)
-            if setup_result.custom_llm_provider in litellm._custom_providers  # pyright: ignore[reportPrivateUsage]  # established custom provider registry
-            else None
-        )
+        custom_handler: Final = _custom_generate_content_handler(setup_result.custom_llm_provider)
         native_hook_overridden: Final = custom_handler is not None and (
             type(custom_handler).agenerate_content is not CustomLLM.agenerate_content
             if _is_async
@@ -434,6 +436,9 @@ def generate_content(
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
+            if custom_handler is not None:
+                setup_result.litellm_logging_obj.mark_logging_complete(event_type="sync_success")
+                setup_result.litellm_logging_obj.mark_logging_complete(event_type="async_success")
             # Use the adapter to convert to completion format
             adapter_response: Final = GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
