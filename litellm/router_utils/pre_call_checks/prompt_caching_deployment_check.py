@@ -23,9 +23,12 @@ from litellm.litellm_core_utils.routing_common_utils import deployment_ids_faile
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.bedrock.common_utils import bedrock_cache_point_ttl_supported, bedrock_capability_model
 from litellm.responses.litellm_completion_transformation.transformation import (
+    RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM,
+    RESPONSES_WEB_SEARCH_TOOL_TYPES,
     LiteLLMCompletionResponsesConfig,
     ResponseTools,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, ResponseInputParam
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import (
@@ -45,16 +48,18 @@ class _PromptCachingSuccessEventKwargs(TypedDict, total=False):
 class _ResponsesPin(NamedTuple):
     cache_key: str
     marked_ttl_seconds: int
-    cacheable_deployment_ids: frozenset[str]
+    cacheable_deployment_ids: tuple[str, ...]
 
 
 class _ResponsesPrompt(NamedTuple):
     messages: list[AllMessageValues]  # mutable-ok: the prefix helpers take chat messages as a list
     tools: list[AllToolParamValues] | None  # mutable-ok: the prefix helpers take chat tools as a list
+    key_tools: list[ChatCompletionToolParam] | None  # mutable-ok: the prefix helpers take chat tools as a list
 
 
 _RESPONSES_PIN_METADATA_KEY: Final = "responses_prompt_cache_pin"
 _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
+_RESPONSES_TOOL_TYPES_KEPT_AS_SENT: Final = RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM | RESPONSES_WEB_SEARCH_TOOL_TYPES
 
 
 def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | None:
@@ -67,6 +72,14 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
         if isinstance(request_tools, list)
         else None
     )
+    tools_kept_as_sent: Final = tuple(
+        tool for tool in listed_tools or () if tool.get("type") in _RESPONSES_TOOL_TYPES_KEPT_AS_SENT
+    )
+    convertible_tools: Final = (
+        [tool for tool in listed_tools if tool.get("type") not in _RESPONSES_TOOL_TYPES_KEPT_AS_SENT]
+        if listed_tools is not None
+        else None
+    )
     try:
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
             input=cast(str | ResponseInputParam, request_input),  # cast-ok: a bad item raises and is caught here
@@ -74,14 +87,28 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
             item_cache_control=True,
             only_since_compaction=True,
         )
-        tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(listed_tools)
+        tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            convertible_tools
+        )
     except Exception as error:  # noqa: BLE001  # the provider judges the input, a routing preference never does
         verbose_logger.debug("Prompt Caching: skipping an input with no chat form: %s", error)
         return None
+    key_tools: Final = [*tools, *tools_kept_as_sent]
     return _ResponsesPrompt(
         messages=cast(list[AllMessageValues], messages),  # cast-ok: the bridge's chat messages, read as plain JSON
         tools=cast(list[AllToolParamValues], tools) or None,  # cast-ok: the bridge's chat tools, read as plain JSON
+        key_tools=cast(list[ChatCompletionToolParam], key_tools) or None,  # cast-ok: tools are hashed as plain JSON
     )
+
+
+def _previous_response_model_id(request_data: Mapping[str, object]) -> str | None:
+    previous_response_id: Final = request_data.get("previous_response_id")
+    model_id: Final = (
+        ResponsesAPIRequestUtils.get_model_id_from_response_id(previous_response_id)
+        if isinstance(previous_response_id, str)
+        else None
+    )
+    return None if model_id is None or model_id in deployment_ids_failed_in_request(request_data) else model_id
 
 
 def _deployment_min_tokens(deployment: Mapping[str, Mapping[str, object]], fallback: int) -> int:
@@ -93,7 +120,7 @@ async def _cacheable_deployment_ids(
     healthy_deployments: Sequence[Mapping[str, Mapping[str, object]]],
     reached_minimum: int,
     reaches: Callable[[int], Awaitable[bool]],
-) -> frozenset[str]:
+) -> tuple[str, ...]:
     minimums: Final = tuple(
         (str(deployment["model_info"]["id"]), _deployment_min_tokens(deployment, reached_minimum))
         for deployment in healthy_deployments
@@ -104,7 +131,7 @@ async def _cacheable_deployment_ids(
             for minimum in frozenset(minimum for _, minimum in minimums)
         }
     )
-    return frozenset(deployment_id for deployment_id, minimum in minimums if reached[minimum])
+    return tuple(sorted(deployment_id for deployment_id, minimum in minimums if reached[minimum]))
 
 
 def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int:
@@ -176,6 +203,20 @@ class PromptCachingDeploymentCheck(CustomLogger):
         pin_metadata: Final = (
             request_data.get("litellm_metadata") if messages is None and request_data is not None else None
         )
+        previous_response_model_id: Final = (
+            _previous_response_model_id(request_data)
+            if request_data is not None and isinstance(pin_metadata, dict)
+            else None
+        )
+        previous_response_deployments: Final = [
+            deployment
+            for deployment in cast(  # cast-ok: router deployments are plain dicts keyed by section name
+                list[dict[str, dict[str, object]]], healthy_deployments
+            )
+            if previous_response_model_id is not None and deployment["model_info"]["id"] == previous_response_model_id
+        ]
+        if previous_response_deployments:
+            return previous_response_deployments[:1]
         responses_prompt: Final = (
             await offload_token_count(_responses_prompt)(request_data)
             if request_data is not None and isinstance(pin_metadata, dict)
@@ -234,8 +275,12 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 ),
                 request_kwargs=request_kwargs,
             )
-            prefix_tools: Final = cast(  # cast-ok: AllToolParamValues widens the union for Anthropic tool shapes
-                Sequence[ChatCompletionToolParam] | None, request_tools
+            prefix_tools: Final = (
+                responses_prompt.key_tools
+                if responses_prompt is not None
+                else cast(  # cast-ok: AllToolParamValues widens the union for Anthropic tool shapes
+                    Sequence[ChatCompletionToolParam] | None, request_tools
+                )
             )
             positions: Final = await PromptCachingCache.async_prefix_positions(affinity_messages, prefix_tools)
             if responses_prompt is not None and isinstance(pin_metadata, dict) and positions:
