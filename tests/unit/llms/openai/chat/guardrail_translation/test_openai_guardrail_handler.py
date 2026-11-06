@@ -987,6 +987,39 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
         ]
 
     @pytest.mark.asyncio
+    async def test_input_guardrail_rewrite_of_a_replayed_server_web_call_reaches_its_hosted_copy(self):
+        handler: Final = OpenAIChatCompletionsHandler()
+        data: Final = {
+            "messages": [
+                {"role": "user", "content": "look up jane"},
+                {
+                    "role": "assistant",
+                    "content": "Searching.",
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            _server_tool_call("srvtoolu_01Search", "web_search", _SEARCH_INPUT),
+                            _server_tool_call("srvtoolu_01Fetch", "web_fetch", _FETCH_INPUT),
+                        ],
+                        "web_search_calls": [
+                            build_web_search_call("srvtoolu_01Search", _SEARCH_INPUT, {"content": []}).model_dump(),
+                            build_web_search_call(
+                                "srvtoolu_01Fetch", _FETCH_INPUT, {"content": []}, tool_name="web_fetch"
+                            ).model_dump(),
+                        ],
+                    },
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data, QueryRedactingGuardrail(guardrail_name="redact"))
+
+        hosted: Final = json.loads(json.dumps(data["messages"][1]["provider_specific_fields"]["web_search_calls"]))
+        assert [(call["id"], call["action"].get("query") or call["action"].get("url")) for call in hosted] == [
+            ("ws_srvtoolu_01Search", "[REDACTED]"),
+            ("ws_srvtoolu_01Fetch", "[REDACTED]"),
+        ]
+
+    @pytest.mark.asyncio
     async def test_output_guardrail_sees_a_response_that_only_carries_server_tool_calls(self):
         handler: Final = OpenAIChatCompletionsHandler()
         guardrail: Final = TestOpenAIChatCompletionsHandlerStreamingOutput._recording_guardrail()

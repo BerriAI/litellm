@@ -167,7 +167,7 @@ class lakeraAI_Moderation(CustomGuardrail):
                     tool_call_messages = [
                         *tool_call_messages,
                         *anthropic_server_tool_call_params(message),
-                        *message.get("tool_calls", ()),
+                        *(message.get("tool_calls") or ()),
                     ]
                     if role == Role.SYSTEM.value:  # we need this for later
                         system_message = message

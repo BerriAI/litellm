@@ -23,6 +23,7 @@ from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
@@ -1447,6 +1448,29 @@ class TestToolPermissionGuardrail:
         assert message.provider_specific_fields["server_tool_calls"] == []
         assert [tool_call.id for tool_call in message.tool_calls] == [_ALLOWED_BASH_CALL["id"]]
         assert "Permission denied" in message.content
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_removes_the_denied_server_tool_calls_hosted_copy(self):
+        rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        response: Final = self._server_search_response()
+        response.choices[0].message.provider_specific_fields = {
+            **response.choices[0].message.provider_specific_fields,
+            "web_search_calls": [
+                build_web_search_call("srvtoolu_01Search", {"query": "weather in Paris"}, {"content": []})
+            ],
+        }
+
+        with patch.object(rewriting, "should_run_guardrail", return_value=True):
+            result: Final = await rewriting.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+        assert result.choices[0].message.provider_specific_fields["web_search_calls"] == []
 
     def test_modify_response_with_permission_errors_keeps_custom_tool_call_in_another_choice(self):
         denied_call = ChatCompletionMessageToolCall(

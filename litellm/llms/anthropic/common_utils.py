@@ -16,6 +16,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictBool, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -2405,12 +2406,30 @@ def write_anthropic_server_tool_calls(
 
 
 def write_request_server_tool_calls(message: object, rewritten: tuple[ChatCompletionAssistantToolCall, ...]) -> None:
+    original: Final = anthropic_server_tool_call_params(message)
+    if rewritten == original:
+        return
+    write_request_hosted_web_call_arguments(message, changed_server_tool_call_arguments(original, rewritten))
     fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields")) or {}
-    if rewritten == anthropic_server_tool_call_params(message) or not isinstance(message, dict):
+    if not isinstance(message, dict):
         return
     message["provider_specific_fields"] = {  # rebind-ok: a guardrail rewrite must land on the request it scanned
         **fields,
         "server_tool_calls": list(rewritten),
+    }
+
+
+def write_request_hosted_web_call_arguments(message: object, arguments_by_tool_id: Mapping[str, str]) -> None:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields"))
+    if not arguments_by_tool_id or not isinstance(message, dict) or fields is None:
+        return
+    if fields.get("web_search_calls") is None:
+        return
+    message["provider_specific_fields"] = {  # rebind-ok: a rewritten call's hosted copy must not keep its old input
+        **fields,
+        "web_search_calls": to_jsonable_python(
+            _rewritten_web_search_calls(fields["web_search_calls"], arguments_by_tool_id), exclude_none=True
+        ),
     }
 
 
@@ -2465,6 +2484,38 @@ def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[
     if arguments is None:
         return item
     return call.model_copy(update={"action": with_hosted_web_tool_arguments(call.action, arguments)})
+
+
+def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str]) -> None:
+    fields: Final = holder.provider_specific_fields or {}
+    holder.provider_specific_fields = {  # rebind-ok: a denied call must leave every copy of the message it was on
+        **fields,
+        "server_tool_calls": [
+            call for call in anthropic_server_tool_call_params(holder) if _server_tool_call_id(call) not in tool_ids
+        ],
+        **(
+            {"web_search_calls": _web_search_calls_without(fields["web_search_calls"], tool_ids)}
+            if fields.get("web_search_calls") is not None
+            else {}
+        ),
+    }
+
+
+def _web_search_calls_without(calls: object, tool_ids: frozenset[str]) -> object:
+    mapping: Final = validated_object_mapping(calls)
+    if mapping is not None:
+        return {key: call for key, call in mapping.items() if _hosted_web_call_tool_id(call) not in tool_ids}
+    items: Final = validated_object_list(calls)
+    if items is None:
+        return calls
+    return [call for call in items if _hosted_web_call_tool_id(call) not in tool_ids]
+
+
+def _hosted_web_call_tool_id(item: object) -> str | None:
+    try:
+        return web_search_call_tool_id(_WEB_SEARCH_CALL_ADAPTER.validate_python(item).id)
+    except ValidationError:
+        return None
 
 
 def write_anthropic_server_tool_call_arguments(holder: Message | Delta, index: int, arguments: str) -> None:
