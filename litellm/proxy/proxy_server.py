@@ -1031,6 +1031,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    query_raw_within_statement_timeout,
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
@@ -1570,8 +1571,19 @@ def _forget_prisma_client() -> None:
     prisma_client = None  # rebind-ok: a closed client must not survive into the next lifespan entry
 
 
-def _spend_log_trace_receiver() -> TraceReceiver:
-    return TraceReceiver(storage=SpendLogTraceStorage(lambda: prisma_client.db if prisma_client is not None else None))
+@dataclass(frozen=True, slots=True)
+class _SpendLogReads:
+    prisma: PrismaClient
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        return await query_raw_within_statement_timeout(self.prisma, query, *args, what="Lens traces")
+
+
+def _spend_log_trace_receiver(database: database_runtime.Database | None) -> TraceReceiver | None:
+    if database is None:
+        return None
+    reads: Final = _SpendLogReads(database.prisma)
+    return TraceReceiver(storage=SpendLogTraceStorage(lambda: reads))
 
 
 @asynccontextmanager
@@ -1950,7 +1962,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
-        fallback_factory=_spend_log_trace_receiver,
+        fallback_factory=lambda: _spend_log_trace_receiver(database),
     ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver, "database": database}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan

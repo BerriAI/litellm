@@ -10,12 +10,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import reduce
+from itertools import chain
 from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
+from litellm.proxy.db.db_span import db_span
 from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
 from litellm.tracing.generated.types import (
     AgentNode,
@@ -168,21 +170,27 @@ def _tag_value(tags: Sequence[object], prefix: str) -> str | None:
     )
 
 
-def _content_texts(content: object) -> tuple[str, ...]:
+def _text_blocks(content: object) -> tuple[str, ...]:
     if isinstance(content, str):
         return (content,)
     return tuple(
-        text
-        for block in _sequence(content)
-        for text in (
-            (_text(_mapping(block).get("text")),)
-            if _mapping(block).get("type") in ("text", "input_text", "output_text")
-            else _content_texts(_mapping(block).get("content"))
-            if _mapping(block).get("type") == "tool_result"
-            else ()
-        )
-        if text
+        _text(block.get("text"))
+        for block in map(_mapping, _sequence(content))
+        if block.get("type") in ("text", "input_text", "output_text")
     )
+
+
+def _block_texts(block: Mapping[str, object]) -> tuple[str, ...]:
+    if block.get("type") == "tool_result":
+        return _text_blocks(block.get("content"))
+    return _text_blocks((block,))
+
+
+def _content_texts(content: object) -> tuple[str, ...]:
+    if isinstance(content, str):
+        return (content,)
+    blocks: Final = chain.from_iterable(_block_texts(block) for block in map(_mapping, _sequence(content)))
+    return tuple(text for text in blocks if text)
 
 
 def _visible_text(content: object) -> str:
@@ -240,8 +248,13 @@ def _response_tool_calls(response: Mapping[str, object]) -> tuple[_ToolCall, ...
             _text(_mapping(call.get("function")).get("name")),
             _mapping(_loads(_text(_mapping(call.get("function")).get("arguments")))),
         )
-        for choice in map(_mapping, _sequence(response.get("choices")))
-        for call in map(_mapping, _sequence(_mapping(choice.get("message")).get("tool_calls")))
+        for call in map(
+            _mapping,
+            chain.from_iterable(
+                _sequence(_mapping(choice.get("message")).get("tool_calls"))
+                for choice in map(_mapping, _sequence(response.get("choices")))
+            ),
+        )
     )
     responses_api: Final = tuple(
         (_text(item.get("name")), _mapping(_loads(_text(item.get("arguments")))))
@@ -308,8 +321,9 @@ def _placed(call: _Call, earlier: tuple[_Placed, ...], root: str) -> _Placed:
     spawner: Final = next(
         (
             (tool.subagent, placed)
-            for placed in reversed(earlier)
-            for tool in placed.call.tool_calls
+            for placed, tool in chain.from_iterable(
+                ((placed, tool) for tool in placed.call.tool_calls) for placed in reversed(earlier)
+            )
             if tool.subagent and tool.subagent_prompt in call.prompts
         ),
         None,
@@ -328,7 +342,7 @@ def _place(calls: Sequence[_Call]) -> tuple[_Placed, ...]:
     def step(earlier: tuple[_Placed, ...], call: _Call) -> tuple[_Placed, ...]:
         return (*earlier, _placed(call, earlier, root))
 
-    initial: tuple[_Placed, ...] = ()
+    initial: Final[tuple[_Placed, ...]] = ()
     return reduce(step, calls, initial)
 
 
@@ -355,19 +369,19 @@ class _AgentRun:
     end_ms: float
 
 
+def _agent_run(name: str, own: tuple[_Placed, ...]) -> _AgentRun:
+    return _AgentRun(
+        name=name,
+        parent=next((item.parent_agent for item in own if item.parent_agent), None),
+        placed=own,
+        start_ms=min(item.call.start_ms for item in own),
+        end_ms=max(item.call.end_ms for item in own),
+    )
+
+
 def _agent_runs(placed: Sequence[_Placed]) -> tuple[_AgentRun, ...]:
     names: Final = tuple(dict.fromkeys(item.agent for item in placed))
-    return tuple(
-        _AgentRun(
-            name=name,
-            parent=next((item.parent_agent for item in own if item.parent_agent), None),
-            placed=own,
-            start_ms=min(item.call.start_ms for item in own),
-            end_ms=max(item.call.end_ms for item in own),
-        )
-        for name in names
-        for own in (tuple(item for item in placed if item.agent == name),)
-    )
+    return tuple(_agent_run(name, tuple(item for item in placed if item.agent == name)) for name in names)
 
 
 def _next_start(placed: Sequence[_Placed], index: int) -> float | None:
@@ -486,10 +500,9 @@ def build_trace(rows: Sequence[SpendLogRow]) -> Trace:
     trace_end: Final = max(call.end_ms for call in calls)
     spans: Final = (
         *(_agent_span(run, trace_start) for run in runs),
-        *(
-            span
+        *chain.from_iterable(
+            (_llm_span(item, trace_start), *_tool_spans(placed, index, trace_start))
             for index, item in enumerate(placed)
-            for span in (_llm_span(item, trace_start), *_tool_spans(placed, index, trace_start))
         ),
     )
     errors: Final = sum(1 for call in calls if call.failed)
@@ -544,8 +557,9 @@ def _span_detail(trace_rows: Sequence[SpendLogRow], span_id: str) -> SpanDetail 
     tool: Final = next(
         (
             tool
-            for call in calls
-            for position, tool in enumerate(call.tool_calls)
+            for call, position, tool in chain.from_iterable(
+                ((call, position, tool) for position, tool in enumerate(call.tool_calls)) for call in calls
+            )
             if _tool_span_id(call, position) == span_id
         ),
         None,
@@ -609,7 +623,10 @@ class SpendLogTraceStorage:
 
     async def _query(self, sql: str, *args: object) -> Sequence[Mapping[str, object]]:
         db: Final = self._database()
-        return await db.query_raw(sql, *args) if db is not None else ()
+        if db is None:
+            return ()
+        async with db_span("lens_spend_log_traces", "LiteLLM_SpendLogs", "select"):
+            return await db.query_raw(sql, *args)
 
     async def _trace_keys(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: tuple[str, str] | None, limit: int
@@ -668,9 +685,8 @@ class SpendLogTraceStorage:
 
     async def _traces(self, keys: Sequence[str], scope: TraceScope) -> tuple[Trace, ...]:
         rows: Final = await self._rows(keys, scope)
-        return tuple(
-            build_trace(own) for key in keys for own in (tuple(row for row in rows if row["trace_key"] == key),) if own
-        )
+        groups: Final = tuple(tuple(row for row in rows if row["trace_key"] == key) for key in keys)
+        return tuple(build_trace(own) for own in groups if own)
 
     async def list_traces(
         self,
@@ -721,24 +737,22 @@ class SpendLogTraceStorage:
         )
         traces: Final = await self._traces(tuple(row["trace_key"] for row in keys), scope)
         names: Final = tuple(
-            dict.fromkeys(name for trace in traces for name in trace["summary"].get("agent_names", ()))
+            dict.fromkeys(chain.from_iterable(trace["summary"].get("agent_names", ()) for trace in traces))
         )
         return tuple(
-            TraceAgentRow(
-                agent_name=name,
-                runs=len(own),
-                failed_runs=sum(
-                    1
-                    for trace in own
-                    if any(span["status"] == "error" for span in trace["spans"] if span["agent"] == name)
-                ),
-                last_seen_ms=int(max(_parse_ms(trace["summary"]["start_time"].replace("Z", "")) for trace in own)),
-                frameworks=tuple(
-                    dict.fromkeys(
-                        span["framework"] for trace in own for span in trace["spans"] if span["agent"] == name
-                    )
-                ),
-            )
+            _agent_row(name, tuple(trace for trace in traces if name in trace["summary"].get("agent_names", ())))
             for name in names[: parameters.limit]
-            for own in (tuple(trace for trace in traces if name in trace["summary"].get("agent_names", ())),)
         )
+
+
+def _agent_row(name: str, own: tuple[Trace, ...]) -> TraceAgentRow:
+    spans: Final = tuple(span for span in chain.from_iterable(trace["spans"] for trace in own) if span["agent"] == name)
+    return TraceAgentRow(
+        agent_name=name,
+        runs=len(own),
+        failed_runs=sum(
+            1 for trace in own if any(span["status"] == "error" and span["agent"] == name for span in trace["spans"])
+        ),
+        last_seen_ms=int(max(_parse_ms(trace["summary"]["start_time"].replace("Z", "")) for trace in own)),
+        frameworks=tuple(dict.fromkeys(span["framework"] for span in spans)),
+    )
