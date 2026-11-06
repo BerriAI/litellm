@@ -2613,7 +2613,7 @@ def redact_proxy_server_request_body_snapshot(data: Mapping[str, object]) -> Non
     if not isinstance(proxy_server_request, dict):
         return
     model: Final = data.get("model")
-    proxy_server_request["body"] = {} if model is None else {"model": model}
+    proxy_server_request["body"] = {"redacted": "blocked by guardrail"} | ({} if model is None else {"model": model})
 
 
 async def add_litellm_data_to_request(

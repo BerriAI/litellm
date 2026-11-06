@@ -150,6 +150,7 @@ from litellm.exceptions import (
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    is_guardrail_intervention,
     merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -268,6 +269,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     add_guardrails_from_auth_metadata,
     normalized_metadata_slot,
+    redact_proxy_server_request_body_snapshot,
 )
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import (
@@ -3374,9 +3376,11 @@ class ProxyLogging:
             if data is not None:
                 self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             return data
-        except Exception:
+        except Exception as e:
             if data is not None:
                 self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
+                if is_guardrail_intervention(e):
+                    redact_proxy_server_request_body_snapshot(data)  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook takes a bare dict
             raise
 
     async def _run_parallel_pre_call_guardrails(

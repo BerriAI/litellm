@@ -2671,18 +2671,12 @@ class ProxyBaseLLMRequestProcessing:
         prefetch_model = self.data.get("model")
         if llm_router is not None and isinstance(prefetch_model, str):
             RoutingContext(llm_router).arm_read_prefetch(prefetch_model, self.data)
-        request_data: Final = self.data
-        try:
-            self.data = await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=request_data,
-                call_type=route_type,
-                skip_guardrails=skip_guardrails,
-            )
-        except Exception as e:
-            if is_guardrail_intervention(e):
-                redact_proxy_server_request_body_snapshot(request_data)
-            raise
+        self.data = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=self.data,
+            call_type=route_type,
+            skip_guardrails=skip_guardrails,
+        )
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,
@@ -2853,7 +2847,9 @@ class ProxyBaseLLMRequestProcessing:
                         if is_hard_per_model_limit(fallback_exc):
                             raise
                         continue
-            except BaseException:
+            except BaseException as e:
+                if isinstance(e, Exception) and is_guardrail_intervention(e):
+                    redact_proxy_server_request_body_snapshot(rate_limited_data)
                 self.data = rate_limited_data
                 raise
 

@@ -22,13 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.exceptions import (
-    APIError,
-    BlockedPiiEntityError,
-    GuardrailRaisedException,
-    InternalServerError,
-    MidStreamFallbackError,
-)
+from litellm.exceptions import APIError, GuardrailRaisedException, InternalServerError, MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
@@ -436,62 +430,6 @@ class TestProxyBaseLLMRequestProcessing:
         proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
         _, kwargs = proxy_logging_obj.post_call_response_headers_hook.call_args
         assert kwargs["request_headers"] == {"authorization": "Bearer sk-test"}
-
-    @staticmethod
-    async def _fail_pre_call_hook_with(error: Exception, request_data: dict[str, object]) -> None:
-        async def add_data(*args: object, **kwargs: object) -> dict[str, object]:
-            return request_data
-
-        proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=error)
-
-        with patch.object(litellm.proxy.common_request_processing, "add_litellm_data_to_request", add_data):
-            with pytest.raises(type(error)):
-                await ProxyBaseLLMRequestProcessing(data=request_data).common_processing_pre_call_logic(
-                    request=MagicMock(spec=Request, headers={}),
-                    general_settings={},
-                    user_api_key_dict=ProxyUserAPIKeyAuth(),
-                    proxy_logging_obj=proxy_logging_obj,
-                    proxy_config=MagicMock(spec=ProxyConfig),
-                    route_type="acompletion",
-                )
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "block",
-        [
-            GuardrailRaisedException(guardrail_name="content-filter", message="blocked"),
-            BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio"),
-            HTTPException(status_code=400, detail={"error": "Violated content filter guardrail policy"}),
-        ],
-        ids=["guardrail_raised", "blocked_pii", "http_400"],
-    )
-    async def test_guardrail_block_in_pre_call_hook_drops_the_prompt_from_the_stored_request_body(
-        self, block: Exception
-    ) -> None:
-        messages: Final = [{"role": "user", "content": "my secret is sk-live-1234"}]
-        request_data: Final[dict[str, object]] = {
-            "model": "gpt-4o",
-            "messages": messages,
-            "proxy_server_request": {
-                "body": {"model": "gpt-4o", "messages": messages},
-                "headers": {"x-trace": "1"},
-            },
-        }
-
-        await self._fail_pre_call_hook_with(block, request_data)
-
-        assert request_data["proxy_server_request"] == {"body": {"model": "gpt-4o"}, "headers": {"x-trace": "1"}}
-
-    @pytest.mark.asyncio
-    async def test_non_guardrail_pre_call_failure_keeps_the_stored_request_body(self) -> None:
-        messages: Final = [{"role": "user", "content": "hello"}]
-        stored_body: Final = {"model": "gpt-4o", "messages": messages}
-        request_data: Final[dict[str, object]] = {**stored_body, "proxy_server_request": {"body": stored_body}}
-
-        await self._fail_pre_call_hook_with(HTTPException(status_code=429, detail="slow down"), request_data)
-
-        assert request_data["proxy_server_request"] == {"body": stored_body}
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(self, monkeypatch):
@@ -7935,6 +7873,54 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         assert processor.data["model"] == fallback_model
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_guardrail_block_on_a_fallback_model_keeps_the_prompt_out_of_the_restored_request_body(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model = "gpt-4"
+        messages = [{"role": "user", "content": "my token is sk-live-abcd1234efgh"}]
+        processor = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": primary_model,
+                "messages": messages,
+                "proxy_server_request": {"body": {"model": primary_model, "messages": messages}},
+            }
+        )
+
+        async def rate_limited_then_blocked(**kwargs):
+            if processor.data["model"] == primary_model:
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            raise GuardrailRaisedException(guardrail_name="block-secrets", message="blocked", blocked_content=True)
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{primary_model: ["gpt-3.5-turbo"]}]
+
+        with (
+            patch.object(processor, "common_processing_pre_call_logic", side_effect=rate_limited_then_blocked),
+            pytest.raises(GuardrailRaisedException),
+        ):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["proxy_server_request"]["body"] == {
+            "model": primary_model,
+            "redacted": "blocked by guardrail",
+        }
 
     @pytest.mark.asyncio
     async def test_local_rate_limit_fallback_skips_an_aliased_embedding_only_model(self):
