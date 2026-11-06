@@ -490,6 +490,29 @@ def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_decla
     assert input_cost > 0 and output_cost > 0
 
 
+@pytest.mark.parametrize(
+    ("deployment_model_info", "native"),
+    [
+        ({}, True),
+        ({"supports_bedrock_native_structured_output": False}, False),
+        ({"supports_native_structured_output": True, "supports_bedrock_native_structured_output": False}, True),
+    ],
+    ids=["native-by-default", "bedrock-opt-out", "explicit-generic-flag"],
+)
+def test_model_info_reports_a_deployment_bedrock_native_output_opt_out(
+    local_model_cost_map: None, deployment_model_info: dict[str, object], native: bool
+) -> None:
+    info: Final = proxy_server._enrich_model_info_with_litellm_data(
+        {
+            "model_name": "sonnet",
+            "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+            "model_info": {"id": "sonnet-deployment", **deployment_model_info},
+        }
+    )["model_info"]
+
+    assert info["supports_native_structured_output"] is native
+
+
 def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
