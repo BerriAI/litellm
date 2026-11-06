@@ -452,6 +452,8 @@ class BedrockRealtimeGuardrails:
         guarded_item: Final = realtime_guarded_item(client_event)
         if guarded_item is None:
             return _ClientEventRoute.FORWARD
+        held: Final = json.dumps(client_event)
+        client_ws.scope[BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY] = held  # rebind-ok: replayed on fallback
         role: Final = "tool" if isinstance(guarded_item, RealtimeToolOutput) else "user"
         match await self._verdict(guarded_item.texts, role, GuardrailEventHooks.pre_call):
             case None:

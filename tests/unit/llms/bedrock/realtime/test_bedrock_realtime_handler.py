@@ -1076,7 +1076,16 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert other_provider.calls == 0
 
     @pytest.mark.asyncio
-    async def test_readiness_failure_on_an_input_first_start_replays_the_input(self, stub_aws_sdk_client):
+    @pytest.mark.parametrize(
+        "guardrail_awaits_its_backend", [False, True], ids=["no guardrail", "a guardrail that awaits its backend"]
+    )
+    async def test_readiness_failure_on_an_input_first_start_replays_the_input(
+        self, stub_aws_sdk_client, monkeypatch, guardrail_awaits_its_backend: bool
+    ):
+        guardrail: Final = AwaitingGuardrail(
+            "hunter2", guardrail_name="remote", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        monkeypatch.setattr(litellm, "callbacks", [guardrail] if guardrail_awaits_its_backend else [])
         handler = BedrockRealtime()
         websocket = RealtimeClientWS([self.USER_TEXT])
         healthy_stream = SessionBoundBedrockStream()
@@ -1751,6 +1760,18 @@ class MaskingGuardrail(BlockedWordGuardrail):
         logging_obj: LiteLLMLogging | None = None,
     ) -> GenericGuardrailAPIInputs:
         return {**inputs, "texts": [text.replace(self.blocked_word, "[MASKED]") for text in inputs["texts"]]}
+
+
+class AwaitingGuardrail(BlockedWordGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        await asyncio.sleep(0.05)
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
 class SystemSkippingGuardrail(BlockedWordGuardrail):

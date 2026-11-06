@@ -177,6 +177,18 @@ async def _screen(
     return await _screen(guardrails[1:], outcome, request_data)
 
 
+async def _screen_each(
+    guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
+) -> RealtimeGuardrailBlock | tuple[str, ...]:
+    if not texts:
+        return ()
+    first: Final = await _screen(guardrails, texts[:1], request_data)
+    if isinstance(first, RealtimeGuardrailBlock):
+        return first
+    rest: Final = await _screen_each(guardrails, texts[1:], request_data)
+    return rest if isinstance(rest, RealtimeGuardrailBlock) else first + rest
+
+
 def _joins(texts: tuple[str, ...]) -> tuple[str, ...]:
     unspaced: Final = "".join(texts)
     boundaries: Final = zip(texts, texts[1:])
@@ -187,11 +199,11 @@ def _joins(texts: tuple[str, ...]) -> tuple[str, ...]:
 async def _rewritten_parts(
     guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
 ) -> RealtimeGuardrailBlock | tuple[str, ...]:
-    parts: Final = await _screen(guardrails, texts, request_data)
+    parts: Final = await _screen_each(guardrails, texts, request_data)
     if isinstance(parts, RealtimeGuardrailBlock):
         return parts
     rejoined: Final = _joins(parts)
-    screened_rejoined: Final = await _screen(guardrails, rejoined, request_data)
+    screened_rejoined: Final = await _screen_each(guardrails, rejoined, request_data)
     if isinstance(screened_rejoined, RealtimeGuardrailBlock):
         return screened_rejoined
     masked_join: Final = next((text for text, join in zip(screened_rejoined, rejoined) if text != join), None)
@@ -247,7 +259,7 @@ async def realtime_guardrail_verdict(
     in_scope: Final = tuple(guardrails.values())
     guardrail_request_data: Final = {**request_data, "user_api_key_dict": user_api_key_dict}
     joined: Final = _joins(texts)
-    screened: Final = await _screen(in_scope, joined, guardrail_request_data)
+    screened: Final = await _screen_each(in_scope, joined, guardrail_request_data)
     if isinstance(screened, RealtimeGuardrailBlock):
         return screened
     if screened == joined:

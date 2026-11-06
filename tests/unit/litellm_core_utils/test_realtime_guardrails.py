@@ -58,6 +58,20 @@ class MaskingGuardrail(CustomGuardrail):
         return {**inputs, "texts": [text.replace(self.word, "[MASKED]") for text in texts]}
 
 
+class LastTextRedactingGuardrail(MaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        last: Final = inputs.get("texts", [""])[-1]
+        if self.word not in last:
+            return inputs
+        return {**inputs, "texts": [last.replace(self.word, "[MASKED]")]}
+
+
 def _item_create(item: object) -> dict:
     return {"type": "conversation.item.create", "item": item}
 
@@ -143,7 +157,7 @@ async def test_masked_texts_come_back_as_a_rewrite_and_reach_later_guardrails_ma
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED]", "and [MASKED]", "hi"))
-    assert second.screened[0] == ("my [MASKED]and swordfishhi", "my [MASKED] and swordfish hi")
+    assert sorted(second.screened[:2]) == [("my [MASKED] and swordfish hi",), ("my [MASKED]and swordfishhi",)]
 
 
 @pytest.mark.asyncio
@@ -162,7 +176,7 @@ async def test_masked_texts_come_back_as_a_rewrite_and_reach_later_guardrails_ma
         ),
     ],
 )
-async def test_a_clean_multi_part_item_reaches_each_guardrail_in_one_call_with_only_the_joins_it_needs(
+async def test_a_clean_multi_part_item_sends_each_guardrail_only_the_joins_it_needs_one_text_per_call(
     parts: tuple[str, ...], screened: tuple[str, ...]
 ) -> None:
     guardrail: Final = MaskingGuardrail("hunter2")
@@ -172,7 +186,7 @@ async def test_a_clean_multi_part_item_reaches_each_guardrail_in_one_call_with_o
     )
 
     assert verdict is None
-    assert guardrail.screened == [screened]
+    assert sorted(guardrail.screened) == sorted((text,) for text in screened)
 
 
 @pytest.mark.asyncio
@@ -293,6 +307,24 @@ async def test_no_mask_one_text_part_gets_is_lost_when_its_joined_text_masks_dif
     assert "123-45-6789" not in forwarded
     assert "hunter2 rocks" not in forwarded
     assert forwarded.startswith("abc")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parts", "rewritten"),
+    [
+        pytest.param(("my code is", "hunter2"), ("my code is", "[MASKED]"), id="mask inside one part"),
+        pytest.param(("my code is hun", "ter2"), ("my code is [MASKED]",), id="mask across parts"),
+    ],
+)
+async def test_a_guardrail_that_answers_with_one_text_still_masks_parts_joined_without_a_space(
+    parts: tuple[str, ...], rewritten: tuple[str, ...]
+) -> None:
+    verdict: Final = await realtime_guardrail_verdict(
+        parts, "user", (GuardrailEventHooks.pre_call,), {}, None, (LastTextRedactingGuardrail("hunter2"),)
+    )
+
+    assert verdict == RealtimeGuardrailRewrite(texts=rewritten)
 
 
 class ScopedGuardrail(RaisingGuardrail):
