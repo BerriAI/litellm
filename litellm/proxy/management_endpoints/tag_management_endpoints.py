@@ -31,6 +31,9 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.redis.stores.spend_counters import (
+    tag_counter,
+)
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
@@ -319,7 +322,7 @@ async def new_tag(
         )
 
         await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
-        await invalidate_spend_counter(counter_key=f"spend:tag:{tag.name}")
+        await invalidate_spend_counter(counter_key=tag_counter(tag.name))
 
         # Update models with new tag
         if tag.models:
