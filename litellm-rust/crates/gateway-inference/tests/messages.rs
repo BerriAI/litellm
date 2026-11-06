@@ -230,6 +230,11 @@ async fn a_deployment_default_reaches_the_provider_as_the_same_client_value(
     json!({}),
     json!({}),
 )]
+#[case::deployment_tools_that_are_not_a_list_stay_out(
+    json!({"tools": tool("deployment_lookup")}),
+    json!({}),
+    json!({}),
+)]
 #[tokio::test]
 async fn a_deployment_param_reaches_the_provider_as_its_client_equivalent(
     #[case] deployment_params: Value,
@@ -250,6 +255,7 @@ async fn a_deployment_param_reaches_the_provider_as_its_client_equivalent(
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn deployment_tools_leave_client_tools_that_are_not_an_array_as_sent() {
     let upstream = MockServer::start().await;
@@ -273,6 +279,7 @@ async fn deployment_tools_leave_client_tools_that_are_not_an_array_as_sent() {
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_deployment_stream_default_streams_a_request_that_omits_stream() {
     let upstream = MockServer::start().await;
