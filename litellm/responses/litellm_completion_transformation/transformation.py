@@ -62,6 +62,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 )
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import CachedTokensDetails
+from litellm.types.llms.bedrock import S3MediaImageUrlObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -224,6 +225,10 @@ _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+
+
+def _is_s3_url(url: object) -> bool:
+    return isinstance(url, str) and url.startswith("s3://")
 
 
 @runtime_checkable
@@ -2257,8 +2262,9 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
-        if item.get("bucket_owner"):
-            file_dict["bucket_owner"] = item["bucket_owner"]
+        bucket_owner: Final = item.get("bucket_owner")
+        if bucket_owner is not None and _is_s3_url(file_id or item.get("file_data")):
+            file_dict["bucket_owner"] = bucket_owner
 
         new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
         if "cache_control" in item:
@@ -2276,8 +2282,8 @@ class LiteLLMCompletionResponsesConfig:
         detail: Final = item.get("detail") or "auto"
         bucket_owner: Final = item.get("bucket_owner")
         image_url_obj: Final = (
-            ChatCompletionImageUrlObject(url=url, detail=detail, bucket_owner=bucket_owner)
-            if bucket_owner
+            S3MediaImageUrlObject(url=url, detail=detail, bucket_owner=bucket_owner)
+            if bucket_owner is not None and _is_s3_url(url)
             else ChatCompletionImageUrlObject(url=url, detail=detail)
         )
 

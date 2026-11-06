@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request, status
-from pydantic import PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, constants, provider_list
@@ -460,6 +460,15 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
+
+
+class ClientSideStorageAllowlist(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = None
+
+    def admits_s3_bucket(self, bucket: str) -> bool:
+        return bucket in (self.allowed_client_side_s3_buckets or ())
 
 
 def _check_banned_params(
