@@ -1,3 +1,5 @@
+from litellm.proxy.deps.repositories import get_plugin_upload_repository
+from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 import asyncio
 import json
 import re
@@ -1804,7 +1806,6 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference: 
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
-    from litellm.repositories.plugin_upload_repository import PluginUploadRepository
     from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
 
     def create(data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
@@ -1826,6 +1827,7 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference: 
     prisma.db.litellm_claudecodepluginversion.create = AsyncMock()
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_plugin_upload_repository] = lambda: PluginUploadRepository(prisma)
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         asyncio.run(
@@ -1843,8 +1845,10 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference: 
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
             )
         )
+        prisma.db.query_raw.return_value = [{"id": "plugin-id", "download_count": 12}]
         response: Final = TestClient(app).get("/public/skill_hub")
 
+    assert response.json()["plugins"][0]["download_count"] == 12
     assert response.status_code == 200
     assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
         ("security-review", preference)
@@ -1854,6 +1858,7 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference: 
 _INTERNAL_PLUGIN: Final = SimpleNamespace(
     id="plugin-id",
     name="deploy-helper",
+    created_by=None,
     enabled=True,
     created_at=None,
     updated_at=None,
@@ -1874,8 +1879,11 @@ def _skill_hub_response(find_many: AsyncMock, general_settings: Mapping[str, obj
     table.find_many = find_many
     prisma: Final = MagicMock()
     prisma.db.litellm_claudecodeplugintable = table
+    prisma.writer_db = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_plugin_upload_repository] = lambda: PluginUploadRepository(prisma)
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
@@ -1909,6 +1917,7 @@ def test_public_skill_hub_500_body_carries_no_exception_text() -> None:
 def test_public_skill_hub_without_a_database_answers_db_not_connected() -> None:
     app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_plugin_upload_repository] = lambda: None
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),

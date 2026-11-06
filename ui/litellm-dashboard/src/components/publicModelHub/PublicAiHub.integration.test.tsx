@@ -82,6 +82,7 @@ const MODELS = [
 
 const SKILLS: Plugin[] = [
   {
+    download_count: 5,
     id: "skill-research",
     name: "research-assistant",
     description: "Answers research questions",
@@ -92,11 +93,15 @@ const SKILLS: Plugin[] = [
     category: "Analysis",
     keywords: ["evidence"],
     author: { name: "Research maintainers" },
+    created_by: "writer@example.test",
+    approved_by: "reviewer@example.test",
+    security_scan_passed: true,
     enabled: true,
     created_at: null,
     updated_at: null,
   },
   {
+    download_count: 9,
     id: "skill-review",
     name: "review-changes",
     description: "Checks pull requests",
@@ -111,6 +116,7 @@ const SKILLS: Plugin[] = [
     updated_at: null,
   },
   {
+    download_count: 2,
     id: "skill-release",
     name: "release-notes",
     description: "Summarizes shipped changes",
@@ -522,18 +528,18 @@ describe("PublicAiHub", () => {
     expect(screen.getByRole("link", { name: /release-notes/ })).toBeInTheDocument();
     expect(screen.getByText("2 skills")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Search skills" }), { target: { value: "changelog" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Search skills/ }), { target: { value: "changelog" } });
     expect(screen.getByRole("link", { name: /release-notes/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /review-changes/ })).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Search skills" }), { target: { value: "evidence" } });
+    fireEvent.change(screen.getByRole("textbox", { name: /Search skills/ }), { target: { value: "evidence" } });
     expect(screen.getByText('No skills match "evidence"')).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^All domains/ }));
     expect(screen.getByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /release-notes/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByText("3 skills")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Search skills" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: /Search skills/ })).toHaveValue("");
     expect(screen.getByRole("checkbox", { name: "Engineering" })).not.toBeChecked();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -541,7 +547,7 @@ describe("PublicAiHub", () => {
   it("finds skills by name, description, namespace, domain, and keywords", async () => {
     renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { tab: "skills" } });
     await screen.findByRole("link", { name: /research-assistant/ });
-    const search = screen.getByRole("textbox", { name: "Search skills" });
+    const search = screen.getByRole("textbox", { name: /Search skills/ });
 
     for (const value of ["research-assistant", "Answers research questions", "knowledge", "Research", "evidence"]) {
       fireEvent.change(search, { target: { value } });
@@ -585,4 +591,35 @@ describe("PublicAiHub", () => {
     expect(screen.getByText("/plugin install review-changes@litellm")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 2, name: "release-notes" })).not.toBeInTheDocument();
   });
+});
+
+it("filters skills by tag and scan status, searches people, and scopes filters to Skills", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn();
+  renderWithProviders(<PublicAiHub accessToken={null} />, { searchParams: { tab: "skills" }, onUrlUpdate });
+  await screen.findByRole("link", { name: /research-assistant/ });
+  await user.click(screen.getByRole("button", { name: "Downloads" }));
+  expect(within(screen.getAllByRole("row")[1]).getByRole("link", { name: /review-changes/ })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Downloads" }));
+  expect(within(screen.getAllByRole("row")[1]).getByRole("link", { name: /release-notes/ })).toBeInTheDocument();
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by tag" }), "evidence");
+  expect(screen.queryByRole("link", { name: /review-changes/ })).not.toBeInTheDocument();
+  expect(screen.getByText("writer@example.test")).toBeInTheDocument();
+  expect(screen.getByText("reviewer@example.test")).toBeInTheDocument();
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "Security scan" }), "Security scan: No");
+  expect(screen.queryByRole("link", { name: /research-assistant/ })).not.toBeInTheDocument();
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "Security scan" }), "Security scan: Yes");
+  fireEvent.change(screen.getByRole("textbox", { name: /Search skills/ }), {
+    target: { value: "reviewer@example.test" },
+  });
+  expect(await screen.findByRole("link", { name: /research-assistant/ })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(onUrlUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        queryString: expect.stringContaining("skills_filter_tag=evidence"),
+      }),
+    ),
+  );
+  await user.click(screen.getByRole("tab", { name: "Model Hub" }));
+  expect(screen.queryByRole("combobox", { name: "Filter by tag" })).not.toBeInTheDocument();
 });

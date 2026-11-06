@@ -42114,15 +42114,21 @@ export interface components {
          * @description Plugin item in list responses.
          */
         PluginListItem: {
+            /** Approved By */
+            approved_by?: string | null;
             author?: components["schemas"]["PluginAuthor"] | null;
             /** Category */
             category?: string | null;
             /** Created At */
             created_at: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Download Count */
+            download_count?: number | null;
             /** Enabled */
             enabled: boolean;
             /** Homepage */
@@ -42137,6 +42143,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -46920,6 +46933,11 @@ export interface components {
             next_offset: number | null;
             /** Skills */
             skills: components["schemas"]["SkillHubSkill"][];
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
         };
         /** SkillHubMetadata */
         SkillHubMetadata: {
@@ -47005,15 +47023,21 @@ export interface components {
         };
         /** SkillHubSkill */
         SkillHubSkill: {
+            /** Approved By */
+            approved_by?: string | null;
             /** Content Url */
             content_url?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             /** Domain */
             domain?: string | null;
             /**
              * Download Count
-             * @description Gateway ZIP downloads, included in proxy-admin catalog listings
+             * @description Gateway ZIP downloads, including repeat downloads
              */
             download_count?: number | null;
             /** Download Url */
@@ -47026,6 +47050,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -74391,6 +74422,10 @@ export interface operations {
                 query?: string;
                 offset?: number;
                 limit?: number;
+                tag?: string;
+                security_scan_passed?: boolean | null;
+                sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
+                sort_order?: "asc" | "desc";
             };
             header?: never;
             path?: never;
