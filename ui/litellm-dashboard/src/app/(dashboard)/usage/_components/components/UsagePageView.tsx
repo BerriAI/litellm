@@ -284,13 +284,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const globalClientSelected = isAdmin && selectedClient !== null && globalClientScope;
   const needsAgentSummary = showTopAgents || globalClientSelected;
   const tagDailyRequest = useMemo<DailyActivityRequest | null>(
-    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
-    [accessToken, startTime, endTime],
+    () => (dailyActivityRequest ? { ...dailyActivityRequest, entityIds: null } : null),
+    [dailyActivityRequest],
   );
   const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
     enabled: tagDailyRequest !== null && needsAgentSummary,
-    deps: [accessToken, startTime, endTime, needsAgentSummary],
+    deps: [tagDailyRequest, needsAgentSummary],
   });
   const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
   const openAgentActivity = useCallback(

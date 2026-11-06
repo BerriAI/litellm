@@ -35,6 +35,8 @@ vi.mock("./ClientUsagePanel", () => ({
   },
 }));
 
+vi.mock("@/components/UsageAlerts/UsageAlertContext", () => ({ default: () => null }));
+
 // The Overview tab. The Key Activity tab stays mounted and carries its own spend-derived totals,
 // so assertions about the overview's request tiles are scoped here rather than to the whole page.
 const overview = () => within(screen.getByRole("tabpanel", { name: "Overview" }));
@@ -603,6 +605,34 @@ describe("UsagePage", () => {
       error: null,
     } as any);
   });
+
+  it.each([
+    { context: "deployment alert", alert: "&alert=example-alert", timezoneOffsetMinutes: 0 },
+    { context: "ordinary usage", alert: "", timezoneOffsetMinutes: undefined },
+  ])(
+    "uses the same daily timezone for totals and tag activity in $context",
+    async ({ alert, timezoneOffsetMinutes }) => {
+      renderWithProviders(<UsagePage {...defaultProps} />, {
+        searchParams: `?from=2026-08-01&to=2026-08-08${alert}`,
+      });
+
+      await waitFor(() =>
+        expect(mockDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "tag",
+          expect.objectContaining({
+            startTime: new Date(2026, 7, 1),
+            endTime: new Date(2026, 7, 8, 23, 59, 59, 999),
+          }),
+        ),
+      );
+      expect(
+        mockDailyActivityAggregatedCall.mock.calls.find(([entity]) => entity === "tag")?.[1].timezoneOffsetMinutes,
+      ).toBe(timezoneOffsetMinutes);
+      expect(
+        mockDailyActivityAggregatedCall.mock.calls.find(([entity]) => entity === "user")?.[1].timezoneOffsetMinutes,
+      ).toBe(timezoneOffsetMinutes);
+    },
+  );
 
   it("hands the subscription usage to the fixed cost card for an admin and never fetches it otherwise", async () => {
     const { unmount } = renderWithProviders(<UsagePage {...defaultProps} />);
