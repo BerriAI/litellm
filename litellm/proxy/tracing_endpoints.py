@@ -27,8 +27,9 @@ from litellm.constants import (
     TRACE_READ_RETRY_AFTER_SECONDS,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
+from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_spend_log_read_scope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
@@ -86,6 +87,10 @@ async def provide_trace_access(
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceAccessContext:
+    if tracing is not None and isinstance(tracing.storage, SpendLogTraceStorage):
+        RouteChecks.should_call_route(route="/spend/logs/ui", valid_token=auth)
+        spend_scope: Final = await resolve_spend_log_read_scope(auth, log_team_lookup)
+        return TraceAccessContext(tracing, spend_scope if auth.user_id or isinstance(spend_scope, AllRows) else None)
     read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     return TraceAccessContext(tracing, read_scope)
 

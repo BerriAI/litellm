@@ -4,19 +4,25 @@ A trace is every spend log row sharing a session id. A row's agent comes from an
 `parent_agent:<name>` tag), the row's agent_id, a Claude Agent SDK subagent whose first prompt matches a parent's
 Task/Agent tool call, or the calling framework read from the user agent."""
 
+import asyncio
 import base64
+import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import reduce
-from itertools import chain
-from typing import Final, Protocol
+from itertools import chain, groupby, islice
+from typing import Final, Protocol, TypeAlias
 
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    get_tool_calls_from_response,
+    resolve_structured_messages,
+)
+from litellm.tracing.errors import TraceChanged
 from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
 from litellm.tracing.generated.types import (
     AgentNode,
@@ -39,8 +45,9 @@ from litellm.tracing.generated.types import (
 AGENT_TAG_PREFIX: Final = "agent:"
 PARENT_AGENT_TAG_PREFIX: Final = "parent_agent:"
 SPEND_LOGS_SERVICE: Final = "litellm"
-TRACE_ROW_LIMIT: Final = 500
-AGENT_LIST_TRACE_LIMIT: Final = 200
+TRACE_ROW_LIMIT: Final = 10_000
+TRACE_SPAN_PAGE_SIZE: Final = 500
+AGENT_LIST_TRACE_PAGE_SIZE: Final = 200
 PREVIEW_CHARS: Final = 300
 ERROR_PREVIEW_CHARS: Final = 500
 TRACE_KEY_SQL: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
@@ -80,6 +87,7 @@ class SpendLogRow(TypedDict):
     start_time: ReadOnly[str]
     end_time: ReadOnly[str]
     agent_id: ReadOnly[str | None]
+    agent_name: ReadOnly[NotRequired[str | None]]
     request_tags: ReadOnly[str | None]
     metadata: ReadOnly[str | None]
     messages: ReadOnly[str | None]
@@ -96,6 +104,7 @@ _OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
 
 @dataclass(frozen=True, slots=True)
 class _ToolCall:
+    id: str | None
     name: str
     arguments: str
     subagent: str | None
@@ -150,7 +159,8 @@ def _text(value: object) -> str:
 
 
 def _parse_ms(timestamp: str) -> float:
-    return datetime.fromisoformat(timestamp).replace(tzinfo=timezone.utc).timestamp() * 1000
+    parsed: Final = datetime.fromisoformat(timestamp)
+    return (parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)).timestamp() * 1000
 
 
 def _iso(ms: float) -> str:
@@ -208,12 +218,9 @@ def _role(value: object) -> ChatRole:
             return "user"
 
 
-def _block_tool_calls(content: object) -> tuple[UIToolCall, ...]:
-    return tuple(
-        UIToolCall(name=_text(_mapping(block).get("name")), arguments=json.dumps(_mapping(block).get("input")))
-        for block in _sequence(content)
-        if _mapping(block).get("type") == "tool_use"
-    )
+def _message_tool_calls(message: Mapping[str, object]) -> tuple[UIToolCall, ...]:
+    response: Final = {"content": message.get("content"), "choices": [{"message": message}]}
+    return tuple(UIToolCall(name=call.name, arguments=call.arguments) for call in _response_tool_calls(response))
 
 
 def _ui_messages(messages: object) -> tuple[UIMessage, ...]:
@@ -221,7 +228,7 @@ def _ui_messages(messages: object) -> tuple[UIMessage, ...]:
         UIMessage(
             role=_role(_mapping(message).get("role")),
             content=_visible_text(_mapping(message).get("content")),
-            tool_calls=_block_tool_calls(_mapping(message).get("content")),
+            tool_calls=_message_tool_calls(_mapping(message)),
         )
         for message in _sequence(messages)
     )
@@ -237,38 +244,20 @@ def _first_user_prompts(messages: object) -> frozenset[str]:
 
 
 def _response_tool_calls(response: Mapping[str, object]) -> tuple[_ToolCall, ...]:
-    anthropic: Final = tuple(
-        (_text(block.get("name")), _mapping(block.get("input")))
-        for block in map(_mapping, _sequence(response.get("content")))
-        if block.get("type") == "tool_use"
-    )
-    openai: Final = tuple(
-        (
-            _text(_mapping(call.get("function")).get("name")),
-            _mapping(_loads(_text(_mapping(call.get("function")).get("arguments")))),
-        )
-        for call in map(
-            _mapping,
-            chain.from_iterable(
-                _sequence(_mapping(choice.get("message")).get("tool_calls"))
-                for choice in map(_mapping, _sequence(response.get("choices")))
-            ),
-        )
-    )
-    responses_api: Final = tuple(
-        (_text(item.get("name")), _mapping(_loads(_text(item.get("arguments")))))
-        for item in map(_mapping, _sequence(response.get("output")))
-        if item.get("type") == "function_call"
-    )
     return tuple(
         _ToolCall(
-            name=name,
-            arguments=json.dumps(arguments),
-            subagent=_text(arguments.get("subagent_type")) or None if name in SUBAGENT_TOOL_NAMES else None,
-            subagent_prompt=_text(arguments.get("prompt")).strip() or None if name in SUBAGENT_TOOL_NAMES else None,
+            id=call["id"],
+            name=call["name"],
+            arguments=json.dumps(call["arguments"]),
+            subagent=_text(call["arguments"].get("subagent_type")) or None
+            if call["name"] in SUBAGENT_TOOL_NAMES
+            else None,
+            subagent_prompt=_text(call["arguments"].get("prompt")).strip() or None
+            if call["name"] in SUBAGENT_TOOL_NAMES
+            else None,
         )
-        for name, arguments in (*anthropic, *openai, *responses_api)
-        if name
+        for call in get_tool_calls_from_response(response)
+        if call["name"]
     )
 
 
@@ -288,7 +277,12 @@ def _request_messages(row: SpendLogRow) -> object:
     stored: Final = _loads(row["messages"])
     if _sequence(stored):
         return stored
-    return _mapping(_loads(row["proxy_server_request"])).get("messages")
+    request: Final = _mapping(_loads(row["proxy_server_request"]))
+    body: Final = _mapping(request.get("body")) if "body" in request else request
+    messages: Final = _sequence(body.get("messages"))
+    if messages:
+        return messages
+    return resolve_structured_messages(None, dict(body)) if body.get("input") else messages
 
 
 def _call(row: SpendLogRow) -> _Call:
@@ -302,7 +296,11 @@ def _call(row: SpendLogRow) -> _Call:
         start_ms=_parse_ms(row["start_time"]),
         end_ms=_parse_ms(row["end_time"]),
         framework=_framework(_text(metadata.get("user_agent"))),
-        explicit_agent=_tag_value(tags, AGENT_TAG_PREFIX) or row["agent_id"] or None,
+        explicit_agent=_text(metadata.get("agent_name")).strip()
+        or _tag_value(tags, AGENT_TAG_PREFIX)
+        or row.get("agent_name")
+        or row["agent_id"]
+        or None,
         explicit_parent=_tag_value(tags, PARENT_AGENT_TAG_PREFIX),
         prompts=_first_user_prompts(messages),
         input_messages=_ui_messages(messages),
@@ -316,33 +314,33 @@ def _root_agent(calls: Sequence[_Call]) -> str:
     return next((call.framework for call in calls if call.framework != DEFAULT_FRAMEWORK), "agent")
 
 
-def _placed(call: _Call, earlier: tuple[_Placed, ...], root: str) -> _Placed:
-    spawner: Final = next(
-        (
-            (tool.subagent, placed)
-            for placed, tool in chain.from_iterable(
-                ((placed, tool) for tool in placed.call.tool_calls) for placed in reversed(earlier)
-            )
-            if tool.subagent and tool.subagent_prompt in call.prompts
-        ),
-        None,
+_Spawner: TypeAlias = tuple[int, _ToolCall, _Placed]
+
+
+def _place_call(call: _Call, spawners: Mapping[str, _Spawner], root: str) -> _Placed:
+    matches: Final = tuple(spawners[prompt] for prompt in call.prompts if prompt in spawners)
+    spawner: Final = max(matches, key=lambda match: match[0]) if matches else None
+    parent: Final = call.explicit_parent if call.explicit_parent != call.explicit_agent else None
+    inferred: Final = spawner is not None and call.explicit_agent in (None, spawner[2].call.explicit_agent)
+    return _Placed(
+        call=call,
+        agent=(spawner[1].subagent or root) if inferred and spawner else (call.explicit_agent or root),
+        parent_agent=spawner[2].agent if inferred and spawner else parent,
     )
-    if spawner is not None and call.explicit_agent in (None, spawner[1].call.explicit_agent):
-        return _Placed(call=call, agent=spawner[0], parent_agent=spawner[1].agent)
-    if call.explicit_agent is not None:
-        parent: Final = call.explicit_parent if call.explicit_parent != call.explicit_agent else None
-        return _Placed(call=call, agent=call.explicit_agent, parent_agent=parent)
-    return _Placed(call=call, agent=root, parent_agent=None)
+
+
+def _placements(calls: Sequence[_Call]) -> Iterator[_Placed]:
+    root: Final = _root_agent(calls)
+    spawners: Final[dict[str, _Spawner]] = {}  # mutable-ok: rolling index avoids quadratic scans
+    for index, placed in ((index, _place_call(call, spawners, root)) for index, call in enumerate(calls)):
+        yield placed
+        for tool in reversed(placed.call.tool_calls):
+            if tool.subagent and tool.subagent_prompt:
+                spawners[tool.subagent_prompt] = (index, tool, placed)
 
 
 def _place(calls: Sequence[_Call]) -> tuple[_Placed, ...]:
-    root: Final = _root_agent(calls)
-
-    def step(earlier: tuple[_Placed, ...], call: _Call) -> tuple[_Placed, ...]:
-        return (*earlier, _placed(call, earlier, root))
-
-    initial: Final[tuple[_Placed, ...]] = ()
-    return reduce(step, calls, initial)
+    return tuple(_placements(calls))
 
 
 def _agent_span_id(agent: str) -> str:
@@ -379,14 +377,18 @@ def _agent_run(name: str, own: tuple[_Placed, ...]) -> _AgentRun:
 
 
 def _agent_runs(placed: Sequence[_Placed]) -> tuple[_AgentRun, ...]:
+    groups: Final = {
+        name: tuple(items)
+        for name, items in groupby(sorted(placed, key=lambda item: item.agent), key=lambda item: item.agent)
+    }
     names: Final = tuple(dict.fromkeys(item.agent for item in placed))
-    return tuple(_agent_run(name, tuple(item for item in placed if item.agent == name)) for name in names)
+    return tuple(_agent_run(name, groups[name]) for name in names)
 
 
 def _next_start(placed: Sequence[_Placed], index: int) -> float | None:
     current: Final = placed[index]
     return next(
-        (item.call.start_ms for item in placed[index + 1 :] if item.agent == current.agent),
+        (item.call.start_ms for item in islice(placed, index + 1, None) if item.agent == current.agent),
         None,
     )
 
@@ -424,6 +426,8 @@ def _llm_span(item: _Placed, trace_start: float) -> Span:
 def _tool_spans(placed: Sequence[_Placed], index: int, trace_start: float) -> tuple[Span, ...]:
     item: Final = placed[index]
     call: Final = item.call
+    if not call.tool_calls:
+        return ()
     resumed_at: Final = _next_start(placed, index)
     duration: Final = max((resumed_at if resumed_at is not None else call.end_ms) - call.end_ms, 0.0)
     return tuple(
@@ -535,6 +539,25 @@ def build_trace(rows: Sequence[SpendLogRow]) -> Trace:
     )
 
 
+def _tool_result(messages: object, tool_id: str) -> str | None:
+    for message in map(_mapping, _sequence(messages)):
+        if message.get("role") == "tool" and message.get("tool_call_id") == tool_id:
+            return _visible_text(message.get("content"))
+        for block in map(_mapping, _sequence(message.get("content"))):
+            if block.get("type") == "tool_result" and block.get("tool_use_id") == tool_id:
+                return _visible_text(block.get("content"))
+    return None
+
+
+def _tool_output(calls: Sequence[_Call], tool: _ToolCall) -> str:
+    if tool.id is None:
+        return "Tool result was not recorded in the spend logs."
+    return next(
+        (result for call in calls if (result := _tool_result(_request_messages(call.row), tool.id)) is not None),
+        "Tool result was not recorded in the spend logs.",
+    )
+
+
 def _span_detail(trace_rows: Sequence[SpendLogRow], span_id: str) -> SpanDetail | None:
     calls: Final = tuple(sorted(map(_call, trace_rows), key=lambda call: (call.start_ms, call.row["request_id"])))
     llm: Final = next((call for call in calls if call.row["request_id"] == span_id), None)
@@ -569,8 +592,8 @@ def _span_detail(trace_rows: Sequence[SpendLogRow], span_id: str) -> SpanDetail 
             attributes={"tool.name": tool.name},
             input=tool.arguments,
             input_ui=UIText(kind="text", text=tool.arguments),
-            output="",
-            output_ui=UIText(kind="text", text=""),
+            output=_tool_output(calls, tool),
+            output_ui=UIText(kind="text", text=_tool_output(calls, tool)),
         )
     trace: Final = build_trace(trace_rows)
     agent: Final = next((span for span in trace["spans"] if span["span_id"] == span_id), None)
@@ -593,6 +616,26 @@ def _span_detail(trace_rows: Sequence[SpendLogRow], span_id: str) -> SpanDetail 
                 },
             ),
         ),
+    )
+
+
+def _trace_page(trace: Trace, cursor: str | None, page_size: int | None) -> Trace:
+    snapshot: Final = hashlib.sha256(json.dumps(trace, sort_keys=True).encode()).hexdigest()
+    decoded: Final = TypeAdapter(tuple[str, int]).validate_json(base64.urlsafe_b64decode(cursor)) if cursor else None
+    if decoded is not None and decoded[0] != snapshot:
+        raise TraceChanged("The trace changed. Reload it to continue.")
+    offset: Final = decoded[1] if decoded else 0
+    if offset < 0 or offset > len(trace["spans"]):
+        raise ValueError("Invalid span cursor")
+    size: Final = page_size if page_size is not None else TRACE_SPAN_PAGE_SIZE
+    if size < 1 or size > TRACE_SPAN_PAGE_SIZE:
+        raise ValueError("Invalid span page size")
+    end: Final = offset + size
+    next_cursor: Final = (
+        base64.urlsafe_b64encode(json.dumps((snapshot, end)).encode()).decode() if end < len(trace["spans"]) else None
+    )
+    return Trace(
+        summary=trace["summary"], agents=trace["agents"], spans=trace["spans"][offset:end], next_cursor=next_cursor
     )
 
 
@@ -644,6 +687,7 @@ class SpendLogTraceStorage:
                   {scope_sql}
                 GROUP BY 1
                 HAVING COUNT(*) > 1
+                    OR bool_or(COALESCE(metadata->>'agent_name', '') <> '')
                     OR bool_or(COALESCE(agent_id, '') <> '')
                     OR bool_or(COALESCE(request_tags::text, '') LIKE '%"{AGENT_TAG_PREFIX}%')
                     OR bool_or(COALESCE(metadata->>'user_agent', '') ~* '{AGENT_USER_AGENT_SQL}')
@@ -667,6 +711,8 @@ class SpendLogTraceStorage:
             f"""
             SELECT request_id, {TRACE_KEY_SQL} AS trace_key, call_type, model, status, spend, prompt_tokens,
                    completion_tokens, "startTime"::text AS start_time, "endTime"::text AS end_time, agent_id,
+                   (SELECT agent_name FROM "LiteLLM_AgentsTable" a
+                    WHERE a.agent_id = "LiteLLM_SpendLogs".agent_id) AS agent_name,
                    request_tags::text AS request_tags, metadata::text AS metadata, messages::text AS messages,
                    proxy_server_request::text AS proxy_server_request, response::text AS response
             FROM "LiteLLM_SpendLogs"
@@ -674,17 +720,18 @@ class SpendLogTraceStorage:
               AND {TRACE_KEY_SQL} = ANY($1::text[])
               {scope_sql}
             ORDER BY "startTime", request_id
-            LIMIT {TRACE_ROW_LIMIT * len(trace_keys)}
+            LIMIT {TRACE_ROW_LIMIT + 1}
             """,
             list(trace_keys),
             *scope_args,
         )
+        if len(rows) > TRACE_ROW_LIMIT:
+            raise OverflowError("Spend-log trace read exceeds its row budget")
         return _SPEND_LOG_ROWS.validate_python(rows)
 
     async def _traces(self, keys: Sequence[str], scope: TraceScope) -> tuple[Trace, ...]:
         rows: Final = await self._rows(keys, scope)
-        groups: Final = tuple(tuple(row for row in rows if row["trace_key"] == key) for key in keys)
-        return tuple(build_trace(own) for own in groups if own)
+        return await asyncio.to_thread(_build_traces, keys, rows)
 
     async def list_traces(
         self,
@@ -711,11 +758,13 @@ class SpendLogTraceStorage:
         page_size: int | None = None,
     ) -> Trace | None:
         traces: Final = await self._traces((trace_id,), scope)
-        return traces[0] if traces else None
+        if not traces:
+            return None
+        return await asyncio.to_thread(_trace_page, traces[0], cursor, page_size)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         rows: Final = await self._rows((trace_id,), scope)
-        return _span_detail(rows, span_id) if rows else None
+        return await asyncio.to_thread(_span_detail, rows, span_id) if rows else None
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
@@ -730,17 +779,49 @@ class SpendLogTraceStorage:
         scope: Final = TraceScope(
             all_teams=parameters.all_teams, user_id=parameters.user_id, team_ids=parameters.team_ids
         )
-        keys: Final = await self._trace_keys(
-            scope, parameters.start_ms, parameters.end_ms, None, AGENT_LIST_TRACE_LIMIT
-        )
-        traces: Final = await self._traces(tuple(row["trace_key"] for row in keys), scope)
-        names: Final = tuple(
-            dict.fromkeys(chain.from_iterable(trace["summary"].get("agent_names", ()) for trace in traces))
-        )
-        return tuple(
-            _agent_row(name, tuple(trace for trace in traces if name in trace["summary"].get("agent_names", ())))
-            for name in names[: parameters.limit]
-        )
+        agents: Final[dict[str, TraceAgentRow]] = {}  # mutable-ok: aggregate pages without retaining graphs
+        cursor: tuple[str, str] | None = None  # rebind-ok: advance through database pages
+        while True:
+            keys = await self._trace_keys(
+                scope, parameters.start_ms, parameters.end_ms, cursor, AGENT_LIST_TRACE_PAGE_SIZE
+            )
+            traces = await self._traces(tuple(row["trace_key"] for row in keys), scope)
+            page_agents = await asyncio.to_thread(_agent_rows, traces)
+            for agent in page_agents:
+                previous = agents.get(agent.agent_name)
+                agents[agent.agent_name] = TraceAgentRow(
+                    agent_name=agent.agent_name,
+                    runs=agent.runs + (previous.runs if previous else 0),
+                    failed_runs=agent.failed_runs + (previous.failed_runs if previous else 0),
+                    last_seen_ms=max(agent.last_seen_ms, previous.last_seen_ms if previous else 0),
+                    frameworks=tuple(dict.fromkeys((*agent.frameworks, *(previous.frameworks if previous else ())))),
+                )
+            if len(keys) < AGENT_LIST_TRACE_PAGE_SIZE:
+                return tuple(sorted(agents.values(), key=lambda agent: (-agent.last_seen_ms, agent.agent_name)))[
+                    : parameters.limit
+                ]
+            cursor = (
+                keys[-1]["last_activity"],
+                keys[-1]["trace_key"],
+            )
+
+
+def _build_traces(keys: Sequence[str], rows: Sequence[SpendLogRow]) -> tuple[Trace, ...]:
+    groups: Final = {
+        key: tuple(own)
+        for key, own in groupby(sorted(rows, key=lambda row: row["trace_key"]), key=lambda row: row["trace_key"])
+    }
+    return tuple(build_trace(groups[key]) for key in keys if key in groups)
+
+
+def _agent_rows(traces: tuple[Trace, ...]) -> tuple[TraceAgentRow, ...]:
+    names: Final = tuple(
+        dict.fromkeys(chain.from_iterable(trace["summary"].get("agent_names", ()) for trace in traces))
+    )
+    return tuple(
+        _agent_row(name, tuple(trace for trace in traces if name in trace["summary"].get("agent_names", ())))
+        for name in names
+    )
 
 
 def _agent_row(name: str, own: tuple[Trace, ...]) -> TraceAgentRow:

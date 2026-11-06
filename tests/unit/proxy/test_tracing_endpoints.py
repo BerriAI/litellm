@@ -1074,3 +1074,28 @@ async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(d
     ) as client:
         with pytest.raises(RuntimeError, match="invalid response"):
             await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")
+
+
+@pytest.mark.parametrize(
+    "path", ["/v1/traces", "/v1/traces/agents", "/v1/traces/session", "/v1/traces/session/spans/call"]
+)
+def test_spend_log_traces_require_spend_log_route_access(client: TestClient, path: str) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(
+        storage=SpendLogTraceStorage(lambda: None)
+    )
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=["llm_api_routes"]
+    )
+    response: Final = client.get(path)
+    assert response.status_code == 403
+
+
+def test_spend_log_traces_allow_a_dashboard_session(client: TestClient) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(
+        storage=SpendLogTraceStorage(lambda: None)
+    )
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=["/spend/logs/ui", "/v1/traces"]
+    )
+    response: Final = client.get("/v1/traces")
+    assert response.status_code == 200 and response.json()["data"] == []

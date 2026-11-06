@@ -268,3 +268,137 @@ async def test_no_database_reads_as_no_traces() -> None:
     page: Final = await SpendLogTraceStorage(lambda: None).list_traces(ALL, 0, 99)
 
     assert page == {"data": (), "next_cursor": None}
+
+
+@pytest.mark.asyncio
+async def test_trace_pages_include_every_call_and_keep_complete_totals() -> None:
+    rows: Final = tuple(row(f"r{i:04d}", "00.000", "01.000", tags=("agent:triage",)) for i in range(601))
+    storage: Final = SpendLogTraceStorage(lambda: FakeDatabase(rows))
+    first: Final = await storage.get_trace("s1", ALL, page_size=500)
+    assert first is not None and first["next_cursor"]
+    second: Final = await storage.get_trace("s1", ALL, cursor=first["next_cursor"], page_size=500)
+    assert second is not None and second["next_cursor"] is None
+    assert len(first["spans"]) == 500
+    assert {span["span_id"] for span in (*first["spans"], *second["spans"])} == {
+        "agent:triage",
+        *(item["request_id"] for item in rows),
+    }
+    assert first["summary"]["llm_calls"] == second["summary"]["llm_calls"] == 601
+    assert math.isclose(first["summary"]["spend"] or 0, 6.01)
+
+
+@pytest.mark.asyncio
+async def test_cursor_rejects_a_changed_run_and_invalid_offsets() -> None:
+    from litellm.tracing.errors import TraceChanged
+
+    rows: Final = (row("r1", "00.000", "01.000"), row("r2", "02.000", "03.000"))
+    db: Final = FakeDatabase(rows, (*rows, row("r3", "04.000", "05.000")))
+    storage: Final = SpendLogTraceStorage(lambda: db)
+    first: Final = await storage.get_trace("s1", ALL, page_size=1)
+    assert first is not None and first["next_cursor"]
+    with pytest.raises(TraceChanged):
+        await storage.get_trace("s1", ALL, cursor=first["next_cursor"], page_size=1)
+
+
+@pytest.mark.asyncio
+async def test_oversized_reads_fail_instead_of_returning_incomplete_runs() -> None:
+    from litellm.tracing.spend_logs import TRACE_ROW_LIMIT
+
+    rows: Final = (row("r1", "00.000", "01.000"),) * (TRACE_ROW_LIMIT + 1)
+    storage: Final = SpendLogTraceStorage(lambda: FakeDatabase(rows))
+    with pytest.raises(OverflowError):
+        await storage.get_trace("s1", ALL)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input": "Find the invoice"},
+        {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Find the invoice"}]}]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_responses_inputs_are_visible_in_the_run_and_step(body: Mapping[str, object]) -> None:
+    item: Final = SpendLogRow(**{**row("r1", "00.000", "01.000"), "proxy_server_request": json.dumps(body)})
+    storage: Final = SpendLogTraceStorage(lambda: FakeDatabase((item,)))
+    assert build_trace((item,))["summary"]["input_preview"] == "Find the invoice"
+    detail: Final = await storage.get_span("s1", "r1", ALL)
+    assert detail is not None
+    assert "Find the invoice" in detail["input"]
+
+
+@pytest.mark.parametrize(
+    ("response", "body"),
+    [
+        (
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                            ]
+                        }
+                    }
+                ]
+            },
+            {"messages": [{"role": "tool", "tool_call_id": "call-1", "content": "Invoice paid"}]},
+        ),
+        (
+            {"content": [{"type": "tool_use", "id": "call-1", "name": "lookup", "input": {}}]},
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "Invoice paid"}],
+                    }
+                ]
+            },
+        ),
+        (
+            {"output": [{"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}"}]},
+            {"input": [{"type": "function_call_output", "call_id": "call-1", "output": "Invoice paid"}]},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_tool_details_use_the_result_recorded_in_the_next_request(
+    response: Mapping[str, object], body: Mapping[str, object]
+) -> None:
+    rows: Final = (
+        row("r1", "00.000", "01.000", response=response),
+        SpendLogRow(**{**row("r2", "02.000", "03.000"), "proxy_server_request": json.dumps(body)}),
+    )
+    storage: Final = SpendLogTraceStorage(lambda: FakeDatabase(rows))
+    detail: Final = await storage.get_span("s1", "r1:tool:0", ALL)
+    assert detail is not None and detail["output"] == "Invoice paid"
+
+
+def test_registered_agent_names_are_readable_and_request_tags_override_them() -> None:
+    item: Final = SpendLogRow(**{**row("r1", "00.000", "01.000", agent_id="agent-uuid"), "agent_name": "Support"})
+    assert build_trace((item,))["summary"]["name"] == "Support"
+    tagged: Final = SpendLogRow(**{**item, "request_tags": '["agent:Research"]'})
+    assert build_trace((tagged,))["summary"]["name"] == "Research"
+
+
+def test_offset_timestamps_preserve_the_actual_instant() -> None:
+    item: Final = SpendLogRow(
+        **{
+            **row("r1", "00.000", "01.000"),
+            "start_time": "2026-11-06T13:00:00+08:00",
+            "end_time": "2026-11-06T13:00:01+08:00",
+        }
+    )
+    assert build_trace((item,))["summary"]["start_time"] == "2026-11-06T05:00:00Z"
+
+
+def test_request_agent_name_groups_calls_without_tags_or_registered_identity() -> None:
+    named: Final = tuple(
+        SpendLogRow(**{**row(f"r{i}", "00.000", "01.000"), "metadata": '{"agent_name": "Support agent"}'})
+        for i in range(2)
+    )
+    trace: Final = build_trace(named)
+    assert trace["summary"]["name"] == "Support agent"
+    assert trace["summary"]["agent_names"] == ("Support agent",)
+    assert trace["summary"]["llm_calls"] == 2
+    assert {span["agent"] for span in trace["spans"]} == {"Support agent"}

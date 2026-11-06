@@ -37,7 +37,7 @@ it("renders the published Lens settings and uses the gateway session, prefix, an
     if (path === "/prefix/lens/signals") return Response.json({ model: "", threshold: 0.5, signals: [] });
     if (path === "/prefix/lens/model_group/info") return Response.json({ data: [] });
     if (path === "/prefix/lens/service")
-      return Response.json({ configured: false, connected: false, status: { storage_ready: false } });
+      return Response.json({ configured: true, connected: true, status: { storage_ready: true } });
     throw new Error(`Unexpected Lens request ${path}`);
   });
   renderWithProviders(<EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />, {
@@ -79,46 +79,20 @@ it("opens the packaged demo trace and preserves its shareable selection in the g
   expect(network).not.toHaveBeenCalled();
 });
 
-it("keeps manual installation on the unconfigured gateway landing and copies its observed setup context", async () => {
-  const user = userEvent.setup();
+it("opens spend-log traces without asking to install a Lens service", async () => {
   network.mockImplementation(async (input, init) => {
     const request = input instanceof Request ? input : new Request(String(input), init);
     const path = new URL(request.url).pathname;
-    if (path === "/prefix/lens/service") {
-      const connection = { url: "", configured: false, connected: false, status: { storage_ready: false } };
-      return Response.json(connection);
-    }
-    if (path === "/prefix/lens")
-      return Response.json(
-        { detail: "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service" },
-        { status: 503 },
-      );
-    if (path === "/prefix/v1/traces" || path === "/prefix/v1/traces/agents")
-      return Response.json(
-        { detail: "Agent tracing is not enabled. Configure the Lens service and LITELLM_LENS_URL." },
-        { status: 501 },
-      );
+    if (path === "/prefix/lens/service")
+      return Response.json({ configured: false, connected: false, status: { storage_ready: false } });
+    if (path === "/prefix/v1/traces") return Response.json({ data: [], next_cursor: null });
+    if (path === "/prefix/v1/traces/agents") return Response.json({ agents: [] });
     throw new Error(`Unexpected Lens request ${path}`);
   });
   renderWithProviders(<EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />);
-
-  const setup = within(await screen.findByRole("region", { name: "Get Lens running" }));
-  expect(setup.getByRole("button", { name: /Install Lens/ })).toHaveAttribute("aria-expanded", "true");
-  expect(await setup.findByRole("link", { name: "Helm setup" })).toHaveAttribute(
-    "href",
-    "https://docs.litellm.ai/docs/proxy/lens/deployment/kubernetes#existing-deployment",
-  );
-  expect(setup.getByRole("link", { name: "Docker setup" })).toHaveAttribute(
-    "href",
-    "https://docs.litellm.ai/docs/proxy/lens/deployment/docker-compose",
-  );
-  expect(setup.getByRole("button", { name: "Check setup" })).toBeEnabled();
-
-  await user.click(setup.getByRole("button", { name: "Set it up for me" }));
-  const prompt = await navigator.clipboard.readText();
-  expect(prompt).toContain("existing LiteLLM admin dashboard");
-  expect(prompt).toContain('LiteLLM API base: "https://gateway.test/prefix"');
-  expect(prompt).toContain("Lens connection is not configured");
-  expect(prompt).toContain("Check for an existing Lens service before installing another");
-  expect(prompt).not.toContain("gateway-session");
+  expect(await screen.findByRole("heading", { name: "Your agent runs will appear here" })).toBeVisible();
+  expect(screen.getByText(/x-litellm-agent-name/)).toBeVisible();
+  expect(screen.queryByRole("region", { name: "Get Lens running" })).not.toBeInTheDocument();
+  const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
+  expect(tabs.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Agents", "Traces"]);
 });
