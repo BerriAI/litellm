@@ -47,10 +47,10 @@ def init_guardrails_v2(
     # verbose_proxy_logger.debug(f"\nGuardrail List:{guardrail_list}\n")
 
     # Populate router's guardrail_list for load balancing support
-    _populate_router_guardrail_list(guardrail_list=guardrail_list)
+    _populate_router_guardrail_list(guardrail_list=guardrail_list, router=llm_router)
 
 
-def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
+def _populate_router_guardrail_list(guardrail_list: list[Guardrail], router: Router | None = None) -> None:
     """
     Populate the router's guardrail_list from initialized guardrails.
 
@@ -61,7 +61,8 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
     from litellm.proxy.proxy_server import llm_router
     from litellm.types.router import GuardrailTypedDict
 
-    if llm_router is None:
+    target_router: Final = router if router is not None else llm_router
+    if target_router is None:
         verbose_proxy_logger.debug("Router not initialized yet, skipping guardrail_list population")
         return
 
@@ -94,7 +95,7 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
 
         router_guardrail_list.append(router_guardrail)
 
-    llm_router.apply(ChangeSet(assign={"guardrail_list": router_guardrail_list}))
+    target_router.apply(ChangeSet(assign={"guardrail_list": router_guardrail_list}))
     verbose_proxy_logger.debug("Populated router guardrail_list with %s guardrails", len(router_guardrail_list))
 
 

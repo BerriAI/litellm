@@ -1,7 +1,6 @@
 """Pin ProxyLogging guardrail pipeline helpers.
 
-Covers ``_should_use_guardrail_load_balancing``, ``_execute_guardrail_hook``,
-``_execute_guardrail_with_load_balancing``, ``_process_guardrail_callback``,
+Covers ``_execute_guardrail_hook``, ``_process_guardrail_callback``,
 ``_process_prompt_template``, ``_process_guardrail_metadata``,
 ``_maybe_execute_pipelines``, ``_handle_pipeline_result``,
 ``_run_guardrail_with_metrics``, ``_emit_guardrail_metrics``.
@@ -17,8 +16,6 @@ from copy import deepcopy
 import logging
 from typing import Any, Callable, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
-
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import pytest
 from fastapi import HTTPException
@@ -60,39 +57,6 @@ def _clear_caps_cache():
     ProxyLogging._callback_capabilities_cache.clear()
 
 
-# ---------------------------------------------------------------------------
-# _should_use_guardrail_load_balancing
-# ---------------------------------------------------------------------------
-
-
-def test_should_use_guardrail_load_balancing_truth_table(proxy_logging):
-    snapshot = {}
-    router = route_entry_points_to_stubs(MagicMock())
-    router.guardrail_list = [{"guardrail_name": "g1"}, {"guardrail_name": "g1"}]
-    with patch("litellm.proxy.proxy_server.llm_router", router):
-        snapshot["multiple_deployments"] = proxy_logging._should_use_guardrail_load_balancing("g1")
-    router.guardrail_list = [{"guardrail_name": "g1"}]
-    with patch("litellm.proxy.proxy_server.llm_router", router):
-        snapshot["single_deployment"] = proxy_logging._should_use_guardrail_load_balancing("g1")
-    with patch("litellm.proxy.proxy_server.llm_router", None):
-        snapshot["no_router"] = proxy_logging._should_use_guardrail_load_balancing("g1")
-    router.guardrail_list = [{"guardrail_name": "other"}, {"guardrail_name": "other"}]
-    with patch("litellm.proxy.proxy_server.llm_router", router):
-        snapshot["unmatched_name"] = proxy_logging._should_use_guardrail_load_balancing("g1")
-    assert snapshot == {
-        "multiple_deployments": True,
-        "single_deployment": False,
-        "no_router": False,
-        "unmatched_name": False,
-    }
-
-
-def test_should_use_guardrail_load_balancing_error_on_bad_guardrail_list(proxy_logging):
-    router = route_entry_points_to_stubs(MagicMock())
-    router.guardrail_list = "not a list"
-    with patch("litellm.proxy.proxy_server.llm_router", router):
-        with pytest.raises((TypeError, AttributeError)):
-            proxy_logging._should_use_guardrail_load_balancing("g1")
 
 
 # ---------------------------------------------------------------------------
@@ -165,53 +129,6 @@ async def test_execute_guardrail_hook_unknown_hook_type_raises(proxy_logging, ma
         )
 
 
-# ---------------------------------------------------------------------------
-# _execute_guardrail_with_load_balancing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_execute_guardrail_with_load_balancing_routes_through_router(proxy_logging, make_user_api_key_auth):
-    cb = _make_guardrail()
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_available_guardrail = MagicMock(return_value={"callback": cb})
-    with patch("litellm.proxy.proxy_server.llm_router", router):
-        out = await proxy_logging._execute_guardrail_with_load_balancing(
-            guardrail_name="g",
-            hook_type="pre_call",
-            data={"model": "m"},
-            user_api_key_dict=make_user_api_key_auth(),
-            call_type="completion",
-        )
-    assert out == {"a": 1, "b": 2, "c": 3}
-
-
-@pytest.mark.asyncio
-async def test_execute_guardrail_with_load_balancing_router_none_raises(proxy_logging, make_user_api_key_auth):
-    with patch("litellm.proxy.proxy_server.llm_router", None):
-        with pytest.raises(ValueError, match="Router not initialized"):
-            await proxy_logging._execute_guardrail_with_load_balancing(
-                guardrail_name="g",
-                hook_type="pre_call",
-                data={},
-                user_api_key_dict=make_user_api_key_auth(),
-                call_type="completion",
-            )
-
-
-@pytest.mark.asyncio
-async def test_execute_guardrail_with_load_balancing_no_callback_raises(proxy_logging, make_user_api_key_auth):
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_available_guardrail = MagicMock(return_value={"callback": None})
-    with patch("litellm.proxy.proxy_server.llm_router", router):
-        with pytest.raises(ValueError, match="No callback found"):
-            await proxy_logging._execute_guardrail_with_load_balancing(
-                guardrail_name="g",
-                hook_type="pre_call",
-                data={},
-                user_api_key_dict=make_user_api_key_auth(),
-                call_type="completion",
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +154,6 @@ async def test_process_guardrail_callback_skipped_when_should_run_false(proxy_lo
 async def test_process_guardrail_callback_returns_data_on_success(proxy_logging, make_user_api_key_auth, monkeypatch):
     cb = _make_guardrail()
     cb.should_run_guardrail = MagicMock(return_value=True)
-    proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
     out = await proxy_logging._process_guardrail_callback(
         callback=cb,
         data={"model": "m", "messages": [{"role": "user"}], "temperature": 0.1},
@@ -257,7 +173,6 @@ async def test_process_guardrail_callback_enriches_and_reraises_http_exception(
     detail = {"error": "blocked"}
     cb.async_pre_call_hook = AsyncMock(side_effect=HTTPException(status_code=400, detail=detail))
     cb.event_hook = "pre_call"
-    proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
 
     with pytest.raises(HTTPException):
         await proxy_logging._process_guardrail_callback(
@@ -4255,4 +4170,3 @@ async def test_live_pipeline_disconnect_scan_that_cannot_run_records_every_step_
     assert seen.get("count") is None
     assert _post_call_statuses(data) == ["guardrail_failed_to_respond"]
     assert any("cut short" in message and "RuntimeError" in message for message in _warnings(caplog))
-

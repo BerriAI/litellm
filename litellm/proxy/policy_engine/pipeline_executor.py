@@ -53,6 +53,7 @@ except ImportError:
     HTTPException = None
 
 _LEGACY_HOOK_REPLACEMENT: Final = TypeAdapter(object)
+_PIPELINE_DATA_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 class UndeliverableStreamRewrite(Exception):
@@ -329,6 +330,37 @@ def _prepare_hook_input(
     return hook_input, scans_raw_request
 
 
+def pipeline_callback_eligible(
+    callback: CustomGuardrail,
+    step: PipelineStep,
+    data: Mapping[str, object],
+    raw_request_snapshot: Mapping[str, object] | None,
+    mode: str,
+    streaming_chunks: list[object] | None,  # mutable-ok: shared buffered-stream chunks, read only here
+    endpoint_translation: "BaseTranslation | None",
+) -> bool:
+    source: Final = raw_request_snapshot if callback.scan_raw_request and raw_request_snapshot is not None else data
+    metadata: Final = source.get("metadata")
+    hook_input: Final[Mapping[str, object]] = {
+        **source,
+        "metadata": {
+            **(_PIPELINE_DATA_FIELDS.validate_python(metadata) if isinstance(metadata, Mapping) else {}),
+            "guardrails": [step.guardrail],
+        },
+        **({"stream": True} if streaming_chunks is not None else {}),
+    }
+    event_type: Final = _PIPELINE_EVENT_HOOKS.get(mode)
+    return (event_type is None or callback.should_run_guardrail(data=hook_input, event_type=event_type) is True) and (  # pyright: ignore[reportUnknownMemberType]  # legacy method accepts the str-keyed request payload
+        streaming_chunks is None
+        or PipelineExecutor.supports_unified_execution(callback)
+        or (
+            endpoint_translation is not None
+            and type(endpoint_translation).assembles_streamed_response
+            and PipelineExecutor.supports_streaming_execution(callback)
+        )
+    )
+
+
 async def _run_pre_call_hook(
     target: CustomLogger,
     callback: CustomGuardrail,
@@ -434,7 +466,7 @@ class PipelineExecutor:
         metadata_key: Final = get_metadata_variable_name_from_kwargs(
             cast(Mapping[str, object], data)  # cast-ok: the request payload is str-keyed
         )
-        working_data = data.copy()
+        working_data = _PIPELINE_DATA_FIELDS.validate_python(data)
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
 
@@ -453,7 +485,9 @@ class PipelineExecutor:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 metadata_key=metadata_key,
-                raw_request_snapshot=raw_request_snapshot,
+                raw_request_snapshot=_PIPELINE_DATA_FIELDS.validate_python(raw_request_snapshot)
+                if raw_request_snapshot is not None
+                else None,
                 streaming_chunks=streaming_chunks,
                 endpoint_translation=endpoint_translation,
                 stream_already_sent=stream_already_sent,
@@ -582,6 +616,68 @@ class PipelineExecutor:
     async def _run_step(
         step: PipelineStep,
         mode: str,
+        data: dict[str, object],  # mutable-ok: request payload passed to the guardrail hooks
+        user_api_key_dict: "UserAPIKeyAuth",
+        call_type: str,
+        metadata_key: Literal["metadata", "litellm_metadata"],
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: original request payload
+        streaming_chunks: list[object] | None = None,  # mutable-ok: shared stream buffer rewritten by hooks
+        endpoint_translation: "BaseTranslation | None" = None,
+        stream_already_sent: bool = False,
+    ) -> tuple[
+        Literal["pass", "fail", "error", "skip"],
+        dict[str, object] | None,
+        str | None,
+        Exception | None,
+    ]:
+        from litellm.proxy.utils import (
+            _load_balanced_callbacks,  # pyright: ignore[reportPrivateUsage]  # same deployment selection as the proxy hook walks
+        )
+
+        callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
+        if callback is None:
+            verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
+            return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
+        callbacks: Final = _load_balanced_callbacks(
+            (callback,),
+            lambda cb: pipeline_callback_eligible(
+                cb, step, data, raw_request_snapshot, mode, streaming_chunks, endpoint_translation
+            ),
+            eligible_only=True,
+        )
+        working_data = data
+        modified_data: dict[str, object] | None = None  # mutable-ok: merged hook payload returned to the pipeline
+        outcome: Literal["pass", "skip"] = "skip"
+        for selected in callbacks:
+            if not isinstance(selected, CustomGuardrail):
+                continue
+            result = await PipelineExecutor._run_callback_step(
+                callback=selected,
+                step=step,
+                mode=mode,
+                data=working_data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                metadata_key=metadata_key,
+                raw_request_snapshot=raw_request_snapshot,
+                streaming_chunks=streaming_chunks,
+                endpoint_translation=endpoint_translation,
+                stream_already_sent=stream_already_sent,
+            )
+            if result[0] in ("fail", "error"):
+                return result
+            if result[0] == "pass":
+                outcome = "pass"
+            if result[1] is not None:
+                modified_data = {**(modified_data or {}), **result[1]}
+                working_data = {**working_data, **result[1]}
+        return (outcome, modified_data, None, None)
+
+    @staticmethod
+    async def _run_callback_step(
+        callback: CustomGuardrail,
+        step: PipelineStep,
+        mode: str,
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
@@ -592,7 +688,7 @@ class PipelineExecutor:
         stream_already_sent: bool = False,
     ) -> tuple[
         Literal["pass", "fail", "error", "skip"],
-        dict | None,
+        dict[str, object] | None,
         str | None,
         Exception | None,
     ]:
@@ -608,11 +704,6 @@ class PipelineExecutor:
               pipeline can re-raise it verbatim and match the direct-attachment
               response/trace, else None
         """
-        callback: Final = PipelineExecutor.find_guardrail_callback(step.guardrail)
-        if callback is None:
-            verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
-            return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
-
         hook_data: Final[Mapping[str, object]] = cast(Mapping[str, object], data)  # cast-ok: payload
         if not _pipeline_stream_scope_allows(callback, hook_data, mode, streaming_chunks):
             return ("skip", None, None, None)
@@ -680,7 +771,12 @@ class PipelineExecutor:
                     None,
                     None,
                 )
-            return ("pass", response if isinstance(response, dict) else None, None, None)
+            return (
+                "pass",
+                _PIPELINE_DATA_FIELDS.validate_python(response) if isinstance(response, dict) else None,
+                None,
+                None,
+            )
 
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
