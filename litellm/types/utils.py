@@ -2848,6 +2848,8 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
 
 
 class TranscriptionResponse(OpenAIObject):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
 
