@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Final
 from uuid import uuid4
@@ -13,6 +13,49 @@ from pydantic import TypeAdapter
 
 from litellm.repositories.bounded_daily_activity import BoundedDailyActivityRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import BoundedDailyActivityResponse
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_bounded_activity_rejects_an_expanded_range_without_losing_totals(
+    gateway: Gateway, db: ManagementDatabase
+) -> None:
+    repository: Final = BoundedDailyActivityRepository.from_prisma(db.prisma)
+    identity: Final = uuid4().hex
+    reporting_key: Final = sha256(identity.encode()).hexdigest()
+    today: Final = datetime.now(timezone.utc).date()
+    start: Final = today - timedelta(days=366)
+    await repository.database.query_raw(
+        """INSERT INTO "LiteLLM_DailyUserSpend"
+        (id,user_id,date,api_key,model,spend,api_requests,successful_requests,updated_at)
+        SELECT $1::text||'-'||d,$1::text,($2::date+d)::text,$3::text,'example-model',1,2,2,CURRENT_TIMESTAMP
+        FROM generate_series(0,366) d""",
+        identity,
+        start.isoformat(),
+        reporting_key,
+    )
+    try:
+        params: Final = {
+            "start_date": start.isoformat(),
+            "end_date": (today - timedelta(days=1)).isoformat(),
+            "api_key": reporting_key,
+            "bounded": "true",
+            "timezone": "1440",
+            "include_current_utc_day": "true",
+        }
+        path: Final = "/user/daily/activity/aggregated"
+        rejected: Final = gateway.request("GET", path, params=params)
+        assert rejected.status_code == 422
+        assert "at most 366 days" in rejected.json()["detail"]
+        result: Final = gateway.request(
+            "GET", path, params={**params, "start_date": (start + timedelta(days=1)).isoformat()}
+        )
+        assert result.status_code == 200
+        activity: Final = BoundedDailyActivityResponse.model_validate(result.json())
+        assert len(activity.results) == 366
+        assert activity.metadata.total_api_requests == 732
+        assert activity.metadata.total_spend == 366
+    finally:
+        await repository.database.query_raw('DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id=$1', identity)
 
 
 @pytest.mark.asyncio(loop_scope="session")
