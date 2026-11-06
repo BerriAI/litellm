@@ -276,6 +276,32 @@ async def _serves_through_litellm(
     return account_slugs is not None and model not in account_slugs
 
 
+def _gateway_token(request: Request) -> str:
+    gateway_parts: Final = request.headers.get("x-litellm-api-key", "").split()
+    return (
+        gateway_parts[-1]
+        if len(gateway_parts) == 1 or (len(gateway_parts) == 2 and gateway_parts[0].lower() == "bearer")
+        else ""
+    )
+
+
+def _forwarded_headers(request: Request) -> Mapping[str, str]:
+    return MappingProxyType({name: value for name, value in request.headers.items() if name in _HEADERS})
+
+
+async def native_turn_serves_through_litellm(
+    model: str, llm_router: "Router", request: Request, user_api_key_dict: UserAPIKeyAuth
+) -> bool:
+    return await _serves_through_litellm(
+        model,
+        llm_router,
+        user_api_key_dict,
+        _models_etag_caller(user_api_key_dict, _gateway_token(request)),
+        _forwarded_headers(request),
+        codex_shared_cache(),
+    )
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     try:
         return _JSON_OBJECT.validate_python(value)
@@ -672,13 +698,7 @@ async def codex_passthrough_route(
 
     authorization: Final = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
-    gateway_key: Final = request.headers.get("x-litellm-api-key", "")
-    gateway_parts: Final = gateway_key.split()
-    gateway_token: Final = (
-        gateway_parts[-1]
-        if len(gateway_parts) == 1 or (len(gateway_parts) == 2 and gateway_parts[0].lower() == "bearer")
-        else ""
-    )
+    gateway_token: Final = _gateway_token(request)
     if scheme.lower() != "bearer" or not token.strip() or not gateway_token:
         raise HTTPException(
             status_code=401,
@@ -687,7 +707,7 @@ async def codex_passthrough_route(
     if hmac.compare_digest(token.strip().encode(), gateway_token.encode()):
         raise HTTPException(status_code=401, detail="ChatGPT and LiteLLM credentials must be separate")
 
-    headers: Final = MappingProxyType({name: value for name, value in request.headers.items() if name in _HEADERS})
+    headers: Final = _forwarded_headers(request)
     caller: Final = _models_etag_caller(user_api_key_dict, gateway_token)
     if endpoint == "models":
         return await _catalog(request, user_api_key_dict, caller, headers, cache)

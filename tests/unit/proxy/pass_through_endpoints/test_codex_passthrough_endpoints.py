@@ -39,8 +39,7 @@ _HEADERS: Final = {"authorization": f"Bearer {_TOKEN}", "x-litellm-api-key": MAS
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> Iterator[TestClient]:
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
-    shared_cache: Final = DualCache()
-    monkeypatch.setitem(proxy_server.app.dependency_overrides, codex_shared_cache, lambda: shared_cache)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj.internal_usage_cache, "dual_cache", DualCache())
     yield TestClient(proxy_server.app)
 
 
@@ -758,6 +757,37 @@ def test_native_route_keeps_a_chatgpt_turn_on_the_subscription_despite_a_saved_a
     assert response.status_code == 200, response.text
     assert not provider.called
     assert [json.loads(call.request.content)["model"] for call in chatgpt.calls] == [_BUNDLED_SLUG]
+
+
+def test_native_route_keeps_a_name_the_account_lists_on_the_subscription_despite_a_saved_alias(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(
+        proxy_server, "llm_router", Router(model_list=[_open_weights("gpt-reserve"), _open_weights("group-b")])
+    )
+    key: Final = "sk-test-alias-on-a-name-the-account-lists"
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            models=["gpt-reserve", "group-b"],
+            router_settings={"model_group_alias": {"gpt-reserve": "group-b"}},
+            model_max_budget={"group-b": {"max_budget": 0.0, "budget_duration": "1d"}},
+        ),
+    )
+    catalog: Final = respx_mock.get(f"{_BASE}/models").respond(json={"models": [{"slug": "gpt-reserve"}]})
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "gpt-reserve", "input": "Hello", "stream": True},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert response.status_code == 200, response.text
+    assert not provider.called
+    assert [json.loads(call.request.content)["model"] for call in chatgpt.calls] == ["gpt-reserve"]
+    assert catalog.call_count == 1
 
 
 def test_v1_request_for_a_gpt_name_still_reaches_the_catch_all_with_the_access_group_recipe(

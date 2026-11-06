@@ -344,6 +344,11 @@ async def _resolve_router_settings_model_group_alias(
     target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
     if target is None or target == requested:
         return
+    if request_dispatched_to_provider_pass_through(request):
+        from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_turn_serves_through_litellm
+
+        if not await native_turn_serves_through_litellm(requested, llm_router, request, valid_token):
+            return
     verbose_proxy_logger.debug(
         "router_settings.model_group_alias resolved %s -> %s before auth",
         requested.replace("\r", "").replace("\n", ""),
