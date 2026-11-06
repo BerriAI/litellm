@@ -53,7 +53,7 @@ export const getSpendString = (value: number | null | undefined, decimals: numbe
     return "-";
   }
 
-  const halfSmallestUnit = 0.5 / 10 ** decimals;
+  const halfSmallestUnit = Number(`5e-${decimals + 1}`);
   if (Math.abs(value) < halfSmallestUnit) {
     const threshold = (1 / 10 ** decimals).toFixed(decimals);
     return `< $${threshold}`;

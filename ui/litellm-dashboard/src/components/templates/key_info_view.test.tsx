@@ -1485,19 +1485,21 @@ describe("KeyInfoView", () => {
 
   describe("regenerate on a German-locale browser", () => {
     const isoLikeLocaleString = vi.mocked(Date.prototype.toLocaleString).getMockImplementation();
+    const numericDateTime: Intl.DateTimeFormatOptions = {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    };
+    const germanDateTime = new Intl.DateTimeFormat("de-DE", numericDateTime);
 
     beforeEach(() => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2026-01-20T12:00:00Z"));
       vi.mocked(Date.prototype.toLocaleString).mockImplementation(function (this: Date) {
-        return new Intl.DateTimeFormat("de-DE", {
-          year: "numeric",
-          month: "numeric",
-          day: "numeric",
-          hour: "numeric",
-          minute: "numeric",
-          second: "numeric",
-        }).format(this);
+        return germanDateTime.format(this);
       });
     });
 

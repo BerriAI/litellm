@@ -132,6 +132,11 @@ describe("dataUtils", () => {
       expect(getSpendString(-0.0000005, 6)).toBe("$-0.000001");
     });
 
+    it("reports spend just under half the smallest unit as below the threshold", () => {
+      expect(getSpendString(0.00000045, 6)).toBe("< $0.000001");
+      expect(getSpendString(4.9999999999999996e-26, 25)).toBe("< $0.0000000000000000000000001");
+    });
+
     describe("when numbers render with non-Latin digits", () => {
       beforeEach(() => {
         vi.spyOn(Number.prototype, "toLocaleString").mockImplementation(arabicDigitsLocaleString);

@@ -65,15 +65,18 @@ const renderHealthCheck = async (props: HarnessProps) => {
   });
 };
 
+const numericDateTime: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+};
+const germanDateTime = new Intl.DateTimeFormat("de-DE", numericDateTime);
+
 const germanLocaleString = function (this: Date): string {
-  return new Intl.DateTimeFormat("de-DE", {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-  }).format(this);
+  return germanDateTime.format(this);
 };
 
 const rowIds = (): string[] =>
@@ -271,7 +274,7 @@ describe("HealthCheckComponent", () => {
       expect(screen.getByText("none")).toBeInTheDocument();
     });
 
-    it("shows the check time only as the last check when the latest stored check failed", async () => {
+    it("does not count a failed stored check as the last success", async () => {
       const checkedAt = "2024-01-15T10:05:00Z";
       mockLatestHealthChecksCall.mockResolvedValue({
         latest_health_checks: {
