@@ -14,10 +14,12 @@ from openai.types.responses import ResponseFunctionWebSearch
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -150,7 +152,9 @@ def _server_tool_call(call_id: str, name: str, arguments: Mapping[str, object]) 
     return {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
-def _tool_call_ids_names_and_arguments(tool_calls: Iterable[Mapping[str, Any]]) -> list[tuple[str, str, str]]:
+def _tool_call_ids_names_and_arguments(
+    tool_calls: Iterable[ChatCompletionToolCallChunk],
+) -> list[tuple[str | None, str | None, str]]:
     return [
         (tool_call["id"], tool_call["function"]["name"], tool_call["function"]["arguments"])
         for tool_call in tool_calls
@@ -176,9 +180,9 @@ class QueryRedactingGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
     ) -> GenericGuardrailAPIInputs:
-        def redacted(tool_call: Mapping[str, Any]) -> Mapping[str, Any]:
+        def redacted(tool_call: ChatCompletionToolCallChunk) -> ChatCompletionToolCallChunk:
             arguments: Final[dict[str, object]] = json.loads(tool_call["function"]["arguments"])
             redacted_arguments: Final = {
                 key: "[REDACTED]" if key in ("query", "url") else value for key, value in arguments.items()
