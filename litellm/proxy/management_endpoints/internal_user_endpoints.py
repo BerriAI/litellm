@@ -573,7 +573,7 @@ async def new_user(
         if billable_users and _license_check.is_over_limit(total_users=billable_users):
             raise HTTPException(
                 status_code=403,
-                detail="No LiteLLM licenses are available. Please contact your administrator.",
+                detail="User count limit reached for your LiteLLM License. Please contact your administrator",
             )
 
         # Only proxy admins can create administrative users
