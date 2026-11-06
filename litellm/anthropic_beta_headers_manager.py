@@ -354,6 +354,7 @@ def get_provider_beta_header(
 def update_headers_with_filtered_beta(
     headers: dict,
     provider: str,
+    keep: frozenset[str] = frozenset(),
 ) -> dict:
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
@@ -362,6 +363,7 @@ def update_headers_with_filtered_beta(
     Args:
         headers: Request headers dict (will be modified in place)
         provider: Provider name
+        keep: Betas the routed model accepts, forwarded as sent whatever the row says
 
     Returns:
         Updated headers dict
@@ -371,12 +373,19 @@ def update_headers_with_filtered_beta(
         return headers
 
     # Parse existing beta headers
-    beta_values: Final = [b.strip() for b in existing_beta.split(",") if b.strip()]
+    beta_values: Final[tuple[str, ...]] = tuple(b.strip() for b in existing_beta.split(",") if b.strip())
 
     # Filter and transform based on provider
-    filtered_beta_values: Final = filter_and_transform_beta_headers(
-        beta_headers=beta_values,
-        provider=provider,
+    filtered_beta_values: Final = tuple(
+        dict.fromkeys(
+            [
+                *filter_and_transform_beta_headers(
+                    beta_headers=[b for b in beta_values if b not in keep],
+                    provider=provider,
+                ),
+                *(b for b in beta_values if b in keep),
+            ]
+        )
     )
 
     # Update or remove the header

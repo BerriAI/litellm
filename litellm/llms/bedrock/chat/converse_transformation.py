@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -158,6 +159,10 @@ def _tools_the_model_accepts(
     if bedrock_model_supports_regex_lookaround(model, litellm_params):
         return list(tools)
     return [tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) for tool in tools]
+
+
+BEDROCK_SERVICE_TIERS: Final = ("default", "flex", "priority", "reserved")
+_BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard_only": "default"})
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -1047,20 +1052,23 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params, model=model, route="bedrock", drop_params=drop_params
+        )
+        is_thinking_enabled: Final = self.is_thinking_enabled(request_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
         drop_thinking_param: Final = self._is_deepseek_model(model=model, base_model=base_model)
         drop_reasoning_effort_param: Final = self._model_rejects_reasoning_effort_param(
             model=model, base_model=base_model
         )
 
-        for param, value in non_default_params.items():
+        for param, value in request_params.items():
             if param == "response_format" and isinstance(value, dict):
                 optional_params = self._translate_response_format_param(
                     value=value,
                     model=model,
                     optional_params=optional_params,
-                    non_default_params=non_default_params,
+                    non_default_params=request_params,
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
@@ -1113,7 +1121,7 @@ class AmazonConverseConfig(BaseConfig):
                         ),
                     ),
                     model=model,
-                    non_default_params=non_default_params,
+                    non_default_params=request_params,
                     optional_params=optional_params,
                 )
             if param == "tool_choice":
@@ -1139,7 +1147,7 @@ class AmazonConverseConfig(BaseConfig):
                     and value.get("type") == "adaptive"
                     and not AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
                 ):
-                    max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
+                    max_tokens = request_params.get("max_completion_tokens") or request_params.get("max_tokens")
                     legacy_thinking = AnthropicConfig.map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
@@ -1200,8 +1208,8 @@ class AmazonConverseConfig(BaseConfig):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
                 self._map_request_metadata_param(value, optional_params)
-            if param == "service_tier" and isinstance(value, str):
-                self._map_service_tier_param(value, optional_params)
+            if param == "service_tier":
+                self._map_service_tier_param(_JSON_VALUE.validate_python(value), optional_params, model, drop_params)
 
             if param == "web_search_options" and isinstance(value, dict):
                 # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
@@ -1216,7 +1224,7 @@ class AmazonConverseConfig(BaseConfig):
         # Nova 2 handles token budgeting differently through reasoningConfig
         if "gpt-oss" not in model and not self._is_nova_2_model(model):
             self.update_optional_params_with_thinking_tokens(
-                non_default_params=non_default_params, optional_params=optional_params
+                non_default_params=request_params, optional_params=optional_params
             )
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
@@ -1254,17 +1262,22 @@ class AmazonConverseConfig(BaseConfig):
         if mapped is not None:
             optional_params["context_management"] = mapped
 
-    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
-        """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
-
-        OpenAI values: "auto", "default", "flex", "priority"
-        Bedrock values: "default", "flex", "priority" (no "auto")
-        """
-        bedrock_tier = value
-        if value == "auto":
-            bedrock_tier = "default"  # Bedrock doesn't support "auto"
-        if bedrock_tier in ("default", "flex", "priority"):
+    def _map_service_tier_param(self, value: object, optional_params: dict, model: str, drop_params: bool) -> None:
+        if value is None or value == "auto":
+            return
+        bedrock_tier: Final = _BEDROCK_SERVICE_TIER_ALIASES.get(value, value) if isinstance(value, str) else None
+        if bedrock_tier in BEDROCK_SERVICE_TIERS:
             optional_params["serviceTier"] = {"type": bedrock_tier}
+            return
+        if not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support service_tier={value!r} on Bedrock. "
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+        verbose_logger.warning("Dropping service_tier=%r for %s, since Bedrock does not serve it.", value, model)
 
     def _translate_response_format_param(
         self,

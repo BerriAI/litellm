@@ -27,10 +27,13 @@ Tests cover (consolidating PRs #23706 and #22727):
 
 import os
 import sys
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+import litellm
 
 # Anchor sys.path to this file's location — not the working-directory-relative
 # pattern Greptile flagged on PR #23706. Resolves correctly regardless of
@@ -67,8 +70,8 @@ def _call_prepare(extra_kwargs, model="gpt-4o", output_format=None, **overrides)
         system=None,
         temperature=None,
         thinking=None,
-        tool_choice=None,
-        tools=None,
+        tool_choice=overrides.get("tool_choice"),
+        tools=overrides.get("tools"),
         top_k=None,
         top_p=None,
         output_format=output_format,
@@ -263,3 +266,112 @@ async def test_messages_layer_converted_stream_flag_still_gets_a_message_back(co
     )
 
     assert response["content"][0]["text"] == "hi"
+
+
+_DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
+
+
+@pytest.mark.parametrize(
+    ("mcp_servers", "named"),
+    [
+        ([_DEEPWIKI_SERVER], "`deepwiki`"),
+        ([_DEEPWIKI_SERVER, {"type": "url", "url": "https://mcp.example.com/mcp"}], "`deepwiki`, `unnamed`"),
+        ({"name": "deepwiki"}, "`unnamed`"),
+    ],
+    ids=["named", "one-unnamed", "not-a-list"],
+)
+def test_mcp_servers_a_chat_route_cannot_run_answer_400_naming_each_server(
+    monkeypatch: pytest.MonkeyPatch, mcp_servers: object, named: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        _call_prepare(
+            extra_kwargs={"mcp_servers": mcp_servers, "custom_llm_provider": "gemini"}, model="gemini-3.8-flash"
+        )
+
+    assert raised.value.status_code == 400
+    assert f"to gemini-3.8-flash on gemini, so the MCP server {named} would not run" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("route", "forwards"),
+    [("litellm_proxy", True), ("hosted_vllm", True), ("bedrock", False), ("vertex_ai", False)],
+)
+def test_mcp_servers_reach_routes_that_carry_them_and_answer_400_elsewhere(
+    monkeypatch: pytest.MonkeyPatch, route: str, forwards: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    extra_kwargs: Final = {"mcp_servers": [_DEEPWIKI_SERVER], "custom_llm_provider": route}
+    if not forwards:
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"on {route}, so the MCP server `deepwiki`"):
+            _call_prepare(extra_kwargs=extra_kwargs, model="some-model")
+        return
+
+    completion_kwargs, _ = _call_prepare(extra_kwargs=extra_kwargs, model="some-model")
+
+    assert completion_kwargs["mcp_servers"] == [_DEEPWIKI_SERVER]
+
+
+_DEEPWIKI_TOOLSET: Final = {"type": "mcp_toolset", "mcp_server_name": "deepwiki"}
+_WEATHER_TOOL: Final = {
+    "name": "get_weather",
+    "description": "Get the weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("tools", "kept_tool_names"),
+    [([_DEEPWIKI_TOOLSET, _WEATHER_TOOL], ["get_weather"]), ([_DEEPWIKI_TOOLSET], None)],
+    ids=["with-function", "toolset-only"],
+)
+def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(
+    monkeypatch: pytest.MonkeyPatch, tools: list[dict[str, object]], kept_tool_names: list[str] | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={"mcp_servers": [_DEEPWIKI_SERVER], "custom_llm_provider": "gemini"},
+        model="gemini-3.8-flash",
+        tools=tools,
+        tool_choice={"type": "auto"},
+    )
+
+    sent_tools: Final = completion_kwargs.get("tools")
+    sent_names: Final = [tool["function"]["name"] for tool in sent_tools] if sent_tools else None
+    assert sent_names == kept_tool_names
+    assert ("tool_choice" in completion_kwargs) == bool(kept_tool_names)
+
+
+_DROP_FORMS: Final[Mapping[str, Mapping[str, object]]] = {
+    "request": {"drop_params": True},
+    "global": {},
+    "additional_drop_params": {"additional_drop_params": ["mcp_servers"]},
+}
+
+
+@pytest.mark.parametrize("drop_params", list(_DROP_FORMS))
+def test_drop_params_drops_mcp_servers_instead_of_forwarding_them(
+    monkeypatch: pytest.MonkeyPatch, drop_params: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params == "global")
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={
+            "mcp_servers": [_DEEPWIKI_SERVER],
+            "custom_llm_provider": "gemini",
+            **_DROP_FORMS[drop_params],
+        },
+        model="gemini-3.8-flash",
+    )
+
+    assert "mcp_servers" not in completion_kwargs
+    assert completion_kwargs["messages"] == MESSAGES
+
+
+@pytest.mark.parametrize("mcp_servers", [None, []], ids=["absent", "empty"])
+def test_no_mcp_servers_needs_no_drop_params(monkeypatch: pytest.MonkeyPatch, mcp_servers: object) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={"mcp_servers": mcp_servers, "custom_llm_provider": "gemini"}, model="gemini-3.8-flash"
+    )
+
+    assert "mcp_servers" not in completion_kwargs
