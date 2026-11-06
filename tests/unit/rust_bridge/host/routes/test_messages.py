@@ -243,6 +243,19 @@ def test_upstream_failure_headers_match_the_python_clients_rebuilt_response(
     assert dict(_get_response_headers(mapped) or {}) == expected
 
 
+@pytest.mark.parametrize("status", [200, 500])
+def test_upstream_failure_without_wire_headers_states_no_headers(status: int) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import _get_response_headers
+
+    upstream: Final = ValueError(status, "not a messages response")
+    upstream.headers = []  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+
+    mapped: Final = messages_host.map_failure(upstream, {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert isinstance(mapped, Exception)
+    assert not dict(_get_response_headers(mapped) or {})
+
+
 def test_a_late_rejection_tells_the_logger_the_resolved_call_first() -> None:
     import datetime
 
