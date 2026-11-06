@@ -587,6 +587,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
+    @staticmethod
+    def _resolve_output_format_strict(strict: bool | None) -> bool:
+        if strict is None:
+            return True
+        return strict
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -696,7 +702,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         "type": "json_schema",
                         "name": "structured_output",
                         "schema": schema,
-                        "strict": output_format.get("strict", False),
+                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
                     }
                 }
 

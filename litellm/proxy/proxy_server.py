@@ -1042,6 +1042,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    run_off_loop_if_fips,
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
@@ -19816,7 +19817,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
     validate_password_policy(data.password, general_settings)
     await validate_password_not_breached(data.password, general_settings)
-    hashed_pw: Final = hash_password(data.password)
+    hashed_pw: Final = await run_off_loop_if_fips(hash_password, data.password)
     current_time = litellm.utils.get_utc_datetime()
     tx_manager: Final[_InvitationAcceptTxManager] = prisma_client.db.tx()
     async with tx_manager as tx:

@@ -85,7 +85,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows
+from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
 from litellm.redis.stores.spend_counters import (
     user_counter,
 )
@@ -210,7 +210,7 @@ async def _hash_password_in_dict(
         if not password_prevalidated:
             validate_password_policy(data["password"], general_settings)
             await validate_password_not_breached(data["password"], general_settings, hibp_client)
-        data["password"] = hash_password(data["password"])
+        data["password"] = await run_off_loop_if_fips(hash_password, data["password"])
         data["password_reset_required"] = True
         data["last_breach_check_at"] = None
 
