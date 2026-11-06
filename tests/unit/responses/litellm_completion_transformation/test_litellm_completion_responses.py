@@ -6591,6 +6591,86 @@ def test_transform_request_reads_service_tier_from_responses_api_request() -> No
     assert result["service_tier"] == "priority"
 
 
+def test_transform_response_input_param_dict_input():
+    """Verify that a single dictionary input item is correctly converted to a chat completion message."""
+    dict_input = {"type": "message", "role": "user", "content": "hello from dict"}
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=dict_input,
+        responses_api_request={},
+    )
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "hello from dict"
+
+
+def test_transform_response_input_param_tuple_input():
+    """Verify that tuple input items are accepted like list input items."""
+    tuple_input = (
+        {"type": "message", "role": "user", "content": "first"},
+        {"type": "message", "role": "user", "content": "second"},
+    )
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=tuple_input,
+        responses_api_request={},
+    )
+    assert [message["content"] for message in messages] == ["first", "second"]
+
+
+def test_transform_response_input_param_invalid_type_raises_bad_request():
+    """Verify that passing invalid input types like integer raises BadRequestError."""
+    import litellm
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=123,
+            responses_api_request={},
+        )
+    assert "Invalid input type" in str(exc_info.value)
+    assert "tuple" in str(exc_info.value)
+
+
+def test_transform_response_input_param_single_item_drops_cache_control_like_list_input() -> None:
+    item: Final = {"type": "message", "role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}
+
+    as_item: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=item, responses_api_request={}
+    )
+
+    assert as_item == LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=[item], responses_api_request={}
+    )
+    assert as_item == [{"role": "user", "content": "hi"}]
+
+
+def test_transform_response_input_param_tuple_drops_items_before_compaction_like_list_input() -> None:
+    summary: Final = {"type": "compaction", "content": "Earlier turns covered the Tokyo trip."}
+    items: Final = (
+        {"type": "message", "role": "user", "content": "Plan the Tokyo trip."},
+        {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(summary)},
+        {"type": "message", "role": "user", "content": "And Osaka?"},
+    )
+
+    as_tuple: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=items, responses_api_request={}, only_since_compaction=True
+    )
+
+    assert as_tuple == LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=list(items), responses_api_request={}, only_since_compaction=True
+    )
+    assert as_tuple == [
+        {"role": "user", "content": "Earlier turns covered the Tokyo trip."},
+        {"role": "user", "content": "And Osaka?"},
+    ]
+
+
+def test_transform_response_input_param_without_input_returns_only_instructions() -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=None, responses_api_request={"instructions": "Be brief."}
+    )
+
+    assert messages == [{"role": "system", "content": "Be brief."}]
+
+
 _COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Earlier turns covered the Tokyo trip."}
 
 
