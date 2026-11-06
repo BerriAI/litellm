@@ -306,49 +306,75 @@ async fn a_reset_fence_holds_a_repair_until_it_is_gone(
     assert_eq!(repaired, Some(Number::Float(12.0)));
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Write {
+    Increment,
+    IncrementMany,
+    PostCall,
+    SetMax,
+    Seed,
+    Set,
+    RefreshTtl,
+}
+
 #[rstest]
+#[case::increment(Write::Increment)]
+#[case::increment_many(Write::IncrementMany)]
+#[case::post_call(Write::PostCall)]
+#[case::set_max(Write::SetMax)]
+#[case::seed(Write::Seed)]
+#[case::set(Write::Set)]
+#[case::refresh_ttl(Write::RefreshTtl)]
 #[tokio::test]
 async fn every_write_lasts_for_the_ttl_its_caller_names(
+    #[case] write: Write,
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {
     let deployment = RedisDeployment::start(topology).await.unwrap();
     let raw = connect(&deployment);
     let store = store(Some(connect(&deployment)));
-    let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+    let counter = team("t");
     let long = Some(Duration::from_secs(3600));
     let one = Number::Int(1);
-    let counters = [
-        "increment",
-        "many",
-        "post_call",
-        "set_max",
-        "seed",
-        "set",
-        "refresh",
-    ]
-    .map(team);
-    let [increment, many, post_call, set_max, seed, set, refresh] = &counters;
 
-    store.increment(increment, one, long).await.unwrap();
-    store
-        .increment_many(&[(many.clone(), one)], long)
-        .await
-        .unwrap();
-    assert!(store.increment_many_post_call(&request, &[(post_call.clone(), one)], long));
-    request.flush_post().await;
-    litellm_redis_testing::eventually(async || store.get_local(post_call).unwrap()).await;
-    store.set_max(set_max, one, long).await.unwrap();
-    store.seed(seed, one, LostSeed::Answer, long).await.unwrap();
-    store.set(set, one, None, long).await.unwrap();
-    store.increment(refresh, one, None).await.unwrap();
-    assert!(store.refresh_ttl(refresh, long).await.unwrap());
-
-    for counter in &counters {
-        let Ttl::Expires(remaining) = raw.send(commands::ttl(&counter.key())).await.unwrap() else {
-            panic!("{counter:?} has no TTL");
-        };
-        assert!(within(remaining, 3600), "{counter:?} {remaining:?}");
+    match write {
+        Write::Increment => {
+            store.increment(&counter, one, long).await.unwrap();
+        }
+        Write::IncrementMany => {
+            store
+                .increment_many(&[(counter.clone(), one)], long)
+                .await
+                .unwrap();
+        }
+        Write::PostCall => {
+            let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+            assert!(store.increment_many_post_call(&request, &[(counter.clone(), one)], long));
+            request.flush_post().await;
+            litellm_redis_testing::eventually(async || store.get_local(&counter).unwrap()).await;
+        }
+        Write::SetMax => {
+            store.set_max(&counter, one, long).await.unwrap();
+        }
+        Write::Seed => {
+            store
+                .seed(&counter, one, LostSeed::Answer, long)
+                .await
+                .unwrap();
+        }
+        Write::Set => {
+            store.set(&counter, one, None, long).await.unwrap();
+        }
+        Write::RefreshTtl => {
+            store.increment(&counter, one, None).await.unwrap();
+            assert!(store.refresh_ttl(&counter, long).await.unwrap());
+        }
     }
+
+    let Ttl::Expires(remaining) = raw.send(commands::ttl(&counter.key())).await.unwrap() else {
+        panic!("{write:?} left the counter without a TTL");
+    };
+    assert!(within(remaining, 3600), "{write:?} {remaining:?}");
 }
 
 #[rstest]
