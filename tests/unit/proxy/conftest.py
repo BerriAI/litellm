@@ -521,15 +521,8 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 
 @pytest.fixture
 def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_new: Final = _hashlib.new
-
-    def new(name: str, data: bytes = b"", *, usedforsecurity: bool = True) -> _hashlib.HASH:
-        if name == "md5":
-            raise _hashlib.UnsupportedDigestmodError("unsupported hash type")
-        return real_new(name, data, usedforsecurity=usedforsecurity)
-
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
-    monkeypatch.setattr(_hashlib, "new", new)
+    monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
 
 
 @pytest.fixture
