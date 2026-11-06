@@ -156,7 +156,13 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         - size -> ratio (convert "WIDTHxHEIGHT" to "WIDTH:HEIGHT")
         - seconds -> duration (convert to integer)
         """
-        unsupported: Final = unsupported_video_fields(video_create_optional_params, model, "runwayml", drop_params)
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "runwayml",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         supported_openai_params: Final = self.get_supported_openai_params(model)
         return {
             **self._prompt_image_param(video_create_optional_params),

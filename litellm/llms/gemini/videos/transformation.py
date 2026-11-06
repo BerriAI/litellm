@@ -124,7 +124,13 @@ class GeminiVideoConfig(BaseVideoConfig):
 
         All other params are passed through as-is to support Gemini-specific parameters.
         """
-        unsupported: Final = unsupported_video_fields(video_create_optional_params, model, "gemini", drop_params)
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "gemini",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         mapped_params: Final[dict[str, object]] = {}
 
         # Get supported OpenAI params (exclude "model" and "prompt" which are handled separately)

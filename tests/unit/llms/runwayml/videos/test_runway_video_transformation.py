@@ -19,6 +19,12 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
+    params: Final = {"seed": 0, "duration": 6, "aspect_ratio": "1:1", "generate_audio": False}
+    assert RunwayMLVideoConfig().map_openai_params({"seconds": "5", **params}, "gen4_turbo", drop_params) == params
+
+
 class TestRunwayMLVideoTransformation:
     """Test RunwayMLVideoConfig transformation class."""
 
@@ -376,7 +382,7 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"])
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
 def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = RunwayMLVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):

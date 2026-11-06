@@ -846,7 +846,13 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_scalar_provider_parameters_are_preserved(drop_params: bool) -> None:
+    params: Final = {"seed": 0, "duration": 6, "aspect_ratio": "1:1", "generate_audio": False}
+    assert GeminiVideoConfig().map_openai_params(params, "veo-3.1-generate-preview", drop_params) == params
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
 def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = GeminiVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):

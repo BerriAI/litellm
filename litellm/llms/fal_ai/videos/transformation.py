@@ -306,7 +306,11 @@ class FalAIVideoConfig(BaseVideoConfig):
         drop_params: bool,
     ) -> _VideoParams:
         unsupported: Final = unsupported_video_fields(
-            video_create_optional_params, model, "fal_ai", drop_params, frozenset({"generate_audio"})
+            video_create_optional_params,
+            model,
+            "fal_ai",
+            drop_params,
+            frozenset({"generate_audio", "aspect_ratio", "seed", "duration"}),
         )
         supported_params: Final[frozenset[str]] = frozenset(self.get_supported_openai_params(model))
         input_reference: Final[object] = video_create_optional_params.get("input_reference")

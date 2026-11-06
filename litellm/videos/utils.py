@@ -40,23 +40,7 @@ class VideoGenerationRequestUtils:
             extra_body: Final = video_generation_optional_params["extra_body"]
             if extra_body and isinstance(extra_body, dict):
                 # extra_body params override mapped params
-                mapped_images: Final = (
-                    "content" in mapped_params
-                    and (
-                        "frame_images" in video_generation_optional_params
-                        or "input_references" in video_generation_optional_params
-                    )
-                    and "frame_images" not in mapped_params
-                    and "input_references" not in mapped_params
-                )
-                mapped_params.update(
-                    {
-                        key: value
-                        for key, value in extra_body.items()
-                        if not (key in OPENROUTER_VIDEO_FIELDS and key not in mapped_params)
-                        and not (key in {"content", "input_reference"} and mapped_images)
-                    }
-                )
+                mapped_params.update(extra_body)
             # Remove extra_body from mapped_params since it's not sent to the API
             mapped_params.pop("extra_body", None)
 
@@ -109,7 +93,9 @@ class VideoGenerationRequestUtils:
             merged_extra_body = filter_out_litellm_params(kwargs=merged_extra_body)
             if merged_extra_body:
                 optional_params["extra_body"] = merged_extra_body
-                optional_params.update(merged_extra_body)
+                optional_params.update(
+                    {key: value for key, value in merged_extra_body.items() if key not in OPENROUTER_VIDEO_FIELDS}
+                )
 
         optional_params.pop("timeout", None)
 

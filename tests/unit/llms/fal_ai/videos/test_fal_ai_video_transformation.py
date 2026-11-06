@@ -25,6 +25,14 @@ H3_TEXT_MODEL = "minimax/h3/text-to-video"
 H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
+    params: Final = {"aspect_ratio": "1:1", "seed": 0, "duration": 6}
+    assert FalAIVideoConfig().map_openai_params({"seconds": "5", "size": "1280x720", **params}, MODEL, drop_params) == {
+        "resolution": "720p", **params,
+    }
+
+
 class TestFalAIVideoTransformation:
     def setup_method(self):
         self.config = FalAIVideoConfig()
@@ -698,7 +706,7 @@ class TestFalAIVideoTransformation:
         )
 
 
-@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "seed"])
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
 def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = FalAIVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):

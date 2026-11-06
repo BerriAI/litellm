@@ -69,7 +69,13 @@ class OpenAIVideoConfig(BaseVideoConfig):
         drop_params: bool,
     ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
-        unsupported: Final = unsupported_video_fields(video_create_optional_params, model, "openai", drop_params)
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "openai",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         return {key: value for key, value in video_create_optional_params.items() if key not in unsupported}
 
     def validate_environment(
