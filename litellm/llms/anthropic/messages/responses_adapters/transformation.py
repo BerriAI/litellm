@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -31,9 +32,13 @@ from litellm.llms.anthropic.messages.native.utils import (
     responses_output_refusal_text,
 )
 from litellm.llms.anthropic.messages.utils import (
+    REASONING_EFFORT_OFF,
+    content_blocks,
+    is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     prompt_cache_key_from_user_id,
+    requested_reasoning_summary,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
@@ -129,16 +134,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return {"type": "input_file", "file_url": url}
         return None
 
-    @staticmethod
-    def _content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
-        if not isinstance(content, list):
-            return ()
-        return tuple(
-            cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
-            for block in cast(Sequence[object], content)  # cast-ok: untyped client content list
-            if isinstance(block, dict)
-        )
-
     @classmethod
     def _tool_result_image_parts(
         cls, blocks: Sequence[Mapping[str, object]]
@@ -163,7 +158,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         block, the images Anthropic caches for the mark. The result's text and documents join into one output, which
         the mark covers whole.
         """
-        inner: Final = cls._content_blocks(block.get("content"))
+        inner: Final = content_blocks(block.get("content"))
         own_breakpoint: Final = block.get("prompt_cache_breakpoint")
         if own_breakpoint is not None:
             return own_breakpoint, cls._tool_result_image_parts(inner), ()
@@ -533,54 +528,73 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return result if result else None
 
     @staticmethod
+    def _requested_effort(
+        thinking: Mapping[str, object],
+        configured_effort: object,
+        *,
+        model: str,
+        drop_params: bool,
+        between_tool_calls: bool,
+    ) -> object:
+        match thinking.get("type"):
+            case "adaptive":
+                return configured_effort or "medium"
+            case "enabled":
+                return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+            case "disabled":
+                return REASONING_EFFORT_OFF
+            case "between_tools":
+                return (configured_effort or "medium") if between_tool_calls else REASONING_EFFORT_OFF
+            case _:
+                return configured_effort or None
+
+    @staticmethod
+    def _reasoning_summary(thinking: Mapping[str, object], auto_summary_level: str) -> str | None:
+        requested: Final = requested_reasoning_summary(thinking)
+        if requested:
+            return requested
+        if thinking.get("display") is not None:
+            return None
+        return auto_summary_level if is_reasoning_auto_summary_enabled() else None
+
+    @classmethod
     def translate_thinking_to_reasoning(
-        thinking: dict[str, object],
-        output_config: dict[str, object] | None = None,
+        cls,
+        thinking: object,
+        output_config: object = None,
         auto_summary_level: str = "detailed",
         *,
         model: str,
         drop_params: bool = True,
+        between_tool_calls: bool = False,
     ) -> dict[str, object] | None:
         """
-        Convert Anthropic thinking param to Responses API reasoning param.
+        Convert Anthropic thinking and ``output_config.effort`` to the Responses API reasoning param.
 
-        ``thinking.budget_tokens`` is bucketed via the shared
-        ``reasoning_effort_from_thinking_budget`` thresholds. For adaptive
-        thinking, uses ``output_config.effort`` if available, otherwise defaults
-        to medium.
+        ``between_tools`` thinking reasons only once the model has tool results to read, so a fresh turn turns
+        reasoning off like ``disabled`` does.
         """
-        if not isinstance(thinking, dict):
+        thinking_params: Final[Mapping[str, object]] = as_str_mapping(thinking) or {}
+        output_params: Final = as_str_mapping(output_config)
+        effort: Final = cls._requested_effort(
+            thinking_params,
+            output_params.get("effort") if output_params is not None else None,
+            model=model,
+            drop_params=drop_params,
+            between_tool_calls=between_tool_calls,
+        )
+        if effort is None:
             return None
-
-        thinking_type: Final = thinking.get("type")
-
-        if thinking_type == "adaptive":
-            # Use output_config.effort if available
-            effort = "medium"
-            if isinstance(output_config, dict) and output_config.get("effort"):
-                effort = output_config["effort"]
-        elif thinking_type == "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
-            if budget_effort is None:
-                return None
-            effort = budget_effort
-        else:
-            return None
-
-        auto_summary: Final = is_reasoning_auto_summary_enabled()
-        result: Final[dict[str, object]] = {"effort": effort}
-        summary: Final = thinking.get("summary")
-        if summary:
-            result["summary"] = summary
-        elif auto_summary:
-            result["summary"] = auto_summary_level
-        return result
+        if effort == REASONING_EFFORT_OFF:
+            return {"effort": effort}
+        summary: Final = cls._reasoning_summary(thinking_params, auto_summary_level)
+        return {"effort": effort} if summary is None else {"effort": effort, "summary": summary}
 
     @classmethod
     def system_blocks_to_instructions(cls, system: object) -> str:
         return "\n".join(
             text
-            for block in cls._content_blocks(system)
+            for block in content_blocks(system)
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
@@ -670,19 +684,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 cast(AnthropicMessagesToolChoice, tool_choice)
             )
 
-        # thinking -> reasoning
-        thinking: Final = anthropic_request.get("thinking")
-        if isinstance(thinking, dict):
-            output_config = anthropic_request.get("output_config")
-            reasoning: Final = self.translate_thinking_to_reasoning(
-                thinking,
-                output_config=cast(dict[str, object] | None, output_config),
-                auto_summary_level=auto_summary_level,
-                model=model,
-                drop_params=drop_params,
-            )
-            if reasoning:
-                responses_kwargs["reasoning"] = reasoning
+        reasoning: Final = self.translate_thinking_to_reasoning(
+            anthropic_request.get("thinking"),
+            output_config=anthropic_request.get("output_config"),
+            auto_summary_level=auto_summary_level,
+            model=model,
+            drop_params=drop_params,
+            between_tool_calls=is_between_tool_calls(anthropic_request),
+        )
+        if reasoning:
+            responses_kwargs["reasoning"] = reasoning
 
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}

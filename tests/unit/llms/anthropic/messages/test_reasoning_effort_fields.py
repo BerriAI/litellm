@@ -18,7 +18,9 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     resolve_supported_reasoning_efforts,
 )
 from litellm.llms.anthropic.messages.utils import (
+    maps_bare_output_effort,
     normalize_reasoning_effort_value,
+    requested_reasoning_summary,
 )
 from litellm.utils import get_model_info
 
@@ -318,3 +320,48 @@ class TestADeclarationDisjointFromTheChain:
         what every deployment got before the resolver was consulted. Dropping the parameter outright
         is the real answer and belongs with the callers that build the request."""
         assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == expected
+
+
+@pytest.fixture
+def synthetic_model_entry(local_model_cost_map, request):
+    key = f"synthetic/{request.node.name}"
+    litellm.model_cost[key] = {"litellm_provider": "synthetic", "mode": "chat", **request.param}
+    litellm.get_model_info.cache_clear()
+    try:
+        yield key.removeprefix("synthetic/")
+    finally:
+        litellm.model_cost.pop(key, None)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "synthetic_model_entry, maps",
+    [
+        ({"supports_reasoning": True}, True),
+        ({"supports_reasoning": True, "default_reasoning_effort": "none"}, False),
+        ({"supports_reasoning": False}, False),
+        ({}, False),
+    ],
+    indirect=["synthetic_model_entry"],
+    ids=["reasons-by-default", "reasoning-off-by-default", "cannot-reason", "no-reasoning-flag"],
+)
+def test_a_bare_output_effort_maps_only_onto_a_model_that_reasons_by_default(synthetic_model_entry, maps):
+    assert maps_bare_output_effort(synthetic_model_entry, "synthetic", deployment_model_info=None) is maps
+
+
+@pytest.mark.parametrize(
+    "thinking, summary",
+    [
+        ({"type": "disabled", "display": "summarized", "summary": "detailed"}, None),
+        ({"type": "adaptive", "display": "omitted", "summary": "concise"}, "concise"),
+        ({"type": "adaptive", "display": "omitted"}, None),
+        ({"type": "adaptive", "display": "summarized"}, "auto"),
+        ({"type": "adaptive"}, None),
+        ({"type": "between_tools"}, "auto"),
+        ({"type": "between_tools", "display": "omitted"}, None),
+    ],
+)
+def test_requested_reasoning_summary_takes_the_client_summary_then_the_display_and_never_one_for_disabled(
+    thinking: dict[str, object], summary: str | None
+) -> None:
+    assert requested_reasoning_summary(thinking) == summary

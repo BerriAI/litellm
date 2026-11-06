@@ -140,7 +140,7 @@ OPENAI_RESPONSES_REQUEST_FROM_MESSAGES: Final[Mapping[str, JsonValue]] = {
     "zero, negative and non-integer quantities before choosing the next file to "
     "inspect.",
     "max_output_tokens": 1024,
-    "reasoning": {"effort": "high"},
+    "reasoning": {"effort": "high", "summary": "auto"},
     "tools": [
         {
             "type": "function",

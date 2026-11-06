@@ -20,9 +20,10 @@ import litellm
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.llms.anthropic.messages.utils import maps_bare_output_effort, model_reasoning_efforts
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.router import Router
-from litellm.utils import reasoning_effort_with_summary_alias
+from litellm.utils import reasoning_effort_with_summary_alias, supports_none_reasoning_effort, supports_reasoning
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -387,7 +388,7 @@ _RESPONSE: Final = {
             "id": "msg_1",
             "status": "completed",
             "role": "assistant",
-            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            "content": [{"type": "output_text", "text": "ok", "annotations": ()}],
         }
     ],
     "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
@@ -582,3 +583,456 @@ class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
 
         sent: Final = json.loads(route.calls.last.request.read())
         assert functools.reduce(lambda body, key: body[key], effort_path, sent) == "minimal"
+
+
+TOOL_RESULT_TURN: Final = [
+    {"role": "user", "content": "multiply 6 by 7"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "multiply", "input": {"a": 6, "b": 7}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}]},
+]
+OPENAI_CHAT_TARGETS: Final = ["openai/gpt-5.1", "openai/gpt-5-mini"]
+OTHER_PROVIDER_CHAT_TARGETS: Final = [
+    ("databricks/databricks-qwen35-122b-a10b", "databricks"),
+    ("fireworks_ai/kimi-k3", "fireworks_ai"),
+    ("gemini/gemini-3.1-pro-preview", "gemini"),
+    ("hosted_vllm/unmapped-model", "hosted_vllm"),
+]
+
+
+def _chat_completion_kwargs(
+    model: str,
+    provider: str,
+    *,
+    thinking: dict[str, object] | None,
+    messages: list[dict[str, object]],
+    output_config: dict[str, str] | None = None,
+    reasoning_effort: str | None = None,
+    drop_params: bool | None = None,
+) -> Mapping[str, object]:
+    extra_kwargs: Final = {
+        key: value
+        for key, value in (
+            ("custom_llm_provider", provider),
+            ("output_config", output_config),
+            ("reasoning_effort", reasoning_effort),
+            ("drop_params", drop_params),
+        )
+        if value is not None
+    }
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=1024,
+        messages=messages,
+        model=model,
+        thinking=thinking,
+        tools=[MULTIPLY_TOOL],
+        extra_kwargs=extra_kwargs,
+    )
+    return completion_kwargs
+
+
+def _lowest_accepted_level(model: str, *, drop_params: bool, between_tools: bool) -> str | None:
+    levels: Final = model_reasoning_efforts(model, "openai")
+    if levels is not None:
+        return levels[0] if levels else None
+    if between_tools:
+        return None
+    drops_unconfirmed_off: Final = (
+        drop_params and supports_reasoning(model, "openai") and not supports_none_reasoning_effort(model, "openai")
+    )
+    return None if drops_unconfirmed_off else "none"
+
+
+class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
+    @pytest.mark.parametrize("model", OPENAI_CHAT_TARGETS)
+    @pytest.mark.parametrize("output_config, tier", [(None, "medium"), ({"effort": "high"}, "high")])
+    def test_between_tools_reasons_after_a_tool_result_at_the_declared_tier_or_medium(
+        self, local_model_cost_map: None, model: str, output_config: dict[str, str] | None, tier: str
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, "openai", thinking={"type": "between_tools"}, messages=TOOL_RESULT_TURN, output_config=output_config
+        )
+
+        assert sent["reasoning_effort"] == tier
+
+    @pytest.mark.parametrize(
+        "model", [*OPENAI_CHAT_TARGETS, "openai/gpt-6.1-sol", "openai/gpt-4.1", "openai/o3"]
+    )
+    @pytest.mark.parametrize(
+        "thinking",
+        [{"type": "disabled"}, {"type": "between_tools", "summary": "concise"}],
+        ids=["disabled", "between_tools-first-turn"],
+    )
+    @pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop_params", "drop_params"])
+    def test_reasoning_off_is_the_lowest_level_the_model_accepts(
+        self, local_model_cost_map: None, model: str, thinking: dict[str, object], drop_params: bool
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model,
+            "openai",
+            thinking=thinking,
+            messages=MESSAGES,
+            output_config={"effort": "high"},
+            drop_params=drop_params,
+        )
+
+        assert sent.get("reasoning_effort") == _lowest_accepted_level(
+            model, drop_params=drop_params, between_tools=thinking["type"] == "between_tools"
+        )
+
+    @pytest.mark.parametrize("model", [*OPENAI_CHAT_TARGETS, "openai/gpt-4.1", "openai/o3"])
+    def test_a_bare_output_effort_is_the_tier_when_the_model_reasons_unasked(
+        self, local_model_cost_map: None, model: str
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, "openai", thinking=None, messages=MESSAGES, output_config={"effort": "high"}
+        )
+
+        assert sent.get("reasoning_effort") == (
+            "high" if maps_bare_output_effort(model, "openai", deployment_model_info=None) else None
+        )
+
+    def test_an_explicit_reasoning_effort_beats_a_bare_output_effort(self, local_model_cost_map: None) -> None:
+        sent: Final = _chat_completion_kwargs(
+            "openai/gpt-5-mini",
+            "openai",
+            thinking=None,
+            messages=MESSAGES,
+            output_config={"effort": "high"},
+            reasoning_effort="low",
+        )
+
+        assert sent["reasoning_effort"] == "low"
+
+    @pytest.mark.parametrize("model, provider", OTHER_PROVIDER_CHAT_TARGETS)
+    @pytest.mark.parametrize(
+        "thinking, messages",
+        [(None, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN), ({"type": "between_tools"}, MESSAGES)],
+        ids=["bare-effort", "between_tools-after-a-tool-result", "between_tools-first-turn"],
+    )
+    def test_another_provider_keeps_ignoring_between_tools_and_a_bare_effort(
+        self,
+        local_model_cost_map: None,
+        model: str,
+        provider: str,
+        thinking: dict[str, object] | None,
+        messages: list[dict[str, object]],
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            model, provider, thinking=thinking, messages=messages, output_config={"effort": "high"}
+        )
+
+        assert "reasoning_effort" not in sent
+
+    @pytest.mark.parametrize(
+        "thinking, messages",
+        [(None, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN), ({"type": "between_tools"}, MESSAGES)],
+        ids=["bare-effort", "between_tools-after-a-tool-result", "between_tools-first-turn"],
+    )
+    def test_a_claude_target_still_gets_no_reasoning_effort(
+        self, local_model_cost_map: None, thinking: dict[str, object] | None, messages: list[dict[str, object]]
+    ) -> None:
+        sent: Final = _chat_completion_kwargs(
+            "anthropic/claude-sonnet-4-5",
+            "anthropic",
+            thinking=thinking,
+            messages=messages,
+            output_config={"effort": "high"},
+        )
+
+        assert "reasoning_effort" not in sent
+
+
+_OFF_MAP_OPENAI_DEPLOYMENT: Final = {
+    "model": "openai/off-map-hybrid-reasoner",
+    "api_base": "https://compatible.example.test/v1",
+    "api_key": "fake-key",
+}
+
+
+class TestDisabledOnAnOffMapOpenAIDeployment:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    async def test_the_chat_route_sends_reasoning_effort_none(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            _OFF_MAP_OPENAI_DEPLOYMENT,
+            {},
+            r"https://compatible\.example\.test/v1/chat/completions",
+            _CHAT_COMPLETION,
+            thinking={"type": "disabled"},
+            stop_sequences=["STOP"],
+        )
+
+        assert sent["reasoning_effort"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_the_responses_bridge_sends_no_reasoning_its_transformation_would_refuse(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            _OFF_MAP_OPENAI_DEPLOYMENT,
+            {},
+            r"https://compatible\.example\.test/v1/responses",
+            _RESPONSE,
+            thinking={"type": "disabled"},
+        )
+
+        assert "reasoning" not in sent
+
+    @pytest.mark.asyncio
+    async def test_the_chat_route_sends_none_when_the_operator_sets_the_deployment_mode(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"},
+            {"mode": "responses"},
+            r"https://compatible\.example\.test/v1/responses",
+            _RESPONSE,
+            thinking={"type": "disabled"},
+            stop_sequences=["STOP"],
+        )
+
+        assert sent["reasoning"]["effort"] == "none"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "messages_params",
+        [{"thinking": {"type": "disabled"}}, {"thinking": {"type": "adaptive"}, "output_config": {"effort": "none"}}],
+        ids=["disabled", "adaptive-effort-none"],
+    )
+    async def test_the_responses_bridge_sends_none_where_its_transformation_accepts_it(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None, messages_params: Mapping[str, object]
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"},
+            {},
+            r"https://compatible\.example\.test/v1/responses",
+            _RESPONSE,
+            **messages_params,
+        )
+
+        assert sent["reasoning"] == {"effort": "none"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "uses_chat_route, reasoning_key", [(True, "reasoning_effort"), (False, "reasoning")], ids=["chat-route", "responses-bridge"]
+    )
+    async def test_a_first_turn_between_tools_leaves_reasoning_to_the_model(
+        self, respx_mock: respx.MockRouter, local_model_cost_map: None, uses_chat_route: bool, reasoning_key: str
+    ) -> None:
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"},
+            {},
+            rf"https://compatible\.example\.test/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+            _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+            thinking={"type": "between_tools"},
+            stop_sequences=["STOP"] if uses_chat_route else None,
+        )
+
+        assert reasoning_key not in sent
+
+
+async def _bodies_sent_alone_and_beside_a_sibling(
+    respx_mock: respx.MockRouter,
+    litellm_params: Mapping[str, object],
+    sibling_model_info: Mapping[str, object],
+    upstream_url: str,
+    upstream_body: Mapping[str, object],
+    **messages_params: object,
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    route: Final = respx_mock.post(url__regex=upstream_url).mock(return_value=httpx.Response(200, json=upstream_body))
+    deployment: Final = {"model_name": "group", "litellm_params": {**litellm_params}, "model_info": {}}
+    sibling: Final = {"model_name": "sibling", "litellm_params": {**litellm_params}, "model_info": {**sibling_model_info}}
+    await Router(model_list=[deployment]).aanthropic_messages(
+        model="group", messages=MESSAGES, max_tokens=4096, **messages_params
+    )
+    alone: Final = json.loads(route.calls.last.request.read())
+    await Router(model_list=[sibling, deployment]).aanthropic_messages(
+        model="group", messages=MESSAGES, max_tokens=4096, **messages_params
+    )
+    return alone, json.loads(route.calls.last.request.read())
+
+
+class TestASiblingDeploymentLeavesTheOffSwitchAlone:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "litellm_params, api_base",
+        [
+            ({**_OFF_MAP_OPENAI_DEPLOYMENT, "model": "openai/vendor/off-map-hybrid-reasoner"}, r"https://compatible\.example\.test/v1"),
+            ({"model": "openai/gpt-5-mini", "api_key": "fake-key"}, r"https://api\.openai\.com/v1"),
+        ],
+        ids=["off-map", "catalog"],
+    )
+    @pytest.mark.parametrize(
+        "uses_chat_route, reasoning_key", [(True, "reasoning_effort"), (False, "reasoning")], ids=["chat-route", "responses-bridge"]
+    )
+    async def test_a_first_turn_between_tools_sends_what_the_deployment_sends_alone(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        litellm_params: Mapping[str, object],
+        api_base: str,
+        uses_chat_route: bool,
+        reasoning_key: str,
+    ) -> None:
+        upstream_url: Final = f"{api_base}/{'chat/completions' if uses_chat_route else 'responses'}"
+        upstream_body: Final = _CHAT_COMPLETION if uses_chat_route else _RESPONSE
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        alone, beside = await _bodies_sent_alone_and_beside_a_sibling(
+            respx_mock,
+            litellm_params,
+            {"supports_none_reasoning_effort": True},
+            upstream_url,
+            upstream_body,
+            thinking={"type": "between_tools"},
+        )
+
+        assert beside.get(reasoning_key) == alone.get(reasoning_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages_params",
+    [{"thinking": "enabled"}, {"thinking": "", "output_config": {"effort": "low"}}],
+    ids=["truthy", "falsy-with-effort"],
+)
+async def test_a_non_object_thinking_still_reaches_the_responses_bridge(
+    respx_mock: respx.MockRouter,
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    messages_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    sent: Final = await _body_sent_upstream(
+        respx_mock,
+        {"model": "openai/gpt-5-mini", "api_key": "fake-key"},
+        {},
+        r"https://api\.openai\.com/v1/responses",
+        _RESPONSE,
+        **messages_params,
+    )
+
+    assert sent["model"] == "gpt-5-mini"
+
+
+_CLIENT_EFFORT_NONE: Final = [
+    {"thinking": {"type": "adaptive"}, "output_config": {"effort": "none"}},
+    {"output_config": {"effort": "none"}},
+]
+
+
+class TestAClientEffortNoneFollowsTheUnsupportedValueRule:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("messages_params", _CLIENT_EFFORT_NONE, ids=["adaptive", "bare"])
+    @pytest.mark.parametrize(
+        "uses_chat_route, reasoning_key", [(True, "reasoning_effort"), (False, "reasoning")], ids=["chat-route", "responses-bridge"]
+    )
+    async def test_drop_params_drops_it_on_a_model_that_refuses_none(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        messages_params: Mapping[str, object],
+        uses_chat_route: bool,
+        reasoning_key: str,
+    ) -> None:
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "openai/gpt-5-mini", "api_key": "fake-key", "drop_params": True},
+            {},
+            rf"https://api\.openai\.com/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+            _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+            **messages_params,
+        )
+
+        assert reasoning_key not in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("messages_params", _CLIENT_EFFORT_NONE, ids=["adaptive", "bare"])
+    @pytest.mark.parametrize("uses_chat_route", [True, False], ids=["chat-route", "responses-bridge"])
+    async def test_without_drop_params_it_answers_400(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        messages_params: Mapping[str, object],
+        uses_chat_route: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="effort=none is not supported for gpt-5-mini"):
+            await _body_sent_upstream(
+                respx_mock,
+                {"model": "openai/gpt-5-mini", "api_key": "fake-key"},
+                {},
+                rf"https://api\.openai\.com/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+                _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+                **messages_params,
+            )
+
+
+class TestTheOffSwitchUsesMinimalOnlyWhereTheDeploymentConfirmsIt:
+    @pytest.fixture(autouse=True)
+    def _httpx_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model_info, expected",
+        [
+            ({"supports_none_reasoning_effort": False}, "low"),
+            ({"reasoning_effort_levels": ["minimal", "low", "medium", "high"]}, "minimal"),
+        ],
+        ids=["none-flag-only", "declared-levels"],
+    )
+    @pytest.mark.parametrize("thinking", [{"type": "disabled"}, {"type": "between_tools"}], ids=["disabled", "between_tools"])
+    @pytest.mark.parametrize("uses_chat_route", [True, False], ids=["chat-route", "responses-bridge"])
+    @pytest.mark.parametrize("drop_params", [False, True], ids=["no-drop_params", "drop_params"])
+    async def test_an_o3_deployment_gets_the_lowest_level_it_confirms(
+        self,
+        respx_mock: respx.MockRouter,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        model_info: Mapping[str, object],
+        expected: str,
+        thinking: Mapping[str, object],
+        uses_chat_route: bool,
+        drop_params: bool,
+    ) -> None:
+        monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", uses_chat_route)
+
+        sent: Final = await _body_sent_upstream(
+            respx_mock,
+            {"model": "openai/o3", "api_key": "fake-key", "drop_params": drop_params},
+            model_info,
+            rf"https://api\.openai\.com/v1/{'chat/completions' if uses_chat_route else 'responses'}",
+            _CHAT_COMPLETION if uses_chat_route else _RESPONSE,
+            thinking=thinking,
+        )
+
+        assert (sent["reasoning_effort"] if uses_chat_route else sent["reasoning"]["effort"]) == expected

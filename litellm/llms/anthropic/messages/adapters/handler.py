@@ -37,12 +37,14 @@ from litellm.llms.anthropic.messages.safeguards import (
     with_safeguard_results,
 )
 from litellm.llms.anthropic.messages.utils import (
+    REASONING_EFFORT_OFF,
     ProxySubCallLoggingKwargs,
     is_reasoning_auto_summary_enabled,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
+    requested_reasoning_summary,
 )
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -468,28 +470,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
-    def _requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
-        if thinking.get("type") == "disabled":
-            return None
-        summary: Final = thinking.get("summary")
-        if isinstance(summary, str):
-            return summary
-        display: Final = thinking.get("display")
-        return "auto" if display is not None and display != "omitted" else None
-
-    @staticmethod
     def _chat_target_reasoning(
         completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
     ) -> _ChatTargetReasoning | None:
-        if not thinking:
-            return None
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        if not thinking or reasoning_effort == REASONING_EFFORT_OFF:
+            return None
         wraps_summary: Final = isinstance(reasoning_effort, dict) and "summary" in reasoning_effort
-        requested_summary: Final = LiteLLMMessagesToCompletionTransformationHandler._requested_reasoning_summary(
-            thinking
-        )
+        requested_summary: Final = requested_reasoning_summary(thinking)
         if not wraps_summary and requested_summary is None:
             return None
         effort: Final[object] = (
@@ -678,6 +668,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             api_base=api_base if isinstance(api_base, str) else None,
             deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
             drop_params=drop_params,
+            translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
+            deployment_model_info=extra_kwargs.get("model_info"),
         )
 
         if openai_request is None:

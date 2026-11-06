@@ -1,14 +1,17 @@
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
@@ -25,7 +28,12 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
         "minimal": ("minimal", "low"),
     }
 )
-_THINKING_OFF: Final = "none"
+REASONING_EFFORT_OFF: Final = "none"
+RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_LOWEST_REASONING_TIERS: Final = ("minimal", "low")
+_UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
+
+ThinkingOffSwitch = Literal["disabled", "between_tools"]
 
 _JsonValue: Final = TypeVar("_JsonValue")
 
@@ -83,6 +91,7 @@ PROXY_SUB_CALL_METADATA_KEYS: Final = (
 )
 _USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
 
 
 _NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -189,6 +198,158 @@ def is_reasoning_auto_summary_enabled() -> bool:
     return litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
 
 
+def requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
+    if thinking.get("type") == "disabled":
+        return None
+    summary: Final = thinking.get("summary")
+    if isinstance(summary, str):
+        return summary
+    display: Final = thinking.get("display")
+    if display is not None:
+        return None if display == "omitted" else "auto"
+    return "auto" if thinking.get("type") == "between_tools" else None
+
+
+def _list_items(value: object) -> Sequence[object]:
+    try:
+        return _OBJECT_LIST.validate_python(value, strict=True)
+    except ValidationError:
+        return ()
+
+
+def content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(block for block in map(as_str_mapping, _list_items(content)) if block is not None)
+
+
+def _final_user_turn(messages: object) -> Iterator[Mapping[str, object]]:
+    for message in map(as_str_mapping, reversed(_list_items(messages))):
+        if message is None or message.get("role") != "user":
+            return
+        yield message
+
+
+def is_between_tool_calls(request: Mapping[str, object]) -> bool:
+    blocks: Final = chain.from_iterable(
+        content_blocks(message.get("content")) for message in _final_user_turn(request.get("messages"))
+    )
+    return any(block.get("type") == "tool_result" for block in blocks)
+
+
+def thinking_off_switch(request: Mapping[str, object]) -> ThinkingOffSwitch | None:
+    thinking: Final = as_str_mapping(request.get("thinking"))
+    thinking_type: Final = thinking.get("type") if thinking is not None else None
+    if thinking_type == "disabled":
+        return "disabled"
+    if thinking_type == "between_tools" and not is_between_tool_calls(request):
+        return "between_tools"
+    return None
+
+
+def _mapped_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+    from litellm.utils import get_model_info
+
+    try:
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+
+
+def _deployment_model_info(
+    model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> Mapping[str, object] | None:
+    from litellm.utils import catalog_entry
+
+    own_info: Final = as_str_mapping(deployment_model_info)
+    if own_info is None:
+        return _mapped_model_info(model, custom_llm_provider)
+    declared: Final = {key: value for key, value in own_info.items() if value is not None}
+    return {**(catalog_entry(model, custom_llm_provider) or {}), **declared}
+
+
+def _resolved_reasoning_efforts(
+    model_info: Mapping[str, object] | None, model: str, custom_llm_provider: str | None
+) -> tuple[str, ...] | None:
+    from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+    from litellm.utils import has_catalog_entry
+
+    if model_info is None:
+        return None
+    return resolve_supported_reasoning_efforts(
+        model_info, deployment_is_mapped=has_catalog_entry(model, custom_llm_provider)
+    )
+
+
+def model_reasoning_efforts(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
+    return _resolved_reasoning_efforts(_mapped_model_info(model, custom_llm_provider), model, custom_llm_provider)
+
+
+def deployment_reasoning_efforts(
+    model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> tuple[str, ...] | None:
+    return _resolved_reasoning_efforts(
+        _deployment_model_info(model, custom_llm_provider, deployment_model_info), model, custom_llm_provider
+    )
+
+
+def _declares(model_info: Mapping[str, object] | None, capability: str) -> bool:
+    return model_info is not None and model_info.get(capability) is True
+
+
+def _confirms_minimal(model_info: Mapping[str, object] | None) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts
+
+    return model_info is not None and (
+        declared_reasoning_efforts(model_info) is not None or _declares(model_info, "supports_minimal_reasoning_effort")
+    )
+
+
+def _lowest_tier_instead_of_off(levels: tuple[str, ...] | None, model_info: Mapping[str, object] | None) -> str | None:
+    if not levels or REASONING_EFFORT_OFF in levels:
+        return None
+    tiers: Final = _LOWEST_REASONING_TIERS if _confirms_minimal(model_info) else _UNCONFIRMED_MINIMAL_LOWEST_TIERS
+    return next((tier for tier in tiers if tier in levels), None)
+
+
+def reasoning_off_level(
+    model: str,
+    custom_llm_provider: str | None,
+    *,
+    deployment_model_info: object,
+    drop_params: bool,
+    between_tools: bool,
+) -> str | None:
+    model_info: Final = _deployment_model_info(model, custom_llm_provider, deployment_model_info)
+    levels: Final = _resolved_reasoning_efforts(model_info, model, custom_llm_provider)
+    if levels == () or (between_tools and levels is None):
+        return None
+    lowest_tier: Final = _lowest_tier_instead_of_off(levels, model_info)
+    if lowest_tier is not None:
+        return lowest_tier
+    if (
+        not drop_params
+        or not _declares(model_info, "supports_reasoning")
+        or _declares(model_info, "supports_none_reasoning_effort")
+    ):
+        return REASONING_EFFORT_OFF
+    verbose_logger.warning(
+        "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
+        "supports_none_reasoning_effort, because drop_params is set",
+        model,
+    )
+    return None
+
+
+def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:
+    from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
+    model_info: Final = _deployment_model_info(model, custom_llm_provider, deployment_model_info)
+    return (
+        model_info is not None
+        and model_info.get("default_reasoning_effort") != REASONING_EFFORT_OFF
+        and resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) != ()
+    )
+
+
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
@@ -214,23 +375,14 @@ def normalize_reasoning_effort_value(
     if chain is None:
         return effort
 
-    from litellm.litellm_core_utils.reasoning_effort_capability import (
-        deployment_rounds_reasoning_effort,
-        resolve_supported_reasoning_efforts,
-    )
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return effort
-    from litellm.utils import get_model_info
 
-    try:
-        model_info: Final[ModelInfo] = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        return chain[-1]
-
-    supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
+    supported: Final = model_reasoning_efforts(model, custom_llm_provider)
     if not supported:
         return chain[-1]
 
-    accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
+    accepted_tiers: Final = tuple(level for level in supported if level != REASONING_EFFORT_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
