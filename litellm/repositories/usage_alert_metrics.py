@@ -338,7 +338,7 @@ class UsageAlertMetricsRepository:
         if not models:
             return ()
         if len(models) > _BATCH_SIZE or not 0 <= (end - start).days < 30:
-            raise ValueError("Deprecation usage accepts at most 500 models and 30 consecutive dates")
+            raise ValueError("Deprecation usage accepts at most 10 models and 30 consecutive dates")
         return _DEPRECATION_USAGE.validate_python(
             await self._database.query_raw(_DEPRECATION_USAGE_QUERY, start.isoformat(), end.isoformat(), models)
         )
