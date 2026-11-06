@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.integrations.langfuse.langfuse_otel_attributes import default_langfuse_tags
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping
 
 LANGFUSE_HEADER_PREFIX: Final = "langfuse_"
@@ -27,17 +28,15 @@ class TraceControls:
     tags: tuple[str, ...] = ()
 
 
-def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
-    request: Final = as_str_mapping(kwargs.get("litellm_params"))
-    if request is None:
-        return TraceControls()
+def caller_trace_controls(
+    kwargs: Mapping[str, object], *, langfuse_defaults: Literal["request", "completed"] | None = None
+) -> TraceControls:
+    request: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
     proxy_request: Final = as_str_mapping(request.get("proxy_server_request"))
     headers: Final = as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
-    bodies: Final = tuple(
-        metadata
-        for key in ("metadata", "litellm_metadata")
-        if (metadata := as_str_mapping(request.get(key))) is not None
-    )
+    user_metadata: Final = as_str_mapping(request.get("metadata")) or {}
+    model_metadata: Final = as_str_mapping(request.get("litellm_metadata")) or {}
+    bodies: Final = (user_metadata, model_metadata)
 
     def scalar(control: str) -> str | None:
         from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}")) if headers is not None else None
@@ -45,11 +44,21 @@ def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
             return from_header
         return next((value for body in bodies if (value := as_str(body.get(control)))), None)
 
+    caller_tags: Final = next((tags for body in bodies if (tags := _str_items(body.get("tags")))), ())
+    defaults: Final = (
+        default_langfuse_tags(
+            kwargs,
+            {**model_metadata, **user_metadata},
+            completed=langfuse_defaults == "completed",
+        )
+        if langfuse_defaults is not None
+        else ()
+    )
     return TraceControls(
         name=scalar("trace_name"),
         user_id=scalar("trace_user_id"),
         session_id=scalar("session_id"),
-        tags=next((tags for body in bodies if (tags := _str_items(body.get("tags")))), ()),
+        tags=tuple(dict.fromkeys(caller_tags + defaults)) if defaults else caller_tags,
     )
 
 
