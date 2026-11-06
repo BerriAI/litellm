@@ -447,14 +447,14 @@ class _RecordingAudioStream(httpx.AsyncByteStream):
 async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream():
     """A streaming upstream response reaches the client piece by piece as it arrives, with no
     wait for a full AUDIO_SPEECH_CHUNK_SIZE before the first audio goes out."""
-    produced: list[bytes] = []
+    produced: Final[list[bytes]] = []
     first, second = b"a" * (AUDIO_SPEECH_CHUNK_SIZE // 8), b"b" * AUDIO_SPEECH_CHUNK_SIZE
-    stream = _RecordingAudioStream([first, second], produced)
-    response = HttpxBinaryResponseContent(
+    stream: Final = _RecordingAudioStream([first, second], produced)
+    response: Final = HttpxBinaryResponseContent(
         httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
     )
 
-    chunks = proxy_server._audio_speech_chunk_generator(response, on_upstream_error=AsyncMock())
+    chunks: Final = proxy_server._audio_speech_chunk_generator(response, on_upstream_error=AsyncMock())
 
     assert await anext(chunks) == first
     assert produced == [first]
@@ -536,7 +536,7 @@ def _route_speech_to(
 @pytest.fixture
 def patched_streaming_speech(monkeypatch):
     """Route /v1/audio/speech to an upstream whose audio body is left unread."""
-    stream = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])
+    stream: Final = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])
     _route_speech_to(monkeypatch, _audio_response(stream))
     yield stream
 
@@ -546,8 +546,8 @@ async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
     """A client that drops mid-clip still has its upstream connection released. Starlette
     raises ClientDisconnect out of the response before any background task runs, so the
     body iterator's own cleanup is what has to cover this."""
-    stream = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE] * 3, [])
-    response = _audio_response(stream)
+    stream: Final = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE] * 3, [])
+    response: Final = _audio_response(stream)
 
     await _serve_until_disconnect(
         StreamingResponse(
@@ -567,19 +567,19 @@ async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
 async def test_audio_speech_route_releases_an_upstream_whose_body_is_never_read(monkeypatch, patched_streaming_speech):
     """A response the server never iterates leaves the body iterator's cleanup unrun and
     out of reach of GC, so the route itself has to arm the release."""
-    stream = patched_streaming_speech
-    captured: list[StreamingResponse] = []
+    stream: Final = patched_streaming_speech
+    captured: Final[list[StreamingResponse]] = []
 
-    original = proxy_server.StreamingResponse
+    original: Final = proxy_server.StreamingResponse
 
     def _capture(*args, **kwargs):
-        response = original(*args, **kwargs)
+        response: Final = original(*args, **kwargs)
         captured.append(response)
         return response
 
     monkeypatch.setattr(proxy_server, "StreamingResponse", _capture)
 
-    request = _speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True})
+    request: Final = _speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True})
     await proxy_server.audio_speech(
         request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
     )

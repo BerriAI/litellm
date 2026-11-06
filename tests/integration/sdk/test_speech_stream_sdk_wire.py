@@ -8,9 +8,11 @@ from typing import Final
 
 import litellm
 import pytest
-from integration._support.client import held
+from integration._support.client import eventually, held
 from integration._support.wire import Reply, Request, wire_server
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import CallTypes, LLMResponseTypes
 
 _BACKEND: Final = "openai/gpt-4o-mini-tts"
 _PROVIDER_KEY: Final = "synthetic-tts-key"
@@ -209,6 +211,26 @@ async def test_aspeech_stream_closed_early_leaves_the_callers_metadata_unmarked_
         ("async_success", Logged(closed_early, "499", "NoneType")),
         ("async_success", Logged(completed, "", "NoneType")),
     )
+
+
+class _SpeechRejected(Exception):
+    pass
+
+
+class _RejectingGuardrail(CustomGuardrail):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: LLMResponseTypes, call_type: CallTypes | None
+    ) -> None:
+        raise _SpeechRejected
+
+
+async def test_aspeech_stream_rejected_by_a_deployment_guardrail_closes_the_provider_connection() -> None:
+    litellm.callbacks.append(_RejectingGuardrail())
+    with wire_server(_peer(), keep_alive=True) as wire:
+        with pytest.raises(_SpeechRejected):
+            await _aspeech(wire.url, str(uuid.uuid4()))
+        await asyncio.to_thread(eventually, wire.open_connections, lambda still_open: still_open == 0)
+        assert wire.connections() == 1
 
 
 def test_speech_takes_base_url_in_its_positional_slot() -> None:

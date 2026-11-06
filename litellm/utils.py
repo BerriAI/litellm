@@ -7,6 +7,7 @@ import ast
 import asyncio
 import base64
 import binascii
+import contextlib
 import contextvars
 import copy
 import datetime
@@ -1674,6 +1675,13 @@ def _unread_speech_upstream(result: object, call_type: str, stream_requested: bo
     return result.unread_response()
 
 
+async def _close_unread_speech(result: object, call_type: str, stream_requested: bool) -> None:
+    unread_speech: Final = _unread_speech_upstream(result, call_type, stream_requested)
+    if unread_speech is not None:
+        with contextlib.suppress(Exception):
+            await unread_speech.aclose()
+
+
 def _bill_failed_speech_stream(logging_obj: LiteLLMLoggingObject, result: object) -> None:
     logging_obj.record_partial_usage_for_failure(Usage(), logging_obj.response_cost_calculator(result=result) or 0.0)
 
@@ -2770,6 +2778,7 @@ def client(original_function):
             return _replayed_when_run_unstreamed(result, transcription_runs_unstreamed)
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            await _close_unread_speech(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with

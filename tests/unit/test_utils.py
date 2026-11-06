@@ -4229,6 +4229,42 @@ async def test_aspeech_stream_other_than_true_buffers_the_audio(
     assert logged["response"] == _audio_summary(len(b"firstrest"))
 
 
+class _SpeechRejected(Exception):
+    pass
+
+
+class _RejectingGuardrail(CustomGuardrail):
+    async def async_post_call_success_deployment_hook(self, request_data, response, call_type) -> None:
+        raise _SpeechRejected
+
+
+class _AudioThatFailsToClose(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.close_attempts: int = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"first"
+
+    async def aclose(self) -> None:
+        self.close_attempts += 1
+        raise httpx.ReadError("the provider connection broke while closing")
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_failing_to_close_keeps_the_guardrail_rejection(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _AudioThatFailsToClose()
+    monkeypatch.setattr(litellm, "callbacks", [_RejectingGuardrail()])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_elevenlabs_audio(respx_mock, audio)
+
+    with pytest.raises(_SpeechRejected):
+        await _aspeech(stream=True)
+
+    assert audio.close_attempts == 1
+
+
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_speech_stream_is_logged_when_the_audio_ends(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
