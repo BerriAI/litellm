@@ -653,6 +653,14 @@ class CallTypes(str, Enum):
     retrieve_fine_tuning_job = "retrieve_fine_tuning_job"
     responses = "responses"
     aresponses = "aresponses"
+    get_responses = "get_responses"
+    aget_responses = "aget_responses"
+    delete_responses = "delete_responses"
+    adelete_responses = "adelete_responses"
+    cancel_responses = "cancel_responses"
+    acancel_responses = "acancel_responses"
+    compact_responses = "compact_responses"
+    acompact_responses = "acompact_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -754,6 +762,8 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "compact_responses",
+    "acompact_responses",
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",

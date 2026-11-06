@@ -3053,3 +3053,21 @@ async def test_pre_call_hook_skips_attachment_scan_when_guardrail_has_none():
     )
 
     assert len(guardrail.apply_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_lets_responses_compact_through_without_a_translation() -> None:
+    handler: Final = UnifiedLLMGuardrails()
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-5.4-mini",
+        "input": [{"role": "user", "content": "Remember the number 42."}],
+    }
+
+    result: Final = await handler.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), call_type="acompact_responses"
+    )
+
+    assert result is data
+    assert guardrail.apply_calls == []
