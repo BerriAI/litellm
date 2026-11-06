@@ -42,6 +42,22 @@ else:
 _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
+def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
+    function: Final = tool_call["function"]
+    name: Final = function.get("name") or ""
+    if "arguments" not in function:
+        return OllamaToolCallFunction(name=name, arguments={})
+    try:
+        arguments: Final = json.loads(function["arguments"])
+    except json.JSONDecodeError as e:
+        raise litellm.BadRequestError(
+            message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not valid JSON: {e}",
+            model=model,
+            llm_provider="ollama_chat",
+        ) from e
+    return OllamaToolCallFunction(name=name, arguments=arguments)
+
+
 class OllamaChatConfig(BaseConfig):
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
@@ -261,16 +277,7 @@ class OllamaChatConfig(BaseConfig):
                 for tool in tool_calls:
                     typed_tool = ChatCompletionAssistantToolCall(**tool)
                     if typed_tool["type"] == "function":
-                        arguments = {}
-                        if "arguments" in typed_tool["function"]:
-                            arguments = json.loads(typed_tool["function"]["arguments"])
-                        ollama_tool_call = OllamaToolCall(
-                            function=OllamaToolCallFunction(
-                                name=typed_tool["function"].get("name") or "",
-                                arguments=arguments,
-                            )
-                        )
-                        new_tools.append(ollama_tool_call)
+                        new_tools.append(OllamaToolCall(function=_to_ollama_tool_call_function(model, typed_tool)))
             reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
