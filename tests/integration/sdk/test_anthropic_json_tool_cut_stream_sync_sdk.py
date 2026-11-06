@@ -10,6 +10,7 @@ from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 _JSON_TOOL: Final = "json_tool_call"
@@ -26,7 +27,7 @@ _RESPONSE_FORMAT: Final[dict[str, JsonValue]] = {
     "json_schema": {"name": "risk", "schema": _SCHEMA},
 }
 _ANTHROPIC_MODEL: Final = "anthropic/claude-scripted-9"
-_BEDROCK_INVOKE_MODEL: Final = "bedrock/invoke/anthropic.claude-sonnet-5"
+_BEDROCK_INVOKE_MODEL: Final = "bedrock/invoke/anthropic.claude-opus-4-8"
 
 
 def _payload(marker_hex: str) -> dict[str, JsonValue]:
@@ -122,12 +123,10 @@ def _credentials(model: str) -> dict[str, str]:
 @pytest.mark.parametrize("model", [_ANTHROPIC_MODEL, _BEDROCK_INVOKE_MODEL], ids=["anthropic", "bedrock_invoke"])
 @pytest.mark.parametrize(
     ("shape", "cut"),
-    [("plain", False), ("plain", True), ("wrapped", True)],
-    ids=["plain_complete", "plain_cut", "wrapped_cut"],
+    [("plain", False), ("wrapped", False), ("plain", True), ("wrapped", True)],
+    ids=["plain_complete", "wrapped_complete", "plain_cut", "wrapped_cut"],
 )
-def test_sync_stream_cut_before_the_json_tool_block_closes_still_yields_the_whole_answer(
-    model: str, shape: str, cut: bool
-) -> None:
+def test_sync_json_tool_stream_requires_a_provider_finish_reason(model: str, shape: str, cut: bool) -> None:
     marker_hex: Final = uuid.uuid4().hex
     with wire_server(_peer(marker_hex, shape, cut)) as wire:
         response: Final = litellm.completion(
@@ -141,6 +140,11 @@ def test_sync_stream_cut_before_the_json_tool_block_closes_still_yields_the_whol
             **_credentials(model),
         )
         assert isinstance(response, CustomStreamWrapper), type(response)
+        if cut:
+            with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):
+                tuple(response)
+            assert len(wire.drain()) == 1
+            return
         text: Final = "".join(str(chunk.choices[0].delta.content or "") for chunk in tuple(response))
         assert len(wire.drain()) == 1
     assert json.loads(text) == _payload(marker_hex), text

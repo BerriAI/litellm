@@ -2,7 +2,7 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import anyio
@@ -12,7 +12,7 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import APIError, MidStreamFallbackError
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.native.utils import (
@@ -27,6 +27,7 @@ from litellm.responses.streaming_iterator import (
     partial_responses_incomplete_event_on_disconnect,
     stream_error_status_and_message,
 )
+from litellm.types.llms.anthropic import AppliedEdit, ContextManagementResponse
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -129,8 +130,10 @@ class AnthropicResponsesStreamWrapper:
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        applied_edits: Sequence[AppliedEdit] | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
         self.safeguards_evaluator: Final = safeguards_evaluator
@@ -138,6 +141,8 @@ class AnthropicResponsesStreamWrapper:
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._unreported_failure: Exception | None = None
+        # The failure behind this stream's error frame, for a router that accounts for it.
+        self.stream_failure: Exception | None = None
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
@@ -445,6 +450,11 @@ class AnthropicResponsesStreamWrapper:
                     "type": "message_delta",
                     "delta": message_delta_payload,
                     "usage": dict(anthropic_usage),
+                    **(
+                        {"context_management": ContextManagementResponse(applied_edits=list(self._applied_edits))}
+                        if self._applied_edits
+                        else {}
+                    ),
                 }
             )
             self._chunk_queue.append({"type": "message_stop"})
@@ -459,6 +469,7 @@ class AnthropicResponsesStreamWrapper:
             llm_provider=getattr(self.responses_stream, "custom_llm_provider", None),
             model=self.model,
         )
+        self.stream_failure = self._unreported_failure
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
 
     async def _report_unreported_failure(self) -> None:
@@ -569,6 +580,10 @@ class AnthropicResponsesSSEByteStream:
 
     async def aclose(self) -> None:
         await self._frames.aclose()
+
+    @property
+    def stream_failure(self) -> Exception | None:
+        return self._wrapper.stream_failure
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()

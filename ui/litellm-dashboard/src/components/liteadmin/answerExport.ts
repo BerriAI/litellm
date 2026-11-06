@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { ARIA_AGENT_LABEL } from "./aria-brand";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
@@ -184,7 +185,9 @@ function copyAnswerNode(source: Node, target: Document): Node | null {
 }
 
 export function createAriaAnswerDocument(question: string, answerElement: HTMLElement): Document {
-  const report = answerElement.ownerDocument.implementation.createHTMLDocument(`${ARIA_AGENT_LABEL} answer`);
+  const report = answerElement.ownerDocument.implementation.createHTMLDocument(
+    i18n.t("aria.answer.exportDocumentTitle", { agent: ARIA_AGENT_LABEL }),
+  );
   report.documentElement.lang = "en";
   const policy = report.createElement("meta");
   policy.httpEquiv = "Content-Security-Policy";
@@ -209,7 +212,7 @@ export function exportAriaAnswer(question: string, answerElement: HTMLElement): 
   const owner = answerElement.ownerDocument;
   const report = createAriaAnswerDocument(question, answerElement);
   const frame = owner.createElement("iframe");
-  frame.title = `${ARIA_AGENT_LABEL} print preview`;
+  frame.title = i18n.t("aria.answer.printPreview", { agent: ARIA_AGENT_LABEL });
   frame.setAttribute("sandbox", "allow-modals allow-same-origin");
   frame.style.cssText = "position:fixed;inset:0;width:0;height:0;border:0;";
   owner.body.appendChild(frame);

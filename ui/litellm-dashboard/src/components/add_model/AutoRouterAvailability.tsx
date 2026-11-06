@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 import { apiClient } from "@/components/networking";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import type { components } from "@/lib/http/schema";
@@ -19,6 +22,7 @@ type AvailabilityState = {
 export const AutoRouterAvailabilityContext = createContext<AvailabilityState>({ isPending: true, isError: false });
 
 export const useAutoRouterAvailability = (accessToken: string, body: Request, enabled = true) => {
+  const { t } = useTranslation();
   const serialized = JSON.stringify(body.complexity_router_config ?? null);
   const [debounced, setDebounced] = useState(serialized);
   useEffect(() => {
@@ -48,8 +52,8 @@ export const useAutoRouterAvailability = (accessToken: string, body: Request, en
   const isChecking = query.isFetching || query.isPlaceholderData || serialized !== debounced;
   const saveBlockedReason = () => {
     if (!enabled) return null;
-    if (query.isPending || isChecking) return "Checking availability";
-    if (query.isError || !query.data) return "Could not check availability. Retry before saving.";
+    if (query.isPending || isChecking) return t("addModel.autoRouterAvailability.checking");
+    if (query.isError || !query.data) return t("addModel.autoRouterAvailability.saveCheckFailed");
     return query.data.error ?? null;
   };
   return {
@@ -60,20 +64,27 @@ export const useAutoRouterAvailability = (accessToken: string, body: Request, en
   };
 };
 
-export const allowanceLabel = (allowance?: Allowance): string | null => {
-  if (!allowance?.available) return "Availability unavailable";
+export const allowanceLabel = (allowance?: Allowance, t: TFunction = i18n.t.bind(i18n)): string | null => {
+  if (!allowance?.available) return t("addModel.autoRouterAvailability.unavailable");
   if (allowance.limit == null) return null;
-  if (allowance.used_by_this_router) return "Used by this router";
-  return `${allowance.remaining} of ${allowance.limit} available`;
+  if (allowance.used_by_this_router) return t("addModel.autoRouterAvailability.usedByThisRouter");
+  return t("addModel.autoRouterAvailability.remainingOfLimit", {
+    remaining: allowance.remaining,
+    limit: allowance.limit,
+  });
 };
 
-const availabilityLabel = (state: AvailabilityState, key: string) => {
-  if (state.isPending || state.isChecking) return "Checking availability";
-  if (state.isError) return "Availability unavailable";
-  return allowanceLabel(state.data?.allowances.find((entry) => entry.key === key));
+const availabilityLabel = (state: AvailabilityState, key: string, t: TFunction = i18n.t.bind(i18n)) => {
+  if (state.isPending || state.isChecking) return t("addModel.autoRouterAvailability.checking");
+  if (state.isError) return t("addModel.autoRouterAvailability.unavailable");
+  return allowanceLabel(
+    state.data?.allowances.find((entry) => entry.key === key),
+    t,
+  );
 };
 
-export const useAllowanceLabel = (key: string) => availabilityLabel(useContext(AutoRouterAvailabilityContext), key);
+export const useAllowanceLabel = (key: string) =>
+  availabilityLabel(useContext(AutoRouterAvailabilityContext), key, useTranslation().t);
 
 export const isAllowanceExhausted = (allowance?: Allowance) =>
   Boolean(allowance?.available && allowance.limit != null && allowance.remaining === 0) &&
@@ -82,6 +93,7 @@ export const isAllowanceExhausted = (allowance?: Allowance) =>
 export const AUTO_ROUTER_CONTACT_URL = "https://calendly.com/tin-berri/litellm-auto-router-pricing-discussion";
 
 export const AutoRouterContactLink = ({ features, message }: { features?: string[]; message?: string }) => {
+  const { t } = useTranslation();
   const state = useContext(AutoRouterAvailabilityContext);
   if (state.isPending || state.isError || state.isChecking) return null;
   const exhausted = state.data?.allowances.some(
@@ -97,7 +109,7 @@ export const AutoRouterContactLink = ({ features, message }: { features?: string
         rel="noopener noreferrer"
         className="font-medium text-blue-600 hover:underline dark:text-blue-400"
       >
-        Talk to our team
+        {t("addModel.autoRouterAvailability.talkToTeam")}
       </a>
     </span>
   );
@@ -120,45 +132,40 @@ export const AutoRouterAllowanceNote = ({ feature, label }: { feature: string; l
 };
 
 export const AutoRouterLimits = () => {
+  const { t } = useTranslation();
   const state = useContext(AutoRouterAvailabilityContext);
   const limits = [
-    ["heuristic_v2", "Heuristic v2 routers"],
-    ["capability", "Capability routers"],
-    ["llm_v2", "Fuse v2 routers"],
-    ["tier_or_classifier_prompt", "Custom tiers or prompts"],
-    ["heuristic_tuning", "Rule-based tuning"],
+    ["heuristic_v2", t("addModel.autoRouterAvailability.limits.heuristicV2")],
+    ["capability", t("addModel.autoRouterAvailability.limits.capability")],
+    ["llm_v2", t("addModel.autoRouterAvailability.limits.fuseV2")],
+    ["tier_or_classifier_prompt", t("addModel.autoRouterAvailability.limits.customTiersOrPrompts")],
+    ["heuristic_tuning", t("addModel.autoRouterAvailability.limits.ruleBasedTuning")],
   ];
   return (
     <Popover>
       <PopoverTrigger className="shrink-0 whitespace-nowrap text-xs font-normal text-muted-foreground underline underline-offset-4 hover:text-foreground">
-        View limits
+        {t("addModel.autoRouterAvailability.limits.view")}
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)] gap-3">
-        <PopoverTitle>Routing and customization limits</PopoverTitle>
-        <p className="text-xs leading-5 text-muted-foreground">
-          Rule-based, Complexity, and OSS are unlimited with built-in settings. Choose or change tier models freely.
-          Customization allowances are shared across this proxy.
-        </p>
+        <PopoverTitle>{t("addModel.autoRouterAvailability.limits.title")}</PopoverTitle>
+        <p className="text-xs leading-5 text-muted-foreground">{t("addModel.autoRouterAvailability.limits.intro")}</p>
         <dl className="space-y-2 text-xs">
           {limits.map(([key, label]) => (
             <div key={key} className="flex items-center justify-between gap-3">
               <dt>{label}</dt>
               <dd className="shrink-0 tabular-nums text-muted-foreground">
-                {availabilityLabel(state, key) ?? "Unlimited"}
+                {availabilityLabel(state, key, t) ?? t("addModel.autoRouterAvailability.limits.unlimited")}
               </dd>
             </div>
           ))}
         </dl>
         <p className="text-xs leading-5 text-muted-foreground">
-          Custom tier definitions and written classifier instructions share one allowance. Built-in prompts and
-          display-name changes do not use it.
+          {t("addModel.autoRouterAvailability.limits.sharedAllowance")}
         </p>
         <p className="text-xs leading-5 text-muted-foreground">
-          Changing scoring rules, such as weights, thresholds, keywords, or custom dimensions, uses the Rule-based
-          tuning allowance. It also applies to Heuristic first and Hybrid. Recorded settings on existing routers are
-          preserved; new routers start from built-in rules.
+          {t("addModel.autoRouterAvailability.limits.tuningAllowance")}
         </p>
-        <AutoRouterContactLink message="Need a higher limit?" />
+        <AutoRouterContactLink message={t("addModel.autoRouterAvailability.limits.needHigherLimit")} />
       </PopoverContent>
     </Popover>
   );

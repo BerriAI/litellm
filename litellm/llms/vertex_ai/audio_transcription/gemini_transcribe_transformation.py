@@ -183,7 +183,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         except ValueError:
             raise VertexAIError(
                 status_code=raw_response.status_code,
-                message=f"Received non-JSON response from Vertex AI Gemini transcription: {raw_response.text}",
+                message="Received non-JSON response from Vertex AI Gemini transcription",
             )
         parsed: Final = VertexGeminiTranscriptionResponse.model_validate(response_json)
         texts: Final = tuple(
