@@ -3111,9 +3111,7 @@ class AmazonConverseConfig(BaseConfig):
             initial_finish_reason=initial_finish_reason,
         )
         choice_provider_specific_fields: Final = (
-            {"native_finish_reason": raw_finish_reason}  # mutable-ok: Choices requires a dict
-            if returned_finish_reason != raw_finish_reason
-            else None
+            {"native_finish_reason": raw_finish_reason} if returned_finish_reason != raw_finish_reason else None
         )
         model_response.choices = [
             litellm.Choices(

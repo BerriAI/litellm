@@ -469,8 +469,7 @@ class ChunkProcessor:
         choices: Final = chunk.get("choices")
         if not choices:
             return MappingProxyType({})
-        fields: Final = choices[0].get("provider_specific_fields")
-        return fields if isinstance(fields, dict) else MappingProxyType({})
+        return object_mapping(_field_of(choices[0], "provider_specific_fields")) or MappingProxyType({})
 
     def build_base_response(
         self,
@@ -490,7 +489,7 @@ class ChunkProcessor:
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
 
-        choice_provider_specific_fields: Final[dict[str, object]] = dict(  # mutable-ok: response field requires a dict
+        choice_provider_specific_fields: Final[Mapping[str, builtins.object]] = dict(
             chain.from_iterable(ChunkProcessor._choice_provider_specific_fields(chunk).items() for chunk in chunks)
         )
 

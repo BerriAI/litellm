@@ -11,7 +11,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -711,7 +711,7 @@ class AWSEventStreamDecoder:
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
             usage: Usage | None = None
-            raw_stop_reason: Final[object] = chunk_data.get("stopReason")
+            raw_stop_reason: Final = (as_str_mapping(chunk_data) or {}).get("stopReason")
             provider_specific_fields: dict = {}
             reasoning_content: str | None = None
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
@@ -750,8 +750,8 @@ class AWSEventStreamDecoder:
                 self._thinking_ran = True
 
             trace: Final = chunk_data.get("trace")
-            choice_provider_specific_fields: Final[dict[str, str] | None] = (
-                {"native_finish_reason": raw_stop_reason}  # mutable-ok: response field contract requires a dict
+            choice_provider_specific_fields: Final = (
+                {"native_finish_reason": raw_stop_reason}
                 if isinstance(raw_stop_reason, str) and raw_stop_reason != finish_reason
                 else None
             )
