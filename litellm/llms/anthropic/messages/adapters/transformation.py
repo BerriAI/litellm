@@ -123,14 +123,22 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    anthropic_image_source_to_openai_url,
     anthropic_inline_document,
-    parse_tool_call_arguments,
-    reasoning_content_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    reasoning_content_from_thinking_blocks,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    anthropic_image_source_to_openai_url,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,

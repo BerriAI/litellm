@@ -12,7 +12,12 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Final, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Final, ParamSpec, TypeVar, cast
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+else:
+    Span: Final = object
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -38,6 +43,8 @@ REDIS_FAMILIES_METADATA_KEY: Final = "families"
 _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", default=None)
 
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
+
+_request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_parent_otel_span", default=None)
 
 
 @contextmanager
@@ -152,6 +159,16 @@ def mirrored_call() -> Generator[None]:
 
 def in_mirrored_call() -> bool:
     return _mirrored_call.get()
+
+
+def set_request_parent_otel_span(span: Span) -> None:
+    """Anchor the proxy request's OTEL span for datastore service spans that no call site passes a parent to.
+    Never reset: it dies with the request task and rides the tasks it spawns, like ``request.state``."""
+    _request_parent_otel_span.set(span)
+
+
+def current_request_parent_otel_span() -> Span | None:
+    return _request_parent_otel_span.get()
 
 
 @contextmanager

@@ -121,6 +121,7 @@ function ProductUpdates({
   unreadCount: number;
   showAlerts: boolean;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   return (
     <Collapsible
@@ -129,7 +130,11 @@ function ProductUpdates({
       className={cn("px-4 py-2", showAlerts && "border-t border-border")}
     >
       <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 py-1 text-sm font-medium">
-        <span>What’s new{unreadCount > 0 ? ` · ${unreadCount} unread` : ""}</span>
+        <span>
+          {unreadCount > 0
+            ? t("shell.notifications.bell.updatesUnread", { count: unreadCount })
+            : t("shell.notifications.bell.title")}
+        </span>
         <ChevronDown
           className={cn("size-4 text-muted-foreground transition-transform", expanded && "rotate-180")}
           aria-hidden
@@ -179,7 +184,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
-  if (needsAttention) label = `Notifications, ${count} ${count === 1 ? "alert needs" : "alerts need"} attention`;
+  if (needsAttention) label = t("shell.notifications.bell.triggerAlerts", { count });
 
   return (
     <Popover>
@@ -207,22 +212,24 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         <PopoverTitle className="shrink-0 border-b border-border px-4 py-3 text-sm font-semibold">
           {t("shell.notifications.bell.trigger")}
         </PopoverTitle>
-        <div aria-label="Notification content" className="min-h-0 overflow-y-auto overscroll-contain">
+        <div aria-label={t("shell.notifications.bell.content")} className="min-h-0 overflow-y-auto overscroll-contain">
           {showIssues && (
             <div className="space-y-3 p-4">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">Alerts</p>
+                <p className="text-sm font-medium">{t("shell.nav.items.alerts")}</p>
                 <a className="text-xs text-primary hover:underline" href={issuesHref()}>
-                  View all{count > 0 ? ` ${count}` : ""}
+                  {count > 0
+                    ? t("shell.notifications.bell.viewAllAlerts", { count })
+                    : t("shell.notifications.bell.viewAlerts")}
                 </a>
               </div>
               {issuesPending && (
                 <p role="status" className="text-xs text-muted-foreground">
-                  Loading alerts…
+                  {t("shell.notifications.bell.loadingAlerts")}
                 </p>
               )}
               {issuesFailed && (
-                <p className="text-xs text-muted-foreground">Could not load alerts. Open Alerts to retry.</p>
+                <p className="text-xs text-muted-foreground">{t("shell.notifications.bell.loadError")}</p>
               )}
               {issues?.data.map((issue) => (
                 <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
@@ -241,7 +248,9 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                   {issue.deprecation && <RecommendedReplacement recommendation={issue.deprecation.model} />}
                 </article>
               ))}
-              {issues?.total === 0 && <p className="text-xs text-muted-foreground">No open alerts.</p>}
+              {issues?.total === 0 && (
+                <p className="text-xs text-muted-foreground">{t("shell.notifications.bell.empty")}</p>
+              )}
             </div>
           )}
           <ProductUpdates announcements={announcements} unreadCount={unreadCount} showAlerts={showIssues} />
