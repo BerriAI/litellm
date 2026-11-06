@@ -448,6 +448,7 @@ def _as_chat_reasoning_items(
 def _with_stream_block_index(
     block: Mapping[str, object],
     index: int,
+    summary_streamed: bool,
 ) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
     if block.get("type") == "redacted_thinking":
         data: Final = block.get("data")
@@ -460,21 +461,33 @@ def _with_stream_block_index(
     signature: Final = block.get("signature")
     return ChatCompletionThinkingBlock(
         type="thinking",
-        thinking=thinking if isinstance(thinking, str) else "",
+        thinking=thinking if isinstance(thinking, str) and not summary_streamed else "",
         signature=signature if isinstance(signature, str) else None,
         index=index,
     )
 
 
+def _stream_output_index(chunk: Mapping[str, object]) -> int | None:
+    output_index: Final = chunk.get("output_index")
+    return output_index if isinstance(output_index, int) and not isinstance(output_index, bool) else None
+
+
 def _reasoning_done_thinking_blocks(
     item: Mapping[str, object],
-    output_index: object,
+    output_index: int | None,
+    summary_streamed: bool,
 ) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]:
-    index: Final = output_index if isinstance(output_index, int) and not isinstance(output_index, bool) else 0
-    return tuple(_with_stream_block_index(block, index) for block in thinking_blocks_from_reasoning_items((item,)))
+    index: Final = output_index if output_index is not None else 0
+    return tuple(
+        _with_stream_block_index(block, index, summary_streamed)
+        for block in thinking_blocks_from_reasoning_items((item,))
+    )
 
 
-def _reasoning_done_stream_chunk(chunk: Mapping[str, object]) -> ModelResponseStream | None:
+def _reasoning_done_stream_chunk(
+    chunk: Mapping[str, object],
+    summary_streamed_outputs: frozenset[int | None],
+) -> ModelResponseStream | None:
     event_type: Final = chunk.get("type")
     event_name: Final = (
         event_type.value
@@ -488,7 +501,8 @@ def _reasoning_done_stream_chunk(chunk: Mapping[str, object]) -> ModelResponseSt
     item: Final = as_str_mapping(chunk.get("item"))
     if item is None or item.get("type") != "reasoning":
         return None
-    signed_blocks: Final = _reasoning_done_thinking_blocks(item, chunk.get("output_index"))
+    output_index: Final = _stream_output_index(chunk)
+    signed_blocks: Final = _reasoning_done_thinking_blocks(item, output_index, output_index in summary_streamed_outputs)
     if not signed_blocks:
         return None
     return ModelResponseStream(
@@ -556,7 +570,6 @@ def _fold_choices_into_one(
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
         *(() if trailing_reasoning_item is None else (trailing_reasoning_item,)),
     )
-    encrypted_thinking_blocks: Final = thinking_blocks_from_reasoning_items(reasoning_items)
     return Choices(
         message=Message(
             role=messages[0].role if messages else "assistant",
@@ -565,7 +578,6 @@ def _fold_choices_into_one(
             tool_calls=list(tool_calls) or None,
             reasoning_content=" ".join(value for value in reasoning_contents if value) or None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
-            thinking_blocks=list(encrypted_thinking_blocks) or None,
             provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         ),
         finish_reason="tool_calls" if tool_calls else "stop",
@@ -1371,12 +1383,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             for summary_block in reasoning_item["summary"]
             if summary_block.get("text")
         )
-        encrypted_thinking_blocks: Final = thinking_blocks_from_reasoning_items(reasoning_items)
         message: Final = Message(
             content=None if tool_search_items else "",
             reasoning_content=reasoning_content if reasoning_content else None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
-            thinking_blocks=list(encrypted_thinking_blocks) or None,
             provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         )
         return Choices(message=message, finish_reason=finish_reason, index=0)
@@ -1941,6 +1951,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        self._summary_streamed_outputs: frozenset[int | None] = frozenset()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2255,7 +2266,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
-        reasoning_chunk: Final = _reasoning_done_stream_chunk(chunk)
+        reasoning_chunk: Final = _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
@@ -2267,6 +2278,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         )
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
+        if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
+            self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:

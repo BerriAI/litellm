@@ -24,9 +24,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import thinking_blocks_from_reasoning_items
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -66,10 +64,6 @@ class _ChunkStream(Protocol):
 
 def _optional_attr(obj: object, name: str) -> object:
     return getattr(obj, name, None)
-
-
-def _delta_has_encrypted_reasoning(delta: object) -> bool:
-    return bool(thinking_blocks_from_reasoning_items(attribute_or_none(delta, "reasoning_items")))
 
 
 def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
@@ -1311,8 +1305,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if thinking_blocks and any(
             isinstance(b, dict) and not is_empty_unsigned_thinking_block(b) for b in thinking_blocks
         ):
-            return False
-        if _delta_has_encrypted_reasoning(delta):
             return False
         return True
 

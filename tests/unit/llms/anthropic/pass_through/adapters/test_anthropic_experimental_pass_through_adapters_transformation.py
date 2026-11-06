@@ -4,7 +4,9 @@ import json
 from types import MappingProxyType
 from typing import Any, Final, cast
 
+import httpx
 import pytest
+import respx
 
 import litellm
 
@@ -31,6 +33,7 @@ from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesRequest,
     AnthropicMessagesUserMessageParam,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
@@ -647,26 +650,50 @@ def test_translate_openai_reasoning_items_are_not_duplicated_when_thinking_block
     assert [block["type"] for block in result] == ["redacted_thinking", "text"]
 
 
-def test_streaming_chunk_with_only_reasoning_items_opens_a_signed_thinking_block():
-    encrypted: Final = "gAAAA_delta"
-    choices: Final = [
-        StreamingChoices(
-            finish_reason=None,
-            index=0,
-            delta=Delta(
-                reasoning_items=[
-                    {"type": "reasoning", "id": "rs_1", "encrypted_content": encrypted, "summary": []}
-                ]
+def _replayed_reasoning_request(tools: list[dict[str, object]]) -> AnthropicMessagesRequest:
+    return AnthropicMessagesRequest(
+        model="azure/gpt-5.4-nano",
+        max_tokens=64,
+        messages=[
+            AnthropicMessagesUserMessageParam(role="user", content="Which city is colder?"),
+            AnthopicMessagesAssistantMessageParam(
+                role="assistant",
+                content=[
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_azure_tools")},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}},
+                ],
             ),
-        )
-    ]
-
-    block_type, start = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
+            AnthropicMessagesUserMessageParam(
+                role="user",
+                content=[{"type": "tool_result", "tool_use_id": "call_1", "content": "-7 C"}],
+            ),
+        ],
+        tools=tools,
     )
 
-    assert block_type == "redacted_thinking"
-    assert start["data"] == encrypted_reasoning_signature(encrypted)
+
+@pytest.mark.parametrize(
+    ("tools", "kept"),
+    [
+        pytest.param(
+            [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+            True,
+            id="function_tools_bridge_to_responses",
+        ),
+        pytest.param([], False, id="no_tools_stay_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_responses(
+    tools: list[dict[str, object]], kept: bool
+) -> None:
+    openai_request, _mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _replayed_reasoning_request(tools),
+        custom_llm_provider="azure",
+        api_base="https://keep-check.openai.azure.com",
+    )
+
+    assistant: Final = openai_request["messages"][1]
+    assert bool(assistant.get("thinking_blocks")) is kept
 
 
 def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
@@ -5395,3 +5422,147 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+@pytest.fixture
+def _chat_bridge_httpx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+_RETRY_API_BASE: Final = "https://encrypted-retry.openai.azure.com"
+_RETRY_URL: Final = r".*encrypted-retry\.openai\.azure\.com/openai/.*responses.*"
+_RETRY_TOOLS: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
+_RETRY_REJECTION: Final = httpx.Response(
+    400,
+    json={
+        "error": {
+            "message": "The encrypted content gAAA_foreign could not be verified.",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_encrypted_content",
+        }
+    },
+)
+_UNRELATED_REJECTION: Final = httpx.Response(
+    400, json={"error": {"message": "max_output_tokens is too small", "type": "invalid_request_error"}}
+)
+_RETRY_REPLY: Final = {
+    "id": "resp_retry",
+    "object": "response",
+    "created_at": 1700000000,
+    "status": "completed",
+    "model": "gpt-5.4-nano",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_retry",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Oslo", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+}
+
+
+def _history_with_foreign_reasoning() -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Which city is colder?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAA_foreign")},
+                {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "-7 C"}]},
+    ]
+
+
+def _sent_reasoning_items(request: httpx.Request) -> list[object]:
+    sent: Final = json.loads(request.read())
+    return [item for item in sent["input"] if item.get("type") == "reasoning"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
+        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+    )
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        messages=_history_with_foreign_reasoning(),
+    )
+
+    assert route.call_count == 2
+    assert len(_sent_reasoning_items(route.calls[0].request)) == 1
+    assert _sent_reasoning_items(route.calls[1].request) == []
+    assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
+        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+    )
+
+    response: Final = litellm.anthropic.messages.create(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        messages=_history_with_foreign_reasoning(),
+    )
+
+    assert route.call_count == 2
+    assert _sent_reasoning_items(route.calls[1].request) == []
+    assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize(
+    ("messages", "rejection"),
+    [
+        pytest.param(
+            [{"role": "user", "content": "Which city is colder?"}],
+            _RETRY_REJECTION,
+            id="no_encrypted_reasoning_to_drop",
+        ),
+        pytest.param(_history_with_foreign_reasoning(), _UNRELATED_REJECTION, id="unrelated_rejection"),
+    ],
+)
+async def test_messages_do_not_retry_other_rejections(
+    respx_mock: respx.MockRouter, messages: list[dict[str, object]], rejection: httpx.Response
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(return_value=rejection)
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.anthropic.messages.acreate(
+            model="azure/gpt-5.4-nano",
+            api_base=_RETRY_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            max_tokens=64,
+            tools=_RETRY_TOOLS,
+            messages=messages,
+        )
+
+    assert route.call_count == 1

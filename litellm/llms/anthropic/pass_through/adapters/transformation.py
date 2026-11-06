@@ -2,12 +2,14 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
@@ -220,10 +222,30 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
-def _keeps_encrypted_reasoning_for_responses(model: str | None, custom_llm_provider: str | None) -> bool:
+@dataclass(frozen=True, slots=True)
+class ChatRouteInputs:
+    tools: Sequence[Mapping[str, object]] | None = None
+    reasoning_effort: str | Mapping[str, object] | None = None
+    api_base: str | None = None
+
+
+_NO_ROUTE_INPUTS: Final = ChatRouteInputs()
+
+
+def _keeps_encrypted_reasoning_for_responses(
+    model: str | None,
+    custom_llm_provider: str | None,
+    route: ChatRouteInputs,
+) -> bool:
     from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
 
-    return chat_completion_ends_in_responses_api(model, custom_llm_provider)
+    return chat_completion_ends_in_responses_api(
+        model,
+        custom_llm_provider,
+        tools=route.tools,
+        reasoning_effort=route.reasoning_effort,
+        api_base=route.api_base,
+    )
 
 
 def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ...]:
@@ -231,6 +253,10 @@ def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ..
         getattr(source, "thinking_blocks", None),
         getattr(source, "reasoning_items", None),
     )
+
+
+def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
 
 
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
@@ -260,7 +286,7 @@ class AnthropicAdapter:
         return result
 
     def translate_completion_input_params_with_tool_mapping(
-        self, kwargs, *, custom_llm_provider: str | None = None
+        self, kwargs, *, custom_llm_provider: str | None = None, api_base: str | None = None
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -294,6 +320,7 @@ class AnthropicAdapter:
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
         )
 
         return translated_body, tool_name_mapping
@@ -479,11 +506,12 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
+        route: ChatRouteInputs = _NO_ROUTE_INPUTS,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
         replayable_messages: Final = (
             messages
-            if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider)
+            if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider, route)
             else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
         )
         leading_count: Final = next(
@@ -1239,6 +1267,7 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         *,
         custom_llm_provider: str | None = None,
+        api_base: str | None = None,
         preserve_midturn_system: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
@@ -1250,26 +1279,15 @@ class LiteLLMAnthropicMessagesAdapter:
               for tools that exceeded OpenAI's 64-char limit
         """
         # Debug: Processing Anthropic message request
-        new_messages: list[AllMessageValues] = []
         tool_name_mapping: dict[str, str] = {}
 
-        ## CONVERT ANTHROPIC MESSAGES TO OPENAI
         messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(
             list[AllAnthropicPassThroughMessageValues],
             anthropic_message_request["messages"],
         )
-        new_messages = self.translate_anthropic_messages_to_openai(
-            messages=messages_list,
-            model=anthropic_message_request.get("model"),
-            custom_llm_provider=custom_llm_provider,
-            preserve_midturn_system=preserve_midturn_system,
-        )
-        ## ADD SYSTEM MESSAGE TO MESSAGES
-        self._add_system_message_to_messages(new_messages, anthropic_message_request)
-
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],
-            "messages": new_messages,
+            "messages": [],
         }
         ## CONVERT METADATA (user_id + litellm metadata)
         self._translate_metadata_to_openai(
@@ -1293,6 +1311,21 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
         )
+        ## CONVERT ANTHROPIC MESSAGES TO OPENAI, after tools and thinking pick the route
+        new_messages: Final = self.translate_anthropic_messages_to_openai(
+            messages=messages_list,
+            model=anthropic_message_request.get("model"),
+            custom_llm_provider=custom_llm_provider,
+            preserve_midturn_system=preserve_midturn_system,
+            route=ChatRouteInputs(
+                tools=new_kwargs.get("tools"),
+                reasoning_effort=new_kwargs.get("reasoning_effort"),
+                api_base=api_base,
+            ),
+        )
+        ## ADD SYSTEM MESSAGE TO MESSAGES
+        self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        new_kwargs["messages"] = new_messages
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
             anthropic_message_request=anthropic_message_request,
@@ -1678,7 +1711,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 choice.delta
             ) is not None:
                 return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _anthropic_thinking_blocks(choice.delta)):
+            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _streamed_thinking_blocks(choice.delta)):
                 thinking_block = thinking_blocks[0]
                 if thinking_block["type"] == "redacted_thinking":
                     redacted_data = thinking_block.get("data")
@@ -1728,7 +1761,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 for tool in choice.delta.tool_calls:
                     if tool.function is not None and tool.function.arguments is not None:
                         partial_json = (partial_json or "") + tool.function.arguments
-            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _anthropic_thinking_blocks(choice.delta)):
+            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _streamed_thinking_blocks(choice.delta)):
                 for thinking_block in thinking_blocks:
                     if thinking_block["type"] == "thinking":
                         thinking = thinking_block.get("thinking") or ""
