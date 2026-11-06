@@ -65,9 +65,8 @@ def _router_setting_source(
 
 def _get_routing_strategies_from_router_class() -> list[str]:
     """
-    Dynamically extract routing strategies from the Router class __init__ method.
+    Dynamically extract routing strategies from the Router constructor's signature.
     """
-    # Get the __init__ signature
     sig: Final = inspect.signature(Router)
 
     # Get the routing_strategy parameter

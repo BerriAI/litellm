@@ -120,7 +120,6 @@ def _router_init(
     fallback_budget_check: FallbackBudgetCheck | None = None,
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
-    _host: PythonHost = python_host,
 ) -> None:
     """
     Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -228,7 +227,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
 
-    _P: Final = ParamSpec("_P")
+    _P = ParamSpec("_P")  # rebind-ok: mypy rejects a Final ParamSpec
 
     def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
 
@@ -432,9 +431,7 @@ else:
             core: Final = self.__dict__.get("_core")
             return sorted({*super().__dir__(), *(dir(core) if core is not None else ())})
 
-    Router.__init__.__signature__ = _CORE_SIGNATURE.replace(  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
-        parameters=[parameter for parameter in _CORE_SIGNATURE.parameters.values() if parameter.name != "_host"]
-    )
+    Router.__init__.__signature__ = _CORE_SIGNATURE  # pyright: ignore[reportFunctionMemberAccess]  # inspect reads it
     Router.__init__.__doc__ = _router_init.__doc__
 
 
