@@ -121,15 +121,24 @@ def hoist_additional_tools(
     return HoistedAdditionalTools(input=remaining_input, tools=unique, hoisted=hoisted)
 
 
+def _top_level_tools(request: Mapping[str, object]) -> tuple[object, ...] | None:
+    try:
+        return _ITEMS.validate_python(request.get("tools") or ())
+    except ValidationError:
+        return None
+
+
 def with_additional_tools_hoisted(request: Mapping[str, object], *, drop_params: bool) -> Mapping[str, object]:
     request_input: Final = request.get("input")
-    if not isinstance(request_input, list):
+    top_level_tools: Final = _top_level_tools(request)
+    if not isinstance(request_input, list) or top_level_tools is None:
         return request
     input_items: Final = cast(ResponseInputParam, request_input)  # cast-ok: forwarded as sent, as inference does
-    top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
-        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(request.get("tools") or ())
+    hoisted: Final = hoist_additional_tools(
+        input_items,
+        cast("tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", top_level_tools),  # cast-ok: forwarded as sent
+        drop_params=drop_params,
     )
-    hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
     if not hoisted.hoisted:
         return request
     return {**request, "input": hoisted.input, "tools": list(hoisted.tools)}

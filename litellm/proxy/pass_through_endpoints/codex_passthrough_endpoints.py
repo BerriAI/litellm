@@ -285,6 +285,11 @@ def _gateway_token(request: Request) -> str:
     )
 
 
+def _chatgpt_bearer(request: Request) -> str:
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    return token.strip() if scheme.lower() == "bearer" else ""
+
+
 def _forwarded_headers(request: Request) -> Mapping[str, str]:
     return MappingProxyType({name: value for name, value in request.headers.items() if name in _HEADERS})
 
@@ -292,11 +297,15 @@ def _forwarded_headers(request: Request) -> Mapping[str, str]:
 async def native_turn_serves_through_litellm(
     model: str, llm_router: "Router", request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> bool:
+    chatgpt_bearer: Final = _chatgpt_bearer(request)
+    gateway_token: Final = _gateway_token(request)
+    if not chatgpt_bearer or not gateway_token or hmac.compare_digest(chatgpt_bearer.encode(), gateway_token.encode()):
+        return False
     return await _serves_through_litellm(
         model,
         llm_router,
         user_api_key_dict,
-        _models_etag_caller(user_api_key_dict, _gateway_token(request)),
+        _models_etag_caller(user_api_key_dict, gateway_token),
         _forwarded_headers(request),
         codex_shared_cache(),
     )
@@ -392,7 +401,8 @@ def _with_reasoning_the_targets_can_decrypt(
         items: Final = _INPUT_ITEMS.validate_python(body.get("input"))
     except ValidationError:
         return body
-    kept: Final = llm_router.registry().decryptable_reasoning(model, items, deployments)
+    model_group: Final = llm_router.registry().resolve(model, kind="alias") or model
+    kept: Final = llm_router.registry().decryptable_reasoning(model_group, items, deployments)
     if body.get("store") is True:
         return {**body, "input": list(kept)}
     resolvable: Final = (_without_unpersisted_reasoning_reference(item) for item in kept)
@@ -696,15 +706,14 @@ async def codex_passthrough_route(
     if request.method != expected_method:
         raise HTTPException(status_code=405, detail="Method not allowed", headers={"Allow": expected_method})
 
-    authorization: Final = request.headers.get("authorization", "")
-    scheme, _, token = authorization.partition(" ")
+    chatgpt_bearer: Final = _chatgpt_bearer(request)
     gateway_token: Final = _gateway_token(request)
-    if scheme.lower() != "bearer" or not token.strip() or not gateway_token:
+    if not chatgpt_bearer or not gateway_token:
         raise HTTPException(
             status_code=401,
             detail="Send the ChatGPT bearer in Authorization and the LiteLLM key in x-litellm-api-key",
         )
-    if hmac.compare_digest(token.strip().encode(), gateway_token.encode()):
+    if hmac.compare_digest(chatgpt_bearer.encode(), gateway_token.encode()):
         raise HTTPException(status_code=401, detail="ChatGPT and LiteLLM credentials must be separate")
 
     headers: Final = _forwarded_headers(request)

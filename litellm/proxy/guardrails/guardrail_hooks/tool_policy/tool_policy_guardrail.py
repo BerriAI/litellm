@@ -28,7 +28,7 @@ from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
-    additional_tool_member_names,
+    nested_tool_member_names,
     replayed_tool_search_tool_names,
 )
 from litellm.integrations.custom_guardrail import (
@@ -48,6 +48,14 @@ _REQUEST_DATA: Final = TypeAdapter(object)
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
+def _function_tool_name(tool: object) -> str | None:
+    match tool:
+        case {"function": {"name": str(name)}}:
+            return name
+        case _:
+            return None
 
 
 def _attribute(source: object, name: str) -> object:
@@ -143,11 +151,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
         """
         if input_type == "request":
             tools: Final = inputs.get("tools") or []
-            function_tool_names: Final = [
-                t["function"]["name"]
-                for t in tools
-                if isinstance(t, dict) and isinstance(t.get("function"), dict) and t["function"].get("name")
-            ]
+            function_tool_names: Final = [name for name in map(_function_tool_name, tools) if name]
             route: Final = _get_request_route_from_data(request_data)
             request: Final = _REQUEST_DATA.validate_python(request_data)
             tool_names = list(
@@ -156,7 +160,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
                         *function_tool_names,
                         *(extract_request_tool_names(route, request_data) if route else ()),
                         *replayed_tool_search_tool_names(request),
-                        *additional_tool_member_names(request),
+                        *nested_tool_member_names(request),
                     )
                 )
             )

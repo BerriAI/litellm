@@ -427,8 +427,13 @@ def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
 
 
-def additional_tool_member_names(request: object) -> tuple[str, ...]:
-    tools: Final = additional_tools_in_input(_json_field(request, "input"))
+def _top_level_namespaces(request: object) -> Iterator[object]:
+    tools: Final = _json_list(_json_field(request, "tools")) or ()
+    return (tool for tool in tools if _json_field(tool, "type") == "namespace")
+
+
+def nested_tool_member_names(request: object) -> tuple[str, ...]:
+    tools: Final = (*_top_level_namespaces(request), *additional_tools_in_input(_json_field(request, "input")))
     members: Final = chain.from_iterable(_namespace_members(tool) for tool in tools)
     return tuple(chain.from_iterable(_tool_definition_name(member) for member in members))
 

@@ -4,7 +4,7 @@ Unit tests for ToolPolicyGuardrail.
 
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -279,8 +279,15 @@ def _responses_request(
             ],
             [],
         ),
+        _responses_request(
+            [
+                {"type": "function", "name": "get_weather"},
+                {"type": "namespace", "name": "mcp__db", "tools": [{"type": "function", "name": "drop_database"}]},
+            ],
+            [],
+        ),
     ],
-    ids=["additional_tools_item", "namespace_in_item", "top_level_mcp"],
+    ids=["additional_tools_item", "namespace_in_item", "top_level_mcp", "top_level_namespace"],
 )
 async def test_blocked_tool_raises_next_to_a_top_level_function_tool(
     guardrail: ToolPolicyGuardrail, request_data: dict[str, object], monkeypatch: pytest.MonkeyPatch
@@ -294,6 +301,16 @@ async def test_blocked_tool_raises_next_to_a_top_level_function_tool(
         )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["blocked_tools"] == ["drop_database"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [["drop_database"], {"name": "drop_database"}], ids=["list", "dict"])
+async def test_function_tool_name_that_is_not_a_string_is_left_for_the_provider_to_refuse(
+    guardrail: ToolPolicyGuardrail, name: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_tool_policies(monkeypatch, {"get_weather": "untrusted"})
+    inputs: Final = {"tools": [{"type": "function", "function": {"name": name}}]}
+    assert await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request") == inputs
 
 
 @pytest.mark.asyncio

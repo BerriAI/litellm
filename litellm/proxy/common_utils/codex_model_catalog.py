@@ -35,7 +35,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from packaging.version import Version
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.codex_model_translation import (
@@ -583,8 +583,14 @@ def merged_codex_catalog(
     return _compact_json({**top, "models": [*upstream, *(added_models[position] for position in kept)]})
 
 
+def _canonical_value(value: object) -> object:
+    return value.model_dump(mode="json") if isinstance(value, BaseModel) else repr(value)
+
+
 def codex_catalog_etag(upstream_etag: str, rows: Sequence[CodexCatalogRow]) -> str:
-    canonical: Final = json.dumps([asdict(row) for row in rows], sort_keys=True, separators=(",", ":"), default=repr)
+    canonical: Final = json.dumps(
+        [asdict(row) for row in rows], sort_keys=True, separators=(",", ":"), default=_canonical_value
+    )
     digest: Final = hashlib.sha256(json.dumps([upstream_etag, canonical]).encode()).hexdigest()
     return f'"{digest}"'
 

@@ -790,6 +790,49 @@ def test_native_route_keeps_a_name_the_account_lists_on_the_subscription_despite
     assert catalog.call_count == 1
 
 
+_BEARER_KEY: Final = "sk-test-alias-key-sent-as-the-bearer"
+
+
+@pytest.mark.parametrize(
+    "gateway_header",
+    [{}, {"x-litellm-api-key": _BEARER_KEY}],
+    ids=["key only in the bearer", "same key in both headers"],
+)
+def test_native_route_never_sends_a_litellm_key_sent_as_the_bearer_to_chatgpt(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, gateway_header: dict[str, str]
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(
+        proxy_server, "llm_router", Router(model_list=[_open_weights("gpt-reserve"), _open_weights("group-b")])
+    )
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(_BEARER_KEY),
+        value=UserAPIKeyAuth(
+            token=hash_token(_BEARER_KEY),
+            models=["gpt-reserve", "group-b"],
+            router_settings={"model_group_alias": {"gpt-reserve": "group-b"}},
+        ),
+    )
+    catalog: Final = respx_mock.get(f"{_BASE}/models").respond(json={"models": []})
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "gpt-reserve", "input": "Hello", "stream": True},
+        headers={
+            "authorization": f"Bearer {_BEARER_KEY}",
+            "chatgpt-account-id": "account-a",
+            "originator": "codex_cli_rs",
+            "user-agent": _CODEX_USER_AGENT,
+            **gateway_header,
+        },
+    )
+    assert response.status_code == 401, response.text
+    assert not catalog.called
+    assert not provider.called
+    assert not chatgpt.called
+
+
 def test_v1_request_for_a_gpt_name_still_reaches_the_catch_all_with_the_access_group_recipe(
     client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
 ) -> None:
@@ -1860,6 +1903,40 @@ def test_encrypted_reasoning_stays_only_when_every_deployment_the_router_may_pic
     respx_mock.reset()
     _account_catalog(respx_mock)
     assert replayed_blobs(["encrypted_content_affinity"]) == [_LUNA_BLOB]
+
+
+def test_encrypted_reasoning_stays_on_a_global_alias_of_a_group_pinned_to_its_origin(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_base: Final = "https://second-openai-org.test/v1"
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "oai-pair",
+                    "litellm_params": {"model": "openai/gpt-6-luna", "api_base": base, "api_key": "test-key"},
+                    "model_info": {"id": model_id},
+                }
+                for base, model_id in ((_OPENAI_BASE, _LUNA_ID), (second_base, "second-org-deployment"))
+            ],
+            model_group_alias={"pair-alias": "oai-pair"},
+            model_group_affinity_config={"oai-pair": ["encrypted_content_affinity"]},
+        ),
+    )
+    _account_catalog(respx_mock)
+    providers: Final = tuple(
+        respx_mock.post(f"{base}/responses").mock(side_effect=_provider_reply) for base in (_OPENAI_BASE, second_base)
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "pair-alias", "input": [_USER_TURN, _LUNA_REASONING, _USER_TURN], "store": False},
+        headers=_ACCOUNT_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    (sent,) = (json.loads(call.request.content)["input"] for provider in providers for call in provider.calls)
+    assert [item.get("encrypted_content") for item in sent if item.get("type") == "reasoning"] == [_LUNA_BLOB]
 
 
 class ModelListingCounter(CustomLogger):
