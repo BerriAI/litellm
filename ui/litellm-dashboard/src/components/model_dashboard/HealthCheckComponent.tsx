@@ -131,19 +131,10 @@ const extractMeaningfulError = (error: unknown, t: TFunction = i18n.t.bind(i18n)
   return truncate(cleaned);
 };
 
-const toCheckedAtLabel = (checkedAt: string | null | undefined, fallback: string): string => {
-  if (!checkedAt) {
-    return fallback;
-  }
-  return new Date(checkedAt).toLocaleString();
-};
+const checkedAtOr = (checkedAt: string | null | undefined, fallback: string): string => checkedAt || fallback;
 
-const toLastSuccessLabel = (checkData: LatestHealthCheck, fallback: string): string => {
-  if (checkData.status !== "healthy") {
-    return fallback;
-  }
-  return toCheckedAtLabel(checkData.checked_at, fallback);
-};
+const lastSuccessAtOr = (checkData: LatestHealthCheck, fallback: string): string =>
+  checkData.status === "healthy" ? checkedAtOr(checkData.checked_at, fallback) : fallback;
 
 interface HealthCheckComponentProps {
   accessToken: string | null;
@@ -229,8 +220,8 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
             healthStatusMap[modelId] = {
               status: checkData.status || "unknown",
-              lastCheck: toCheckedAtLabel(checkData.checked_at, "None"),
-              lastSuccess: toLastSuccessLabel(checkData, "None"),
+              lastCheck: checkedAtOr(checkData.checked_at, "None"),
+              lastSuccess: lastSuccessAtOr(checkData, "None"),
               loading: false,
               error: fullError ? extractMeaningfulError(fullError) : undefined,
               fullError: fullError,
@@ -263,7 +254,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
 
       try {
         const response = await individualModelHealthCheckCall(accessToken, modelId);
-        const currentTime = new Date().toLocaleString();
+        const currentTime = new Date().toISOString();
 
         if (response.unhealthy_count > 0 && response.unhealthy_endpoints && response.unhealthy_endpoints.length > 0) {
           const rawError =
@@ -303,8 +294,8 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
               ...prev,
               [modelId]: {
                 status: checkData.status || prev[modelId]?.status || "unknown",
-                lastCheck: toCheckedAtLabel(checkData.checked_at, prev[modelId]?.lastCheck || "None"),
-                lastSuccess: toLastSuccessLabel(checkData, prev[modelId]?.lastSuccess || "None"),
+                lastCheck: checkedAtOr(checkData.checked_at, prev[modelId]?.lastCheck || "None"),
+                lastSuccess: lastSuccessAtOr(checkData, prev[modelId]?.lastSuccess || "None"),
                 loading: false,
                 error: fullError ? extractMeaningfulError(fullError) : prev[modelId]?.error,
                 fullError: fullError || prev[modelId]?.fullError,
@@ -314,7 +305,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
           }
         } catch (dbError) {}
       } catch (error) {
-        const currentTime = new Date().toLocaleString();
+        const currentTime = new Date().toISOString();
         const rawError = error instanceof Error ? error.message : String(error);
         const errorMessage = extractMeaningfulError(rawError);
         setModelHealthStatuses((prev) => ({
@@ -361,7 +352,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
       try {
         const response = await individualModelHealthCheckCall(accessToken, modelId);
 
-        const currentTime = new Date().toLocaleString();
+        const currentTime = new Date().toISOString();
         if (response.unhealthy_count > 0 && response.unhealthy_endpoints && response.unhealthy_endpoints.length > 0) {
           const rawError =
             response.unhealthy_endpoints[0]?.error || t("modelDashboard.healthCheckComponent.healthCheckFailed");
@@ -391,7 +382,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
         }
       } catch (error) {
         console.error(`Health check failed for model id ${modelId}:`, error);
-        const currentTime = new Date().toLocaleString();
+        const currentTime = new Date().toISOString();
         const rawError = error instanceof Error ? error.message : String(error);
         const errorMessage = extractMeaningfulError(rawError, t);
         setModelHealthStatuses((prev) => ({
@@ -426,8 +417,8 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
               ...prev,
               [modelId]: {
                 status: checkData.status || currentStatus?.status || "unknown",
-                lastCheck: toCheckedAtLabel(checkData.checked_at, currentStatus?.lastCheck || "None"),
-                lastSuccess: toLastSuccessLabel(checkData, currentStatus?.lastSuccess || "None"),
+                lastCheck: checkedAtOr(checkData.checked_at, currentStatus?.lastCheck || "None"),
+                lastSuccess: lastSuccessAtOr(checkData, currentStatus?.lastSuccess || "None"),
                 loading: false,
                 error: fullError ? extractMeaningfulError(fullError, t) : currentStatus?.error,
                 fullError: fullError || currentStatus?.fullError,
