@@ -98,6 +98,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return LlmProviders.AZURE
 
     def _sampling_params_allowed(self, model: str, effort: str | None) -> bool:
+        if self.custom_llm_provider != LlmProviders.AZURE:
+            return super()._sampling_params_allowed(model, effort)
         return AzureOpenAIGPT5Config.sampling_params_allowed(
             model, effort, fallback_allowed=not self._is_gpt_5_model(model)
         )
