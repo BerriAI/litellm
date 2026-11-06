@@ -71,6 +71,10 @@ def _responses_turn(*parts: object) -> dict[str, object]:
     return {"input": [{"role": "user", "content": list(parts)}]}
 
 
+def _gemini_turn(*parts: object) -> dict[str, object]:
+    return {"contents": [{"role": "user", "parts": list(parts)}]}
+
+
 @pytest.mark.parametrize(
     "request_body",
     (
@@ -116,6 +120,19 @@ def _responses_turn(*parts: object) -> dict[str, object]:
             {"system": [{"type": "image", "source": {"type": "url", "url": _MANAGED_UPLOAD}}], "messages": []},
             id="anthropic-system",
         ),
+        pytest.param(
+            _gemini_turn({"file_data": {"mime_type": "image/png", "file_uri": _MANAGED_UPLOAD}}),
+            id="gemini-file-data-snake-case",
+        ),
+        pytest.param(
+            _gemini_turn({"fileData": {"mimeType": "image/png", "fileUri": _MANAGED_UPLOAD}}),
+            id="gemini-file-data-camel-case",
+        ),
+        pytest.param(
+            {"system_instruction": {"parts": [{"file_data": {"file_uri": _MANAGED_UPLOAD}}]}, "contents": []},
+            id="gemini-system-instruction",
+        ),
+        pytest.param({"metadata": {"url": _MANAGED_UPLOAD}}, id="media-key-in-any-field"),
     ),
 )
 def test_s3_media_uris_finds_an_s3_object_on_every_media_surface(request_body: dict[str, object]):
@@ -178,7 +195,7 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
         pytest.param({"messages": [{"role": "user", "content": _MANAGED_UPLOAD}]}, id="string-content"),
         pytest.param({"input": _MANAGED_UPLOAD}, id="responses-string-input"),
         pytest.param({"system": _MANAGED_UPLOAD, "messages": []}, id="string-system"),
-        pytest.param({"metadata": {"url": _MANAGED_UPLOAD}}, id="non-media-field"),
+        pytest.param({"metadata": {"note": _MANAGED_UPLOAD}}, id="non-media-key"),
     ),
 )
 def test_s3_media_uris_ignores_what_never_becomes_an_s3_media_source(request_body: dict[str, object]):

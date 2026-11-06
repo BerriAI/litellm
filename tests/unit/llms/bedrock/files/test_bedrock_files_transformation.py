@@ -4478,6 +4478,28 @@ def _batch_line_with_body(field: str, value: object) -> str:
     return _batch_line({**_VALID_BATCH_RECORD["body"], field: value})
 
 
+_BATCH_S3_IMAGE: Final = "s3://media-bucket/dir/cat.png"
+_BATCH_S3_MEDIA_REFUSAL: Final = (
+    f"Batch input file line 2 has s3:// media URLs ({_BATCH_S3_IMAGE}). "
+    "Bedrock batch files do not take s3:// media URLs yet"
+)
+_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE: Final = _batch_line_with_body(
+    "messages",
+    [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}]}],
+)
+_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE: Final = json.dumps(
+    {
+        "custom_id": "req-2",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _BATCH_S3_IMAGE}]}],
+        },
+    }
+)
+
+
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -4518,6 +4540,16 @@ def _batch_line_with_body(field: str, value: object) -> str:
             f"{_VALID_BATCH_LINE}\n{_batch_line(_CLAUDE_BODY_WITH_A_LIST_ROLE_BEFORE_A_SYSTEM_MESSAGE)}\n".encode(),
             "Batch input file line 2 could not be converted to a Bedrock batch record",
             id="claude-list-role-before-a-system-message",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="responses-s3-image",
         ),
         pytest.param(
             f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),

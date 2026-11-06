@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
+    s3_media_uris,
     sanitize_cloud_object_component,
     should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
@@ -391,6 +392,12 @@ def _batch_body_problem(record: Mapping[str, object]) -> str | None:
         return "has a body that is missing or not a JSON object"
     if "model" in body and not isinstance(body["model"], str):
         return "has a body.model that is not a string"
+    s3_uris: Final = s3_media_uris(body)
+    if s3_uris:
+        return (
+            f"has s3:// media URLs ({', '.join(s3_uris)}). Bedrock batch files do not take s3:// media URLs yet, "
+            "so send the media inline as base64 data"
+        )
     return None
 
 
