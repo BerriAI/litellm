@@ -24240,3 +24240,13 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+@pytest.mark.parametrize("request_type", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize("field", ["customer_rpm_limit", "customer_tpm_limit"])
+def test_negative_customer_limit_is_rejected_at_the_request_boundary(request_type, field):
+    with pytest.raises(ValidationError) as exc_info:
+        request_type(key="sk-customer-limits", **{field: {"acme": -1}})
+
+    assert exc_info.value.errors()[0]["loc"] == (field, "acme")
+    assert request_type(key="sk-customer-limits", **{field: {"acme": 0}}).model_dump()[field] == {"acme": 0}
