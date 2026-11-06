@@ -305,20 +305,20 @@ def _root_agent(calls: Sequence[_Call]) -> str:
 
 
 def _placed(call: _Call, earlier: tuple[_Placed, ...], root: str) -> _Placed:
-    if call.explicit_agent is not None:
-        parent: Final = call.explicit_parent if call.explicit_parent != call.explicit_agent else None
-        return _Placed(call=call, agent=call.explicit_agent, parent_agent=parent)
     spawner: Final = next(
         (
-            (tool.subagent, placed.agent)
+            (tool.subagent, placed)
             for placed in reversed(earlier)
             for tool in placed.call.tool_calls
             if tool.subagent and tool.subagent_prompt in call.prompts
         ),
         None,
     )
-    if spawner is not None:
-        return _Placed(call=call, agent=spawner[0], parent_agent=spawner[1])
+    if spawner is not None and call.explicit_agent in (None, spawner[1].call.explicit_agent):
+        return _Placed(call=call, agent=spawner[0], parent_agent=spawner[1].agent)
+    if call.explicit_agent is not None:
+        parent: Final = call.explicit_parent if call.explicit_parent != call.explicit_agent else None
+        return _Placed(call=call, agent=call.explicit_agent, parent_agent=parent)
     return _Placed(call=call, agent=root, parent_agent=None)
 
 

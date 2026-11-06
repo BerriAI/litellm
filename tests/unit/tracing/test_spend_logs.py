@@ -145,6 +145,41 @@ def test_claude_agent_sdk_subagent_is_inferred_from_its_task_prompt() -> None:
     assert trace["summary"]["input_preview"] == "research MVCC"
 
 
+def test_claude_agent_sdk_subagent_wins_over_a_tag_inherited_from_its_parent() -> None:
+    task: Final = {
+        "content": [{"type": "tool_use", "name": "Task", "input": {"subagent_type": "researcher", "prompt": "dig"}}]
+    }
+    tags: Final = ("agent:support",)
+    trace: Final = build_trace(
+        (
+            row(
+                "r1",
+                "00.000",
+                "01.000",
+                tags=tags,
+                user_agent=SDK_UA,
+                response=task,
+                messages=[{"role": "user", "content": "help"}],
+            ),
+            row("r2", "01.100", "02.000", tags=tags, user_agent=SDK_UA, messages=[{"role": "user", "content": "dig"}]),
+            row(
+                "r3",
+                "02.100",
+                "03.000",
+                tags=("agent:billing",),
+                user_agent=SDK_UA,
+                messages=[{"role": "user", "content": "dig"}],
+            ),
+        )
+    )
+
+    assert {(agent["name"], agent["parent_agent"]) for agent in trace["agents"]} == {
+        ("support", None),
+        ("researcher", "support"),
+        ("billing", None),
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("scope", "scope_args"),
