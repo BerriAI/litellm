@@ -68,11 +68,9 @@ def video_image_params(
                 model=model,
                 llm_provider=provider,
             ) from e
-        return video_image_params(
+        return _mapped_video_image_params(
             {k: v for k, v in params.items() if k not in {"frame_images", "input_references"}},
-            model,
-            provider,
-            drop_params,
+            (),
         )
     roles: Final = tuple(item["frame_type"] for item in parsed_frames)
     if len(roles) != len(frozenset(roles)) and not drop_params:
@@ -88,6 +86,14 @@ def video_image_params(
         {"type": item["type"], "image_url": item["image_url"], "role": "reference_image"} for item in parsed_references
     )
     media: Final = frame_items if frames is not None else reference_items
+    return _mapped_video_image_params(params, media)
+
+
+def _mapped_video_image_params(
+    params: Mapping[str, object], media: tuple[Mapping[str, object], ...]
+) -> Mapping[str, object]:
+    frames: Final = params.get("frame_images")
+    references: Final = params.get("input_references")
     excluded: Final[frozenset[str]] = frozenset({"frame_images", "input_references", "aspect_ratio"}) | (
         frozenset({"content", "input_reference"}) if frames is not None or references is not None else frozenset[str]()
     )

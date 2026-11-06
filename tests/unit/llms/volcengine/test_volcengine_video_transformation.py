@@ -1197,3 +1197,18 @@ def test_openrouter_empty_and_invalid_frames(images: object) -> None:
         assert config.map_openai_params(params, SEEDANCE_2_5, True) == {}
     else:
         assert config.map_openai_params(params, SEEDANCE_2_5, False) == {"content": []}
+
+
+def test_dropping_invalid_frames_preserves_raw_content_and_other_mappings() -> None:
+    content: Final = [{"type": "image_url", "image_url": {"url": "https://example.com/raw.png"}, "role": "first_frame"}]
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "frame_images": [{"type": "image_url", "image_url": {}}],
+        "content": content,
+        "aspect_ratio": "16:9",
+        "duration": 8,
+    })
+    assert VolcEngineVideoConfig().map_openai_params(params, SEEDANCE_2_5, True) == {
+        "content": content,
+        "ratio": "16:9",
+        "duration": 8,
+    }
