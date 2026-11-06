@@ -1287,7 +1287,68 @@ def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     return (
         anthropic_error_sse_frame(
             status_code=error_status_code(answered, status.HTTP_500_INTERNAL_SERVER_ERROR),
-            raw_message=answered.message,
+            raw_message=redact_internal_details_from_client_message(answered.message),
+        ),
+    )
+
+
+_ANTHROPIC_LATE_ERROR_BODY_LIMIT: Final = 64 * 1024
+
+
+async def _read_late_error_body(response: Response) -> bytes:
+    """Read at most one page of an error body. A read that fails yields what it got."""
+    read: bytes = b""  # rebind-ok: accumulates streamed chunks, then takes the buffered body
+    try:
+        if isinstance(response, StreamingResponse):
+            async for chunk in response.body_iterator:
+                read += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+                if len(read) >= _ANTHROPIC_LATE_ERROR_BODY_LIMIT:
+                    break
+        else:
+            read = bytes(response.body or b"")  # rebind-ok: the buffered body arrives whole, nothing to accumulate
+    except Exception:  # noqa: BLE001  # the stream is already broken; the caller still needs a frame
+        verbose_proxy_logger.exception("could not read the body of an upstream late failure")
+    return read[:_ANTHROPIC_LATE_ERROR_BODY_LIMIT]
+
+
+class _LateErrorDetail(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    message: str | None = None
+
+
+class _LateErrorEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    error: _LateErrorDetail | None = None
+
+
+def _late_error_message(body: bytes, status_code: int) -> str:
+    fallback: Final = f"upstream returned HTTP {status_code}"
+    detail: Final = body.decode("utf-8", "replace")
+    if not detail:
+        return fallback
+    try:
+        envelope: Final = _LateErrorEnvelope.model_validate_json(detail)
+    except ValidationError:
+        return detail
+    message: Final = envelope.error.message if envelope.error is not None else None
+    return message or detail
+
+
+async def _anthropic_late_response_frames(response: Response) -> tuple[str, ...]:
+    """The frame an Anthropic stream ends with when the upstream answered with an error status.
+
+    The status line is already out, so the failure has to travel as an event. Anthropic
+    clients read `event: error` and skip anything else, which is why the upstream body
+    cannot simply be relayed.
+    """
+    body: Final = await _read_late_error_body(response)
+    message: Final = redact_internal_details_from_client_message(_late_error_message(body, response.status_code))
+    return (
+        anthropic_error_sse_frame(
+            status_code=response.status_code,
+            raw_message=message,
         ),
     )
 
@@ -1541,6 +1602,7 @@ async def open_sse_before_first_byte(
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
     late_failure_frames: Callable[[Exception], tuple[str, ...]] = _openai_late_failure_frames,
+    answers_as_anthropic: bool = False,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1586,8 +1648,18 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                for frame in late_failure_frames(await _sanitized_late_failure(exc, on_late_failure)):
+                failure_frames: Final = _anthropic_late_failure_frames if answers_as_anthropic else late_failure_frames
+                for frame in failure_frames(await _sanitized_late_failure(exc, on_late_failure)):
                     yield frame.encode()
+                return
+            if answers_as_anthropic and produced.status_code >= 400:
+                # The upstream answered with an error status after the keepalive had
+                # already committed a 200. Those bytes cannot be relayed as they are:
+                # a caller that speaks a different stream protocol reads them as an
+                # unknown event and treats the truncated stream as a completed turn.
+                for frame in await _anthropic_late_response_frames(produced):
+                    yield frame.encode()
+                await _aclose_late_response(produced)
                 return
             async for chunk in _relay_late_response(produced):
                 yield chunk
