@@ -1,4 +1,5 @@
 import json
+import sys
 from typing import Final, Literal
 
 import pytest
@@ -325,6 +326,17 @@ async def test_a_guardrail_that_answers_with_one_text_still_masks_parts_joined_w
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=rewritten)
+
+
+@pytest.mark.asyncio
+async def test_a_mask_in_a_message_with_more_text_parts_than_the_recursion_limit_still_comes_back() -> None:
+    parts: Final = (*(f"part {index}." for index in range(sys.getrecursionlimit())), "my code is hunter2.")
+
+    verdict: Final = await realtime_guardrail_verdict(
+        parts, "user", (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail("hunter2"),)
+    )
+
+    assert verdict == RealtimeGuardrailRewrite(texts=(*parts[:-1], "my code is [MASKED]."))
 
 
 class ScopedGuardrail(RaisingGuardrail):

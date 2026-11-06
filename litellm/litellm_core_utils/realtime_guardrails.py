@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, TypeAlias
 
@@ -177,16 +177,23 @@ async def _screen(
     return await _screen(guardrails[1:], outcome, request_data)
 
 
+async def _screened_until_block(
+    guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
+) -> AsyncIterator[RealtimeGuardrailBlock | str]:
+    for text in texts:
+        if isinstance(outcome := await _screen(guardrails, (text,), request_data), RealtimeGuardrailBlock):
+            yield outcome
+            return
+        for screened in outcome:
+            yield screened
+
+
 async def _screen_each(
     guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
 ) -> RealtimeGuardrailBlock | tuple[str, ...]:
-    if not texts:
-        return ()
-    first: Final = await _screen(guardrails, texts[:1], request_data)
-    if isinstance(first, RealtimeGuardrailBlock):
-        return first
-    rest: Final = await _screen_each(guardrails, texts[1:], request_data)
-    return rest if isinstance(rest, RealtimeGuardrailBlock) else first + rest
+    outcomes: Final = tuple([outcome async for outcome in _screened_until_block(guardrails, texts, request_data)])
+    block: Final = next((outcome for outcome in outcomes if isinstance(outcome, RealtimeGuardrailBlock)), None)
+    return block if block is not None else tuple(outcome for outcome in outcomes if isinstance(outcome, str))
 
 
 def _joins(texts: tuple[str, ...]) -> tuple[str, ...]:
