@@ -1,5 +1,5 @@
 import hashlib
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from typing import Annotated, Final, Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -9,6 +9,9 @@ from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared factory leaves params untyped
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.credential_hydration import (
@@ -83,9 +86,8 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-async def nim_http_client() -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient(follow_redirects=False) as client:
-        yield client
+async def nim_http_client() -> httpx.AsyncClient:
+    return get_async_httpx_client(llm_provider="nvidia_nim", params={"follow_redirects": False, "timeout": 10}).client
 
 
 @router.post(
@@ -149,16 +151,16 @@ async def discover_nim_models(
     if cached is not None:
         return NimModelDiscoveryResponse(status="success", models=_MODELS.validate_python(cached))
     try:
-        async with AsyncOpenAI(
+        client: Final = AsyncOpenAI(
             api_key=api_key or "not-required",
             base_url=api_base,
             timeout=10,
             max_retries=0,
             http_client=http_client,
-        ) as client:
-            page: Final = await client.models.list()
-            listing: Final = _ModelListing.model_validate(page.model_dump())
-            models: Final = tuple(sorted(frozenset(f"nvidia_nim/{item.id}" for item in listing.data if item.id)))
+        )
+        page: Final = await client.models.list()
+        listing: Final = _ModelListing.model_validate(page.model_dump())
+        models: Final = tuple(sorted(frozenset(f"nvidia_nim/{item.id}" for item in listing.data if item.id)))
         if not models:
             return NimModelDiscoveryResponse(status="unavailable")
         _CACHE.set_cache(cache_key, models)

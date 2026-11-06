@@ -133,3 +133,18 @@ def test_cached_models_are_scoped_to_endpoint_and_key(client: TestClient, app: F
         json={"credential_values": {**original, "api_base": "https://other.example/v1"}},
     )
     assert other_endpoint.json() == {"status": "unavailable", "models": []}
+
+
+def test_consecutive_discoveries_keep_the_shared_connection_usable(client: TestClient, app: FastAPI) -> None:
+    shared_client: Final = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"id": "shared"}]}))
+    )
+
+    async def connection() -> httpx.AsyncClient:
+        return shared_client
+
+    app.dependency_overrides[nim_http_client] = connection
+    first: Final = client.post("/credentials/nvidia_nim/models", json={"credential_values": {"api_key": "first"}})
+    second: Final = client.post("/credentials/nvidia_nim/models", json={"credential_values": {"api_key": "second"}})
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json() == {"status": "success", "models": ["nvidia_nim/shared"]}
