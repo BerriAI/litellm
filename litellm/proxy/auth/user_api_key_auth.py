@@ -4891,8 +4891,7 @@ async def authorize_internal_virtual_key(
     execution_route: Final = route if route is not None else get_request_route(request=request)
     await pre_db_read_auth_checks(request_data=request_data, request=request, route=execution_route)
     identity.end_user_id = await resolve_and_validate_end_user_id(
-        raw_end_user_id=identity.end_user_id
-        or get_end_user_id_from_request_body(request_data, safe_get_request_headers(request)),
+        raw_end_user_id=identity.end_user_id or get_end_user_id_from_request_body(request_data, request.headers),
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=None,
@@ -4900,18 +4899,20 @@ async def authorize_internal_virtual_key(
         route=execution_route,
         key_end_user_budget_id=get_key_end_user_budget_id(identity.metadata),
     )
-    end_user_object: Final[LiteLLM_EndUserTable | None]
-    if identity.end_user_id is not None:
-        _, end_user_object = await _lookup_end_user_and_apply_budget(
-            valid_token=identity,
-            route=execution_route,
-            parent_otel_span=None,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    else:
-        end_user_object = None
+    end_user_object: Final[LiteLLM_EndUserTable | None] = (
+        (
+            await _lookup_end_user_and_apply_budget(
+                valid_token=identity,
+                route=execution_route,
+                parent_otel_span=None,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )[1]
+        if identity.end_user_id is not None
+        else None
+    )
     auth: Final = await validate_resolved_virtual_key(
         request=request,
         request_data=request_data,
