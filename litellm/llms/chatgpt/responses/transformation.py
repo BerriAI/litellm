@@ -108,11 +108,12 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        normalized_input: Final = self._validate_input_param(input)
         request: Final = super().transform_responses_api_request(
             model,
-            [{"role": "user", "content": input}]
-            if isinstance(input, str)
-            else [_system_item_as_developer(item) for item in input],
+            [{"role": "user", "content": normalized_input}]
+            if isinstance(normalized_input, str)
+            else [_system_item_as_developer(item) for item in normalized_input],
             response_api_optional_request_params,
             litellm_params,
             headers,
