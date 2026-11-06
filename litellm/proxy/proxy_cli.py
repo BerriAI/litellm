@@ -1376,7 +1376,8 @@ def run_server(
     if forward_mode is Mode.SUPERVISOR and not any(
         (version, validate_config, health, test, skip_server_startup, check_migrations_against_existing_data)
     ):
-        from litellm.proxy.rust_forward.supervisor import StartupError, supervise
+        from litellm.proxy.rust_forward.supervisor import supervise
+        from litellm.proxy.rust_forward.supervisor.preflight import StartupError
 
         server: Final = ProxyInitializationHelpers.python_server(
             host,

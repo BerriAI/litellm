@@ -4313,7 +4313,7 @@ class TestRustForwardServer:
     )
     def test_unsupported_servers_are_refused_before_starting_children(self, argv: list[str], reason: str) -> None:
         from litellm.proxy.rust_forward.platform.posix import PosixPlatform
-        from litellm.proxy.rust_forward.supervisor import StartupError, startup_check
+        from litellm.proxy.rust_forward.supervisor.preflight import StartupError, startup_check
 
         _, server = self._server(argv)
         assert startup_check(PosixPlatform(), server, "gateway") == StartupError(f"LITELLM_RUST {reason}")
@@ -4417,7 +4417,7 @@ class TestRustForwardServer:
         from litellm.proxy.rust_forward.mode import InheritedFd, Supervised, rust_forward_mode
         from litellm.proxy.rust_forward.platform import PrivateListener
         from litellm.proxy.rust_forward.platform.posix import PosixPlatform
-        from litellm.proxy.rust_forward.supervisor import python_spec
+        from litellm.proxy.rust_forward.supervisor.children import python_spec
 
         monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
         _, server = self._server(["--run_gunicorn"] if gunicorn else [])

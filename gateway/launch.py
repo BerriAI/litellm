@@ -121,7 +121,8 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
         stop_with_supervisor,
         uvicorn_flags,
     )
-    from litellm.proxy.rust_forward.supervisor import StartupError, supervise
+    from litellm.proxy.rust_forward.supervisor import supervise
+    from litellm.proxy.rust_forward.supervisor.preflight import StartupError
 
     mode: Final = rust_forward_mode(os.environ)
     match mode:
