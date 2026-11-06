@@ -30,7 +30,7 @@ RUN uv venv --python python && \
       "google-cloud-aiplatform==1.133.0" \
       "google-genai==1.37.0" \
       "anthropic[vertex]==0.84.0" \
-      "grpcio==1.78.0" \
+      "grpcio==1.84.1" \
       "prometheus-client==0.20.0" \
       "langfuse==2.59.7" \
       "opentelemetry-api==1.28.0" \
@@ -55,7 +55,10 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
 
 ENV PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries
 
+COPY docker/prod_entrypoint.sh /app/docker/prod_entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && chmod +x /app/docker/prod_entrypoint.sh
+
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["litellm"]
+ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]

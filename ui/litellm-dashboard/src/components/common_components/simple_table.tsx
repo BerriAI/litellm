@@ -1,11 +1,21 @@
 import React from "react";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import i18n from "@/i18n/i18n";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table";
 
 export interface SimpleTableColumn<T> {
   header: string;
   accessor?: keyof T;
   cell?: (row: T) => React.ReactNode;
   width?: string;
+  numeric?: boolean;
 }
 
 interface SimpleTableProps<T> {
@@ -19,14 +29,14 @@ interface SimpleTableProps<T> {
 
 /**
  * Simple table component for forms and settings pages
- * For complex tables with sorting/filtering, use DataTable from view_logs
+ * For complex tables with sorting/filtering, use DataTable from shared/DataTable
  */
 export function SimpleTable<T>({
   data,
   columns,
   isLoading = false,
-  loadingMessage = "Loading...",
-  emptyMessage = "No data",
+  loadingMessage = i18n.t("simpleTable.loading"),
+  emptyMessage = i18n.t("simpleTable.empty"),
   getRowKey,
 }: SimpleTableProps<T>) {
   return (
@@ -34,7 +44,11 @@ export function SimpleTable<T>({
       <TableHeader>
         <TableRow>
           {columns.map((column, index) => (
-            <TableHead key={index} style={{ width: column.width }}>
+            <TableHead
+              key={index}
+              style={{ width: column.width }}
+              className={column.numeric ? NUMERIC_CELL_CLASS : undefined}
+            >
               {column.header}
             </TableHead>
           ))}
@@ -51,7 +65,7 @@ export function SimpleTable<T>({
           data.map((row, rowIndex) => (
             <TableRow key={getRowKey ? getRowKey(row, rowIndex) : rowIndex}>
               {columns.map((column, colIndex) => (
-                <TableCell key={colIndex}>
+                <TableCell key={colIndex} className={column.numeric ? NUMERIC_CELL_CLASS : undefined}>
                   {column.cell ? column.cell(row) : String(row[column.accessor as keyof T] ?? "")}
                 </TableCell>
               ))}

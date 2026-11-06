@@ -17,18 +17,20 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Organization, Team } from "../networking";
+import type { Team } from "@/components/key_team_helpers/key_list";
 import { splitWildcardModels } from "./modelUtils";
 
 const MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE = {
-  label: "All Proxy Models",
+  labelKey: "modelSelect.specialOptions.allProxyModels",
   value: "all-proxy-models",
 } as const;
 
 const MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE = {
-  label: "No Default Models",
+  labelKey: "modelSelect.specialOptions.noDefaultModels",
   value: "no-default-models",
 } as const;
 
@@ -69,11 +71,18 @@ type ModelOptionGroup = {
 
 type FilterContextArgs = {
   allProxyModels: string[];
-  selectedTeam?: Team;
-  selectedOrganization?: Organization;
+  organizationID?: string;
+  organizationModels?: string[];
   userModels?: string[];
   options?: ModelSelectProps["options"];
 };
+
+const isUncappedModelCeiling = (organizationModels: string[]) =>
+  organizationModels.length === 0 || organizationModels.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value);
+
+// useTeam seeds from the team list, which omits organization_models; /team/info is the only source of the org ceiling.
+const isAwaitingOrganizationModels = (team: Team | undefined, isFetchingTeam: boolean) =>
+  isFetchingTeam && team !== undefined && team.organization_models === undefined;
 
 const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextArgs) => string[]> = {
   user: ({ allProxyModels, userModels, options }) => {
@@ -82,18 +91,10 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
     return [];
   },
 
-  team: ({ allProxyModels, selectedOrganization, userModels }) => {
-    if (selectedOrganization) {
-      if (
-        selectedOrganization.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
-        selectedOrganization.models.length === 0
-      ) {
-        return allProxyModels;
-      }
-      return allProxyModels.filter((model) => selectedOrganization.models.includes(model));
-    }
-
-    return allProxyModels ?? [];
+  team: ({ allProxyModels, organizationID, organizationModels }) => {
+    if (organizationModels === undefined) return organizationID ? [] : allProxyModels;
+    if (isUncappedModelCeiling(organizationModels)) return allProxyModels;
+    return allProxyModels.filter((model) => organizationModels.includes(model));
   },
 
   organization: ({ allProxyModels }) => {
@@ -108,7 +109,7 @@ const contextFilters: Record<ModelSelectProps["context"], (args: FilterContextAr
 const filterModels = (
   allProxyModels: ProxyModel[],
   ctx: ModelSelectProps,
-  extra: { selectedTeam?: Team; selectedOrganization?: Organization; userModels?: string[] },
+  extra: { organizationModels?: string[]; userModels?: string[] },
 ): string[] => {
   const deduplicatedProxyModels = Array.from(new Map(allProxyModels.map((m) => [m.id, m])).values()).map(
     (model) => model.id,
@@ -118,24 +119,51 @@ const filterModels = (
   const filterFn = contextFilters[ctx.context];
   if (!filterFn) return [];
 
-  return filterFn({ allProxyModels: deduplicatedProxyModels, ...extra, options: ctx.options });
+  const filterArgs: FilterContextArgs = {
+    allProxyModels: deduplicatedProxyModels,
+    organizationID: ctx.organizationID,
+    ...extra,
+    options: ctx.options,
+  };
+  return filterFn(filterArgs);
+};
+
+const isOfferedListKnown = (
+  proxyModelsLoaded: boolean,
+  context: ModelSelectProps["context"],
+  organizationID: string | undefined,
+  organizationModels: string[] | undefined,
+) => proxyModelsLoaded && !(context === "team" && organizationID !== undefined && organizationModels === undefined);
+
+const unavailableGroups = (
+  selectedOptions: ModelOption[],
+  offeredByValue: Map<string, ModelOption>,
+  offeredListKnown: boolean,
+  t: TFunction,
+): ModelOptionGroup[] => {
+  if (!offeredListKnown) return [];
+  const items = selectedOptions.filter((option) => !offeredByValue.has(option.value));
+  if (items.length === 0) return [];
+  return [{ label: t("modelSelect.groups.unavailable"), items }];
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
+  const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
-  const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
+  const { data: team, isLoading: isLoadingTeam, isFetching: isFetchingTeam } = useTeam(teamID);
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
   const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
 
   const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
-  const isLoading = isLoadingAllProxyModels || isLoadingTeam || isLoadingOrganization || isCurrentUserLoading;
-  const organizationHasAllProxyModels =
-    organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
-    organization?.models.length === 0;
+  const isTeamPending = isLoadingTeam || isAwaitingOrganizationModels(team, isFetchingTeam);
+  const isLoading = isLoadingAllProxyModels || isTeamPending || isLoadingOrganization || isCurrentUserLoading;
+  // The org's ceiling rides on /team/info, which a team admin may read; /organization/info 403s for them.
+  const organizationModels = team?.organization_models ?? organization?.models;
+  const organizationHasAllProxyModels = organizationModels !== undefined && isUncappedModelCeiling(organizationModels);
   const shouldShowAllProxyModels =
     showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
 
@@ -145,37 +173,29 @@ export const ModelSelect = (props: ModelSelectProps) => {
 
   const handleChange = (selected: ModelOption[]) => {
     const values = selected.map((option) => option.value);
-    const specialValues = values.filter(isSpecialOption);
+    const addedSpecialValues = values.filter((v) => isSpecialOption(v) && !value.includes(v));
+    const addedSpecial = addedSpecialValues[addedSpecialValues.length - 1];
 
-    let finalValues: string[];
-    if (specialValues.length > 0) {
-      const lastSelectedSpecial = specialValues[specialValues.length - 1];
-      finalValues = [lastSelectedSpecial];
-    } else {
-      finalValues = values;
-    }
-
-    onChange(finalValues);
+    onChange(addedSpecial === undefined ? values : [addedSpecial]);
   };
 
   const filteredModels = filterModels(allProxyModels?.data ?? [], props, {
-    selectedTeam: team,
-    selectedOrganization: organization,
+    organizationModels,
     userModels: currentUser?.models,
   });
 
   const { wildcard, regular } = splitWildcardModels(filteredModels);
 
-  const groups: ModelOptionGroup[] = [
+  const offeredGroups: ModelOptionGroup[] = [
     ...(includeSpecialOptions
       ? [
           {
-            label: "Special Options",
+            label: t("modelSelect.groups.special"),
             items: [
               ...(shouldShowAllProxyModels
                 ? [
                     {
-                      label: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.label,
+                      label: t(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.labelKey),
                       value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
                       disabled:
                         value.length > 0 &&
@@ -186,7 +206,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
                   ]
                 : []),
               {
-                label: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.label,
+                label: t(MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.labelKey),
                 value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
                 disabled:
                   value.length > 0 &&
@@ -199,13 +219,13 @@ export const ModelSelect = (props: ModelSelectProps) => {
     ...(wildcard.length > 0
       ? [
           {
-            label: "Wildcard Options",
+            label: t("modelSelect.groups.wildcard"),
             items: wildcard.map((model) => {
               const provider = model.replace("/*", "");
               const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
 
               return {
-                label: `All ${capitalizedProvider} models`,
+                label: t("modelSelect.wildcardOption", { provider: capitalizedProvider }),
                 value: model,
                 disabled: hasSpecialOptionSelected,
               };
@@ -214,7 +234,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
         ]
       : []),
     {
-      label: "Models",
+      label: t("modelSelect.groups.models"),
       items: regular.map((model) => ({
         label: model,
         value: model,
@@ -223,8 +243,21 @@ export const ModelSelect = (props: ModelSelectProps) => {
     },
   ];
 
-  const optionsByValue = new Map(groups.flatMap((group) => group.items).map((option) => [option.value, option]));
-  const selectedOptions = value.map((v) => optionsByValue.get(v) ?? { label: v, value: v });
+  const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
+  const sentinelOption = (v: string): ModelOption | undefined => {
+    const sentinel = MODEL_SENTINEL_OPTIONS.find((option) => option.value === v);
+    return sentinel === undefined ? undefined : { label: t(sentinel.labelKey), value: sentinel.value };
+  };
+  const selectedOptions = value.map((v) => offeredByValue.get(v) ?? sentinelOption(v) ?? { label: v, value: v });
+  const groups: ModelOptionGroup[] = [
+    ...unavailableGroups(
+      selectedOptions,
+      offeredByValue,
+      isOfferedListKnown(allProxyModels !== undefined, context, organizationID, organizationModels),
+      t,
+    ),
+    ...offeredGroups,
+  ];
   const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);
 
   return (
@@ -248,19 +281,24 @@ export const ModelSelect = (props: ModelSelectProps) => {
                 ))}
                 {overflowOptions.length > 0 && (
                   <Tooltip>
-                    <TooltipTrigger
-                      render={<span className="px-1 text-xs text-muted-foreground" />}
-                    >{`+${overflowOptions.length} more`}</TooltipTrigger>
+                    <TooltipTrigger render={<span className="px-1 text-xs text-muted-foreground" />}>
+                      {t("modelSelect.moreSelected", { count: overflowOptions.length })}
+                    </TooltipTrigger>
                     <TooltipContent>{overflowOptions.map((option) => option.value).join(", ")}</TooltipContent>
                   </Tooltip>
                 )}
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput id={id} placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
+          <ComboboxChipsInput
+            id={id}
+            placeholder={t("modelSelect.placeholder")}
+            aria-label={t("modelSelect.placeholder")}
+            className="min-w-24"
+          />
         </ComboboxChips>
         <ComboboxContent anchor={anchor}>
-          <ComboboxEmpty>No models found</ComboboxEmpty>
+          <ComboboxEmpty>{t("modelSelect.empty")}</ComboboxEmpty>
           <ComboboxList>
             {(group: ModelOptionGroup) => (
               <ComboboxGroup key={group.label} items={group.items}>

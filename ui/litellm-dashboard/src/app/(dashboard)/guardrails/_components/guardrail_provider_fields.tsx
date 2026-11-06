@@ -1,4 +1,6 @@
+import type { ParseKeys, TFunction } from "i18next";
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -9,10 +11,12 @@ import { getGuardrailProviderSpecificParams } from "@/components/networking";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import NumericalInput from "@/components/shared/numerical_input";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/toast";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import {
   asStringArray,
@@ -22,6 +26,7 @@ import {
   readRecord,
   requiredRule,
   type GuardrailFieldControlProps,
+  type GuardrailFieldRules,
   type GuardrailFormControl,
 } from "./GuardrailFormField";
 
@@ -52,13 +57,53 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const BOOLEAN_ITEMS = [
-  { label: "True", value: true },
-  { label: "False", value: false },
+const BOOLEAN_ITEMS: { labelKey: ParseKeys; value: boolean }[] = [
+  { labelKey: "guardrails.providerFields.boolean.true", value: true },
+  { labelKey: "guardrails.providerFields.boolean.false", value: false },
 ];
 
 const isSecretKey = (fieldKey: string): boolean =>
   fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key");
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Object fields hold the raw text while the user types, so submission must be
+// blocked until the value parses to a plain JSON object (or is cleared).
+const jsonObjectRule = (fieldKey: string, t: TFunction): GuardrailFieldRules => ({
+  validate: (value: unknown) =>
+    value === undefined || isPlainObject(value)
+      ? true
+      : t("guardrails.providerFields.errors.invalidJsonObject", { field: fieldKey }),
+});
+
+// Commits a parsed object (or undefined for a cleared field) to the form on
+// blur; anything else stays as raw text so jsonObjectRule blocks submission.
+const commitObjectField = (raw: string, onChange: (value: unknown) => void, t: TFunction): void => {
+  const next = raw.trim();
+  if (next === "") {
+    onChange(undefined);
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(next);
+  } catch {
+    parsed = next;
+  }
+  if (isPlainObject(parsed)) {
+    onChange(parsed);
+  } else {
+    toast.error(t("guardrails.providerFields.toasts.invalidJsonObject"));
+  }
+};
+
+const fieldRules = (field: ProviderParam, fieldKey: string, t: TFunction): GuardrailFieldRules | undefined => {
+  if (field.type === "object") {
+    return jsonObjectRule(fieldKey, t);
+  }
+  return field.required ? requiredRule(t("guardrails.providerFields.errors.required", { field: fieldKey })) : undefined;
+};
 
 interface ProviderFieldInputProps {
   descriptor: ProviderParam;
@@ -67,6 +112,7 @@ interface ProviderFieldInputProps {
 }
 
 const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fieldKey, control }) => {
+  const { t } = useTranslation();
   const { id, value, onChange, onBlur, ref, name, ...aria } = control;
 
   if (descriptor.type === "select" && descriptor.options) {
@@ -105,7 +151,7 @@ const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fie
   if (descriptor.type === "bool" || descriptor.type === "boolean") {
     return (
       <Select
-        items={BOOLEAN_ITEMS}
+        items={BOOLEAN_ITEMS.map(({ labelKey, value: itemValue }) => ({ label: t(labelKey), value: itemValue }))}
         value={typeof value === "boolean" ? value : null}
         onValueChange={(next: boolean | null) => onChange(next)}
       >
@@ -113,8 +159,8 @@ const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fie
           <SelectValue placeholder={descriptor.description} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={true}>True</SelectItem>
-          <SelectItem value={false}>False</SelectItem>
+          <SelectItem value={true}>{t("guardrails.providerFields.boolean.true")}</SelectItem>
+          <SelectItem value={false}>{t("guardrails.providerFields.boolean.false")}</SelectItem>
         </SelectContent>
       </Select>
     );
@@ -138,6 +184,25 @@ const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fie
           <span>100%</span>
         </div>
       </div>
+    );
+  }
+
+  if (descriptor.type === "object") {
+    const objectValue = typeof value === "object" && value !== null ? JSON.stringify(value, null, 2) : asText(value);
+    return (
+      <Textarea
+        id={id}
+        name={name}
+        ref={ref}
+        placeholder={descriptor.description}
+        value={objectValue}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={(event) => {
+          commitObjectField(event.target.value, onChange, t);
+          onBlur();
+        }}
+        {...aria}
+      />
     );
   }
 
@@ -192,9 +257,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   providerParams: providerParamsProp = null,
   value = null,
 }) => {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(providerParamsProp);
-  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   // Fetch provider-specific parameters when component mounts
   useEffect(() => {
@@ -208,7 +274,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
       if (!accessToken) return;
 
       setLoading(true);
-      setError(null);
+      setLoadFailed(false);
 
       try {
         const data = await getGuardrailProviderSpecificParams(accessToken);
@@ -219,7 +285,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         populateGuardrailProviderMap(data);
       } catch (error) {
         console.error("Error fetching provider params:", error);
-        setError("Failed to load provider parameters");
+        setLoadFailed(true);
       } finally {
         setLoading(false);
       }
@@ -241,14 +307,14 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <UiLoadingSpinner className="size-4" />
-        Loading provider parameters...
+        {t("guardrails.providerFields.loading")}
       </div>
     );
   }
 
   // Show error state
-  if (error) {
-    return <div className="text-destructive">{error}</div>;
+  if (loadFailed) {
+    return <div className="text-destructive">{t("guardrails.providerFields.loadFailed")}</div>;
   }
 
   // Get the provider key matching the selected provider in the guardrail_provider_map
@@ -258,7 +324,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   const providerFields = providerParams && providerParams[providerKey];
 
   if (!providerFields || Object.keys(providerFields).length === 0) {
-    return <div>No configuration fields available for this provider.</div>;
+    return <div>{t("guardrails.providerFields.noFields")}</div>;
   }
 
   // Fields to skip for content filter provider (handled in dedicated steps)
@@ -316,7 +382,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           control={control}
           name={fullFieldKey}
           label={labelWithHint(fieldKey, field.description)}
-          rules={field.required ? requiredRule(`${fieldKey} is required`) : undefined}
+          rules={fieldRules(field, fieldKey, t)}
           defaultValue={resolvedInitialValue}
         >
           {(fieldControl) => <ProviderFieldInput descriptor={field} fieldKey={fieldKey} control={fieldControl} />}

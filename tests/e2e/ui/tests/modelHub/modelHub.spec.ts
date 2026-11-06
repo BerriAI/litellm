@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
+import { masterKey, uniqueSuffix } from "../../helpers/traffic";
 
 test.describe("AI Hub (internal admin view)", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -22,10 +23,12 @@ test.describe("AI Hub (internal admin view)", () => {
     await expect(modal.getByText(/Select All \(\d+\)/)).toBeVisible({ timeout: 5_000 });
 
     // Step 1: pick the seeded models via "Select All"
-    await modal.getByText(/Select All/i).click();
+    await modal.getByRole("checkbox", { name: /Select All/ }).check();
 
     // Move to confirm step
-    await modal.getByRole("button", { name: "Next" }).click();
+    const next = modal.getByRole("button", { name: "Next" });
+    await expect(next).toBeEnabled();
+    await next.click();
     await expect(modal.getByText("Confirm Making Models Public")).toBeVisible({ timeout: 5_000 });
 
     // Submit
@@ -59,22 +62,93 @@ test.describe("AI Hub (internal admin view)", () => {
 });
 
 test.describe("Public model hub (/ui/model_hub_table)", () => {
-  // No storageState — the public page is reached anonymously with a `key` query param.
-
-  test("Public model_hub_table loads and renders the Model Hub tab", async ({ page }) => {
-    // The page expects the proxy key as the `key` query param. Use the master
-    // key the e2e runner already exports — this matches what the AI Hub copy
-    // button hands out.
-    const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
-    await page.goto(`/ui/model_hub_table?key=${masterKey}`);
-
-    // Dismiss the feedback popup before asserting on the tab, so a popup
-    // race can't briefly mask the tab while we're evaluating visibility.
+  test("shows the Model Hub and Skills Hub catalogs", async ({ page }) => {
+    await page.goto("/ui/model_hub_table");
     await dismissFeedbackPopup(page);
 
-    // Page loads (no auth redirect) and the Model Hub tab is always present.
-    // Agent Hub and MCP Hub tabs are conditionally rendered only when public
-    // agents/MCP servers exist, so we don't assert on them in a fresh CI run.
-    await expect(page.getByRole("tab", { name: "Model Hub" })).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByRole("tab", { name: "Model Hub", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "Search models", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await page.getByRole("tab", { name: "Skills Hub", exact: true }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Search skills", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("finds a published skill and opens its installation instructions", async ({
+    page,
+    request,
+  }) => {
+    const skillName = `e2e-catalog-${uniqueSuffix()}`;
+    const domain = `catalog-${uniqueSuffix()}`;
+    const auth = { Authorization: `Bearer ${masterKey()}` };
+    const created = await request.post("/claude-code/plugins", {
+      headers: auth,
+      data: {
+        name: skillName,
+        source: { source: "github", repo: "example/catalog-skills" },
+        description: "Catalog browser test skill",
+        domain,
+        version: "1.0.0",
+      },
+    });
+    expect(
+      created.ok(),
+      `skill registration failed (${created.status()}): ${await created.text()}`,
+    ).toBe(true);
+    try {
+      await page.goto("/ui/model_hub_table?tab=skills");
+      await dismissFeedbackPopup(page);
+      await page.getByRole("checkbox", { name: domain, exact: true }).check();
+      await page
+        .getByRole("textbox", { name: "Search skills", exact: true })
+        .fill(skillName);
+      await page.getByRole("link").filter({ hasText: skillName }).click();
+
+      const details = page.getByRole("dialog");
+      await expect(
+        details.getByRole("heading", { name: skillName, exact: true }),
+      ).toBeVisible();
+      await expect(
+        details.getByText(`/plugin install ${skillName}@litellm`, {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`open=${skillName}`));
+      await page.reload();
+      await expect(
+        page
+          .getByRole("dialog")
+          .getByRole("heading", { name: skillName, exact: true }),
+      ).toBeVisible();
+    } finally {
+      const deleted = await request.delete(
+        `/claude-code/plugins/${skillName}`,
+        { headers: auth },
+      );
+      expect(deleted.ok(), `skill cleanup failed (${deleted.status()})`).toBe(
+        true,
+      );
+    }
+  });
+
+  test("retired catalog links return to Models and clear the old selection", async ({
+    page,
+  }) => {
+    for (const tab of ["agents", "mcp"]) {
+      await page.goto(
+        `/ui/model_hub_table?tab=${tab}&open=retired-entry&key=preserved`,
+      );
+      await dismissFeedbackPopup(page);
+      await expect(
+        page.getByRole("tab", { name: "Model Hub", exact: true }),
+      ).toHaveAttribute("aria-selected", "true");
+      await expect(page).toHaveURL(/model_hub_table\?key=preserved$/);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+    }
   });
 });

@@ -1,7 +1,7 @@
 import json
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
@@ -140,16 +140,17 @@ class AlephAlphaConfig:
         contextual_control_threshold: int | None = None,
         control_log_additive: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -277,12 +278,7 @@ def completion(
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens: Final = len(encoding.encode(prompt))
-        completion_tokens: Final = len(
-            encoding.encode(
-                model_response["choices"][0]["message"]["content"],
-                disallowed_special=(),
-            )
-        )
+        completion_tokens: Final = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
 
         model_response.created = int(time.time())
         model_response.model = model

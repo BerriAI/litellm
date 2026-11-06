@@ -14,13 +14,16 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_semantic_cache_prompt_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -35,6 +38,11 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+_CACHE_RESPONSE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(
+    str | bytes | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class RedisSemanticCache(BaseCache):
@@ -116,7 +124,8 @@ class RedisSemanticCache(BaseCache):
                 password = password or os.environ["REDIS_PASSWORD"]
             except KeyError as e:
                 # Raise a more informative exception if any of the required keys are missing
-                missing_var: Final = e.args[0]
+                key_error_args: Final[tuple[object, ...]] = e.args
+                missing_var: Final = key_error_args[0]
                 raise ValueError(
                     f"Missing required Redis configuration: {missing_var}. Provide {missing_var} or redis_url."
                 ) from e
@@ -262,7 +271,7 @@ class RedisSemanticCache(BaseCache):
         """
         messages: Final = kwargs.get("messages")
         if messages:
-            return get_str_from_messages(messages)
+            return get_semantic_cache_prompt_from_messages(messages)
 
         if "input" not in kwargs:
             return None
@@ -273,7 +282,7 @@ class RedisSemanticCache(BaseCache):
         return prompt or None
 
     @classmethod
-    def _collect_responses_input_text(cls, value: Any, prompt_parts: list[str]) -> None:
+    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:  # noqa: C901  # one branch per Responses input shape
         value = cls._coerce_response_input_value(value)
         if value is None:
             return
@@ -295,6 +304,11 @@ class RedisSemanticCache(BaseCache):
                 cls._collect_responses_input_text(content, prompt_parts)
                 return
 
+            output = value.get("output")
+            if isinstance(output, list):
+                cls._collect_responses_input_text(output, prompt_parts)
+                return
+
             for text_key in ("text", "output", "input_text", "output_text"):
                 text_value = value.get(text_key)
                 if isinstance(text_value, str):
@@ -304,9 +318,9 @@ class RedisSemanticCache(BaseCache):
                         return
             return
 
-        content = getattr(value, "content", None)
-        if content is not None:
-            cls._collect_responses_input_text(content, prompt_parts)
+        attribute_content: Final[object] = getattr(value, "content", None)
+        if attribute_content is not None:
+            cls._collect_responses_input_text(attribute_content, prompt_parts)
             return
 
         for text_key in ("text", "output", "input_text", "output_text"):
@@ -334,7 +348,7 @@ class RedisSemanticCache(BaseCache):
             resolve_embedding_max_input_tokens(self.embedding_max_input_tokens, self.embedding_model, router),
         )
 
-    def _get_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> list[float]:
+    def _get_embedding(self, prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
         """
         Routes through the proxy Router when the embedding model is a Router
         deployment so per-deployment auth (e.g. Bedrock aws_role_name) applies,
@@ -373,7 +387,7 @@ class RedisSemanticCache(BaseCache):
             )
         return embedding_response["data"][0]["embedding"]
 
-    def _get_cache_logic(self, cached_response: Any) -> object:
+    def _get_cache_logic(self, cached_response: str | bytes | None) -> object:
         """
         Process the cached response to prepare it for use.
 
@@ -384,23 +398,22 @@ class RedisSemanticCache(BaseCache):
             The processed cache response, or None if input was None
         """
         if cached_response is None:
-            return cached_response
+            return None
 
         # Convert bytes to string if needed
-        if isinstance(cached_response, bytes):
-            cached_response = cached_response.decode("utf-8")
+        response_text: Final = (
+            cached_response.decode("utf-8") if isinstance(cached_response, bytes) else cached_response
+        )
 
         # Convert string representation to Python object
         try:
-            cached_response = json.loads(cached_response)
+            return json.loads(response_text)
         except json.JSONDecodeError:
             try:
-                cached_response = ast.literal_eval(cached_response)
+                return ast.literal_eval(response_text)
             except (ValueError, SyntaxError) as e:
                 print_verbose(f"Error parsing cached response: {e}")
                 return None
-
-        return cached_response
 
     def set_cache(self, key: str, value: object, **kwargs) -> None:
         """
@@ -425,7 +438,7 @@ class RedisSemanticCache(BaseCache):
 
             prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: Final[dict[str, Any]] = {
+            store_kwargs: Final[dict[str, object]] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
@@ -487,7 +500,7 @@ class RedisSemanticCache(BaseCache):
             similarity: Final = 1 - vector_distance
 
             cached_prompt: Final = cache_hit["prompt"]
-            cached_response: Final = cache_hit["response"]
+            cached_response: Final = _CACHE_RESPONSE_ADAPTER.validate_python(cache_hit["response"])
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
@@ -504,7 +517,7 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error retrieving from Redis semantic cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
-    async def _get_async_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> list[float]:
+    async def _get_async_embedding(self, prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
         """
         Asynchronously generate an embedding for the given prompt.
 
@@ -522,7 +535,7 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
-        embedding_input: Final = self._embedding_input(prompt, router)
+        embedding_input: Final = await asyncify(self._embedding_input)(prompt, router)
         embedding_call: Final = (
             router.aembedding(
                 model=self.embedding_model,
@@ -571,7 +584,7 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the value (response) to cache
             prompt_embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: Final[dict[str, Any]] = {
+            store_kwargs: Final[dict[str, object]] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
@@ -638,7 +651,7 @@ class RedisSemanticCache(BaseCache):
             similarity: Final = 1 - vector_distance
 
             cached_prompt: Final = cache_hit["prompt"]
-            cached_response: Final = cache_hit["response"]
+            cached_response: Final = _CACHE_RESPONSE_ADAPTER.validate_python(cache_hit["response"])
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
@@ -665,7 +678,7 @@ class RedisSemanticCache(BaseCache):
         aindex: Final = await self.llmcache._get_async_index()
         return await aindex.info()
 
-    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs: object) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs: object) -> None:
         """
         Asynchronously store multiple values in the semantic cache.
 

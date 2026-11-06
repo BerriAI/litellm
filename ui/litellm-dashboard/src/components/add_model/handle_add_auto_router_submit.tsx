@@ -1,8 +1,10 @@
 import { modelCreateCall } from "../networking";
 import { toast } from "@/lib/toast";
+import i18n from "@/i18n/i18n";
 import type { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+import type { AutoRouterCompressionLitellmParams } from "./buildAutoRouterCompression";
 
-export interface AddAutoRouterValues {
+export interface AddAutoRouterValues extends AutoRouterCompressionLitellmParams {
   auto_router_name: string;
   auto_router_default_model: string | undefined;
   model_type: "complexity_router";
@@ -24,6 +26,16 @@ export const handleAddAutoRouterSubmit = async (
         model: "auto_router/complexity_router",
         complexity_router_config: values.complexity_router_config,
         complexity_router_default_model: values.auto_router_default_model,
+        ...(values.auto_router_routing_compression === undefined
+          ? {}
+          : {
+              auto_router_routing_compression: values.auto_router_routing_compression,
+            }),
+        ...(values.auto_router_model_compression === undefined
+          ? {}
+          : {
+              auto_router_model_compression: values.auto_router_model_compression,
+            }),
       },
       model_info: {
         ...(values.team_id ? { team_id: values.team_id } : {}),
@@ -33,7 +45,7 @@ export const handleAddAutoRouterSubmit = async (
 
     await modelCreateCall(accessToken, autoRouterConfig);
 
-    toast.success(`Successfully created Auto Router: ${values.auto_router_name}`);
+    toast.success(i18n.t("addModel.handleAddAutoRouterSubmit.created", { name: values.auto_router_name }));
 
     resetForm();
 
@@ -42,6 +54,6 @@ export const handleAddAutoRouterSubmit = async (
     }
   } catch (error) {
     console.error("Failed to add auto router:", error);
-    toast.fromError("Failed to add auto router: " + error);
+    toast.fromError(i18n.t("addModel.handleAddAutoRouterSubmit.failed", { error: String(error) }));
   }
 };

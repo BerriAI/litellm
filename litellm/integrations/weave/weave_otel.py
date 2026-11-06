@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry.trace import Status, StatusCode
@@ -59,7 +60,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
         safe_set_attribute(span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt))
 
 
-def _set_weave_specific_attributes(span: Span, kwargs: dict[str, Any], response_obj: Any):
+def _set_weave_specific_attributes(span: Span, kwargs: Mapping[str, Any], response_obj: Any):
     """
     Sets Weave-specific metadata attributes onto the OTEL span.
 
@@ -105,7 +106,7 @@ def _set_weave_specific_attributes(span: Span, kwargs: dict[str, Any], response_
             safe_set_attribute(span, OpenInferenceSpanAttributes.OUTPUT_VALUE, safe_dumps(output_dict))
 
 
-def _get_weave_authorization_header(api_key: str) -> str:
+def get_weave_authorization_header(api_key: str) -> str:
     """
     Get the authorization header for Weave OpenTelemetry.
 
@@ -114,6 +115,17 @@ def _get_weave_authorization_header(api_key: str) -> str:
     auth_string: Final = f"api:{api_key}"
     auth_header: Final = base64.b64encode(auth_string.encode()).decode()
     return f"Basic {auth_header}"
+
+
+_get_weave_authorization_header = get_weave_authorization_header
+
+
+def weave_otel_endpoint(host: str | None) -> str:
+    """The OTLP traces endpoint for a self-managed ``host``, else Weave cloud."""
+    if not host:
+        return WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
+    normalized: Final = host if host.startswith("http") else f"https://{host}"
+    return normalized.rstrip("/") + WEAVE_OTEL_ENDPOINT
 
 
 def get_weave_otel_config() -> WeaveOtelConfig:
@@ -133,7 +145,6 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     """
     api_key: Final = os.getenv("WANDB_API_KEY")
     project_id: Final = os.getenv("WANDB_PROJECT_ID")
-    host = os.getenv("WANDB_HOST")
 
     if not api_key:
         raise ValueError("WANDB_API_KEY must be set for Weave OpenTelemetry integration.")
@@ -143,18 +154,11 @@ def get_weave_otel_config() -> WeaveOtelConfig:
             "WANDB_PROJECT_ID must be set for Weave OpenTelemetry integration. Format: <entity>/<project_name>"
         )
 
-    if host:
-        if not host.startswith("http"):
-            host = "https://" + host
-        # Self-managed instances use a different path
-        endpoint = host.rstrip("/") + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug("Using Weave OTEL endpoint from host: %s", endpoint)
-    else:
-        endpoint = WEAVE_BASE_URL + WEAVE_OTEL_ENDPOINT
-        verbose_logger.debug("Using Weave cloud endpoint: %s", endpoint)
+    endpoint: Final = weave_otel_endpoint(os.getenv("WANDB_HOST"))
+    verbose_logger.debug("Using Weave OTEL endpoint: %s", endpoint)
 
     # Weave uses Basic auth with format: api:<WANDB_API_KEY>
-    auth_header: Final = _get_weave_authorization_header(api_key=api_key)
+    auth_header: Final = get_weave_authorization_header(api_key=api_key)
     otlp_auth_headers: Final = f"Authorization={auth_header},project_id={project_id}"
 
     # Set standard OTEL environment variables
@@ -169,7 +173,7 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     )
 
 
-def set_weave_otel_attributes(span: Span, kwargs: dict[str, Any], response_obj: Any):
+def set_weave_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
     """
     Sets OpenTelemetry span attributes for Weave observability.
     Uses the same attribute setting logic as other OTEL integrations for consistency.
@@ -319,7 +323,7 @@ class WeaveOtelLogger(OpenTelemetry):
         dynamic_weave_project_id: Final = standard_callback_dynamic_params.get("weave_project_id")
 
         if dynamic_wandb_api_key:
-            auth_header: Final = _get_weave_authorization_header(
+            auth_header: Final = get_weave_authorization_header(
                 api_key=dynamic_wandb_api_key,
             )
             dynamic_headers["Authorization"] = auth_header

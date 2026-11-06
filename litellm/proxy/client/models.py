@@ -1,22 +1,28 @@
 import builtins
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from pydantic import ConfigDict, TypeAdapter
 
 from .exceptions import NotFoundError, UnauthorizedError
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+
 
 class ModelsManagementClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         """
         Initialize the ModelsManagementClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -30,7 +36,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> list[dict[str, Any]] | requests.Request:
+    def list(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get the list of models supported by the server.
 
@@ -55,7 +61,7 @@ class ModelsManagementClient:
         # Prepare and send the request
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:
@@ -66,10 +72,10 @@ class ModelsManagementClient:
     def new(
         self,
         model_name: str,
-        model_params: dict[str, Any],
-        model_info: dict[str, Any] | None = None,
+        model_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Add a new model to the proxy.
 
@@ -104,15 +110,15 @@ class ModelsManagementClient:
         # Prepare and send the request
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
             raise
 
-    def delete(self, model_id: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
+    def delete(self, model_id: str, return_request: bool = False) -> dict[str, object] | requests.Request:
         """
         Delete a model from the proxy.
 
@@ -140,9 +146,9 @@ class ModelsManagementClient:
         # Prepare and send the request
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -155,7 +161,7 @@ class ModelsManagementClient:
         model_id: str | None = None,
         model_name: str | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get information about a specific model by its ID or name.
 
@@ -165,7 +171,7 @@ class ModelsManagementClient:
             return_request (bool): If True, returns the prepared request object instead of executing it
 
         Returns:
-            Union[Dict[str, Any], requests.Request]: Either the model information from the server or
+            dict[str, object] | requests.Request: Either the model information from the server or
             a prepared request object if return_request is True
 
         Raises:
@@ -232,7 +238,7 @@ class ModelsManagementClient:
         # Prepare and send the request
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:
@@ -243,10 +249,10 @@ class ModelsManagementClient:
     def update(
         self,
         model_id: str,
-        model_params: dict[str, Any],
-        model_info: dict[str, Any] | None = None,
+        model_params: Mapping[str, object],
+        model_info: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Update an existing model's configuration.
 
@@ -282,9 +288,9 @@ class ModelsManagementClient:
         # Prepare and send the request
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

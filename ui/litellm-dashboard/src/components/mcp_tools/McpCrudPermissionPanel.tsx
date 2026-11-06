@@ -10,6 +10,7 @@
  */
 
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { CrudOp, MCPToolEntry, CRUD_GROUP_META, groupToolsByCrud } from "../../utils/mcpToolCrudClassification";
@@ -25,6 +26,11 @@ interface McpCrudPermissionPanelProps {
   value: string[] | undefined;
   /** Called whenever the allowed set changes. Always emits a concrete string[]. */
   onChange: (allowed: string[]) => void;
+  /**
+   * Tools that are allowed by a grant this panel cannot edit, so they stay allowed whatever is
+   * ticked here. They render allowed and disabled, and a group toggle leaves them on.
+   */
+  lockedTools?: readonly string[];
   readOnly?: boolean;
   /**
    * Optional search filter string. When set, only tools whose name or description
@@ -61,13 +67,17 @@ const GROUP_HEADER_BG: Record<CrudOp, string> = {
 
 // ---------------------------------------------------------------------------
 
+const NO_LOCKED_TOOLS: readonly string[] = [];
+
 const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   tools,
   value,
   onChange,
+  lockedTools = NO_LOCKED_TOOLS,
   readOnly = false,
   searchFilter = "",
 }) => {
+  const { t } = useTranslation();
   const [collapsed, setCollapsed] = useState<Record<CrudOp, boolean>>({
     read: false,
     create: false,
@@ -90,6 +100,8 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
     return new Set(value);
   }, [value, tools]);
 
+  const locked: Set<string> = useMemo(() => new Set(lockedTools), [lockedTools]);
+
   const isToolAllowed = (name: string) => effectiveAllowed.has(name);
 
   const isGroupFullyAllowed = (op: CrudOp) => {
@@ -105,7 +117,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
   };
 
   const toggleTool = (toolName: string) => {
-    if (readOnly) return;
+    if (readOnly || locked.has(toolName)) return;
     const next = new Set(effectiveAllowed);
     if (next.has(toolName)) {
       next.delete(toolName);
@@ -121,7 +133,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
     for (const tool of grouped[op]) {
       if (enable) {
         next.add(tool.name);
-      } else {
+      } else if (!locked.has(tool.name)) {
         next.delete(tool.name);
       }
     }
@@ -169,29 +181,36 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                 ) : (
                   <ChevronDownIcon className="w-4 h-4 text-muted-foreground shrink-0" />
                 )}
-                <span className="font-semibold text-foreground text-sm">{meta.label}</span>
+                <span className="font-semibold text-foreground text-sm">{t(meta.label)}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${RISK_BADGE[meta.risk]}`}>
                   {meta.risk === "high"
-                    ? "High Risk"
+                    ? t("mcpTools.crudPermissionPanel.risk.high")
                     : meta.risk === "medium"
-                      ? "Medium Risk"
+                      ? t("mcpTools.crudPermissionPanel.risk.medium")
                       : meta.risk === "low"
-                        ? "Safe"
-                        : "Unclassified"}
+                        ? t("mcpTools.crudPermissionPanel.risk.low")
+                        : t("mcpTools.crudPermissionPanel.risk.unknown")}
                 </span>
                 <span className="text-xs text-muted-foreground ml-1">
-                  {group.filter((t) => effectiveAllowed.has(t.name)).length}/{group.length} allowed
+                  {t("mcpTools.crudPermissionPanel.allowedCount", {
+                    allowed: group.filter((tool) => effectiveAllowed.has(tool.name)).length,
+                    total: group.length,
+                  })}
                 </span>
               </button>
 
               {!readOnly && (
                 <div className="flex items-center gap-2 ml-4">
                   <p className="text-xs text-muted-foreground">
-                    {fullyAllowed ? "All on" : partial ? "Partial" : "All off"}
+                    {fullyAllowed
+                      ? t("mcpTools.crudPermissionPanel.groupState.allOn")
+                      : partial
+                        ? t("mcpTools.crudPermissionPanel.groupState.partial")
+                        : t("mcpTools.crudPermissionPanel.groupState.allOff")}
                   </p>
                   {/* Checkbox supports `indeterminate`; Switch does not. */}
                   <Checkbox
-                    aria-label={`Allow all ${meta.label} tools`}
+                    aria-label={t("mcpTools.crudPermissionPanel.allowAllAria", { label: t(meta.label) })}
                     checked={fullyAllowed}
                     indeterminate={partial}
                     onCheckedChange={(checked) => toggleGroup(op, checked)}
@@ -204,7 +223,7 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
             {/* Description row */}
             {!isCollapsed && (
               <div className="px-4 pt-2 pb-1 text-xs text-muted-foreground bg-card border-b border-border">
-                {meta.description}
+                {t(meta.description)}
               </div>
             )}
 
@@ -220,18 +239,19 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                   )
                   .map((tool) => {
                     const allowed = isToolAllowed(tool.name);
+                    const isLocked = locked.has(tool.name);
                     return (
                       <div
                         key={tool.name}
                         className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-accent ${
-                          !readOnly ? "cursor-pointer" : ""
+                          !readOnly && !isLocked ? "cursor-pointer" : ""
                         } ${allowed ? "" : "opacity-60"}`}
                         onClick={() => toggleTool(tool.name)}
                       >
                         <Checkbox
                           aria-label={tool.name}
                           checked={allowed}
-                          disabled={readOnly}
+                          disabled={readOnly || isLocked}
                           onClick={(e) => e.stopPropagation()}
                         />
                         <div className="flex-1 min-w-0">
@@ -245,7 +265,9 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
                             allowed ? "bg-success/15 text-success" : "bg-muted text-muted-foreground"
                           }`}
                         >
-                          {allowed ? "on" : "off"}
+                          {allowed
+                            ? t("mcpTools.crudPermissionPanel.toolState.on")
+                            : t("mcpTools.crudPermissionPanel.toolState.off")}
                         </span>
                       </div>
                     );

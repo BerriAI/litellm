@@ -9,22 +9,26 @@ import base64
 import hashlib
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
+from litellm.llms.gigachat.utils import get_api_base
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.types.utils import LlmProviders
 
 from .authenticator import get_access_token, get_access_token_async
 
-# GigaChat API endpoint
-GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
-
 # Simple in-memory cache for file IDs
-_file_cache: Final[dict[str, str]] = {}
+_file_cache: Final[dict[str, object]] = {}
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _get_url_hash(url: str) -> str:
@@ -51,13 +55,21 @@ def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
     return content_bytes, content_type, ext
 
 
+def _content_type_or_default(headers: Mapping[str, str]) -> str:
+    """Return the response's ``content-type`` header, falling back to ``image/jpeg`` when absent."""
+    try:
+        return headers["content-type"]
+    except KeyError:
+        return "image/jpeg"
+
+
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
-    client: Final = _get_httpx_client(params={"ssl_verify": False})
+    client: Final = get_httpx_client(params={"ssl_verify": False})
     response: Final = client.get(url)
     response.raise_for_status()
 
-    content_type: Final = response.headers.get("content-type", "image/jpeg")
+    content_type: Final = _content_type_or_default(response.headers)
     ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return response.content, content_type, ext
@@ -72,7 +84,7 @@ async def _download_image_async(url: str) -> tuple[bytes, str, str]:
     response: Final = await client.get(url)
     response.raise_for_status()
 
-    content_type: Final = response.headers.get("content-type", "image/jpeg")
+    content_type: Final = _content_type_or_default(response.headers)
     ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return response.content, content_type, ext
@@ -82,7 +94,8 @@ def upload_file_sync(
     image_url: str,
     credentials: str | None = None,
     api_base: str | None = None,
-) -> str | None:
+    litellm_params: Mapping[str, object] | None = None,
+) -> object:
     """
     Upload file to GigaChat and return file_id (sync).
 
@@ -114,13 +127,12 @@ def upload_file_sync(
         filename: Final = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token: Final = get_access_token(credentials)
+        access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = api_base or GIGACHAT_BASE_URL
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
-        client: Final = _get_httpx_client(params={"ssl_verify": False})
+        client: Final = get_httpx_client(params={"ssl_verify": False})
         response: Final = client.post(
             upload_url,
             headers={"Authorization": f"Bearer {access_token}"},
@@ -129,9 +141,9 @@ def upload_file_sync(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = _DECODED_JSON.validate_python(response.json())
 
-        file_id: Final = result.get("id")
+        file_id: Final = decoded_json_object(result).get("id")
         if file_id:
             _file_cache[url_hash] = file_id
             verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)
@@ -147,7 +159,8 @@ async def upload_file_async(
     image_url: str,
     credentials: str | None = None,
     api_base: str | None = None,
-) -> str | None:
+    litellm_params: Mapping[str, object] | None = None,
+) -> object:
     """
     Upload file to GigaChat and return file_id (async).
 
@@ -179,11 +192,10 @@ async def upload_file_async(
         filename: Final = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token: Final = await get_access_token_async(credentials)
+        access_token: Final = await get_access_token_async(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = api_base or GIGACHAT_BASE_URL
-        upload_url: Final = f"{base_url}/files"
+        upload_url: Final = join_api_base(get_api_base(api_base), "files")
 
         client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
@@ -197,9 +209,9 @@ async def upload_file_async(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = _DECODED_JSON.validate_python(response.json())
 
-        file_id: Final = result.get("id")
+        file_id: Final = decoded_json_object(result).get("id")
         if file_id:
             _file_cache[url_hash] = file_id
             verbose_logger.debug("File uploaded successfully, file_id: %s", file_id)

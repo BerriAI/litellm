@@ -9,6 +9,7 @@ from .bytedance_transformation import (
     FalAIBytedanceDreaminaV31Config,
     FalAIBytedanceSeedreamV3Config,
 )
+from .flux_dev_transformation import FalAIFluxDevConfig
 from .flux_pro_v11_transformation import FalAIFluxProV11Config
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 from .flux_schnell_transformation import FalAIFluxSchnellConfig
@@ -25,6 +26,7 @@ __all__ = [
     "FalAIBriaConfig",
     "FalAIBytedanceDreaminaV31Config",
     "FalAIBytedanceSeedreamV3Config",
+    "FalAIFluxDevConfig",
     "FalAIFluxProV11Config",
     "FalAIFluxProV11UltraConfig",
     "FalAIFluxSchnellConfig",
@@ -65,6 +67,8 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
         if "ultra" in model_lower:
             return FalAIFluxProV11UltraConfig()
         return FalAIFluxProV11Config()
+    elif "flux/dev" in model_lower or "flux-dev" in model_lower:
+        return FalAIFluxDevConfig()
     elif "flux/schnell" in model_lower or "flux-schnell" in model_lower or "schnell" in model_lower:
         return FalAIFluxSchnellConfig()
     elif "bytedance/seedream" in model_lower:

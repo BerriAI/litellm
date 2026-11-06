@@ -1,14 +1,12 @@
 "use client";
 
 import { Separator as SeparatorPrimitive } from "@base-ui/react/separator";
-import * as React from "react";
 
 import { cn } from "@/lib/cva.config";
 
-const Separator = React.forwardRef<React.ComponentRef<typeof SeparatorPrimitive>, SeparatorPrimitive.Props>(
-  ({ className, orientation = "horizontal", ...props }, ref) => (
+function Separator({ className, orientation = "horizontal", ...props }: SeparatorPrimitive.Props) {
+  return (
     <SeparatorPrimitive
-      ref={ref}
       data-slot="separator"
       orientation={orientation}
       className={cn(
@@ -17,8 +15,7 @@ const Separator = React.forwardRef<React.ComponentRef<typeof SeparatorPrimitive>
       )}
       {...props}
     />
-  ),
-);
-Separator.displayName = "Separator";
+  );
+}
 
 export { Separator };

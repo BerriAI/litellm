@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   Combobox,
   ComboboxContent,
@@ -17,8 +18,8 @@ export interface ModelChoice {
 
 interface ModelChoiceComboboxProps {
   id: string;
-  value: string;
-  onChange: (value: string) => void;
+  value: string | null;
+  onChange: (value: string | null) => void;
   choices: ModelChoice[];
   placeholder: string;
   ariaInvalid: true | undefined;
@@ -34,13 +35,14 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
   ariaInvalid,
   ariaDescribedBy,
 }) => {
+  const { t } = useTranslation();
   const selected = value ? choices.find((choice) => choice.value === value) ?? { value, label: value } : null;
 
   return (
     <Combobox
       items={choices}
       value={selected}
-      onValueChange={(choice: ModelChoice | null) => onChange(choice?.value ?? "")}
+      onValueChange={(choice: ModelChoice | null) => onChange(choice?.value ?? null)}
       itemToStringLabel={(choice: ModelChoice) => choice.label}
       isItemEqualToValue={(choice: ModelChoice, current: ModelChoice) => choice.value === current.value}
     >
@@ -50,10 +52,10 @@ const ModelChoiceCombobox: React.FC<ModelChoiceComboboxProps> = ({
         aria-describedby={ariaDescribedBy}
         placeholder={placeholder}
         className="w-full"
-        showClear={value !== ""}
+        showClear={value != null && value !== ""}
       />
       <ComboboxContent>
-        <ComboboxEmpty>No models found</ComboboxEmpty>
+        <ComboboxEmpty>{t("addModel.modelChoiceCombobox.empty")}</ComboboxEmpty>
         <ComboboxList>
           {(choice: ModelChoice) => (
             <ComboboxItem key={choice.value} value={choice}>

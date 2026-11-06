@@ -6,10 +6,12 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
@@ -28,6 +30,13 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _StabilityImageEditResponse(TypedDict, total=False):
+    image: ReadOnly[str]
+    finish_reason: ReadOnly[str]
+    seed: ReadOnly[int]
+    errors: ReadOnly[Sequence[str]]
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -74,7 +83,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, object]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -182,7 +191,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         # Build Stability request
         # Populate multipart form-data as separate text fields (data) and files.
         # Stability expects prompt/output_format/etc. as normal form fields, not file parts.
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "output_format": "png",  # Default to PNG
         }
 
@@ -259,7 +268,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final[_StabilityImageEditResponse] = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",
@@ -300,16 +309,15 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         if not hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = {}
-        if "additional_headers" not in model_response._hidden_params:
-            model_response._hidden_params["additional_headers"] = {}
+            model_response.hidden_params = {}
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+            dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
+        )
         # Override: fetch model-cost from model_cost map based on the provided model name
         model_info: Final = get_model_info(model, custom_llm_provider="stability")
         cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                cost_per_image
-            )
+            additional_headers["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
         return model_response
 
     def use_multipart_form_data(self) -> bool:

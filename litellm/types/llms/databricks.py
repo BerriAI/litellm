@@ -1,7 +1,9 @@
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel
 from typing_extensions import (
+    NotRequired,
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -21,7 +23,7 @@ class GenericStreamingChunk(TypedDict, total=False):
 class DatabricksTextContent(TypedDict, total=False):
     type: Literal["text"]
     text: Required[str]
-    citations: list[dict[str, Any]] | None
+    citations: list[dict[str, object]] | None
 
 
 class DatabricksReasoningSummary(TypedDict):
@@ -33,7 +35,7 @@ class DatabricksReasoningSummary(TypedDict):
 class DatabricksReasoningContent(TypedDict, total=False):
     type: Literal["reasoning"]
     summary: Required[list[DatabricksReasoningSummary]]
-    citations: list[dict[str, Any]] | None
+    citations: list[dict[str, object]] | None
 
 
 AllDatabricksContentListValues = DatabricksTextContent | DatabricksReasoningContent
@@ -57,6 +59,14 @@ class DatabricksMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[AllDatabricksContentValues]
     tool_calls: list[DatabricksTool] | None
+    reasoning_content: ReadOnly[str | None]
+    reasoning: ReadOnly[str | None]
+
+
+class DatabricksDelta(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[AllDatabricksContentValues | None]
+    reasoning_content: ReadOnly[str | None]
 
 
 class DatabricksChoice(TypedDict, total=False):
@@ -73,3 +83,4 @@ class DatabricksResponse(TypedDict):
     model: str
     choices: list[DatabricksChoice]
     usage: ChatCompletionUsageBlock
+    system_fingerprint: NotRequired[ReadOnly[str | None]]

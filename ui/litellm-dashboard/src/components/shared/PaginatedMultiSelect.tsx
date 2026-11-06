@@ -3,11 +3,14 @@
 import { Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import i18n from "@/i18n/i18n";
+
 import {
   Combobox,
   ComboboxChip,
   ComboboxChips,
   ComboboxChipsInput,
+  ComboboxClear,
   ComboboxContent,
   ComboboxEmpty,
   ComboboxItem,
@@ -21,7 +24,7 @@ import { usePaginatedCombobox } from "./usePaginatedCombobox";
 
 interface PaginatedMultiSelectProps {
   options: SearchSelectOption[];
-  value?: string[];
+  value?: readonly string[];
   onValueChange: (value: string[]) => void;
   onSearchChange: (query: string) => void;
   onLoadMore: () => void;
@@ -32,6 +35,7 @@ interface PaginatedMultiSelectProps {
   emptyText?: string;
   errorText?: string;
   loadingText?: string;
+  clearAllLabel?: string;
   disabled?: boolean;
   className?: string;
   inputId?: string;
@@ -48,10 +52,11 @@ export function PaginatedMultiSelect({
   hasNextPage = false,
   isLoading = false,
   isFetchingNextPage = false,
-  placeholder = "Search…",
-  emptyText = "No results",
+  placeholder = i18n.t("shared.paginatedMultiSelect.placeholder"),
+  emptyText = i18n.t("shared.paginatedMultiSelect.empty"),
   errorText,
-  loadingText = "Loading…",
+  loadingText = i18n.t("shared.paginatedMultiSelect.loading"),
+  clearAllLabel,
   disabled = false,
   className,
   inputId,
@@ -119,6 +124,7 @@ export function PaginatedMultiSelect({
           className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
           aria-label={placeholder}
         />
+        {clearAllLabel != null && value.length > 0 && <ComboboxClear aria-label={clearAllLabel} disabled={disabled} />}
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
         <ComboboxEmpty className={errorText == null ? undefined : "text-destructive"}>

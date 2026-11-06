@@ -93,7 +93,7 @@ def get_bedrock_pricing(url, providers):
         else:
             # General logic for other providers
             section = soup.find(
-                "h2", text=lambda t: t and provider.lower() in t.lower()
+                "h2", text=lambda t, needle=provider.lower(): t and needle in t.lower()
             )
             if not section:
                 pricing_data[provider] = "Provider section not found"

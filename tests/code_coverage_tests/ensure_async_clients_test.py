@@ -2,6 +2,12 @@ import ast
 import os
 
 ALLOWED_FILES = [
+    # Lens data traffic owns one pool per app lifespan, isolated from model traffic and closed on shutdown.
+    "../../litellm/tracing/remote.py",
+    "./litellm/tracing/remote.py",
+    # Only a guardrail check retry opens a client, on purpose to get a new connection, and closes it right after.
+    "../../litellm/proxy/guardrails/guardrail_hooks/generic_guardrail_api/generic_guardrail_api.py",
+    "./litellm/proxy/guardrails/guardrail_hooks/generic_guardrail_api/generic_guardrail_api.py",
     # local files
     "../../litellm/__init__.py",
     "../../litellm/llms/custom_httpx/http_handler.py",
@@ -11,7 +17,7 @@ ALLOWED_FILES = [
     "../../litellm/llms/base.py",
     "../../litellm/llms/custom_httpx/httpx_handler.py",
     "../../litellm/llms/openai/common_utils.py",
-    "../../litellm/experimental_mcp_client/client.py",
+    "../../litellm/mcp_client/client.py",
     # when running on ci/cd
     "./litellm/__init__.py",
     "./litellm/llms/custom_httpx/http_handler.py",
@@ -21,7 +27,7 @@ ALLOWED_FILES = [
     "./litellm/llms/base.py",
     "./litellm/llms/custom_httpx/httpx_handler.py",
     "./litellm/llms/openai/common_utils.py",
-    "./litellm/experimental_mcp_client/client.py",
+    "./litellm/mcp_client/client.py",
 ]
 
 warning_msg = "this is a serious violation that can impact latency. Creating Async clients per request can add +500ms per request"

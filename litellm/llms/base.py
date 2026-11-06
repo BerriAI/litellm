@@ -1,11 +1,12 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Union
 
 import httpx
 
 import litellm
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.utils import ModelResponse, TextCompletionResponse
 
@@ -19,7 +20,7 @@ class BaseLLM:
         response: httpx.Response,
         model_response: "ModelResponse",
         stream: bool,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         api_key: str,
         data: dict | str,
@@ -38,7 +39,7 @@ class BaseLLM:
         response: httpx.Response,
         model_response: "TextCompletionResponse",
         stream: bool,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         api_key: str,
         data: dict | str,
@@ -75,11 +76,17 @@ class BaseLLM:
         if hasattr(self, "_aclient_session"):
             await self._aclient_session.aclose()
 
-    def validate_environment(self, *args, **kwargs) -> Any | None:  # set up the environment required to run the model
+    def validate_environment(
+        self, *args, **kwargs
+    ) -> object | None:  # set up the environment required to run the model
         return None
 
-    def completion(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model completion calls
+    def completion(
+        self, *args, **kwargs
+    ) -> object | None:  # logic for parsing in - calling - parsing out model completion calls
         return None
 
-    def embedding(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(
+        self, *args, **kwargs
+    ) -> object | None:  # logic for parsing in - calling - parsing out model embedding calls
         return None

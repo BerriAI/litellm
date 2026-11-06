@@ -3,9 +3,10 @@
 
 import os
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -22,6 +23,18 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.utils import print_verbose
 
 API_BASE: Final = "https://api.braintrustdata.com/v1"
+
+
+class _BraintrustProjectBody(TypedDict):
+    id: ReadOnly[str]
+
+
+class _BraintrustProjectResponse(Protocol):
+    def json(self) -> _BraintrustProjectBody: ...
+
+
+def _project_id(response: _BraintrustProjectResponse) -> str:
+    return response.json()["id"]
 
 
 def get_utc_datetime():
@@ -80,8 +93,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
-            project_id: Final = project_dict["id"]
+            project_id: Final = _project_id(response)
             self._project_id_cache[project_name] = project_id
             return project_id
         except httpx.HTTPStatusError as e:
@@ -100,8 +112,7 @@ class BraintrustLogger(CustomLogger):
                 headers=self.headers,
                 json={"name": project_name},
             )
-            project_dict: Final = response.json()
-            project_id: Final = project_dict["id"]
+            project_id: Final = _project_id(response)
             self._project_id_cache[project_name] = project_id
             return project_id
         except httpx.HTTPStatusError as e:
@@ -112,18 +123,14 @@ class BraintrustLogger(CustomLogger):
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
-
-        self.default_project_id = project_dict["id"]
+        self.default_project_id = _project_id(project)
 
     def create_sync_default_project_and_experiment(self):
         project: Final = self.global_braintrust_sync_http_handler.post(
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
-        project_dict: Final = project.json()
-
-        self.default_project_id = project_dict["id"]
+        self.default_project_id = _project_id(project)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
@@ -139,13 +146,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}
@@ -264,13 +271,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
             litellm_params: Final = kwargs.get("litellm_params", {})
             dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}

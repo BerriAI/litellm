@@ -18,6 +18,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from e2e_config import ws_base_url
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from e2e_http import FileUploadForm, Headers, NoBody, Result, StreamingResponse
 from models import ChatMessage
@@ -34,7 +35,7 @@ class JsonSchema(BaseModel):
 
 
 class GeminiHeaders(Headers):
-    x_goog_api_key: str = Field(serialization_alias="x-goog-api-key")
+    x_goog_api_key: str = Field(serialization_alias="x-goog-api-key", repr=False)
     content_type: str = Field(
         default="application/json", serialization_alias="Content-Type"
     )
@@ -42,7 +43,7 @@ class GeminiHeaders(Headers):
 
 
 class AnthropicHeaders(Headers):
-    x_api_key: str = Field(serialization_alias="x-api-key")
+    x_api_key: str = Field(serialization_alias="x-api-key", repr=False)
     anthropic_version: str = Field(
         default="2023-06-01", serialization_alias="anthropic-version"
     )
@@ -56,7 +57,7 @@ class VertexHeaders(Headers):
     # Only the litellm virtual key; the /vertex_ai passthrough mints the Vertex token
     # from the proxy's own service account (the deployment marked use_in_pass_through),
     # so no upstream Authorization bearer is sent from the client.
-    x_litellm_api_key: str = Field(serialization_alias="x-litellm-api-key")
+    x_litellm_api_key: str = Field(serialization_alias="x-litellm-api-key", repr=False)
     content_type: str = Field(
         default="application/json", serialization_alias="Content-Type"
     )
@@ -168,6 +169,35 @@ def completed_responses_object(result: StreamingResponse) -> ResponsesObject | N
     return completed[-1] if completed else None
 
 
+class AnthropicMessageObject(BaseModel):
+    id: str
+
+
+class AnthropicStreamEvent(BaseModel):
+    """One SSE frame of a native Anthropic stream. Only `message_start` carries the
+    message, so it stays optional and the deltas validate as themselves."""
+
+    type: str
+    message: AnthropicMessageObject | None = None
+
+
+def anthropic_message_id(result: StreamingResponse) -> str | None:
+    """The `msg_...` id the caller was served, which is what the spend row is keyed by
+    on this route: off the `message_start` frame when streaming, off the body when not."""
+    if not result.is_streaming:
+        return AnthropicMessageObject.model_validate_json(result.body).id
+    events = (
+        AnthropicStreamEvent.model_validate_json(payload)
+        for payload in result.stream_events
+    )
+    started = tuple(
+        event.message
+        for event in events
+        if event.type == "message_start" and event.message is not None
+    )
+    return started[0].id if started else None
+
+
 class OpenAIResponsesBody(BaseModel):
     model: str
     input: str
@@ -217,6 +247,7 @@ class PassthroughClient:
 
     # ---- Gemini native passthrough (/gemini/v1beta/...) -----------------
 
+    @step("Send a Gemini generateContent request to {model} through /gemini")
     def gemini_generate(
         self,
         key: str,
@@ -234,6 +265,7 @@ class PassthroughClient:
             ),
         )
 
+    @step("Send a Gemini streamGenerateContent request to {model} through /gemini")
     def gemini_stream(
         self, key: str, model: str, text: str, *, tags: list[str] | None = None
     ) -> StreamingResponse:
@@ -249,6 +281,7 @@ class PassthroughClient:
 
     # ---- Vertex AI native passthrough (/vertex_ai/v1/projects/...) -------
 
+    @step("Send a Vertex AI generateContent request to {model} in {location} through /vertex_ai")
     def vertex_generate(
         self, key: str, project: str, location: str, model: str, text: str
     ) -> StreamingResponse:
@@ -266,6 +299,7 @@ class PassthroughClient:
 
     # ---- Anthropic native passthrough (/anthropic/v1/messages) ----------
 
+    @step("Send a /v1/messages request to {model} through /anthropic with streaming set to {stream}")
     def anthropic_message(
         self,
         key: str,
@@ -295,6 +329,7 @@ class PassthroughClient:
     # Relayed to OpenAI untouched, which is the whole point of the prefix: the
     # customer opts out of the gateway's managed-file handling here.
 
+    @step("Upload {filename} to /openai_passthrough/v1/files")
     def openai_passthrough_upload_file(
         self, key: str, *, content: bytes, filename: str
     ) -> Result[PassthroughFileObject]:
@@ -307,6 +342,7 @@ class PassthroughClient:
             response_type=PassthroughFileObject,
         )
 
+    @step("Delete the uploaded file through /openai_passthrough/v1/files")
     def openai_passthrough_delete_file(
         self, key: str, file_id: str
     ) -> Result[PassthroughFileDeleted]:
@@ -317,6 +353,7 @@ class PassthroughClient:
             response_type=PassthroughFileDeleted,
         )
 
+    @step("List batches from /openai_passthrough/v1/batches")
     def openai_passthrough_list_batches(self, key: str) -> Result[PassthroughBatchList]:
         return self.proxy.transport.get(
             "/openai_passthrough/v1/batches",
@@ -331,6 +368,7 @@ class PassthroughClient:
     # budgets against this traffic, so a 200 that logs no spend is money the
     # gateway never sees.
 
+    @step("Send a /v1/responses request to {model} through /openai_passthrough with streaming set to {stream}")
     def openai_passthrough_responses(
         self, key: str, model: str, text: str, *, stream: bool = False
     ) -> StreamingResponse:
@@ -341,6 +379,7 @@ class PassthroughClient:
             stream=stream,
         )
 
+    @step('Send a /v1/embeddings request to {model} through /openai_passthrough for "{text}"')
     def openai_passthrough_embed(
         self, key: str, model: str, text: str
     ) -> StreamingResponse:
@@ -350,6 +389,7 @@ class PassthroughClient:
             json=OpenAIEmbeddingBody(model=model, input=text),
         )
 
+    @step("Send a /v1/chat/completions request to {model} through /openai")
     def openai_chat(
         self, key: str, model: str, text: str, *, max_completion_tokens: int = 64
     ) -> StreamingResponse:
@@ -368,6 +408,7 @@ class PassthroughClient:
     # The same prefixes over an upgrade instead of a POST, for the provider APIs
     # that only speak websocket (realtime, responses.connect).
 
+    @step("Open a websocket to {path} and wait for its first event")
     def openai_passthrough_websocket(
         self,
         key: str,

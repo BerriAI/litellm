@@ -12,6 +12,8 @@ export {
   type DataTableSortVariant,
   type DataTableSortField,
 } from "./DataTableSortHeader";
+export { usePersistedColumnVisibility } from "./usePersistedColumnVisibility";
+export { useUrlTableState, type UrlTableState, type UrlTableStateOptions } from "./useUrlTableState";
 export type { DataTablePaginationProps } from "./DataTablePagination";
 export type {
   ColumnPinnedSide,

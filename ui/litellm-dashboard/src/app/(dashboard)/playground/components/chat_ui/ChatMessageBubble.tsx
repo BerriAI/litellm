@@ -1,5 +1,6 @@
 import { Bot, User } from "lucide-react";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -40,26 +41,25 @@ function ChatMessageBubble({
   codeInterpreterResult,
   accessToken,
 }: ChatMessageBubbleProps) {
+  const { t } = useTranslation();
   const syntaxTheme = useSyntaxTheme(coy);
   const isUser = message.role === "user";
 
   return (
     <div className={`mb-4 min-w-0 ${isUser ? "text-right" : "text-left"}`}>
       <div
-        className="inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg p-3 shadow-xs sm:max-w-[85%] sm:px-4"
-        style={{
-          backgroundColor: isUser ? "#f0f8ff" : "#ffffff",
-          border: isUser ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-          textAlign: "left",
-        }}
+        data-testid="message-surface"
+        className={`inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg border p-3 text-left text-card-foreground shadow-xs sm:max-w-[85%] sm:px-4 ${
+          isUser ? "border-info/20 bg-info/10" : "border-border bg-card"
+        }`}
       >
         {/* Header: role icon + name + model badge */}
         <div className="mb-1.5 flex min-w-0 items-center gap-2">
           <div
-            className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-            style={{
-              backgroundColor: isUser ? "#e6f0fa" : "#f5f5f5",
-            }}
+            data-testid="message-avatar"
+            className={`flex items-center justify-center w-6 h-6 rounded-full mr-1 ${
+              isUser ? "bg-info/20" : "bg-muted"
+            }`}
           >
             {isUser ? (
               <User className="size-3 text-info" aria-hidden="true" />
@@ -119,7 +119,7 @@ function ChatMessageBubble({
           {message.isImage ? (
             <img
               src={typeof message.content === "string" ? message.content : ""}
-              alt="Generated image"
+              alt={t("playground.chatUi.chatMessageBubble.generatedImage")}
               className="max-w-full rounded-md border border-border shadow-xs"
               style={{ maxHeight: "500px" }}
             />
@@ -177,7 +177,7 @@ function ChatMessageBubble({
                 <div className="mt-3">
                   <img
                     src={message.image.url}
-                    alt="Generated image"
+                    alt={t("playground.chatUi.chatMessageBubble.generatedImage")}
                     className="max-w-full rounded-md border border-border shadow-xs"
                     style={{ maxHeight: "500px" }}
                   />

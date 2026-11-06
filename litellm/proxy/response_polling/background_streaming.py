@@ -10,14 +10,16 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final, TypedDict, cast
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from time import perf_counter
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
-from typing_extensions import ReadOnly
+from starlette.types import Message
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
@@ -29,28 +31,88 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-class _StreamContentPart(TypedDict, total=False):
-    text: ReadOnly[str]
+_JsonDict: TypeAlias = dict[str, object]
+_JsonList: TypeAlias = list[object]
 
 
-class _StreamOutputItem(TypedDict, total=False):
+class _OutputItem(TypedDict, total=False):
     id: ReadOnly[str]
-    content: ReadOnly[Sequence[_StreamContentPart | None]]
+    content: ReadOnly[Sequence[object]]
+
+
+class _TerminalResponse(TypedDict, total=False):
+    status: ReadOnly[ResponsesAPIStatus]
+    error: ReadOnly[_JsonDict]
+    usage: ReadOnly[_JsonDict]
+    reasoning: ReadOnly[_JsonDict]
+    tool_choice: ReadOnly[object]
+    tools: ReadOnly[_JsonList]
+    model: ReadOnly[str]
+    instructions: ReadOnly[str]
+    temperature: ReadOnly[float]
+    top_p: ReadOnly[float]
+    max_output_tokens: ReadOnly[int]
+    previous_response_id: ReadOnly[str]
+    text: ReadOnly[_JsonDict]
+    truncation: ReadOnly[str]
+    parallel_tool_calls: ReadOnly[bool]
+    user: ReadOnly[str]
+    store: ReadOnly[bool]
+    incomplete_details: ReadOnly[_JsonDict]
+    output: ReadOnly[Sequence[_OutputItem]]
+
+
+class _StreamEvent(TypedDict, total=False):
+    type: ReadOnly[str]
+    item: ReadOnly[_OutputItem]
+    item_id: ReadOnly[str]
+    content_index: ReadOnly[int]
+    delta: ReadOnly[str]
+    part: ReadOnly[object]
+    response: ReadOnly[_TerminalResponse]
+
+
+class _StreamEventParser:
+    parse: Callable[[str], _StreamEvent] = staticmethod(json.loads)
+
+
+@runtime_checkable
+class _StreamsBody(Protocol):
+    @property
+    def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
+
+
+def _sse_frame_data(frame: str) -> str | None:
+    return next((line[6:].strip() for line in split_sse_lines(frame) if line.startswith("data: ")), None)
+
+
+async def _never_receive() -> Message:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+def detach_request_from_client(request: Request) -> Request:
+    """Same scope (headers, parsed body, auth) but a receive() that never yields http.disconnect.
+
+    The polling client closes its connection right after getting the polling id, so the
+    upstream call must not be cancelled by the client-disconnect guards.
+    """
+    return Request(request.scope, _never_receive)
 
 
 async def background_streaming_task(
     polling_id: str,
-    data,
+    data: dict[str, object],
     polling_handler: ResponsePollingHandler,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    general_settings,
+    general_settings: dict[str, object],
     llm_router: "Router | None",
     proxy_config: "ProxyConfig",
     proxy_logging_obj: "ProxyLogging",
-    select_data_generator,
-    user_model,
+    select_data_generator: Callable[..., object] | None,
+    user_model: str | None,
     user_temperature: float | None,
     user_request_timeout: float | None,
     user_max_tokens: int | None,
@@ -66,6 +128,16 @@ async def background_streaming_task(
     Processes streaming events and builds Response object:
     https://platform.openai.com/docs/api-reference/responses/object
     """
+
+    started_at: Final = perf_counter()
+    first_token_at: float | None = None  # rebind-ok: first content event closes the TTFT interval
+    finished_at: float | None = None  # rebind-ok: terminal event closes the execution interval
+
+    def timing_snapshot() -> Mapping[str, float]:
+        return {
+            **({"time_to_first_token_ms": (first_token_at - started_at) * 1000} if first_token_at is not None else {}),
+            **({"total_latency_ms": (finished_at - started_at) * 1000} if finished_at is not None else {}),
+        }
 
     try:
         verbose_proxy_logger.info("Starting background streaming for %s", polling_id)
@@ -86,8 +158,8 @@ async def background_streaming_task(
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response: Final[StreamingResponse] = await processor.base_process_llm_request(
-            request=request,
+        response: Final = await processor.base_process_llm_request(
+            request=detach_request_from_client(request),
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
             route_type="aresponses",
@@ -108,9 +180,8 @@ async def background_streaming_task(
 
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
-        output_items: Final[dict[str, _StreamOutputItem]] = {}  # Track output items by ID
-        # Track accumulated text deltas by (item_id, content_index)
-        accumulated_text: Final[dict[tuple[str, int], str]] = {}
+        output_items: Final = dict[str, _OutputItem]()
+        accumulated_text: Final = dict[tuple[str, int], str]()
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
@@ -131,7 +202,7 @@ async def background_streaming_task(
         incomplete_details_data = None
 
         state_dirty = False  # Track if state needs to be synced
-        last_update_time = asyncio.get_event_loop().time()
+        last_update_time = perf_counter()
         UPDATE_INTERVAL: Final = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
@@ -139,7 +210,7 @@ async def background_streaming_task(
             None  # Will be set by response.completed/failed/incomplete/cancelled
         )
         terminal_error = None
-        _event_to_status: Final = {
+        _event_to_status: Final[Mapping[str, ResponsesAPIStatus]] = {
             "response.completed": "completed",
             "response.failed": "failed",
             "response.incomplete": "incomplete",
@@ -150,38 +221,52 @@ async def background_streaming_task(
             """Flush accumulated state to Redis if interval elapsed or forced"""
             nonlocal state_dirty, last_update_time
 
-            current_time: Final = asyncio.get_event_loop().time()
+            current_time: Final = perf_counter()
             if state_dirty and (force or (current_time - last_update_time) >= UPDATE_INTERVAL):
                 # Convert output_items dict to list for update
                 output_list: Final = list(output_items.values())
                 await polling_handler.update_state(
                     polling_id=polling_id,
                     output=output_list,
+                    timing=timing_snapshot(),
                 )
                 state_dirty = False
                 last_update_time = current_time
 
         # Handle StreamingResponse
-        if not hasattr(response, "body_iterator"):
+        if not isinstance(response, _StreamsBody):
             verbose_proxy_logger.warning(
                 "background_streaming_task: response for %s has no body_iterator; this may indicate a misconfiguration or provider error",
                 polling_id,
             )
 
-        if hasattr(response, "body_iterator"):
+        if isinstance(response, _StreamsBody):
             async for chunk in response.body_iterator:
                 # Parse chunk
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
 
-                if isinstance(chunk, str) and chunk.startswith("data: "):
-                    chunk_data = chunk[6:].strip()
+                if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
                     if chunk_data == "[DONE]":
                         break
 
                     try:
-                        event = json.loads(chunk_data)
+                        event: _StreamEvent = _StreamEventParser.parse(chunk_data)
                         event_type = event.get("type", "")
+
+                        if (
+                            first_token_at is None
+                            and event_type
+                            in (
+                                "response.output_text.delta",
+                                "response.reasoning_text.delta",
+                                "response.reasoning_summary_text.delta",
+                                "response.reasoning.delta",
+                            )
+                            and event.get("delta")
+                        ):
+                            first_token_at = perf_counter()
+                            state_dirty = True
 
                         # Process different event types based on OpenAI streaming spec
                         if event_type == "response.output_item.added":
@@ -199,19 +284,18 @@ async def background_streaming_task(
 
                             if item_id and item_id in output_items:
                                 # Update the output item with new content
-                                current_item = output_items[item_id]
-                                appended_item: _StreamOutputItem = {
-                                    **current_item,
-                                    "content": (*current_item.get("content", ()), content_part),
+                                added_item = output_items[item_id]
+                                output_items[item_id] = {
+                                    **added_item,
+                                    "content": (*added_item.get("content", ()), content_part),
                                 }
-                                output_items[item_id] = appended_item
                                 state_dirty = True
 
                         elif event_type == "response.output_text.delta":
                             # Text delta - accumulate text content
                             # https://platform.openai.com/docs/api-reference/responses-streaming/response-text-delta
                             item_id = event.get("item_id")
-                            content_index: int = event.get("content_index", 0)
+                            content_index = event.get("content_index", 0)
                             delta = event.get("delta", "")
 
                             if item_id and item_id in output_items:
@@ -222,24 +306,13 @@ async def background_streaming_task(
                                 accumulated_text[key] += delta
 
                                 # Update the content in output_items
-                                current_item = output_items[item_id]
-                                content_list: Sequence[_StreamContentPart | None] = current_item.get("content", ())
-                                if content_index < len(content_list):
-                                    # Update existing content part with accumulated text
-                                    content_entry = content_list[content_index]
-                                    if isinstance(content_entry, dict):
-                                        delta_part: _StreamContentPart = {
-                                            **content_entry,
-                                            "text": accumulated_text[key],
-                                        }
-                                        delta_item: _StreamOutputItem = {
-                                            **current_item,
-                                            "content": tuple(
-                                                delta_part if index == content_index else entry
-                                                for index, entry in enumerate(content_list)
-                                            ),
-                                        }
-                                        output_items[item_id] = delta_item
+                                delta_item = output_items[item_id]
+                                if "content" in delta_item:
+                                    content_list = delta_item["content"]
+                                    if content_index < len(content_list):
+                                        content_entry = content_list[content_index]
+                                        if isinstance(content_entry, dict):
+                                            content_entry["text"] = accumulated_text[key]
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":
@@ -250,17 +323,17 @@ async def background_streaming_task(
 
                             if item_id and item_id in output_items:
                                 # Update with final content from event
-                                current_item = output_items[item_id]
-                                content_list = current_item.get("content", ())
-                                if content_index < len(content_list):
-                                    finalized_item: _StreamOutputItem = {
-                                        **current_item,
-                                        "content": tuple(
-                                            content_part if index == content_index else entry
-                                            for index, entry in enumerate(content_list)
-                                        ),
-                                    }
-                                    output_items[item_id] = finalized_item
+                                done_item = output_items[item_id]
+                                if "content" in done_item:
+                                    content_list = done_item["content"]
+                                    if content_index < len(content_list):
+                                        output_items[item_id] = {
+                                            **done_item,
+                                            "content": tuple(
+                                                content_part if part_index == content_index else existing_part
+                                                for part_index, existing_part in enumerate(content_list)
+                                            ),
+                                        }
                                 state_dirty = True
 
                         elif event_type == "response.output_item.done":
@@ -287,13 +360,11 @@ async def background_streaming_task(
                         ):
                             # Terminal event - extract all ResponsesAPIResponse fields
                             # https://platform.openai.com/docs/api-reference/responses-streaming
+                            finished_at = perf_counter()
                             response_data = event.get("response", {})
-                            terminal_status = cast(
-                                ResponsesAPIStatus,
-                                response_data.get(
-                                    "status",
-                                    _event_to_status.get(event_type, "completed"),
-                                ),
+                            terminal_status = response_data.get(
+                                "status",
+                                _event_to_status.get(event_type, "completed"),
                             )
 
                             # Extract error for failed and incomplete responses
@@ -340,10 +411,13 @@ async def background_streaming_task(
 
         # Use the terminal status from the stream, default to "completed"
         final_status: Final = terminal_status or "completed"
+        if finished_at is None:
+            finished_at = perf_counter()  # rebind-ok: close the interval when the stream has no terminal event
 
         await polling_handler.update_state(
             polling_id=polling_id,
             status=final_status,
+            timing=timing_snapshot(),
             usage=usage_data,
             error=terminal_error,
             reasoning=reasoning_data,
@@ -373,6 +447,7 @@ async def background_streaming_task(
         )
 
     except Exception as e:
+        finished_at = perf_counter()  # rebind-ok: capture execution time at failure
         verbose_proxy_logger.error("Error in background streaming task for %s: %s", polling_id, e)
         import traceback
 
@@ -381,6 +456,7 @@ async def background_streaming_task(
         await polling_handler.update_state(
             polling_id=polling_id,
             status="failed",
+            timing=timing_snapshot(),
             error={
                 "type": "internal_error",
                 "message": str(e),

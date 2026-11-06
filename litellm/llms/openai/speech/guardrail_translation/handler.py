@@ -5,7 +5,8 @@ This module provides guardrail translation support for OpenAI's text-to-speech e
 The handler processes the 'input' text parameter (output is audio, so no text to guardrail).
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -13,7 +14,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class OpenAITextToSpeechHandler(BaseTranslation):
@@ -31,8 +34,8 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-    ) -> Any:
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> Mapping[str, object]:
         """
         Process input text by applying guardrails.
 
@@ -80,10 +83,10 @@ class OpenAITextToSpeechHandler(BaseTranslation):
         self,
         response: "HttpxBinaryResponseContent",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "HttpxBinaryResponseContent":
         """
         Process output - not applicable for text-to-speech.
 

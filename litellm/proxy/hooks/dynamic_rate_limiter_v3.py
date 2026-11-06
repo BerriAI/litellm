@@ -11,19 +11,25 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import ModelResponse, Router
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+    response_has_hidden_params,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )
@@ -32,8 +38,9 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
@@ -53,6 +60,10 @@ def _get_priority_settings() -> "PriorityReservationSettings":
 
         return PriorityReservationSettings()
     return settings
+
+
+def _is_latin1_encodable(value: object) -> bool:
+    return all(ord(char) < 256 for char in str(value))
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -81,9 +92,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
+        self.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
 
-    def update_variables(self, llm_router: Router):
+    def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
 
     def _get_saturation_check_cache_ttl(self) -> int:
@@ -92,8 +103,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     async def _get_saturation_value_from_cache(
         self,
-        counter_key: str,
-    ) -> str | None:
+        counter: RateLimitCounter,
+    ) -> int | float | str | None:
         """
         Get saturation value with configurable local cache TTL.
 
@@ -101,19 +112,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         TTL is configurable via litellm.priority_reservation_settings.saturation_check_cache_ttl
 
         Args:
-            counter_key: The cache key for the saturation counter
+            counter: The saturation counter
 
         Returns:
-            Counter value as string, or None if not found
+            Counter value, or None if not found
         """
-        local_cache_ttl: Final = self._get_saturation_check_cache_ttl()
-
-        return await self.internal_usage_cache.async_get_cache(
-            key=counter_key,
-            litellm_parent_otel_span=None,
-            local_only=False,
-            ttl=local_cache_ttl,
+        value: Final = await self.v3_limiter.rate_limits.get(
+            counter, backfill_ttl=self._get_saturation_check_cache_ttl()
         )
+        return None if isinstance(value, dict) else value
 
     def _get_priority_weight(self, priority: str | None, model_info: ModelGroupInfo | None = None) -> float:
         """Get the weight for a given priority from litellm.priority_reservation"""
@@ -123,7 +130,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         elif priority is not None and litellm.priority_reservation is not None:
             if os.getenv("LITELLM_LICENSE", None) is None:
                 verbose_proxy_logger.error(
-                    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
+                    "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise."
                 )
             else:
                 value: Final = litellm.priority_reservation[priority]
@@ -240,14 +247,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Query RPM saturation - always read from Redis for multi-node consistency
             if model_group_info.rpm is not None and model_group_info.rpm > 0:
                 # Use v3 limiter's key format: {key:value}:rate_limit_type
-                counter_key = self.v3_limiter.create_rate_limit_keys(
-                    key="model_saturation_check",
-                    value=model,
-                    rate_limit_type="requests",
-                )
-
                 # Query Redis directly for current counter value (skip local cache for consistency)
-                counter_value = await self._get_saturation_value_from_cache(counter_key=counter_key)
+                counter_value = await self._get_saturation_value_from_cache(
+                    RateLimitScope("model_saturation_check", model).counter("requests")
+                )
 
                 if counter_value is not None:
                     current_requests: Final = int(counter_value)
@@ -260,13 +263,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Query TPM saturation
             if model_group_info.tpm is not None and model_group_info.tpm > 0:
-                counter_key = self.v3_limiter.create_rate_limit_keys(
-                    key="model_saturation_check",
-                    value=model,
-                    rate_limit_type="tokens",
+                counter_value = await self._get_saturation_value_from_cache(
+                    RateLimitScope("model_saturation_check", model).counter("tokens")
                 )
-
-                counter_value = await self._get_saturation_value_from_cache(counter_key=counter_key)
 
                 if counter_value is not None:
                     current_tokens: Final = float(counter_value)
@@ -306,7 +305,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             return descriptors
 
         # Get model group info
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             return descriptors
 
@@ -407,7 +406,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Raises:
             HTTPException: If any limit is exceeded
         """
-        import json
 
         saturation_threshold: Final = _get_priority_settings().saturation_threshold
         should_enforce_priority: Final = saturation >= saturation_threshold
@@ -454,9 +452,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        verbose_proxy_logger.debug(
-            "Atomic check+increment response: %s", json.dumps(atomic_response, indent=2, default=list)
-        )
+        verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
@@ -561,6 +557,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
 
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -610,7 +607,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
 
         # Get model configuration
-        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
         if model_group_info is None:
             verbose_proxy_logger.debug("No model group info for %s, allowing request", model)
             return None
@@ -648,7 +645,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return None
 
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
+    ) -> LLMResponseTypes:
         """
         Post-call hook to add rate limit headers to response.
         Leverages v3 limiter's post-call hook functionality.
@@ -659,21 +659,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
 
-            # Add additional priority-specific headers
-            if isinstance(response, ModelResponse):
+            if response_has_hidden_params(response):
                 priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
-
-                # Get existing additional headers
-                additional_headers: Final = getattr(response, "_hidden_params", {}).get("additional_headers", {}) or {}
-
-                # Add priority information
-                additional_headers["x-litellm-priority"] = priority or "default"
+                additional_headers: Final = ensure_response_additional_headers(response)
+                priority_header: Final = priority or "default"
+                if _is_latin1_encodable(priority_header):
+                    additional_headers["x-litellm-priority"] = priority_header
+                else:
+                    verbose_proxy_logger.debug(
+                        "Skipping x-litellm-priority header: priority %r is not Latin-1 encodable", priority
+                    )
                 additional_headers["x-litellm-rate-limiter-version"] = "v3"
-
-                # Update response
-                if not hasattr(response, "_hidden_params"):
-                    response._hidden_params = {}
-                response._hidden_params["additional_headers"] = additional_headers
 
             return response
 
@@ -681,7 +677,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Update token usage for priority-based rate limiting after successful API calls.
 
@@ -690,18 +687,17 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - priority_model: Priority-specific token tracking
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
-        from litellm.types.caching import RedisPipelineIncrementOperation
         from litellm.types.utils import Usage
 
         try:
             verbose_proxy_logger.debug("INSIDE dynamic rate limiter ASYNC SUCCESS LOGGING")
 
-            litellm_parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
 
             # Get metadata from standard_logging_object
             standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
@@ -734,21 +730,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if total_tokens == 0:
                 return
 
-            # Create pipeline operations for token increments
-            pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
-
             # Model-wide token tracking (model_saturation_check)
-            model_token_key: Final = self.v3_limiter.create_rate_limit_keys(
-                key="model_saturation_check",
-                value=model_group,
-                rate_limit_type="tokens",
-            )
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=model_token_key,
-                    increment_value=total_tokens,
-                    ttl=self.v3_limiter.window_size,
-                )
+            model_tokens: Final = CounterIncrement(
+                counter=RateLimitScope("model_saturation_check", model_group).counter("tokens"),
+                amount=total_tokens,
+                ttl=self.v3_limiter.window_size,
             )
 
             # Priority-specific token tracking (priority_model)
@@ -764,17 +750,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else:
                 priority_key = f"{model_group}:default_pool"
 
-            priority_token_key: Final = self.v3_limiter.create_rate_limit_keys(
-                key="priority_model",
-                value=priority_key,
-                rate_limit_type="tokens",
-            )
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=priority_token_key,
-                    increment_value=total_tokens,
+            pipeline_operations: Final = (
+                model_tokens,
+                CounterIncrement(
+                    counter=RateLimitScope("priority_model", priority_key).counter("tokens"),
+                    amount=total_tokens,
                     ttl=self.v3_limiter.window_size,
-                )
+                ),
             )
 
             # Execute token increments with TTL preservation
@@ -796,3 +778,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in dynamic rate limiter success event: %s", e)
+
+
+PROXY_DynamicRateLimitHandlerV3: Final = _PROXY_DynamicRateLimitHandlerV3

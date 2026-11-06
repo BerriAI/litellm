@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CheckIcon, ClipboardIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -11,6 +12,7 @@ interface CodeBlockProps {
 }
 
 const CodeBlock = ({ code, language }: CodeBlockProps) => {
+  const { t } = useTranslation();
   const syntaxTheme = useSyntaxTheme(oneLight);
   const [copied, setCopied] = useState(false);
   const copyToClipboard = () => {
@@ -20,11 +22,11 @@ const CodeBlock = ({ code, language }: CodeBlockProps) => {
   };
 
   return (
-    <div className="relative rounded-lg border border-border overflow-hidden">
+    <div className="relative rounded-lg border border-border bg-muted overflow-hidden">
       <button
         onClick={copyToClipboard}
-        className="absolute top-3 right-3 p-2 rounded-md bg-muted hover:bg-accent text-muted-foreground z-10"
-        aria-label="Copy code"
+        className="absolute top-3 right-3 p-2 rounded-md border border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground z-raised"
+        aria-label={t("codeBlock.copyCode")}
       >
         {copied ? <CheckIcon size={16} /> : <ClipboardIcon size={16} />}
       </button>
@@ -36,8 +38,9 @@ const CodeBlock = ({ code, language }: CodeBlockProps) => {
           padding: "1.5rem",
           borderRadius: "0.5rem",
           fontSize: "0.9rem",
-          backgroundColor: "#fafafa",
+          background: "transparent",
         }}
+        codeTagProps={{ style: { background: "transparent" } }}
         showLineNumbers
       >
         {code}

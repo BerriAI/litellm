@@ -1,21 +1,14 @@
 import { useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { Info, UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useForm } from "react-hook-form";
 import { userFilterUICall } from "@/components/networking";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { Button } from "@/components/ui/button";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -40,8 +33,8 @@ interface Role {
 }
 
 interface FormValues {
-  user_email: string | undefined;
-  user_id: string | undefined;
+  user_email: string | null | undefined;
+  user_id: string | null | undefined;
   role: string;
 }
 
@@ -56,25 +49,27 @@ interface UserSearchModalProps {
   teamId?: string;
 }
 
+const defaultRoles = (t: TFunction): Role[] => [
+  { label: "admin", value: "admin", description: t("userSearchModal.defaultRoles.adminDescription") },
+  { label: "user", value: "user", description: t("userSearchModal.defaultRoles.userDescription") },
+];
+
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
   isVisible,
   onCancel,
   onSubmit,
   accessToken,
-  title = "Add Team Member",
-  roles = [
-    {
-      label: "admin",
-      value: "admin",
-      description: "Admin role. Can create team keys, add members, and manage settings.",
-    },
-    { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
-  ],
+  title,
+  roles,
   defaultRole = "user",
   teamId,
 }) => {
+  const { t } = useTranslation();
+  const roleOptions = roles ?? defaultRoles(t);
   const emptyValues: FormValues = { user_email: undefined, user_id: undefined, role: defaultRole };
   const form = useForm<FormValues>({ defaultValues: emptyValues });
+  const selectedUserId = form.watch("user_id");
+  const selectedUserEmail = form.watch("user_email");
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
@@ -119,14 +114,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     }
   };
 
-  const debouncedSearch = useDebouncedCallback(
-    (text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName),
-    { wait: DEBOUNCE_WAIT_MS },
-  );
-
   const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {
     setSelectedField(fieldName);
-    debouncedSearch(value, fieldName);
+    void fetchUsers(value, fieldName);
   };
 
   const handleSelect = (option: UserOption | null): void => {
@@ -154,54 +144,40 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     if (event.key === "Enter") event.preventDefault();
   };
 
-  const optionsFor = (fieldName: "user_email" | "user_id", value: string | undefined): UserOption[] => {
-    const visible = selectedField === fieldName ? userOptions : [];
-    if (value == null || value === "" || visible.some((option) => option.value === value)) return visible;
-    return [{ label: value, value, user: null }, ...visible];
-  };
-
   const renderUserSearch = (
     fieldName: "user_email" | "user_id",
     placeholder: string,
-    controlProps: { id: string; value: string | undefined; onChange: (value: string | undefined) => void },
+    controlProps: {
+      id: string;
+      value: string | null | undefined;
+      onChange: (value: string | null | undefined) => void;
+    },
     testId?: string,
   ) => {
-    const items = optionsFor(fieldName, controlProps.value);
-    const selected = items.find((option) => option.value === controlProps.value) ?? null;
+    const items = selectedField === fieldName ? userOptions : [];
+    const handleValueChange = (value: string | null) => {
+      if (value === null) {
+        form.setValue("user_email", null);
+        form.setValue("user_id", null);
+        return;
+      }
+      controlProps.onChange(value);
+      handleSelect(items.find((option) => option.value === value) ?? null);
+    };
     return (
-      <div data-testid={testId}>
-        <Combobox
-          items={items}
-          value={selected}
-          // @ts-expect-error TS2322 -- Combobox.Root narrows autoHighlight to boolean; the AriaCombobox it wraps
-          // accepts "always", the only value that highlights a list this component filters server-side
+      <div data-testid={testId} onKeyDown={swallowEnter}>
+        <PaginatedSearchSelect
+          options={items}
+          value={controlProps.value}
+          onValueChange={handleValueChange}
+          onSearchChange={(query: string) => handleSearch(query, fieldName)}
           autoHighlight="always"
-          filter={null}
-          onValueChange={(option: UserOption | null) => {
-            controlProps.onChange(option?.value);
-            handleSelect(option);
-          }}
-          onInputValueChange={(text: string) => handleSearch(text, fieldName)}
-          isItemEqualToValue={(a: UserOption, b: UserOption) => a.value === b.value}
-          itemToStringLabel={(option: UserOption) => option.label}
-        >
-          <ComboboxInput
-            id={controlProps.id}
-            placeholder={placeholder}
-            showClear={selected !== null}
-            onKeyDown={swallowEnter}
-          />
-          <ComboboxContent>
-            <ComboboxEmpty>{loading ? "Loading..." : "No results"}</ComboboxEmpty>
-            <ComboboxList>
-              {(option: UserOption) => (
-                <ComboboxItem key={option.value} value={option}>
-                  {option.label}
-                </ComboboxItem>
-              )}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
+          isLoading={loading}
+          placeholder={placeholder}
+          emptyText={t("userSearchModal.search.noResults")}
+          loadingText={t("userSearchModal.search.loading")}
+          inputId={controlProps.id}
+        />
       </div>
     );
   };
@@ -210,39 +186,43 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal={isSubmitting}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>{title ?? t("userSearchModal.defaultTitle")}</DialogTitle>
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
             <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
               <Info />
-              <AlertTitle>
-                Search selects from users that already exist. To add someone new, ask a proxy admin to create their
-                account first.
-              </AlertTitle>
+              <AlertTitle>{t("userSearchModal.existingUsersNotice")}</AlertTitle>
             </Alert>
 
             <FieldGroup>
-              <FormField control={form.control} name="user_email" label="Email">
+              <FormField control={form.control} name="user_email" label={t("userSearchModal.fields.email")}>
                 {({ id, value, onChange }) =>
-                  renderUserSearch("user_email", "Search by email", { id, value, onChange }, "member-email-search")
+                  renderUserSearch(
+                    "user_email",
+                    t("userSearchModal.fields.emailPlaceholder"),
+                    { id, value, onChange },
+                    "member-email-search",
+                  )
                 }
               </FormField>
 
-              <div className="text-center">OR</div>
+              <div className="text-center">{t("userSearchModal.fields.or")}</div>
 
-              <FormField control={form.control} name="user_id" label="User ID">
-                {({ id, value, onChange }) => renderUserSearch("user_id", "Search by user ID", { id, value, onChange })}
+              <FormField control={form.control} name="user_id" label={t("userSearchModal.fields.userId")}>
+                {({ id, value, onChange }) =>
+                  renderUserSearch("user_id", t("userSearchModal.fields.userIdPlaceholder"), { id, value, onChange })
+                }
               </FormField>
 
-              <FormField control={form.control} name="role" label="Member Role">
+              <FormField control={form.control} name="role" label={t("userSearchModal.fields.role")}>
                 {({ id, value, onChange }) => (
-                  <Select items={roles} value={value} onValueChange={(next) => onChange(next as string)}>
+                  <Select items={roleOptions} value={value} onValueChange={(next) => onChange(next as string)}>
                     <SelectTrigger id={id}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {roles.map((role) => (
+                      {roleOptions.map((role) => (
                         <SelectItem key={role.value} value={role.value}>
                           <Tooltip>
                             <TooltipTrigger
@@ -264,9 +244,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             </FieldGroup>
 
             <div className="mt-4 text-right">
-              <Button type="submit" disabled={isSubmitting}>
+              <Button type="submit" disabled={isSubmitting || (!selectedUserId && !selectedUserEmail)}>
                 {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserPlus />}
-                {isSubmitting ? "Adding..." : "Add Member"}
+                {isSubmitting ? t("userSearchModal.submit.adding") : t("userSearchModal.submit.add")}
               </Button>
             </div>
           </form>

@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { mcpAllowedToolsFor, mcpServersForIdentifier } from "../mcp_server_management/effectiveMcpServers";
+import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
+  inheritedMcpServers?: InheritedGrant[];
   accessToken?: string | null;
 }
 
@@ -19,8 +23,10 @@ export function MCPServerPermissions({
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
+  inheritedMcpServers = [],
   accessToken,
 }: MCPServerPermissionsProps) {
+  const { t } = useTranslation();
   const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
   const [toolsetDetails, setToolsetDetails] = useState<MCPToolset[]>([]);
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
@@ -50,10 +56,16 @@ export function MCPServerPermissions({
     });
   };
 
+  const directServerIds = mcpServers.filter(
+    (server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL,
+  );
+  const inheritedOnlyServers = inheritedMcpServers.filter((grant) => !mcpServers.includes(grant.id));
+  const serverIdCount = directServerIds.length + inheritedOnlyServers.length;
+
   // Fetch MCP server details when component mounts
   useEffect(() => {
     const fetchMCPServerDetails = async () => {
-      if (accessToken && mcpServers.length > 0) {
+      if (accessToken && serverIdCount > 0) {
         try {
           const response = await fetchMCPServers(accessToken);
           if (response && Array.isArray(response)) {
@@ -67,7 +79,7 @@ export function MCPServerPermissions({
       }
     };
     fetchMCPServerDetails();
-  }, [accessToken, mcpServers.length]);
+  }, [accessToken, serverIdCount]);
 
   // Fetch toolset details
   useEffect(() => {
@@ -85,25 +97,43 @@ export function MCPServerPermissions({
     fetchToolsets();
   }, [accessToken, mcpToolsets.length]);
 
-  // Function to get display name for MCP server
-  const getMCPServerDisplayName = (serverId: string) => {
-    const serverDetail = mcpServerDetails.find((server) => server.server_id === serverId);
+  // A grant may name a server by id, name or alias, resolved the way the backend resolves it.
+  const getMCPServerDisplayName = (serverIdentifier: string) => {
+    const [serverDetail] = mcpServersForIdentifier(mcpServerDetails, serverIdentifier);
     if (serverDetail) {
+      const label = serverDetail.alias || serverDetail.server_name || serverDetail.server_id;
+      const serverId = serverDetail.server_id;
       const truncatedId = serverId.length > 7 ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}` : serverId;
-      return `${serverDetail.alias || serverDetail.server_name || serverId} (${truncatedId})`;
+      return `${label} (${truncatedId})`;
     }
-    return serverId;
+    return serverIdentifier;
+  };
+
+  // The allowlist may be keyed by a different identifier than the grant names the server by, and
+  // several equivalent keys may each carry part of it; the backend enforces their union.
+  const getToolPermissionsFor = (serverIdentifier: string): readonly string[] | undefined => {
+    const [serverDetail] = mcpServersForIdentifier(mcpServerDetails, serverIdentifier);
+    if (!serverDetail) {
+      return mcpToolPermissions[serverIdentifier];
+    }
+    return mcpAllowedToolsFor(serverDetail, mcpToolPermissions, mcpServerDetails);
   };
 
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
   const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
-  // Merge servers and access groups into one list
   const mergedItems = [
-    ...mcpServers
-      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL)
-      .map((server) => ({ type: "server", value: server })),
-    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...directServerIds.map((server) => ({
+      type: "server",
+      value: server,
+      tooltip: t("permissions.mcpServerPermissions.fullId", { id: server }),
+    })),
+    ...inheritedOnlyServers.map((grant) => ({
+      type: "server",
+      value: grant.id,
+      tooltip: inheritedGrantTooltip(grant, t),
+    })),
+    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group, tooltip: "" })),
   ];
   const totalCount = mergedItems.length + mcpToolsets.length;
 
@@ -111,28 +141,30 @@ export function MCPServerPermissions({
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <ServerIcon className="h-4 w-4 text-info" />
-        <p className="text-sm font-semibold text-foreground">MCP Servers</p>
+        <p className="text-sm font-semibold text-foreground">{t("permissions.mcpServerPermissions.title")}</p>
         <Badge variant={blocksAllMcpServers ? "destructive" : "secondary"}>
-          {blocksAllMcpServers ? "Blocked" : grantsAllProxyMcpServers ? "All" : totalCount}
+          {blocksAllMcpServers
+            ? t("permissions.mcpServerPermissions.blocked")
+            : grantsAllProxyMcpServers
+              ? t("permissions.mcpServerPermissions.all")
+              : totalCount}
         </Badge>
       </div>
 
       {blocksAllMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
           <ServerIcon className="h-4 w-4 text-destructive" />
-          <p className="text-destructive text-sm">
-            No MCP servers — this key is blocked from all MCP servers, including its team&apos;s servers
-          </p>
+          <p className="text-destructive text-sm">{t("permissions.mcpServerPermissions.blockedNotice")}</p>
         </div>
       ) : grantsAllProxyMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20">
           <ServerIcon className="h-4 w-4 text-info" />
-          <p className="text-info text-sm">All Proxy MCP Servers</p>
+          <p className="text-info text-sm">{t("permissions.mcpServerPermissions.allProxyServers")}</p>
         </div>
       ) : totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
           {mergedItems.map((item, index) => {
-            const toolsForServer = item.type === "server" ? mcpToolPermissions[item.value] : undefined;
+            const toolsForServer = item.type === "server" ? getToolPermissionsFor(item.value) : undefined;
             const hasToolRestrictions = toolsForServer && toolsForServer.length > 0;
             const isExpanded = expandedServers.has(item.value);
 
@@ -153,14 +185,14 @@ export function MCPServerPermissions({
                             {getMCPServerDisplayName(item.value)}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>{item.tooltip}</TooltipContent>
                       </Tooltip>
                     ) : (
                       <div className="inline-flex items-center gap-2 min-w-0">
                         <span className="inline-block w-1.5 h-1.5 bg-success rounded-full shrink-0"></span>
                         <span className="text-sm font-medium text-foreground truncate">{item.value}</span>
                         <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-success bg-success/10 border border-success/20 rounded-sm uppercase tracking-wide shrink-0">
-                          Group
+                          {t("permissions.mcpServerPermissions.group")}
                         </span>
                       </div>
                     )}
@@ -170,7 +202,7 @@ export function MCPServerPermissions({
                     <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
                       <span className="text-xs font-medium text-muted-foreground">{toolsForServer.length}</span>
                       <span className="text-xs text-muted-foreground">
-                        {toolsForServer.length === 1 ? "tool" : "tools"}
+                        {t("permissions.mcpServerPermissions.tools", { count: toolsForServer.length })}
                       </span>
                       {isExpanded ? (
                         <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
@@ -223,13 +255,15 @@ export function MCPServerPermissions({
                         {detail?.toolset_name ?? toolsetId}
                       </span>
                       <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0 dark:text-purple-300 dark:bg-purple-950 dark:border-purple-800">
-                        Toolset
+                        {t("permissions.mcpServerPermissions.toolset")}
                       </span>
                     </div>
                     {toolCount > 0 && (
                       <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
                         <span className="text-xs font-medium text-muted-foreground">{toolCount}</span>
-                        <span className="text-xs text-muted-foreground">{toolCount === 1 ? "tool" : "tools"}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {t("permissions.mcpServerPermissions.tools", { count: toolCount })}
+                        </span>
                         {isExpanded ? (
                           <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         ) : (
@@ -261,7 +295,7 @@ export function MCPServerPermissions({
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
           <ServerIcon className="h-4 w-4 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">No MCP servers, access groups, or toolsets configured</p>
+          <p className="text-muted-foreground text-sm">{t("permissions.mcpServerPermissions.empty")}</p>
         </div>
       )}
     </div>

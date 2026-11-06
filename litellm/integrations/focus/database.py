@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import polars as pl
 
@@ -32,7 +32,7 @@ class FocusLiteLLMDatabase:
         client: Final = self._ensure_prisma_client()
 
         where_clauses: Final[list[str]] = []
-        query_params: Final[list[Any]] = []
+        query_params: Final[list[datetime | int]] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
@@ -96,11 +96,23 @@ class FocusLiteLLMDatabase:
 
         try:
             db_response: Final = await client.db.query_raw(query, *query_params)
-            return pl.DataFrame(db_response, infer_schema_length=None)
+            from litellm.proxy.spend_tracking.key_metadata_recovery import (
+                fill_missing_api_key_aliases,
+            )
+
+            usage_rows: Final = (
+                db_response.to_dicts()
+                if isinstance(db_response, pl.DataFrame)
+                else db_response
+                if isinstance(db_response, list)
+                else []
+            )
+            recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
+            return pl.DataFrame([dict(row) for row in recovered_rows], infer_schema_length=None)
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> dict[str, Any]:
+    async def get_table_info(self) -> dict[str, object]:
         """Return metadata about the spend table for diagnostics."""
         client: Final = self._ensure_prisma_client()
 

@@ -13,6 +13,8 @@ import re
 import traceback
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
@@ -22,7 +24,7 @@ from litellm.constants import (
     SQS_SEND_MESSAGE_ACTION,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -32,6 +34,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
@@ -270,7 +273,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if self.sqs_queue_url is None:
                 raise ValueError("sqs_queue_url not set")
 
-            json_data: Final = json.loads(safe_dumps(payload))
+            json_data: Final = _DECODED_JSON.validate_python(json.loads(safe_dumps(payload)))
             if self.app_crypto:
                 aad_bytes: Final = self.sqs_app_encryption_aad.encode("utf-8") if self.sqs_app_encryption_aad else None
                 encrypted: Final = self.app_crypto.encrypt_json(json_data, aad=aad_bytes)
@@ -295,7 +298,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(aws_request)
+            await run_aws_signing(SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth, aws_request)
 
             signed_headers: Final = dict(aws_request.headers.items())
 
