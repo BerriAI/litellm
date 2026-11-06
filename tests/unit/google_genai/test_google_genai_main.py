@@ -4,10 +4,15 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
+import asyncio
+from datetime import datetime
+from threading import Event
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
+import respx
+import httpx
 
 
 
@@ -15,6 +20,10 @@ import pytest
 import litellm
 from litellm.google_genai.main import agenerate_content_stream, generate_content_stream
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
@@ -470,3 +479,112 @@ async def test_custom_content_stream_uses_completion_adapter(
     chunks: Final = [chunk async for chunk in stream]
     assert any(b"stream adapter" in chunk for chunk in chunks)
     assert handler.requests == ()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_native_config_cannot_overwrite_accounting_context(
+    native_content_handler: NativeContentLLM, is_async: bool
+) -> None:
+    config: Final = {
+        "litellm_params": {"metadata": {}},
+        "model": "spoofed",
+        "custom_llm_provider": "spoofed",
+        "call_type": "spoofed",
+        "seed": 17,
+    }
+    metadata: Final = {"user_api_key": "trusted-key-id", "user_api_key_team_id": "trusted-team"}
+    request: Final = dict(model="native_image_test/image-model", contents=[], config=config, metadata=metadata)
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    received: Final = native_content_handler.requests[0]
+    logged: Final = received["logging_obj"].model_call_details
+    assert result is native_content_handler.response
+    assert received["config"] == config
+    assert logged["litellm_params"]["metadata"]["user_api_key"] == "trusted-key-id"
+    assert logged["litellm_params"]["metadata"]["user_api_key_team_id"] == "trusted-team"
+    assert logged["model"] == "image-model"
+    assert logged["custom_llm_provider"] == "native_image_test"
+    assert logged["call_type"] == ("agenerate_content" if is_async else "generate_content")
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_builtin_native_content_keeps_priority_over_colliding_custom_handler(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "gemini", "custom_handler": native_content_handler}])
+    litellm.utils.custom_llm_setup()
+    request: Final = dict(
+        model="gemini/test-model",
+        contents=[{"parts": [{"text": "draw"}]}],
+        config={"responseModalities": ["IMAGE"]},
+        api_key="test-key",
+    )
+    with respx.mock:
+        route: Final = respx.post(
+            "https://generativelanguage.googleapis.com/v1alpha/models/test-model:generateContent"
+        ).respond(200, json=native_content_handler.response)
+        if is_async:
+            client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+            try:
+                result = await litellm.agenerate_content(**request, client=client)
+            finally:
+                await client.close()
+        else:
+            result = litellm.generate_content(**request)
+    assert result.candidates == native_content_handler.response["candidates"]
+    assert result.usageMetadata == native_content_handler.response["usageMetadata"]
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["generationConfig"] == request["config"]
+    assert native_content_handler.requests == ()
+
+
+class ContentSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sync_calls: tuple[str, ...] = ()
+        self.async_calls: tuple[str, ...] = ()
+        self.sync_logged = Event()
+        self.async_logged = asyncio.Event()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.sync_calls = (*self.sync_calls, kwargs["call_type"])
+        self.sync_logged.set()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.async_calls = (*self.async_calls, kwargs["call_type"])
+        self.async_logged.set()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_accounts_for_one_success(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    recorder: Final = ContentSuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    outer_logging: Final = Logging(
+        model="native_image_test/chat-model", messages=[], stream=False,
+        call_type="agenerate_content" if is_async else "generate_content",
+        start_time=datetime(2026, 1, 1), litellm_call_id="adapter-accounting", function_id="adapter-accounting",
+    )
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
+        litellm_logging_obj=outer_logging,
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    if is_async:
+        await asyncio.wait_for(recorder.async_logged.wait(), timeout=5)
+        await GLOBAL_LOGGING_WORKER.flush()
+        await outer_logging.async_success_handler(result=result)
+        assert recorder.async_calls == ("acompletion",)
+    else:
+        assert await asyncio.to_thread(recorder.sync_logged.wait, 5)
+        outer_logging.success_handler(result=result)
+        assert recorder.sync_calls == ("completion",)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
