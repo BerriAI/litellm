@@ -344,7 +344,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             if item_tpm + input_tokens > _deployment_tpm or (
                 (rpm_dict is not None and item in rpm_dict)
                 and rpm_dict[item] is not None
-                and (rpm_dict[item] + 1 >= _deployment_rpm)
+                and (rpm_dict[item] + 1 > _deployment_rpm)
             ):
                 continue
             elif item_tpm == lowest_tpm:
