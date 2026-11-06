@@ -83,6 +83,7 @@ def _logging_obj() -> LiteLLMLoggingObj:
     logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     logging_obj.model_call_details = {}
     logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
     logging_obj.litellm_call_id = "test-call-id"
     return logging_obj
 

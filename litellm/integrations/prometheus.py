@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_cust
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -66,7 +67,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.router_api import deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
@@ -448,7 +449,7 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
-        or logged_call.get("api_call_start_time") is None
+        or (logged_call.get("api_call_start_time") is None and not caused_by_entra_rejection(exception))
         or _used_a_caller_credential(logged_call)
     )
 
@@ -3022,8 +3023,8 @@ class PrometheusLogger(CustomLogger):
         ).get("custom_llm_provider")
         if isinstance(provider, str) and provider:
             return provider
-        deployment_metadata: Final = find_deployment_metadata(litellm_params)
-        return _deployment_model_provider(deployment_metadata.get("deployment") if deployment_metadata else None)
+        picked_deployment: Final = deployment_metadata(litellm_params)
+        return _deployment_model_provider(picked_deployment.get("deployment") if picked_deployment else None)
 
     @staticmethod
     def _extract_api_provider_from_exception(exception: Exception) -> str | None:
@@ -3036,7 +3037,7 @@ class PrometheusLogger(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -3059,10 +3060,14 @@ class PrometheusLogger(CustomLogger):
         try:
             _tags: Final = StandardLoggingPayloadSetup.get_request_tags(
                 litellm_params=request_data,
-                proxy_server_request=request_data.get("proxy_server_request", {}),
+                proxy_server_request=_logged_fields(request_data.get("proxy_server_request")),
             )
-            _metadata: Final = request_data.get("metadata", {}) or {}
-            model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
+            _metadata: Final = _logged_fields(request_data.get("metadata"))
+            model_id: Final = (
+                _logged_fields(_metadata.get("model_info")).get("id")
+                or _logged_fields(request_data.get("model_info")).get("id")
+                or _logged_fields(request_data.get("standard_logging_object")).get("model_id")
+            )
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
@@ -5209,7 +5214,7 @@ def _tag_matches_wildcard_configured_pattern(tags: Sequence[str], configured_tag
     """
     import re
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router: Final = PatternMatchRouter()
     regex_pattern: Final = pattern_router.pattern_to_regex(configured_tag)
