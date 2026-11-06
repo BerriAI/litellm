@@ -63,7 +63,7 @@ def count_tokens(
 ) -> int:
     """``_count_pre_call_check_tokens``: messages, or Responses input normalized to messages, plus
     the tools and Anthropic ``system`` block the message list never carries. Embedding media is left
-    out of the input when every item of ``deployments`` declares image embedding input. An
+    out of the input when an item of ``deployments`` declares image embedding input. An
     embedding batch (a list of texts, token IDs or token ID lists) counts as its longest input, and
     a text of at most ``fits_within`` UTF-8 bytes counts as its byte length without the tokenizer:
     a token is never shorter than a byte, so it fits any window of that size."""

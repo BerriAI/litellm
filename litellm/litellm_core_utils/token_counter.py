@@ -740,15 +740,16 @@ def _embeds_media(model: str) -> bool:
 
 
 def embedding_text_input(value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]]) -> _EmbeddingInputT:
-    """``value`` without its media when every backend in ``media_models`` declares image embedding
-    input. A text-only backend reads a data URI as text, so for it the media stays in."""
+    """``value`` without its media when a backend in ``media_models`` declares image embedding input.
+    The pre-call check holds one count for the whole group, so an image backend is never refused over
+    media it embeds, and only a group of text-only backends, which read a data URI as text, counts it."""
     from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
 
     text, media = split_embedding_media_for_tpm(value)
     if not media:
         return value
     models: Final = tuple(media_models())
-    if not models or not all(map(_embeds_media, models)):
+    if not any(map(_embeds_media, models)):
         return value
     return cast(_EmbeddingInputT, text)  # cast-ok: the projection keeps the input's container shape
 
