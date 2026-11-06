@@ -324,10 +324,20 @@ async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
     assert filtered == deployments
 
 
+_RETRIES_ON_DEP_1: Final = tuple({"deployment_id": "dep-1"} for _ in range(4))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failed_in_request",
-    [{"_excluded_deployment_ids": ["dep-2"]}, {"_retry_skipped_deployment_ids": ("dep-2",)}],
+    [
+        {"_excluded_deployment_ids": ["dep-2"]},
+        {"_retry_skipped_deployment_ids": ("dep-2",)},
+        {"metadata": {"previous_models": [{"deployment_id": "dep-2"}], "request_retry_count": 1}},
+        {"litellm_metadata": {"previous_models": ({"deployment_id": "dep-2"},), "request_retry_count": 1}},
+        {"metadata": {"previous_models": _RETRIES_ON_DEP_1, "request_retry_count": 5}},
+    ],
+    ids=["excluded", "retry_skipped", "retried", "retried_litellm_metadata", "retries_rolled_over"],
 )
 async def test_async_filter_deployments_does_not_pin_to_a_deployment_that_failed_this_request(
     failed_in_request: dict[str, object],
@@ -343,6 +353,34 @@ async def test_async_filter_deployments_does_not_pin_to_a_deployment_that_failed
         messages=messages,
         request_kwargs=failed_in_request,
     ) == _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_metadata",
+    [
+        {"previous_models": _RETRIES_ON_DEP_1, "request_retry_count": 4},
+        {"previous_models": "dep-2"},
+        {"previous_models": [None, "dep-2", {"deployment_id": None}], "request_retry_count": 3},
+    ],
+    ids=["every_retry_on_record", "malformed_breadcrumbs", "malformed_records"],
+)
+async def test_async_filter_deployments_keeps_the_pin_while_every_retry_is_on_record(
+    retry_metadata: dict[str, object],
+):
+    cache: Final = DualCache()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    filtered: Final = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=_deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6"),
+        messages=messages,
+        request_kwargs={"metadata": retry_metadata},
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in filtered] == ["dep-2"]
 
 
 @pytest.mark.asyncio
@@ -1631,6 +1669,91 @@ async def test_responses_request_pins_after_prompt_caching_is_turned_off_and_on_
     router.prompt_caching_pin_cache.in_memory_cache.flush_cache()
 
     assert len(await _deployments_serving_repeats(router, _marked_responses_input())) == 1
+
+
+def _team_tagged_router(model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": model, "api_key": "sk-fake", "tags": [team]},
+                "model_info": {"id": model_id},
+            }
+            for model_id, team in (("dep-1", "team-a"), ("dep-2", "team-b"))
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        enable_tag_filtering=True,
+    )
+
+
+async def _serve_team_response(router: litellm.Router, team: str) -> str:
+    response = await router.aresponses(
+        model=MODEL_GROUP_ALIAS,
+        input=_marked_responses_input(),
+        instructions="Be terse.",
+        tools=[_RESPONSES_TOOL],
+        litellm_metadata={"tags": [team]},
+        mock_response="ok",
+    )
+    return response._hidden_params["model_id"]
+
+
+async def _serve_team_completion(router: litellm.Router, team: str) -> str:
+    response = await router.acompletion(
+        model=MODEL_GROUP_ALIAS,
+        messages=_messages(word_count=5000),
+        metadata={"tags": [team]},
+        mock_response="ok",
+    )
+    return response._hidden_params["model_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, serve",
+    [(RESPONSES_NATIVE_MODEL, _serve_team_response), (RESPONSES_BRIDGED_MODEL, _serve_team_completion)],
+    ids=["responses", "chat"],
+)
+async def test_prompt_cache_pin_never_overrides_the_request_tags(model: str, serve):
+    router = _team_tagged_router(model)
+    assert await serve(router, "team-a") == "dep-1"
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+
+    assert await serve(router, "team-b") == "dep-2"
+
+
+@pytest.mark.asyncio
+async def test_retry_moves_off_the_pinned_deployment_that_failed():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {
+                    "model": RESPONSES_BRIDGED_MODEL,
+                    "api_key": "sk-fake",
+                    "mock_response": mock_response,
+                    "weight": weight,
+                },
+                "model_info": {"id": model_id},
+            }
+            for model_id, mock_response, weight in (
+                ("dep-1", "litellm.InternalServerError", 1),
+                ("dep-2", "ok", 1000),
+            )
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        num_retries=3,
+        retry_after=0,
+        disable_cooldowns=True,
+    )
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=router.prompt_caching_pin_cache).async_add_model_id(
+        model_id="dep-1", messages=messages, tools=None
+    )
+
+    response: Final = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages)
+
+    assert response._hidden_params["model_id"] == "dep-2"
 
 
 @pytest.mark.asyncio

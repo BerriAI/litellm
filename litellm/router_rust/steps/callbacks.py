@@ -432,15 +432,20 @@ class OptionalChecks:
         deployments: list[dict[str, object]],  # mutable-ok: CustomLogger deployment-list contract
         messages: object,
         request: Mapping[str, object],
-    ) -> list[object]:  # mutable-ok: as the filters return it
+    ) -> tuple[list[object], str | None]:  # mutable-ok: as the filters return it
         """``async_callback_filter_deployments``: each routing callback narrows the deployments in
-        turn; a filter's error is raised for the Rust core to decide on."""
+        turn, then the prompt caching check names the deployment it prefers among the rest, which
+        the Rust core takes only if its later filters keep it; a filter's error is raised for the
+        Rust core to decide on."""
         remaining: list[object] = list(deployments)  # mutable-ok: filter contract  # rebind-ok: narrowed
         base: Final[object] = CustomLogger.async_filter_deployments  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
         request_kwargs: Final = dict(request)
-        for callback in tuple(self.routing_callbacks()):
+        callbacks: Final = tuple(self.routing_callbacks())
+        for callback in callbacks:
             # The base filter returns its input unchanged: only overriding filters are run.
             if not isinstance(callback, CustomLogger) or type(callback).async_filter_deployments is base:  # pyright: ignore[reportUnknownMemberType]  # see above
+                continue
+            if isinstance(callback, PromptCachingDeploymentCheck):
                 continue
             remaining = await callback.async_filter_deployments(  # pyright: ignore[reportUnknownMemberType, reportAssignmentType, reportUnknownVariableType]  # see above
                 model=model,
@@ -449,7 +454,15 @@ class OptionalChecks:
                 request_kwargs=request_kwargs,
                 parent_otel_span=None,
             )
-        return remaining
+        prompt_caching: Final = next((cb for cb in callbacks if isinstance(cb, PromptCachingDeploymentCheck)), None)
+        if prompt_caching is None:
+            return remaining, None
+        return remaining, await prompt_caching.async_preferred_deployment_id(
+            model,
+            remaining,  # pyright: ignore[reportArgumentType]  # RustCore's deployment dicts
+            messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
+            request_kwargs,
+        )
 
     # -- release --------------------------------------------------------------------------------
 
@@ -654,15 +667,15 @@ class RustOptionalChecks:
     async def _answer_callback_filters(
         self, step: Mapping[str, object], request: Mapping[str, object], messages: object
     ) -> tuple[object, BaseException | None]:
-        """A ``callback_filters`` step: the remaining ids, or a filter's error as an attempt
-        failure with the error itself, which the caller keeps to raise."""
+        """A ``callback_filters`` step: the remaining ids and the one a filter prefers, or a
+        filter's error as an attempt failure with the error itself, which the caller keeps to raise."""
         from litellm.router_rust.core import attempt_failure
 
         candidates: Final = [str(id) for id in step.get("candidates") or ()]  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType, reportUnknownArgumentType]  # the step's id list
         records: Final = self._records_of(candidates)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # RustCore's deployment dicts
         narrowed: Final = _request_with_failed_ids(request, step)
         try:
-            remaining: Final = await self._opt.filter_deployments(
+            remaining, preferred_id = await self._opt.filter_deployments(
                 str(step.get("model_group")),
                 records,  # pyright: ignore[reportUnknownArgumentType]  # see above
                 messages,
@@ -673,7 +686,8 @@ class RustOptionalChecks:
         # A filter's pin lands on the request kwargs the pick goes on to read.
         if narrowed is not request and narrowed.get(_ENCRYPTED_PIN) and isinstance(request, dict):
             request[_ENCRYPTED_PIN] = True  # rebind-ok: the request dict the pick goes on to read
-        return filtered_ids(remaining, candidates), None  # pyright: ignore[reportUnknownArgumentType]  # see above
+        kept: Final = filtered_ids(remaining, candidates)  # pyright: ignore[reportUnknownArgumentType]  # see above
+        return (kept, preferred_id), None
 
 
 __all__ = [

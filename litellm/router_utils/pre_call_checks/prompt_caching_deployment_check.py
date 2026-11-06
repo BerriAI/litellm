@@ -5,10 +5,11 @@ Route to previously cached model id, if valid
 """
 
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, TypedDict, cast
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 from litellm import verbose_logger
@@ -70,6 +71,7 @@ class _ResponsesPrompt(NamedTuple):
 _RESPONSES_PIN_METADATA_KEY: Final = "responses_prompt_cache_pin"
 _RESPONSES_PINS_IN_FLIGHT_LIMIT: Final = 10_000
 _RESPONSES_PIN_LIFETIME_SECONDS: Final = 3600
+_RETRY_RECORDS: Final = TypeAdapter(tuple[object, ...])
 _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
 _RESPONSES_TOOL_TYPES_KEPT_AS_SENT: Final = RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM | RESPONSES_WEB_SEARCH_TOOL_TYPES
 
@@ -119,6 +121,37 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
     )
 
 
+def _retry_records(metadata: Mapping[str, object]) -> tuple[object, ...]:
+    try:
+        return _RETRY_RECORDS.validate_python(metadata.get("previous_models", ()))
+    except ValidationError:
+        return ()
+
+
+def _record_deployment_ids(records: tuple[object, ...]) -> Iterator[str]:
+    deployment_ids: Final = ((as_str_mapping(record) or {}).get("deployment_id") for record in records)
+    return (deployment_id for deployment_id in deployment_ids if isinstance(deployment_id, str))
+
+
+def _retried_deployment_ids(metadata: Mapping[str, object]) -> frozenset[str] | None:
+    records: Final = _retry_records(metadata)
+    retry_count: Final = metadata.get("request_retry_count")
+    if type(retry_count) is int and retry_count > len(records):
+        return None
+    return frozenset(_record_deployment_ids(records))
+
+
+def _deployment_ids_tried_in_request(request_data: Mapping[str, object]) -> frozenset[str] | None:
+    retried: Final = tuple(
+        _retried_deployment_ids(as_str_mapping(request_data.get(bucket)) or {})
+        for bucket in ("litellm_metadata", "metadata")
+    )
+    known: Final = tuple(ids for ids in retried if ids is not None)
+    if len(known) < len(retried):
+        return None
+    return deployment_ids_failed_in_request(request_data).union(*known)
+
+
 def _previous_response_model_id(request_data: Mapping[str, object]) -> str | None:
     previous_response_id: Final = request_data.get("previous_response_id")
     model_id: Final = (
@@ -126,7 +159,8 @@ def _previous_response_model_id(request_data: Mapping[str, object]) -> str | Non
         if isinstance(previous_response_id, str)
         else None
     )
-    return None if model_id is None or model_id in deployment_ids_failed_in_request(request_data) else model_id
+    tried: Final = _deployment_ids_tried_in_request(request_data) if model_id is not None else None
+    return model_id if model_id is not None and tried is not None and model_id not in tried else None
 
 
 def _deployment_min_tokens(deployment: Mapping[str, Mapping[str, object]], fallback: int) -> int:
@@ -152,7 +186,14 @@ async def _cacheable_deployment_ids(
     return tuple(sorted(deployment_id for deployment_id, minimum in minimums if reached[minimum]))
 
 
-def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int:
+def _deployment_models(healthy_deployments: Sequence[Mapping[str, object]]) -> Iterator[str]:
+    models: Final = (
+        (as_str_mapping(deployment.get("litellm_params")) or {}).get("model") for deployment in healthy_deployments
+    )
+    return (model for model in models if isinstance(model, str) and model)
+
+
+def _get_min_token_count_for_deployments(healthy_deployments: Sequence[Mapping[str, object]]) -> int:
     """
     Returns the lowest minimum cacheable prefix across a model group.
 
@@ -168,11 +209,7 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
     losing a cache hit it had earned. The lowest can only cost a lookup that finds nothing.
     """
     return min(
-        (
-            get_prompt_cache_min_tokens(model=deployment["litellm_params"]["model"])
-            for deployment in healthy_deployments
-            if deployment.get("litellm_params", {}).get("model")
-        ),
+        (get_prompt_cache_min_tokens(model=model) for model in _deployment_models(healthy_deployments)),
         default=DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
     )
 
@@ -212,20 +249,28 @@ class PromptCachingDeploymentCheck(CustomLogger):
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
-        if self.is_priority_group is not None and self.is_priority_group(model):
-            return healthy_deployments
-        if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
-            return healthy_deployments
-        if not healthy_deployments[1:]:
-            return healthy_deployments
-
-        request_data: Final = (
-            cast(  # cast-ok: request_kwargs is a bare dict; this only reads its keys
-                Mapping[str, object], request_kwargs
-            )
-            if request_kwargs is not None
-            else None
+        preferred_id: Final = await self.async_preferred_deployment_id(
+            model, healthy_deployments, messages, request_kwargs
         )
+        preferred: Final = [
+            deployment for deployment in healthy_deployments if deployment["model_info"]["id"] == preferred_id
+        ]
+        return preferred[:1] or healthy_deployments
+
+    async def async_preferred_deployment_id(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, Mapping[str, object]]],
+        messages: list[AllMessageValues] | None,  # mutable-ok: the request's messages list, read as is
+        request_data: Mapping[str, object] | None,
+    ) -> str | None:
+        if self.is_priority_group is not None and self.is_priority_group(model):
+            return None
+        if request_data is not None and request_data.get("_target_order") is not None:
+            return None
+        if not healthy_deployments[1:]:
+            return None
+
         pin_metadata: Final = (
             request_data.get("litellm_metadata") if messages is None and request_data is not None else None
         )
@@ -235,15 +280,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
             if request_data is not None and isinstance(pin_metadata, dict)
             else None
         )
-        previous_response_deployments: Final = [
-            deployment
-            for deployment in cast(  # cast-ok: router deployments are plain dicts keyed by section name
-                list[dict[str, dict[str, object]]], healthy_deployments
-            )
-            if previous_response_model_id is not None and deployment["model_info"]["id"] == previous_response_model_id
-        ]
-        if previous_response_deployments:
-            return previous_response_deployments[:1]
+        if previous_response_model_id is not None:
+            return previous_response_model_id
         responses_prompt: Final = (
             await offload_token_count(_responses_prompt)(request_data)
             if request_data is not None and isinstance(pin_metadata, dict)
@@ -291,16 +329,12 @@ class PromptCachingDeploymentCheck(CustomLogger):
             ## be derived from the messages as they will be sent, not as they arrive here.
             affinity_messages: Final = AnthropicCacheControlHook.messages_with_default_injections(
                 messages=prompt_messages,
-                models=(
-                    deployment["litellm_params"]["model"]
-                    for deployment in healthy_deployments
-                    if isinstance(deployment.get("litellm_params"), dict) and deployment["litellm_params"].get("model")
-                ),
+                models=_deployment_models(healthy_deployments),
                 tools=request_tools,
                 enable_prompt_caching=(
-                    request_kwargs.get("enable_prompt_caching") is True if request_kwargs is not None else None
+                    request_data.get("enable_prompt_caching") is True if request_data is not None else None
                 ),
-                request_kwargs=request_kwargs,
+                request_kwargs=request_data,
             )
             prefix_tools: Final = (
                 responses_prompt.key_tools
@@ -322,9 +356,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
                             affinity_messages, prefix_tools
                         ),
                         cacheable_deployment_ids=await _cacheable_deployment_ids(
-                            cast(  # cast-ok: router deployments are plain dicts keyed by section name
-                                Sequence[Mapping[str, Mapping[str, object]]], healthy_deployments
-                            ),
+                            healthy_deployments,
                             group_minimum,
                             reaches,
                         ),
@@ -333,15 +365,11 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 pin_metadata[_RESPONSES_PIN_METADATA_KEY] = pin_token
 
             model_id_dict: Final = await prompt_cache.async_get_model_id_at(positions)
-            if model_id_dict is not None and model_id_dict["model_id"] not in deployment_ids_failed_in_request(
-                request_data or {}
-            ):
-                model_id: Final = model_id_dict["model_id"]
-                for deployment in healthy_deployments:
-                    if deployment["model_info"]["id"] == model_id:
-                        return [deployment]
+            tried: Final = _deployment_ids_tried_in_request(request_data or {}) if model_id_dict is not None else None
+            if model_id_dict is not None and tried is not None and model_id_dict["model_id"] not in tried:
+                return model_id_dict["model_id"]
 
-        return healthy_deployments
+        return None
 
     def exempt_from_message_redaction(self) -> bool:
         return True
