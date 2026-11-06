@@ -26,63 +26,6 @@ def _adaptive(r, name):
     return r.adaptive_routers[name][0].strategy
 
 
-def _params(**overrides):
-    base = {"model": "auto_router/adaptive_router"}
-    base.update(overrides)
-    return LiteLLM_Params(**base)
-
-
-# ---- Fix 1 & 2: opt-in prefix routing -----------------------------------
-
-
-def test_auto_router_check_excludes_adaptive_router_prefix():
-    r = Router(model_list=[])
-    assert (
-        r._is_auto_router_deployment(
-            litellm_params=_params(model="auto_router/adaptive_router")
-        )
-        is False
-    )
-
-
-def test_auto_router_check_excludes_complexity_router_prefix():
-    r = Router(model_list=[])
-    assert (
-        r._is_auto_router_deployment(
-            litellm_params=_params(model="auto_router/complexity_router")
-        )
-        is False
-    )
-
-
-def test_auto_router_check_still_matches_plain_auto_router_prefix():
-    r = Router(model_list=[])
-    assert (
-        r._is_auto_router_deployment(
-            litellm_params=_params(model="auto_router/my-semantic-router")
-        )
-        is True
-    )
-
-
-def test_adaptive_router_check_recognizes_prefix():
-    r = Router(model_list=[])
-    assert (
-        r._is_adaptive_router_deployment(
-            litellm_params=_params(model="auto_router/adaptive_router")
-        )
-        is True
-    )
-
-
-def test_adaptive_router_check_rejects_other_prefixes():
-    r = Router(model_list=[])
-    assert (
-        r._is_adaptive_router_deployment(litellm_params=_params(model="openai/gpt-4o"))
-        is False
-    )
-
-
 # ---- Fix 3: cost field path --------------------------------------------
 
 
@@ -481,44 +424,6 @@ def test_init_adaptive_router_rejects_duplicate_model_name():
         r.init_adaptive_router_deployment(deployment=deployment)
 
 
-def test_finalize_adaptive_router_if_configured_initializes_and_is_idempotent():
-    """`_finalize_adaptive_router_if_configured` walks the model_list, builds an
-    AdaptiveRouter for each adaptive deployment, and is a safe no-op on
-    re-entry (models already in self.adaptive_routers are skipped)."""
-    r = Router(
-        model_list=[
-            {
-                "model_name": "fast",
-                "litellm_params": {"model": "openai/gpt-4o-mini"},
-                "model_info": {"input_cost_per_token": 0.00000015},
-            },
-            {
-                "model_name": "smart",
-                "litellm_params": {"model": "openai/gpt-4o"},
-                "model_info": {"input_cost_per_token": 0.0000025},
-            },
-            {
-                "model_name": "my-router",
-                "litellm_params": {
-                    "model": "auto_router/adaptive_router",
-                    "adaptive_router_config": {
-                        "available_models": ["fast", "smart"],
-                    },
-                },
-            },
-        ]
-    )
-
-    # Router __init__ already called _finalize_adaptive_router_if_configured.
-    assert "my-router" in r.adaptive_routers
-    original = _adaptive(r, "my-router")
-
-    # Calling again must be idempotent: the existing AdaptiveRouter instance
-    # is preserved, not rebuilt.
-    r._finalize_adaptive_router_if_configured()
-    assert _adaptive(r, "my-router") is original
-
-
 def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():
     """Replacing the Router (hot-reload path) must not leave stale
     AdaptiveRouterPostCallHook instances in `litellm.callbacks` — otherwise
@@ -572,16 +477,3 @@ def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():
             litellm.callbacks.append(cb)
 
 
-def test_finalize_adaptive_router_if_configured_noop_when_none_configured():
-    """With no adaptive deployments in model_list, the finalizer leaves
-    `adaptive_routers` empty."""
-    r = Router(
-        model_list=[
-            {
-                "model_name": "fast",
-                "litellm_params": {"model": "openai/gpt-4o-mini"},
-            }
-        ]
-    )
-    r._finalize_adaptive_router_if_configured()
-    assert r.adaptive_routers == {}

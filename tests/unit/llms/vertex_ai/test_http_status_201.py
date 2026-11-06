@@ -39,8 +39,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         # Create a mock response with status code 201
         mock_response = MagicMock()
         mock_response.status_code = 201
-        mock_response.aiter_lines = MagicMock()
-        mock_response.aiter_lines.return_value = ["test response"]
+        mock_response.aiter_text = MagicMock()
+        mock_response.aiter_text.return_value = ["test response"]
 
         # Setup mock client
         mock_client = MagicMock()
@@ -76,8 +76,8 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         # Create a mock response with status code 201
         mock_response = MagicMock()
         mock_response.status_code = 201
-        mock_response.iter_lines = MagicMock()
-        mock_response.iter_lines.return_value = ["test response"]
+        mock_response.iter_text = MagicMock()
+        mock_response.iter_text.return_value = ["test response"]
         mock_post.return_value = mock_response
 
         # Call the make_sync_call function

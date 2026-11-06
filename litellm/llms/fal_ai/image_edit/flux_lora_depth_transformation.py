@@ -4,12 +4,14 @@ from typing import Final
 
 from httpx._types import RequestFiles
 
+from litellm.images.utils import image_to_data_url
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes
 
-from .transformation import DEFAULT_BASE_URL, FalAIImageEditConfig, to_data_url
+from .transformation import DEFAULT_BASE_URL, FalAIImageEditConfig
 
 FLUX_LORA_DEPTH_ENDPOINT: Final[str] = "fal-ai/flux-lora-depth"
 SUPPORTED_OPENAI_PARAMS: Final[tuple[str, ...]] = ("n", "size")
@@ -45,8 +47,8 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         api_base: str | None,
         litellm_params: dict,  # mutable-ok: base class contract
     ) -> str:
-        base_url: Final = (api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL).rstrip("/")
-        return f"{base_url}/{FLUX_LORA_DEPTH_ENDPOINT}"
+        base_url: Final = api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL
+        return join_api_base(base_url, FLUX_LORA_DEPTH_ENDPOINT)
 
     def transform_image_edit_request(
         self,
@@ -67,7 +69,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,
-            "image_url": to_data_url(next(iter(images))),
+            "image_url": image_to_data_url(next(iter(images))),
             **provider_params,
         }
         return request_body, ()

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
@@ -20,10 +21,15 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
+
+_INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
+    object, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class BaseInteractionsAPIStreamingIterator:
@@ -83,7 +89,7 @@ class BaseInteractionsAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(stripped_chunk)
+            parsed_chunk: Final = _INTERACTIONS_STREAMING_CHUNK_ADAPTER.validate_python(json.loads(stripped_chunk))
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
@@ -140,7 +146,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
         )
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = aiter_sse_lines(response.aiter_text())
 
     def __aiter__(self):
         return self
@@ -207,7 +213,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
         )
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = iter_sse_lines(response.iter_text())
 
     def __iter__(self):
         return self

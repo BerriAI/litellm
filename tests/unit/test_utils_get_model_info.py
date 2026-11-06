@@ -61,6 +61,30 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     assert model_info["input_cost_per_token"] == 0.0
 
 
+def test_get_model_info_passes_through_gemini_tiered_audio_rates() -> None:
+    model: Final = "gemini-tiered-audio-rates-test"
+    prices: Final = {
+        "input_cost_per_audio_token_flex": 1e-6,
+        "input_cost_per_audio_token_priority": 2e-6,
+        "cache_read_input_audio_token_cost_flex": 3e-7,
+        "cache_read_input_audio_token_cost_priority": 4e-7,
+        "cache_read_input_audio_token_cost_batches": 5e-7,
+    }
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "gemini",
+                "mode": "chat",
+                **prices,
+            }
+        }
+    )
+
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    assert {key: model_info[key] for key in prices} == prices
+
+
 def test_get_model_info_ollama_chat():
     from litellm.llms.ollama.completion.transformation import OllamaConfig
 
@@ -136,6 +160,7 @@ def _enforce_bedrock_converse_models(
             info.get("litellm_provider") == "bedrock"
             and info.get("mode") == "chat"
             and model not in whitelist_models
+            and BedrockModelInfo.get_bedrock_route(model) != "claude_platform"
             and not (
                 (base_model := BedrockModelInfo.get_base_model(model)) != model
                 and model_cost.get(base_model, {}).get("litellm_provider") == "bedrock_converse"
@@ -307,6 +332,18 @@ def _cross_region_profiles(
     )
 
 
+_BEDROCK_PROFILE_ONLY_NATIVE_OUTPUT_MODELS: Final = frozenset(
+    {
+        "anthropic.claude-opus-5-5",
+        "anthropic.claude-fable-5-1",
+        "anthropic.claude-sonnet-5",
+        "anthropic.claude-haiku-5-5",
+        "anthropic.claude-opus-5",
+        "anthropic.claude-opus-4-8",
+    }
+)
+
+
 def test_get_model_info_bedrock_cross_region_capability_parity():
     """
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
@@ -336,6 +373,13 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
             if _govcloud_may_lag(k, cap):
                 assert base_value or not v[cap], f"{cap} is on {k} but not on {base_model_key}"
+                continue
+            if (
+                cap == "supports_native_structured_output"
+                and base_model_key in _BEDROCK_PROFILE_ONLY_NATIVE_OUTPUT_MODELS
+                and v[cap] is True
+            ):
+                assert base_value is False, f"{cap} is already enabled on bare model {base_model_key}"
                 continue
             assert (
                 v[cap] == base_value

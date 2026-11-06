@@ -399,9 +399,10 @@ async def test_refetch_shrunk_map_fails_integrity_not_swapped_in():
 
 
 @pytest.mark.asyncio
-async def test_refetch_respects_local_env_override(monkeypatch):
-    """LITELLM_LOCAL_MODEL_COST_MAP=True short-circuits to the bundled backup, zero HTTP."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+async def test_refetch_respects_local_env_override(monkeypatch, flag):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True or LITELLM_OFFLINE_MODE=True short-circuits to the bundled backup, zero HTTP."""
+    monkeypatch.setenv(flag, "True")
 
     def _fail(request):
         raise AssertionError("no HTTP request should be made when local map is forced")
@@ -708,9 +709,10 @@ def test_boot_load_falls_back_when_urlsplit_rejects_the_url():
     assert "invalid URL" in (source["fallback_reason"] or "")
 
 
-def test_boot_load_respects_local_env_override(monkeypatch):
-    """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+def test_boot_load_respects_local_env_override(monkeypatch, flag):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True or LITELLM_OFFLINE_MODE=True still short-circuits to the backup with zero HTTP."""
+    monkeypatch.setenv(flag, "True")
 
     def _fail(request):
         raise AssertionError("no HTTP request should be made when local map is forced")

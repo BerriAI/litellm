@@ -13,6 +13,7 @@ from httpx import Headers
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -404,10 +405,5 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the MiniMax endpoint URL.
         """
-        base_url = api_base or get_secret_str("MINIMAX_API_BASE") or self.TTS_BASE_URL
-        base_url = base_url.rstrip("/")
-
-        # MiniMax uses a simple endpoint path
-        url: Final = f"{base_url}{self.TTS_ENDPOINT_PATH}"
-
-        return url
+        base_url: Final = api_base or get_secret_str("MINIMAX_API_BASE") or self.TTS_BASE_URL
+        return join_api_base(base_url, self.TTS_ENDPOINT_PATH)

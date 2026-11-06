@@ -10,7 +10,7 @@ import httpx
 from httpx._types import FileContent, RequestFiles
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -445,7 +445,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         request_id, model_id = self._decode_video_id(video_id)
         encoded_request_id: Final[str] = encode_url_path_segment(request_id, field_name="video_id")
         return (
-            f"{api_base.rstrip('/')}/{_queue_request_base_path(model_id)}/requests/{encoded_request_id}/status",
+            join_api_base(api_base, f"{_queue_request_base_path(model_id)}/requests/{encoded_request_id}/status"),
             {},
         )
 
@@ -541,7 +541,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         request_id, model_id = self._decode_video_id(video_id)
         encoded_request_id: Final[str] = encode_url_path_segment(request_id, field_name="video_id")
         return (
-            f"{api_base.rstrip('/')}/{_queue_request_base_path(model_id)}/requests/{encoded_request_id}",
+            join_api_base(api_base, f"{_queue_request_base_path(model_id)}/requests/{encoded_request_id}"),
             {},
         )
 

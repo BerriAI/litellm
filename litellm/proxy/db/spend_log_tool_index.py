@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain, groupby
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
@@ -122,7 +122,7 @@ def build_tool_usage_transaction(
     spend: float,
     total_tokens: int,
     completion_response: object,
-    realtime_tool_calls: Any = None,
+    realtime_tool_calls: object = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
