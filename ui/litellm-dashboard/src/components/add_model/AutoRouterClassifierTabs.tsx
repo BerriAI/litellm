@@ -1,9 +1,10 @@
-import AutoRouterFamilySelector, { classifierFamily } from "./AutoRouterFamilySelector";
 import React, { useContext, useId } from "react";
 import { useTranslation } from "react-i18next";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { ChevronDownIcon } from "lucide-react";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { ChevronDownIcon, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -28,6 +29,7 @@ import { isForecastClassifier } from "./forecast_classifier_config";
 import {
   AutoRouterAllowanceLabel,
   AutoRouterAvailabilityContext,
+  AutoRouterLimits,
   AutoRouterContactLink,
   isAllowanceExhausted,
   AUTO_ROUTER_CONTACT_URL,
@@ -133,7 +135,7 @@ interface AutoRouterClassifierTabsProps {
   children: React.ReactNode;
   judgeModel?: React.ReactNode;
   decisionModel?: React.ReactNode;
-  showFamilySelector?: boolean;
+  switchyard?: { selected: boolean; onSelect: () => void; fields: React.ReactNode };
 }
 
 const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
@@ -142,18 +144,37 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
   children,
   judgeModel,
   decisionModel,
-  showFamilySelector = true,
+  switchyard,
 }) => {
   const { t } = useTranslation();
   const id = useId();
   const availability = useContext(AutoRouterAvailabilityContext);
   const classifierType = effectiveClassifierType(value);
-  const family = classifierFamily(value);
+  const familyByType: Record<ClassifierType, string> = {
+    heuristic: "heuristics",
+    heuristic_v2: "heuristics",
+    llm: "llm",
+    heuristic_first: "llm",
+    hybrid: "llm",
+    capability: "llm",
+    llm_v2: "llm",
+    jev: "jev",
+    custom: "custom",
+  };
+  const family = switchyard?.selected ? "switchyard" : familyByType[classifierType];
   const hasCustomTiers = Boolean(value.custom_tier_set);
   const changeType = (next: ClassifierType) => {
     if (next !== classifierType) onChange(transitionClassifierType(value, next));
   };
 
+  const changeFamily = (next: unknown) => {
+    if (next === "switchyard") return switchyard?.onSelect();
+    if (next === family) return;
+    if (next === familyByType[classifierType]) return onChange(value);
+    if (next === "heuristics") changeType("heuristic");
+    if (next === "llm") changeType("llm");
+    if (next === "jev") changeType("jev");
+  };
   const changeProvider = (provider: unknown) => {
     if (!isOssClassifierProvider(provider)) return;
     const defaults = defaultJevClassifierConfig(provider);
@@ -172,7 +193,69 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
   };
   return (
     <div className="flex flex-col gap-4">
-      {showFamilySelector && <AutoRouterFamilySelector value={value} onChange={onChange} />}
+      <fieldset>
+        <legend className="mb-4 flex w-full items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h4 className="m-0 text-xl font-semibold text-foreground">
+              {t("addModel.autoRouterClassifierTabs.title")}
+            </h4>
+            <SimpleTooltip content={t("addModel.autoRouterClassifierTabs.titleTooltip")}>
+              <button
+                type="button"
+                aria-label={t("addModel.autoRouterClassifierTabs.aboutClassifiers")}
+                className="text-muted-foreground"
+              >
+                <Info className="size-4" />
+              </button>
+            </SimpleTooltip>
+          </div>
+          <AutoRouterLimits />
+        </legend>
+        <RadioGroup
+          value={family}
+          onValueChange={changeFamily}
+          className={switchyard ? "grid gap-3 sm:grid-cols-2 xl:grid-cols-4" : "grid gap-3 sm:grid-cols-3"}
+        >
+          {[
+            {
+              value: "heuristics",
+              label: t("addModel.autoRouterClassifierTabs.families.heuristics"),
+              description: t("addModel.autoRouterClassifierTabs.families.heuristicsDescription"),
+            },
+            { value: "llm", label: "LLM", description: t("addModel.autoRouterClassifierTabs.families.llmDescription") },
+            {
+              value: "jev",
+              label: t("addModel.autoRouterClassifierTabs.families.decisionModel"),
+              description: t("addModel.autoRouterClassifierTabs.families.decisionModelDescription"),
+            },
+            ...(switchyard
+              ? [{ value: "switchyard", label: "Switchyard", description: "Route by the conversation’s tool history." }]
+              : []),
+          ].map((option) => (
+            <Label
+              key={option.value}
+              className="cursor-pointer items-start rounded-lg border p-4 transition-colors hover:bg-muted/50 has-data-checked:border-primary has-data-checked:bg-primary/5"
+            >
+              <RadioGroupItem
+                aria-describedby={`${id}-${option.value}-description`}
+                value={option.value}
+                disabled={option.value === "heuristics" && hasCustomTiers}
+              />
+              <span className="space-y-1">
+                <span className="block font-medium">{option.label}</span>
+                <span
+                  id={`${id}-${option.value}-description`}
+                  aria-hidden="true"
+                  className="block text-xs font-normal text-muted-foreground"
+                >
+                  {option.description}
+                </span>
+              </span>
+            </Label>
+          ))}
+        </RadioGroup>
+      </fieldset>
+      {family === "switchyard" && switchyard?.fields}
       {family === "jev" &&
         (decisionModel ?? (
           <div className="space-y-2">
@@ -284,7 +367,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
           </p>
         </div>
       )}
-      {hasCustomTiers && (
+      {family !== "switchyard" && hasCustomTiers && (
         <p className="text-xs text-muted-foreground">{t("addModel.autoRouterClassifierTabs.restoreStandardTiers")}</p>
       )}
       {availability.data?.error && !availability.isChecking && (
@@ -301,7 +384,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
           </button>
         </p>
       )}
-      {children}
+      {family !== "switchyard" && children}
     </div>
   );
 };

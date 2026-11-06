@@ -19,7 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { handleAddAutoRouterSubmit, handleAddSwitchyardSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
@@ -145,6 +145,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => {
 
 vi.mock("./handle_add_auto_router_submit", () => ({
   handleAddAutoRouterSubmit: vi.fn(),
+  handleAddSwitchyardSubmit: vi.fn(),
 }));
 
 // Kept real by default so the "mandatory field" test still sees genuine tier validation; one
@@ -202,20 +203,23 @@ describe("AddAutoRouterTab", () => {
     vi.mocked(modelCostMap).mockResolvedValue({});
   });
 
-  it("keeps existing strategies reachable and preserves the Switchyard draft across strategy changes", async () => {
+  it("swaps the tiers for the Switchyard fields and saves Switchyard through the same form", async () => {
     renderAdvanced(<Harness />);
-    expect(screen.getByRole("radio", { name: "Heuristics", exact: true })).toBeEnabled();
-    expect(screen.getByRole("radio", { name: "LLM", exact: true })).toBeEnabled();
-    expect(screen.getByRole("radio", { name: "Decisions Model", exact: true })).toBeEnabled();
     fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
     expect(screen.getByText("Stage Router", { exact: true })).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Router name"), { target: { value: "stage-test" } });
+    expect(screen.queryByText("Define your tiers")).not.toBeInTheDocument();
+    expect(screen.getByTestId("auto-router-test-connect-btn")).not.toBeVisible();
+
     fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
-    expect(screen.getByText("Stage Router", { exact: true })).not.toBeVisible();
     expect(screen.getByText("Define your tiers")).toBeVisible();
+    expect(screen.queryByText("Stage Router", { exact: true })).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
-    expect(screen.getByLabelText("Router name")).toHaveValue("stage-test");
-    expect(screen.getByText("Stage Router", { exact: true })).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/Auto Router Name/), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddSwitchyardSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddSwitchyardSubmit).mock.calls[0][0].name).toBe("stage-test");
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
   it("creates the goal-selected latest OpenAI pair using its Bedrock deployment aliases", async () => {

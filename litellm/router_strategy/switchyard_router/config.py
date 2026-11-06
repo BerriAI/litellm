@@ -15,8 +15,6 @@ class LlmClassifierConfig(BaseModel):
     kind: Literal["llm"] = "llm"
     base_threshold: float = Field(default=0.5, ge=0, le=1)
     threshold_step: float = Field(default=0.0, ge=0, le=1)
-    session_affinity: bool = False
-    message_hash_fallback: bool = False
     recent_turn_window: int | None = Field(default=None, gt=0)
     max_output_tokens: int = Field(default=4096, gt=0)
     response_format_type: Literal["json_schema", "json_object"] = "json_schema"
@@ -116,8 +114,6 @@ def _task_classifier(config: SwitchyardRouterConfig) -> TaskClassifierConfig | N
             return TaskClassifierConfig(
                 base_threshold=llm.base_threshold,
                 threshold_step=llm.threshold_step,
-                session_affinity=llm.session_affinity,
-                message_hash_fallback=llm.message_hash_fallback,
                 recent_turn_window=llm.recent_turn_window,
                 max_output_tokens=llm.max_output_tokens,
                 response_format_type=llm.response_format_type,

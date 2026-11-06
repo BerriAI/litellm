@@ -1,4 +1,3 @@
-import AutoRouterFamilySelector from "./AutoRouterFamilySelector";
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "./AutoRouterAvailability";
 import { decisionDeploymentName } from "./jev_classifier_config";
 import DecisionModelSelect from "./DecisionModelSelect";
@@ -7,7 +6,7 @@ import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useState } from "react";
 import BlockedReasonTooltip from "./BlockedReasonTooltip";
-import SwitchyardRouterForm from "./SwitchyardRouterForm";
+import { useSwitchyardOption } from "./SwitchyardRouterForm";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
@@ -181,6 +180,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const requiresTeamScope = createScope === "team-required";
   const form = useZodForm(autoRouterSchema(requiresTeamScope), { defaultValues: EMPTY_FORM_VALUES });
   const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
+  const switchyard = useSwitchyardOption(accessToken, watchedName, isProxyAdminRole(userRole));
   const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
   const actor = { userRole, userID: userId ?? null, isViewOnly: false };
   const isMemberManaged =
@@ -198,7 +198,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   });
 
   const [advanced, setAdvanced] = useState(false);
-  const [switchyardSelected, setSwitchyardSelected] = useState(false);
   const [prefillAttempted, setPrefillAttempted] = useState(false);
   const [goal, setGoal] = useState<RouterGoal>("balanced");
   const [family, setFamily] = useState<FamilyPreference>("auto");
@@ -432,7 +431,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       ? t("addModel.addAutoRouterTab.selectTeamToSeeModels")
       : simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
-    setSwitchyardSelected(false);
+    switchyard.deselect();
     setSelectedPreset(undefined);
     setComplexityRouterConfig(config);
   };
@@ -524,7 +523,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     setIsSubmitting(true);
     try {
-      await submitRecommendedRouter(name);
+      await (switchyard.selected
+        ? switchyard.submit(name, () => form.reset(EMPTY_FORM_VALUES), handleOk)
+        : submitRecommendedRouter(name));
     } finally {
       setIsSubmitting(false);
     }
@@ -601,16 +602,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       <TooltipProvider>
         <Card>
           <CardContent>
-            <div hidden={!advanced} className="mb-6 space-y-6">
-              <AutoRouterFamilySelector
-                value={complexityRouterConfig}
-                onChange={handleClassifierChange}
-                switchyardSelected={switchyardSelected}
-                allowSwitchyard={isProxyAdminRole(userRole)}
-                onSelectSwitchyard={() => setSwitchyardSelected(true)}
-              />
-            </div>
-            <form hidden={switchyardSelected} onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
+            <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
               <div className="mb-4">
                 <FormField
                   control={form.control}
@@ -705,7 +697,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               )}
               {advanced && (
                 <AutoRouterClassifierTabs
-                  showFamilySelector={false}
+                  switchyard={switchyard.option}
                   value={complexityRouterConfig}
                   onChange={handleClassifierChange}
                   decisionModel={
@@ -774,6 +766,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       type="button"
                       variant="outline"
                       data-testid="auto-router-test-routing-btn"
+                      hidden={switchyard.selected}
                       disabled={submitBlockedReason !== null || isSubmitting}
                       onClick={() => setIsRoutingTestVisible(true)}
                     >
@@ -784,16 +777,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     type="button"
                     variant="outline"
                     data-testid="auto-router-test-connect-btn"
+                    hidden={switchyard.selected}
                     onClick={handleTestConnection}
                     disabled={isTestingConnection}
                   >
                     {isTestingConnection && <UiLoadingSpinner className="size-4" />}
                     {t("addModel.addAutoRouterTab.testConnection")}
                   </Button>
-                  <BlockedReasonTooltip reason={saveBlockedReason}>
+                  <BlockedReasonTooltip reason={switchyard.selected ? null : saveBlockedReason}>
                     <Button
                       type="button"
-                      disabled={saveBlockedReason !== null || isSubmitting}
+                      disabled={(!switchyard.selected && saveBlockedReason !== null) || isSubmitting}
                       onClick={() => {
                         void handleAutoRouterSubmit();
                       }}
@@ -804,13 +798,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </div>
               </div>
             </form>
-            <SwitchyardRouterForm
-              hidden={!switchyardSelected}
-              accessToken={accessToken}
-              onSuccess={handleOk}
-              routerName={watchedName}
-              onRouterNameChange={(name) => form.setValue("auto_router_name", name)}
-            />
           </CardContent>
         </Card>
 

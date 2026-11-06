@@ -55,6 +55,7 @@ def test_request_rewrite_and_unknown_options_are_rejected(option: str) -> None:
         {"options": {"confidence_threshold": 2}},
         {"models": {"capable": "", "efficient": "fast"}},
         {"models": {"capable": "same", "efficient": "same"}},
+        {"models": {"capable": "strong", "efficient": "fast", "judge": "j"}, "classifier": {"session_affinity": True}},
         {"models": {"capable": "strong", "efficient": "fast", "judge": "judge"}},
         {"models": {"capable": "strong", "efficient": "fast", "judge": "j"}, "classifier": {"kind": "other"}},
         {
@@ -85,17 +86,6 @@ def test_missing_package_rejects_save_with_install_instructions() -> None:
         violation: Final = validate_switchyard_config_write({"models": {"capable": "strong", "efficient": "fast"}})
     assert violation is not None
     assert "litellm[switchyard]" in violation
-
-
-def test_native_validation_rejects_invalid_session_affinity() -> None:
-    violation: Final = validate_switchyard_config_write(
-        {
-            "models": {"capable": "strong", "efficient": "fast", "judge": "judge"},
-            "classifier": {"session_affinity": False, "message_hash_fallback": True},
-        }
-    )
-    assert violation is not None
-    assert "Invalid switchyard_router_config" in violation
 
 
 @pytest.mark.parametrize(

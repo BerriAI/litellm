@@ -4,6 +4,7 @@ import {
   isDecisionModelMode,
   setClassifierKind,
   stageConfidence,
+  switchyardSaveError,
   switchyardConfigSchema,
   toggleClassifier,
 } from "./switchyard_config";
@@ -45,18 +46,10 @@ describe("Switchyard configuration", () => {
       ).toBe(false);
     },
   );
-  it("rejects unsupported algorithms and invalid affinity", () => {
+  it("rejects unsupported algorithms and settings the stage router judge ignores", () => {
+    const models = { capable: "strong", efficient: "fast", judge: "judge" };
     expect(switchyardConfigSchema.safeParse({ ...emptySwitchyardConfig(), algorithm: "random" }).success).toBe(false);
-    const config = toggleClassifier(
-      { ...emptySwitchyardConfig(), models: { capable: "strong", efficient: "fast", judge: "judge" } },
-      true,
-    );
-    expect(
-      switchyardConfigSchema.safeParse({
-        ...config,
-        classifier: { ...config.classifier, message_hash_fallback: true, session_affinity: false },
-      }).success,
-    ).toBe(false);
+    expect(switchyardConfigSchema.safeParse({ models, classifier: { session_affinity: true } }).success).toBe(false);
   });
   it("reads a stored classifier without a kind as an LLM judge", () => {
     const parsed = switchyardConfigSchema.parse({
@@ -93,5 +86,11 @@ describe("Switchyard configuration", () => {
     [undefined, false],
   ])("treats mode %s as a decision model: %s", (mode, expected) => {
     expect(isDecisionModelMode(mode)).toBe(expected);
+  });
+  it("blocks saving without a name or with the router as one of its own targets", () => {
+    const config = { ...emptySwitchyardConfig(), models: { capable: "strong", efficient: "fast" } };
+    expect(switchyardSaveError("route", config)).toBeNull();
+    expect(switchyardSaveError("  ", config)).toBe("Enter a router name");
+    expect(switchyardSaveError("strong", config)).toBe("The router cannot select itself");
   });
 });

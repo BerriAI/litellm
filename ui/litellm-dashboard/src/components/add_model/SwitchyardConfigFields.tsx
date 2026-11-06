@@ -327,35 +327,6 @@ export default function SwitchyardConfigFields({
                   }
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <label htmlFor={`${id}-affinity`}>Session affinity</label>
-                <Switch
-                  id={`${id}-affinity`}
-                  checked={llm.session_affinity}
-                  onCheckedChange={(enabled) =>
-                    onChange({
-                      ...value,
-                      classifier: {
-                        ...llm,
-                        session_affinity: enabled,
-                        message_hash_fallback: enabled && llm.message_hash_fallback,
-                      },
-                    })
-                  }
-                />
-              </div>
-              {llm.session_affinity && (
-                <div className="flex items-center justify-between">
-                  <label htmlFor={`${id}-hash`}>Use message hash when session ID is missing</label>
-                  <Switch
-                    id={`${id}-hash`}
-                    checked={llm.message_hash_fallback}
-                    onCheckedChange={(enabled) =>
-                      onChange({ ...value, classifier: { ...llm, message_hash_fallback: enabled } })
-                    }
-                  />
-                </div>
-              )}
             </>
           )}
         </div>

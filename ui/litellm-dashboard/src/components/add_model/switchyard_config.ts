@@ -22,8 +22,6 @@ const llmClassifierFields = {
   recent_turn_window: positiveInteger.optional(),
   response_format_type: z.enum(["json_schema", "json_object"]).default("json_schema"),
   prompt: z.string().optional(),
-  session_affinity: z.boolean().default(false),
-  message_hash_fallback: z.boolean().default(false),
 };
 const decisionClassifierFields = {
   kind: z.literal("decision"),
@@ -48,17 +46,6 @@ export const switchyardConfigSchema = z
         path: ["models", "judge"],
       });
     }
-    if (
-      value.classifier?.kind === "llm" &&
-      value.classifier.message_hash_fallback &&
-      !value.classifier.session_affinity
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Message hash fallback requires session affinity",
-        path: ["classifier", "session_affinity"],
-      });
-    }
   });
 
 export type SwitchyardConfig = z.infer<typeof switchyardConfigSchema>;
@@ -73,8 +60,6 @@ export const defaultClassifier = (kind: ClassifierKind = "llm"): NonNullable<Swi
         threshold_step: 0,
         max_output_tokens: 4096,
         response_format_type: "json_schema",
-        session_affinity: false,
-        message_hash_fallback: false,
       };
 export const emptySwitchyardConfig = (): SwitchyardConfig => ({
   algorithm: "stage_router",
@@ -102,3 +87,16 @@ export function parseToolSemantics(text: string): SwitchyardConfig["options"]["t
   if (!text.trim()) return undefined;
   return optionsFields.tool_semantics.parse(JSON.parse(text));
 }
+
+export function switchyardSaveError(name: string, config: SwitchyardConfig): string | null {
+  if (!name.trim()) return "Enter a router name";
+  const validated = switchyardConfigSchema.safeParse(config);
+  if (!validated.success) return validated.error.issues[0].message;
+  if (Object.values(validated.data.models).includes(name.trim())) return "The router cannot select itself";
+  return null;
+}
+
+export const switchyardRouterPayload = (name: string, config: SwitchyardConfig) => ({
+  model_name: name.trim(),
+  litellm_params: { model: "auto_router/switchyard", switchyard_router_config: switchyardConfigSchema.parse(config) },
+});
