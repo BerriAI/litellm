@@ -143,7 +143,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
-    without_bedrock_native_output_opt_in,
+    for_bedrock_json_tool_retry,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4369,7 +4369,7 @@ def _native_output_fallback(
     first_attempt_params: Mapping[str, object],
     first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback:
-    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    litellm_params: Final = for_bedrock_json_tool_retry(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
         optional_params={
@@ -4500,7 +4500,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             converse_attempt,
             (
                 partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
-                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                if AmazonConverseConfig().uses_native_output(converse_model, converse_params, litellm_params)
                 else None
             ),
             converse_model,
@@ -4556,7 +4556,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             (
                 partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
                 if isinstance(provider_config, AmazonAnthropicClaudeConfig)
-                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+                and provider_config.uses_native_output(model, invoke_params, litellm_params)
                 else None
             ),
             model,
@@ -6111,6 +6111,11 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6119,7 +6124,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
+            api_base=supplied_client_api_base or api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,

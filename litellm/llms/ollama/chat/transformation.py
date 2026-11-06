@@ -12,6 +12,8 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_images_from_message,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
@@ -353,7 +355,7 @@ class OllamaChatConfig(BaseConfig):
                 del response_json_message["thinking"]
             elif response_json_message.get("content") is not None:
                 # parse reasoning content from content
-                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
                     parse_content_for_reasoning,
                 )
 

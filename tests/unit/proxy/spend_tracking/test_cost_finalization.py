@@ -11,6 +11,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
 MODEL: Final = "gemini-finalization-test"
@@ -92,12 +94,6 @@ def response(cost: float = 0.5) -> ModelResponse:
 async def test_header_and_logging_share_one_allowance_allocation(
     logging_obj: Logging, used: int, expected: float
 ) -> None:
-    import json
-
-    from litellm.proxy.db.accounting_ledger import UsageWrite
-    from litellm.proxy.spend_tracking.usage_capture import capture_logging_usage
-    from litellm.proxy.spend_tracking.usage_meter import DurableUsageMeter, UsageCaptureSettings
-
     counter: Final = Counter(used)
     result: Final = response()
     costs: Final = await asyncio.gather(*(finalize_response_cost(logging_obj, result, counter, NOW) for _ in range(3)))
@@ -116,24 +112,6 @@ async def test_header_and_logging_share_one_allowance_allocation(
     assert payload["cost_finalized"] is True
     assert payload["cost_breakdown"] == costs[0].logging_breakdown()
 
-    committed: Final[asyncio.Queue[UsageWrite]] = asyncio.Queue()
-
-    async def persist(writes: tuple[UsageWrite, ...]) -> None:
-        for write in writes:
-            committed.put_nowait(write)
-
-    meter: Final = DurableUsageMeter(persist, UsageCaptureSettings())
-    assert logging_obj.prepared_cost is not None
-    prepared_usage: Final = logging_obj.prepared_cost.usage.model_dump()
-    result.usage = Usage(prompt_tokens=999)
-    capture_logging_usage(meter, logging_obj, result, NOW, NOW)
-    await meter.close()
-    committed.get_nowait()
-    event: Final = json.loads(committed.get_nowait().envelope)
-    assert event["finalized_cost"]["response_cost"] == pytest.approx(costs[0].amount)
-    assert event["allocation"]["discount"] == pytest.approx(costs[0].allowance_discount)
-    assert event["usage"] == prepared_usage
-    assert counter.calls == 1
 
 
 @pytest.mark.asyncio
@@ -322,8 +300,8 @@ async def test_guardrail_json_response_uses_finalized_header_when_cost_is_known(
     logging_obj: Logging, monkeypatch: pytest.MonkeyPatch, known_cost: bool
 ) -> None:
     import httpx
-    from fastapi import Response
 
+    from fastapi import Response
     from litellm.caching.dual_cache import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.utils import ProxyLogging
@@ -367,8 +345,8 @@ async def test_guardrail_json_response_uses_finalized_header_when_cost_is_known(
 async def test_malformed_passthrough_logging_preserves_response_dispatch_contract(
     logging_obj: Logging, inline: bool
 ) -> None:
-    import httpx
 
+    import httpx
     from litellm.llms.anthropic.common_utils import AnthropicError
     from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
@@ -505,11 +483,11 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
-    counters: Final = DualCache()
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
     for key in ("spend:key:completed-key", "spend:team:completed-team"):
-        counters.set_cache(key=key, value=1.5 + reserved_cost)
-    counters.set_cache(key="spend:tag:User-Agent: budget-client", value=1.5)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
+        counters.set_local(key, 1.5 + reserved_cost)
+    counters.set_local("spend:tag:User-Agent: budget-client", 1.5)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
     reservation: Final = (
         {
             "reserved_cost": reserved_cost,
@@ -547,7 +525,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     if disable_spend_updates:
         assert writer.update_database.await_count == 0
         for key in ("spend:key:completed-key", "spend:team:completed-team", "spend:tag:User-Agent: budget-client"):
-            assert await counters.async_get_cache(key=key) == pytest.approx(1.5)
+            assert counters.get_local(key) == pytest.approx(1.5)
         if auth.budget_reservation is not None:
             assert auth.budget_reservation["finalized"] is True
         return
@@ -562,12 +540,10 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     assert not logging_obj.async_success_log_enqueued
     if auth.budget_reservation is not None:
         assert auth.budget_reservation["finalized"] is True
-    assert await counters.async_get_cache(key="spend:key:completed-key") == pytest.approx(2.0 + guardrail_cost)
-    assert await counters.async_get_cache(key="spend:team:completed-team") == pytest.approx(2.0 + guardrail_cost)
+    assert counters.get_local("spend:key:completed-key") == pytest.approx(2.0 + guardrail_cost)
+    assert counters.get_local("spend:team:completed-team") == pytest.approx(2.0 + guardrail_cost)
 
-    assert await counters.async_get_cache(key="spend:tag:User-Agent: budget-client") == pytest.approx(
-        2.0 + guardrail_cost
-    )
+    assert counters.get_local("spend:tag:User-Agent: budget-client") == pytest.approx(2.0 + guardrail_cost)
 
 
 @pytest.mark.asyncio

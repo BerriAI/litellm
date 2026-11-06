@@ -12,14 +12,14 @@ import asyncio
 import itertools
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE, DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS
 from litellm.types.caching import RedisPipelineIncrementOperation
 
 from .base_cache import BaseCache
@@ -91,7 +91,9 @@ class DualCache(BaseCache):
         self.last_redis_batch_access_time = LimitedSizeOrderedDict(max_size=default_max_redis_batch_cache_size)
         self._last_redis_batch_access_time_lock = Lock()
         self.redis_batch_cache_expiry = (
-            default_redis_batch_cache_expiry or litellm.default_redis_batch_cache_expiry or 10
+            default_redis_batch_cache_expiry
+            or litellm.default_redis_batch_cache_expiry
+            or DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS
         )
         self.default_in_memory_ttl = default_in_memory_ttl or litellm.default_in_memory_ttl
         self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
@@ -497,7 +499,7 @@ class DualCache(BaseCache):
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
         return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
 
-    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+    async def async_delete_cache_pre_call(self, key: str) -> Awaitable[None] | None:
         """Memory now, the Redis DEL on the request's pipeline; None when no pipeline is open, so the caller
         takes its direct path."""
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
@@ -620,7 +622,7 @@ class DualCache(BaseCache):
         increment_list: list["RedisPipelineIncrementOperation"],
         local_only: bool = False,
         parent_otel_span: Span | None = None,
-        **kwargs,
+        **kwargs: object,  # kwargs-ok: accepted and unused, as the cache interface's other calls take them
     ) -> list[float] | None:
         result: list[float] | None = None
         try:

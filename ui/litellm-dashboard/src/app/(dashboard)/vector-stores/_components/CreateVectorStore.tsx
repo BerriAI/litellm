@@ -401,7 +401,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                       type={field.type === "password" ? "password" : "text"}
                       value={asText(providerParams[field.name])}
                       onChange={(e) => setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))}
-                      placeholder={field.placeholder}
+                      placeholder={field.placeholderKey ? t(field.placeholderKey) : field.placeholder}
                     />
                   </Field>
                 ))}

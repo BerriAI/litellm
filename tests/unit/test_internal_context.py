@@ -32,6 +32,7 @@ _CACHE_PARAMETER_HELPERS: Final = frozenset(
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
+        "litellm/router_utils/routing_prefetch.py",
         "litellm/utils.py",
     }
 )
@@ -57,6 +58,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",
         "litellm/llms/github_copilot/per_user_auth.py",
+        "litellm/llms/github_copilot/authenticator.py",
         "litellm/llms/litellm_proxy/skills/handler.py",
         "litellm/llms/openai/common_utils.py",
         "litellm/llms/openai_like/model_info.py",

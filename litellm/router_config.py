@@ -80,7 +80,12 @@ def detached(value: object) -> object:
 
 
 def build_router_config(arguments: Mapping[str, object]) -> RouterConfig:
-    """The constructor arguments, detached from the caller's objects: settings are static."""
+    """The constructor arguments, detached from the caller's objects: settings are static.
+
+    A bool `cooldown_time` is refused: `True` is not a number of seconds, and
+    reading it as 1 s or as the default would both be a guess."""
+    if isinstance(arguments.get("cooldown_time"), bool):
+        raise TypeError("Router cooldown_time must be a number of seconds, not a bool")
     return RouterConfig(arguments=MappingProxyType({name: detached(value) for name, value in arguments.items()}))
 
 

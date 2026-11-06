@@ -562,19 +562,27 @@ def _invoke_params_for_schema(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "native_key", "thinking_params", "native"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
-    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+    ids=[
+        "legacy-key",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
+        "bedrock-key-adaptive",
+        "bedrock-key-effort",
+        "bedrock-key-thinking-disabled",
+    ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
 
@@ -914,9 +922,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(set_native_structured_output):
-    """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
-    it lets the model answer in prose instead of the requested JSON."""
+def test_bedrock_chat_invoke_adaptive_thinking_leaves_the_response_format_tool_unforced(set_native_structured_output):
     set_native_structured_output("us.anthropic.claude-opus-5", None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
@@ -935,7 +941,8 @@ def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_
         drop_params=False,
     )
 
-    assert result["tool_choice"] == {"type": "tool", "name": result["tools"][0]["name"]}
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+    assert "tool_choice" not in result
     assert result["thinking"] == {"type": "adaptive"}
 
 
@@ -2040,8 +2047,9 @@ def _invoke_chat_params(
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
 def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    local_model_cost_map, model, thinking_params
+    local_model_cost_map, model, thinking_params, monkeypatch
 ):
+    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
     )
@@ -2076,6 +2084,15 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     )
 
 
+def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None) -> None:
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "disabled"}}
+    )
+
+    assert AmazonAnthropicClaudeConfig().uses_native_output(model, optional_params, {})
+
+
 @pytest.mark.parametrize(
     ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native"),
     [
@@ -2084,7 +2101,7 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
         (False, True, None, {"thinking": {"type": "adaptive"}}, True),
         (False, False, None, {}, False),
         (False, None, {"supports_bedrock_native_structured_output": False}, {}, False),
-        (True, True, None, {}, False),
+        (True, True, None, {"thinking": {"type": "disabled"}}, False),
     ],
     ids=[
         "cannot-force-tool",

@@ -706,7 +706,7 @@ def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> 
 def split_embedding_input_tokens(
     value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
 ) -> tuple[_EmbeddingInputT, int]:
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
         embedding_input_is_all_media,
         split_embedding_media_for_tpm,
     )
