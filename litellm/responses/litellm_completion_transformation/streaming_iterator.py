@@ -205,6 +205,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
         self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
+        self._done_tool_search_call_ids: frozenset[str] = frozenset()
 
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
@@ -245,19 +246,21 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _queue_tool_search_call_done(
         self, call_id: str, output_index: int, final_args: str, execution: ToolSearchExecution
     ) -> None:
-        self._queue_tool_search_call_added(call_id, output_index, "", execution)
-        item: Final = build_tool_search_call(
-            call_id, final_args or self._tool_args_by_call_id.get(call_id, ""), "completed", execution
-        )
-        self._sequence_number += 1
-        self._pending_tool_events.append(
-            OutputItemDoneEvent(
-                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-                output_index=output_index,
-                sequence_number=self._sequence_number,
-                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+        if call_id not in self._done_tool_search_call_ids:
+            self._done_tool_search_call_ids = self._done_tool_search_call_ids | {call_id}
+            self._queue_tool_search_call_added(call_id, output_index, "", execution)
+            item: Final = build_tool_search_call(
+                call_id, final_args or self._tool_args_by_call_id.get(call_id, ""), "completed", execution
             )
-        )
+            self._sequence_number += 1
+            self._pending_tool_events.append(
+                OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=output_index,
+                    sequence_number=self._sequence_number,
+                    item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+                )
+            )
         self._queue_tool_search_output(call_id)
 
     def _queue_arrived_tool_search_outputs(self) -> None:
@@ -265,7 +268,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         for call_id in tool_search_results_by_call_id((self._accumulated_provider_specific_fields,)):
             if self._tool_search_executions.get(call_id) == "server":
-                self._queue_tool_search_output(call_id)
+                self._queue_tool_search_call_done(call_id, self._get_or_assign_tool_output_index(call_id), "", "server")
 
     def _queue_tool_search_output(self, call_id: str) -> None:
         if call_id in self._tool_search_output_index_by_call_id:

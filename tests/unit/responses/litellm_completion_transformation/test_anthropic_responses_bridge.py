@@ -490,9 +490,13 @@ def _history_tool_ids(messages: Sequence[object]) -> tuple[Sequence[str], Sequen
 @pytest.mark.parametrize("search_answered", [False, True])
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expect_search"),
-    [("mistral/mistral-small-latest", "mistral", False), (_MODEL, "anthropic", True)],
+    [
+        ("mistral/mistral-small-latest", "mistral", False),
+        ("anthropic/claude-3-7-sonnet-20250219", "anthropic", False),
+        (_MODEL, "anthropic", True),
+    ],
 )
-async def test_previous_response_id_drops_a_client_replayed_search_call_only_off_anthropic(
+async def test_previous_response_id_drops_a_client_replayed_search_call_only_where_it_cannot_run(
     model: str, custom_llm_provider: str, expect_search: bool, search_answered: bool
 ) -> None:
     """
@@ -1709,7 +1713,7 @@ def test_streamed_responses_over_anthropic_emit_the_tool_search_output_in_order_
         1,
         2,
     ]
-    assert sorted((event.output_index, event.item.id) for event in done) == [
+    assert [(event.output_index, event.item.id) for event in done] == [
         (index, item.id) for index, item in enumerate(completed)
     ]
     assert {event.item.id: event.output_index for event in done} == added
@@ -1787,7 +1791,13 @@ async def test_previous_response_id_sends_back_a_search_the_stored_turn_got_as_i
 
 
 @pytest.mark.asyncio
-async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_items_off_anthropic() -> None:
-    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, "mistral/mistral-small-latest", "mistral")
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("mistral/mistral-small-latest", "mistral"), ("anthropic/claude-3-7-sonnet-20250219", "anthropic")],
+)
+async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_items_where_it_cannot_run(
+    model: str, custom_llm_provider: str
+) -> None:
+    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, model, custom_llm_provider)
 
     assert _history_tool_ids(messages) == (["toolu_01Weather"], ["toolu_01Weather"])
