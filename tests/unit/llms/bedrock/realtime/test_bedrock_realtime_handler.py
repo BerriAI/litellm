@@ -1986,9 +1986,7 @@ class TestBedrockRealtimeGuardrails:
         assert client_ws.sent_to_client == []
 
     @pytest.mark.asyncio
-    async def test_blocked_word_stays_out_of_the_spoken_notice_without_a_configured_message(
-        self, stub_aws_models: None
-    ) -> None:
+    async def test_the_block_reason_is_spoken_when_no_message_is_configured(self, stub_aws_models: None) -> None:
         guardrail: Final = BlockedWordGuardrail(
             "hunter2", guardrail_name="no_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
         )
@@ -1997,8 +1995,8 @@ class TestBedrockRealtimeGuardrails:
             [self._user_text(self.BLOCKED_TEXT), self.RESPONSE_CREATE], guardrail
         )
 
-        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
-        assert ["Say exactly" in text for text in self._text_inputs(stream)] == [True]
+        assert self.BLOCKED_TEXT not in json.dumps(self._bedrock_events(stream))
+        assert ['"hunter2 is not allowed"' in text for text in self._text_inputs(stream)] == [True]
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == ["hunter2 is not allowed"]
 
     @pytest.mark.asyncio
@@ -2214,6 +2212,37 @@ class TestBedrockRealtimeGuardrails:
         assert guardrail.checked == [((self.BLOCKED_TEXT,), user_api_key_dict)]
         assert "hunter2" not in json.dumps(self._bedrock_events(stream))
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+
+    @pytest.mark.asyncio
+    async def test_a_key_that_opted_out_of_global_guardrails_is_not_screened(
+        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ProxyLogging(FakeLogging):
+            def update_from_kwargs(self, **kwargs: object) -> None:
+                pass
+
+        guardrail: Final = self._guardrail()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)
+        stub_aws_sdk_client["streams"] = [stream]
+        client_ws: Final = DisconnectingClientWS([self._user_text(self.BLOCKED_TEXT)])
+
+        await asyncio.wait_for(
+            realtime_main._arealtime.__wrapped__(
+                model=f"bedrock/{self.MODEL}",
+                websocket=client_ws,
+                litellm_logging_obj=ProxyLogging(),
+                aws_region_name="us-east-1",
+                aws_access_key_id="k",
+                aws_secret_access_key="s",
+                metadata={"user_api_key_metadata": {"disable_global_guardrails": True}},
+            ),
+            timeout=1,
+        )
+
+        assert guardrail.checked == []
+        assert self._guardrail_errors(client_ws) == []
+        assert self.BLOCKED_TEXT in json.dumps(self._bedrock_events(stream))
 
 
 if __name__ == "__main__":

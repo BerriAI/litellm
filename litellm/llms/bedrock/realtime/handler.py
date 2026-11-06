@@ -452,7 +452,7 @@ class BedrockRealtimeGuardrails:
             return _ClientEventRoute.END_SESSION
         if isinstance(guarded_item, RealtimeToolOutput):
             return _ClientEventRoute.DROP
-        for voice_prompt_event in guardrail_voice_prompt_events(block.spoken_message):
+        for voice_prompt_event in guardrail_voice_prompt_events(f'"{block.message}"'):
             await forward_to_bedrock(voice_prompt_event)
         self._drop_next_response_create = True
         return _ClientEventRoute.DROP

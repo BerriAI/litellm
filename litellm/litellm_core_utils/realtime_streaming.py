@@ -1661,7 +1661,7 @@ class RealTimeStreaming:
 
     async def run_realtime_guardrails(
         self,
-        transcript: str,
+        transcript: object,
         item_id: str | None = None,
         pre_block_backend_message: str | None = None,
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
@@ -1670,6 +1670,8 @@ class RealTimeStreaming:
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
         """
+        if not isinstance(transcript, str):
+            return False
         verdict: Final = await self.apply_realtime_guardrails(
             (transcript,), item_id, pre_block_backend_message, event_hooks
         )
@@ -1726,7 +1728,7 @@ class RealTimeStreaming:
         await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
         await self.websocket.send_text(guardrail_violation_error_event(block.message))
         if not self._is_transcription_session:
-            for voice_prompt_event in guardrail_voice_prompt_events(block.spoken_message):
+            for voice_prompt_event in guardrail_voice_prompt_events(block.message):
                 await self._send_to_backend(voice_prompt_event)
 
         self._violation_count += 1
@@ -1823,7 +1825,7 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
-                blocked = await self.run_realtime_guardrails(cast(str, transcript))
+                blocked = await self.run_realtime_guardrails(transcript)
                 if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue

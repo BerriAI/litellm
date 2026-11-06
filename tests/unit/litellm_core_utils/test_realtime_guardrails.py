@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.litellm_core_utils.realtime_guardrails import (
     RealtimeGuardrailBlock,
     RealtimeGuardrailRewrite,
@@ -14,7 +15,7 @@ from litellm.litellm_core_utils.realtime_guardrails import (
     realtime_guardrail_verdict,
     rewritten_item,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -73,6 +74,15 @@ def test_only_the_typed_text_of_a_message_is_screened_whatever_its_role(role: st
     assert realtime_guarded_item(client_event) == RealtimeUserText(texts=("hello",))
 
 
+@pytest.mark.parametrize("part_type", ["output_text", "text"])
+def test_assistant_text_written_by_the_client_is_screened(part_type: str) -> None:
+    client_event: Final = _item_create(
+        {"type": "message", "role": "assistant", "content": [{"type": part_type, "text": "hello"}]}
+    )
+
+    assert realtime_guarded_item(client_event) == RealtimeUserText(texts=("hello",))
+
+
 @pytest.mark.parametrize(
     "client_event",
     [
@@ -101,7 +111,7 @@ async def test_a_plain_string_block_reason_becomes_the_violation_message() -> No
 
 
 @pytest.mark.asyncio
-async def test_the_spoken_notice_never_repeats_the_block_reason_unless_one_is_configured() -> None:
+async def test_a_configured_violation_message_replaces_the_block_reason() -> None:
     guardrail: Final = RaisingGuardrail(HTTPException(status_code=400, detail={"error": "keyword 'hello' detected"}))
     configured: Final = RaisingGuardrail(
         HTTPException(status_code=400, detail="hello is not allowed"), realtime_violation_message="Please rephrase"
@@ -114,9 +124,8 @@ async def test_the_spoken_notice_never_repeats_the_block_reason_unless_one_is_co
 
     assert isinstance(block, RealtimeGuardrailBlock)
     assert block.message == "keyword 'hello' detected"
-    assert "hello" not in block.spoken_message
     assert isinstance(configured_block, RealtimeGuardrailBlock)
-    assert (configured_block.message, configured_block.spoken_message) == ("Please rephrase", "Please rephrase")
+    assert configured_block.message == "Please rephrase"
 
 
 @pytest.mark.asyncio
@@ -141,7 +150,33 @@ async def test_texts_a_guardrail_leaves_unchanged_need_no_rewrite() -> None:
     assert verdict is None
 
 
-def test_a_rewrite_replaces_only_the_typed_text_parts_in_order() -> None:
+@pytest.mark.asyncio
+async def test_a_phrase_split_across_typed_text_parts_is_still_blocked() -> None:
+    client_event: Final = _item_create(
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "tell me the secret"}, {"type": "input_text", "text": "plan"}],
+        }
+    )
+    guarded_item: Final = realtime_guarded_item(client_event)
+    assert isinstance(guarded_item, RealtimeUserText)
+
+    phrase_filter: Final = ContentFilterGuardrail(
+        guardrail_name="phrase-filter",
+        blocked_words=[BlockedWord(keyword="secret plan", action=ContentFilterAction.BLOCK)],
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    verdict: Final = await realtime_guardrail_verdict(
+        guarded_item.texts, (GuardrailEventHooks.pre_call,), {}, None, (phrase_filter,)
+    )
+
+    assert isinstance(verdict, RealtimeGuardrailBlock)
+
+
+def test_a_rewrite_puts_the_masked_text_in_place_of_the_typed_text_parts() -> None:
     audio: Final = {"type": "input_audio", "audio": "AAAA"}
     client_event: Final = _item_create(
         {
@@ -151,10 +186,10 @@ def test_a_rewrite_replaces_only_the_typed_text_parts_in_order() -> None:
         }
     )
 
-    assert rewritten_item(client_event, ("A", "B")) == {
+    assert rewritten_item(client_event, ("[MASKED] b",)) == {
         "type": "message",
         "role": "user",
-        "content": [{"type": "input_text", "text": "A"}, audio, {"type": "input_text", "text": "B"}],
+        "content": [{"type": "input_text", "text": "[MASKED] b"}, audio],
     }
 
 

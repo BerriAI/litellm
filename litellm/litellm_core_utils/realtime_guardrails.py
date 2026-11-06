@@ -16,12 +16,12 @@ BLOCKED_TOOL_OUTPUT: Final = json.dumps({"error": "Tool output blocked by conten
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
 _TEXTS: Final = TypeAdapter(tuple[str, ...])
+_TYPED_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
 
 @dataclass(frozen=True, slots=True)
 class RealtimeGuardrailBlock:
     message: str
-    spoken_message: str
     ends_session_on_violation: bool
     end_session_after_n_fails: int | None
 
@@ -33,7 +33,6 @@ class RealtimeGuardrailBlock:
 
 GUARDRAIL_FAILURE_BLOCK: Final = RealtimeGuardrailBlock(
     message=_DEFAULT_VIOLATION_MESSAGE,
-    spoken_message=_DEFAULT_VIOLATION_MESSAGE,
     ends_session_on_violation=True,
     end_session_after_n_fails=None,
 )
@@ -68,9 +67,9 @@ def _json_object(value: object) -> Mapping[str, object] | None:
         return None
 
 
-def _input_text(part: object) -> str | None:
+def _typed_text(part: object) -> str | None:
     part_object: Final = _json_object(part)
-    if part_object is None or part_object.get("type") != "input_text":
+    if part_object is None or part_object.get("type") not in _TYPED_TEXT_PART_TYPES:
         return None
     text: Final[object] = part_object.get("text", "")
     return text if isinstance(text, str) else None
@@ -80,8 +79,8 @@ def _content_parts(content: object) -> Sequence[object]:
     return _JSON_ARRAY.validate_python(content) if isinstance(content, list) else ()
 
 
-def _input_texts(content: object) -> tuple[str, ...]:
-    return tuple(text for text in map(_input_text, _content_parts(content)) if text is not None)
+def _typed_texts(content: object) -> tuple[str, ...]:
+    return tuple(text for text in map(_typed_text, _content_parts(content)) if text is not None)
 
 
 def _with_text(part: object, text: str | None) -> object:
@@ -106,18 +105,25 @@ def realtime_guarded_item(client_event: Mapping[str, object]) -> RealtimeGuarded
         return None
     if item.get("type") == "function_call_output":
         return _tool_output(client_event, item)
-    texts: Final = _input_texts(item.get("content"))
-    return RealtimeUserText(texts=texts) if any(texts) else None
+    texts: Final = _typed_texts(item.get("content"))
+    return RealtimeUserText(texts=(" ".join(texts),)) if any(texts) else None
 
 
 def rewritten_item(client_event: Mapping[str, object], texts: tuple[str, ...]) -> Mapping[str, object]:
     item: Final = _json_object(client_event.get("item")) or {}
+    text: Final = " ".join(texts)
     if item.get("type") == "function_call_output":
-        return {**item, "output": " ".join(texts)}
+        return {**item, "output": text}
     parts: Final = _content_parts(item.get("content"))
-    text_positions: Final = tuple(index for index, part in enumerate(parts) if _input_text(part) is not None)
-    replacements: Final = dict(zip(text_positions, texts))
-    return {**item, "content": [_with_text(part, replacements.get(index)) for index, part in enumerate(parts)]}
+    text_positions: Final = tuple(index for index, part in enumerate(parts) if _typed_text(part) is not None)
+    replacements: Final = dict.fromkeys(text_positions[:1], text)
+    merged_away: Final = frozenset(text_positions[1:])
+    return {
+        **item,
+        "content": [
+            _with_text(part, replacements.get(index)) for index, part in enumerate(parts) if index not in merged_away
+        ],
+    }
 
 
 def _violation_text(error: Exception) -> str:
@@ -159,7 +165,6 @@ async def _guardrail_outcome(
             raise
         return RealtimeGuardrailBlock(
             message=guardrail.realtime_violation_message or _violation_text(error),
-            spoken_message=guardrail.realtime_violation_message or _DEFAULT_VIOLATION_MESSAGE,
             ends_session_on_violation=guardrail.on_violation == "end_session",
             end_session_after_n_fails=guardrail.end_session_after_n_fails,
         )
@@ -218,9 +223,7 @@ def guardrail_violation_error_event(message: str) -> str:
 
 
 def guardrail_voice_prompt_events(message: str) -> tuple[str, str]:
-    prompt: Final = (
-        f'Say exactly the following message to the user, word for word, do not add anything else: "{message}"'
-    )
+    prompt: Final = f"Say exactly the following message to the user, word for word, do not add anything else: {message}"
     return (
         json.dumps(
             {

@@ -1057,6 +1057,31 @@ async def test_transcription_captured_in_backend_to_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transcript", [None, 123, ["a"], {"text": "a"}])
+async def test_a_non_string_transcript_does_not_end_the_session(transcript: object) -> None:
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": transcript, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed", "response.done"]
+    backend_ws.send.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_transcription_session_captures_usage_and_skips_response_create():
     """
     For a transcription-only session (session.type == "transcription", e.g.
@@ -1956,14 +1981,19 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_realtime_text_input_masking_guardrail_forwards_only_the_masked_text(monkeypatch: pytest.MonkeyPatch):
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
+async def test_realtime_text_input_masking_guardrail_forwards_only_the_masked_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class MaskingGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-            return {**inputs, "texts": [text.replace("test@example.com", "[EMAIL]") for text in inputs["texts"]]}
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            texts: Final = inputs.get("texts", [])
+            return {**inputs, "texts": [text.replace("test@example.com", "[EMAIL]") for text in texts]}
 
     monkeypatch.setattr(
         litellm,
