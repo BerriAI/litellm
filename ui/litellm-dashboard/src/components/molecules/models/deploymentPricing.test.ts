@@ -8,6 +8,7 @@ describe("parseCostKey", () => {
     ["output_cost_per_token_flex", { charge: "output", unit: "token", threshold: null, tier: "flex" }],
     ["input_cost_per_token_batches", { charge: "input", tier: "batches" }],
     ["cache_read_input_token_cost", { charge: "cache_read", unit: "token", tier: "standard" }],
+    ["explicit_cache_read_input_token_cost", { charge: "explicit_cache_read", unit: "token", tier: "standard" }],
     [
       "cache_read_input_token_cost_above_272k_tokens_priority",
       { charge: "cache_read", threshold: 272_000, tier: "priority" },
@@ -83,6 +84,18 @@ describe("buildPricingTable", () => {
       { label: "Cache write / 1M tokens", prices: { standard: "$3.00" } },
       { label: "Output / 1M tokens", prices: { standard: "$10.00" } },
       { label: "Output / second", prices: { standard: "$0.001" } },
+    ]);
+  });
+
+  it("shows an explicit cached read per 1M tokens on its own row", () => {
+    const { groups, unknown } = buildPricingTable({
+      cache_read_input_token_cost: 1e-7,
+      explicit_cache_read_input_token_cost: 5e-8,
+    });
+    expect(unknown).toEqual([]);
+    expect(groups[0].rows).toEqual([
+      { label: "Cache read / 1M tokens", prices: { standard: "$0.10" } },
+      { label: "Explicit cache read / 1M tokens", prices: { standard: "$0.05" } },
     ]);
   });
 

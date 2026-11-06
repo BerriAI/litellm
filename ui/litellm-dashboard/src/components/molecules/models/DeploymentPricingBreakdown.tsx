@@ -133,6 +133,7 @@ export function DeploymentPricingBreakdown({
       {deployments.map((deployment, index) => (
         <DeploymentPrices key={`${deployment.provider}-${index}`} deployment={deployment} />
       ))}
+      <p className="text-xs text-muted-foreground">{t("deploymentPricing.requestAdjustments")}</p>
     </div>
   );
 }

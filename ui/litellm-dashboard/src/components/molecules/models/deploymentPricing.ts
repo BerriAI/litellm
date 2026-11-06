@@ -21,7 +21,7 @@ export const SERVICE_TIER_LABELS: Readonly<Record<ServiceTier, ParseKeys>> = {
 const UNITS = ["token", "second", "image", "pixel", "character", "query", "request"] as const;
 type Unit = (typeof UNITS)[number];
 
-const CHARGES = ["input", "cache_read", "cache_write", "output"] as const;
+const CHARGES = ["input", "cache_read", "explicit_cache_read", "cache_write", "output"] as const;
 type Charge = (typeof CHARGES)[number];
 
 const MODALITIES = ["", "text", "image", "audio", "video", "reasoning"] as const;
@@ -43,7 +43,7 @@ const TIER_SUFFIX = /^(.+)_(flex|balanced|priority|ultrafast|batches)$/;
 const THRESHOLD_SUFFIX = /^(.+)_above_(\d+)k_tokens$/;
 const CACHE_DURATION_SUFFIX = /^(.+)_above_(\d+hr)$/;
 const DIRECT_PRICE = /^(input|output)_cost_per_(?:(text|image|audio|video|reasoning)_(?:per_)?)?([a-z]+)$/;
-const CACHE_PRICE = /^cache_(read|creation)_input_(?:(image|audio)_)?token_cost$/;
+const CACHE_PRICE = /^(explicit_)?cache_(read|creation)_input_(?:(image|audio)_)?token_cost$/;
 
 const splitSuffix = (key: string, pattern: RegExp): readonly [string, string | null] => {
   const match = pattern.exec(key);
@@ -60,8 +60,10 @@ const parseBase = (base: string): Pick<Extract<CostKey, { kind: "price" }>, "cha
   }
   const cache = CACHE_PRICE.exec(base);
   if (cache) {
-    const [, kind, modality = ""] = cache;
-    return { charge: kind === "read" ? "cache_read" : "cache_write", modality: modality as Modality, unit: "token" };
+    const [, explicit, kind, modality = ""] = cache;
+    if (kind === "creation")
+      return explicit ? null : { charge: "cache_write", modality: modality as Modality, unit: "token" };
+    return { charge: explicit ? "explicit_cache_read" : "cache_read", modality: modality as Modality, unit: "token" };
   }
   return null;
 };
@@ -89,12 +91,14 @@ const CHARGE_LABELS: Readonly<Record<LabelForm, Readonly<Record<Charge, ParseKey
   start: {
     input: "deploymentPricing.charges.input",
     cache_read: "deploymentPricing.charges.cacheRead",
+    explicit_cache_read: "deploymentPricing.charges.explicitCacheRead",
     cache_write: "deploymentPricing.charges.cacheWrite",
     output: "deploymentPricing.charges.output",
   },
   inline: {
     input: "deploymentPricing.chargesInline.input",
     cache_read: "deploymentPricing.chargesInline.cacheRead",
+    explicit_cache_read: "deploymentPricing.chargesInline.explicitCacheRead",
     cache_write: "deploymentPricing.chargesInline.cacheWrite",
     output: "deploymentPricing.chargesInline.output",
   },

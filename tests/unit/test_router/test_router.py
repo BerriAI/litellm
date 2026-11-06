@@ -2029,6 +2029,55 @@ def test_model_group_info_shows_an_overridden_deployment_only_the_prices_billing
     assert shadowed.isdisjoint(costs), dict(costs)
 
 
+@pytest.mark.parametrize("vertex_location", ["us-east5", "global"])
+def test_model_group_info_shows_a_vertex_deployment_the_token_prices_billing_charges_at_its_location(
+    local_model_cost_map: None, vertex_location: str
+) -> None:
+    model: Final = "vertex_ai/hub-vertex-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            }
+        },
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub",
+                "litellm_params": {"model": model, "vertex_project": "p", "vertex_location": vertex_location},
+                "model_info": {"id": "hub-vertex"},
+            }
+        ]
+    )
+
+    group: Final = router.registry().group("hub")
+
+    assert group is not None
+    costs: Final = group.deployment_pricing[0].costs
+
+    def billed(cost_key: str) -> float:
+        usage, _ = _usage_billed_at(cost_key)
+        cost: Final = litellm.completion_cost(
+            completion_response=litellm.ModelResponse(usage=usage),
+            model=model,
+            custom_llm_provider="vertex_ai",
+            router_model_id="hub-vertex",
+            vertex_location=vertex_location,
+        )
+        return cost / max(usage.prompt_tokens, usage.completion_tokens)
+
+    shown: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+    assert {key: costs[key] for key in shown} == pytest.approx({key: billed(key) for key in shown})
+
+
 def test_model_group_info_lists_tiered_pricing_ranges(local_model_cost_map: None) -> None:
     tiers: Final = (
         {"range": [0, 256000], "input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07},

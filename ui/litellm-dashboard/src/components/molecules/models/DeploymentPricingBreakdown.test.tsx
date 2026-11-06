@@ -38,6 +38,7 @@ describe("DeploymentPricingBreakdown", () => {
     expect(pricesOf(azure, "Base prices", "Input / 1M tokens")).toEqual(["$2.75"]);
     expect(within(azure).queryByText(/Blank cells/)).not.toBeInTheDocument();
     expect(screen.getByText(/This model has 2 deployments/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Adjustments made per request/)).toHaveLength(1);
   });
 
   it("lays prices out by service tier column and context threshold group", () => {
@@ -45,11 +46,11 @@ describe("DeploymentPricingBreakdown", () => {
 
     const openai = screen.getByRole("region", { name: "OpenAI pricing" });
     const header = within(openai).getAllByRole("rowgroup")[0];
-    expect(within(header).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual([
-      "Charge",
-      "Standard",
-      "Priority",
-    ]);
+    expect(
+      within(header)
+        .getAllByRole("columnheader")
+        .map((cell) => cell.textContent),
+    ).toEqual(["Charge", "Standard", "Priority"]);
     expect(pricesOf(openai, "Base prices", "Output / 1M tokens")).toEqual(["$10.00", ""]);
     expect(pricesOf(openai, "Above 272K tokens", "Cache read / 1M tokens")).toEqual(["", "$1.00"]);
     expect(within(openai).getByText("Blank cells aren't priced separately for this deployment.")).toBeInTheDocument();

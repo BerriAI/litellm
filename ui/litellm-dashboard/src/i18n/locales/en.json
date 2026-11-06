@@ -20053,6 +20053,7 @@
   "deploymentPricing": {
     "deploymentCount_one": "This model has {{count}} deployment. Each request is billed at the prices of the deployment that served it.",
     "deploymentCount_other": "This model has {{count}} deployments. Each request is billed at the prices of the deployment that served it.",
+    "requestAdjustments": "These are list prices. Adjustments made per request, like off-peak discounts, regional or data residency surcharges, and some providers' own pricing rules, aren't included.",
     "providerPricing": "{{provider}} pricing",
     "chargeColumn": "Charge",
     "basePrices": "Base prices",
@@ -20078,12 +20079,14 @@
     "charges": {
       "input": "Input",
       "cacheRead": "Cache read",
+      "explicitCacheRead": "Explicit cache read",
       "cacheWrite": "Cache write",
       "output": "Output"
     },
     "chargesInline": {
       "input": "input",
       "cacheRead": "cache read",
+      "explicitCacheRead": "explicit cache read",
       "cacheWrite": "cache write",
       "output": "output"
     },

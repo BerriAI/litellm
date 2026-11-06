@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import deployment_supported_endpoints
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, coerce_token_limit
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -344,6 +345,9 @@ class HostModelInfo:
                     _configured_deployment_id(deployment),
                     group.params[int(str(step["index"]))].model,
                     model_info,
+                    resolve_vertex_location_for_cost(
+                        llm_provider, deployment.get("litellm_params"), None, litellm_model
+                    ),
                 )
                 if pricing is not None and pricing not in group.pricing:
                     group.pricing = (*group.pricing, pricing)  # rebind-ok: the merge's state
