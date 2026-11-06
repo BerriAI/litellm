@@ -569,8 +569,6 @@ MASKED_MARKER = "[MASKED]"
 
 
 class _MaskingGuardrail(_CountingPassingGuardrail):
-    """Rewrites the markers out of the response text and tool-call arguments, as a PII masker does."""
-
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -591,7 +589,6 @@ class _MaskingGuardrail(_CountingPassingGuardrail):
 def _mask_tool_call(
     tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
 ) -> ChatCompletionToolCallChunk | ChatCompletionMessageToolCall:
-    """Handlers hand chat tool calls over as dicts and /v1/messages tool calls as pydantic objects."""
     if isinstance(tool_call, dict):
         function = tool_call["function"]
         arguments = function["arguments"].replace(TOOL_ARGUMENTS_MARKER, MASKED_MARKER)
@@ -601,8 +598,6 @@ def _mask_tool_call(
 
 
 class _ToolDroppingGuardrail(_MaskingGuardrail):
-    """Masks like _MaskingGuardrail but returns no tool calls at all, as a guardrail that strips a disallowed tool does."""
-
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -615,8 +610,6 @@ class _ToolDroppingGuardrail(_MaskingGuardrail):
 
 
 class _ToolClearingGuardrail(_MaskingGuardrail):
-    """Empties the handler's own tool-call list in place and hands that same list back."""
-
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -632,7 +625,6 @@ class _ToolClearingGuardrail(_MaskingGuardrail):
 
 
 async def _anthropic_tool_use_stream():
-    """A complete /v1/messages SSE stream with a text block and a tool_use block whose input carries the marker."""
     yield _sse_event(
         "message_start",
         {
@@ -709,7 +701,6 @@ async def _run_messages_stream(guardrail: CustomGuardrail, stream: AsyncGenerato
 async def _run_buffered_chat(
     guardrail: CustomGuardrail, content_chunks: list[str], tool_argument_chunks: list[str] | None = None
 ) -> list[Any]:
-    """The plain ``streaming_buffer_until_moderated: true`` config: hold the whole stream, scan once at the end."""
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = False
     guardrail.streaming_end_of_stream_only = False
@@ -735,7 +726,6 @@ async def _run_buffered_chat(
 
 @pytest.mark.asyncio
 async def test_buffered_messages_stream_delivers_masked_text_to_the_client():
-    """A masking guardrail on a fully buffered /v1/messages stream, the client gets the masked text, never the original."""
     guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
     raw = await _run(guardrail)
     assert guardrail.scan_count == 1
@@ -767,7 +757,6 @@ async def test_buffered_chat_stream_delivers_masked_text_and_tool_arguments():
 
 
 def _two_choice_tool_call_chunk(finish_reason: str | None = None) -> ModelResponseStream:
-    """An ``n=2`` chunk: tool-call rewrites cannot be written back onto a multi-choice stream."""
     return ModelResponseStream(
         id="chatcmpl-two-choices",
         created=1724900000,
@@ -801,7 +790,6 @@ async def _two_choice_tool_call_stream() -> AsyncGenerator[ModelResponseStream, 
 
 @pytest.mark.asyncio
 async def test_buffered_messages_stream_withholds_everything_when_the_guardrail_drops_a_tool_call():
-    """A tool call the guardrail removed must not reach the client as the original, the request fails with a 500."""
     guardrail = _ToolDroppingGuardrail(guardrail_name="dropper", event_hook="post_call")
     with pytest.raises(HTTPException) as raised:
         await _run_messages_stream(guardrail, _anthropic_tool_use_stream())
@@ -812,7 +800,6 @@ async def test_buffered_messages_stream_withholds_everything_when_the_guardrail_
 
 @pytest.mark.asyncio
 async def test_buffered_chat_stream_withholds_everything_when_the_tool_call_rewrite_cannot_be_placed():
-    """Neither the originals nor a half-applied rewrite reach the client, the request fails with a 500 instead."""
     guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = False
@@ -867,7 +854,6 @@ async def test_buffered_responses_stream_delivers_masked_text_to_the_client():
 
 @pytest.mark.asyncio
 async def test_buffered_responses_stream_withholds_everything_when_the_guardrail_drops_a_tool_call():
-    """A function call the guardrail removed must not reach the client as the original, the request fails with a 500."""
     guardrail = _ToolDroppingGuardrail(guardrail_name="dropper", event_hook="post_call")
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = False
@@ -916,7 +902,6 @@ async def test_buffered_chat_stream_withholds_everything_when_the_guardrail_drop
 
 @pytest.mark.asyncio
 async def test_live_messages_stream_keeps_block_only_for_a_masking_guardrail():
-    """Without buffering the chunks are already out, so a rewrite cannot reach the client and nothing is replaced."""
     guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call")
     guardrail.streaming_buffer_until_moderated = False
     guardrail.streaming_end_of_stream_only = True
