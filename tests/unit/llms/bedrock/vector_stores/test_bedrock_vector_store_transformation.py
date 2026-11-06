@@ -503,6 +503,11 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             id="operator-shape-still-mapped",
         ),
         pytest.param(
+            {"key": "department", "value": "hr", "operator": "eq", "type": "string"},
+            {"equals": {"key": "department", "value": "hr"}},
+            id="operator-shape-with-type-key-still-mapped",
+        ),
+        pytest.param(
             {
                 "and": [
                     {"key": "department", "value": "hr", "operator": "eq"},
@@ -535,22 +540,26 @@ async def test_search_sends_openai_filters_as_aws_retrieval_filters(
     assert _sent_filter(retrieve_route) == aws_filter
 
 
-INVALID_FILTERS: Final = [
-    pytest.param({"type": "regex", "key": "department", "value": "h.*"}, id="unknown-type"),
-    pytest.param({"type": "eq", "key": "department"}, id="missing-value"),
-    pytest.param({"type": "and", "filters": []}, id="empty-compound"),
-    pytest.param(
+INVALID_FILTERS: Final = (
+    ("unknown-type", {"type": "regex", "key": "department", "value": "h.*"}, "Input tag 'regex'"),
+    ("missing-value", {"type": "eq", "key": "department"}, "filters.eq.value: Field required"),
+    ("empty-compound", {"type": "and", "filters": []}, "filters.and.filters: Tuple should have at least 1 item"),
+    (
+        "untyped-member",
         {"type": "and", "filters": [{"type": "eq", "key": "department", "value": "hr"}, {"key": "year"}]},
-        id="untyped-member",
+        "filters.and.filters.1: Unable to extract tag",
     ),
-    pytest.param([{"type": "eq", "key": "department", "value": "hr"}], id="not-an-object"),
-]
+    ("bools-in-list", {"type": "in", "key": "remote", "value": [True, False]}, "filters.in.value"),
+    ("not-an-object", [{"type": "eq", "key": "department", "value": "hr"}], "filters must be an object, got list"),
+)
 
 
-@pytest.mark.parametrize("filters", INVALID_FILTERS)
+@pytest.mark.parametrize(
+    ("filters", "reason"), [pytest.param(filters, reason, id=case) for case, filters, reason in INVALID_FILTERS]
+)
 @pytest.mark.asyncio
 async def test_search_rejects_invalid_filters_with_400_without_calling_aws(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object, reason: str
 ):
     import litellm
 
@@ -572,11 +581,11 @@ async def test_search_rejects_invalid_filters_with_400_without_calling_aws(
         )
 
     assert error.value.status_code == 400
-    assert "filters" in error.value.message
+    assert reason in error.value.message
     assert retrieve_route.call_count == 0
 
 
-@pytest.mark.parametrize("filters", INVALID_FILTERS)
+@pytest.mark.parametrize("filters", [pytest.param(filters, id=case) for case, filters, _ in INVALID_FILTERS])
 @pytest.mark.parametrize("drop_params_source", ["request", "global"])
 @pytest.mark.asyncio
 async def test_search_drops_invalid_filters_under_drop_params(
