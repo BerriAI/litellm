@@ -28073,7 +28073,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -28104,7 +28104,7 @@ export interface components {
             patterns?: components["schemas"]["ContentFilterPattern"][] | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -38195,7 +38195,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -38353,7 +38353,7 @@ export interface components {
             prompt_injections?: boolean | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**

@@ -31,13 +31,6 @@ class RealtimeGuardrailBlock:
         )
 
 
-GUARDRAIL_FAILURE_BLOCK: Final = RealtimeGuardrailBlock(
-    message=_DEFAULT_VIOLATION_MESSAGE,
-    ends_session_on_violation=True,
-    end_session_after_n_fails=None,
-)
-
-
 @dataclass(frozen=True, slots=True)
 class RealtimeGuardrailRewrite:
     texts: tuple[str, ...]
@@ -47,7 +40,8 @@ RealtimeGuardrailVerdict: TypeAlias = RealtimeGuardrailBlock | RealtimeGuardrail
 
 
 @dataclass(frozen=True, slots=True)
-class RealtimeUserText:
+class RealtimeMessageText:
+    role: str
     texts: tuple[str, ...]
 
 
@@ -57,7 +51,7 @@ class RealtimeToolOutput:
     sanitized_event: str
 
 
-RealtimeGuardedItem: TypeAlias = RealtimeUserText | RealtimeToolOutput
+RealtimeGuardedItem: TypeAlias = RealtimeMessageText | RealtimeToolOutput
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:
@@ -106,18 +100,18 @@ def realtime_guarded_item(client_event: Mapping[str, object]) -> RealtimeGuarded
     if item.get("type") == "function_call_output":
         return _tool_output(client_event, item)
     texts: Final = _typed_texts(item.get("content"))
-    return RealtimeUserText(texts=(" ".join(texts),)) if any(texts) else None
+    role: Final[object] = item.get("role")
+    return RealtimeMessageText(role=role if isinstance(role, str) else "user", texts=texts) if any(texts) else None
 
 
 def rewritten_item(client_event: Mapping[str, object], texts: tuple[str, ...]) -> Mapping[str, object]:
     item: Final = _json_object(client_event.get("item")) or {}
-    text: Final = " ".join(texts)
     if item.get("type") == "function_call_output":
-        return {**item, "output": text}
+        return {**item, "output": " ".join(texts)}
     parts: Final = _content_parts(item.get("content"))
     text_positions: Final = tuple(index for index, part in enumerate(parts) if _typed_text(part) is not None)
-    replacements: Final = dict.fromkeys(text_positions[:1], text)
-    merged_away: Final = frozenset(text_positions[1:])
+    replacements: Final = dict(zip(text_positions, texts))
+    merged_away: Final = frozenset(text_positions[len(texts) :])
     return {
         **item,
         "content": [
@@ -172,17 +166,43 @@ async def _guardrail_outcome(
 
 
 async def _screen(
-    guardrails: Sequence["CustomGuardrail"],
-    texts: tuple[str, ...],
-    original_texts: tuple[str, ...],
-    user_api_key_dict: object | None,
-) -> RealtimeGuardrailVerdict:
+    guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], user_api_key_dict: object | None
+) -> RealtimeGuardrailBlock | tuple[str, ...]:
     if not guardrails:
-        return None if texts == original_texts else RealtimeGuardrailRewrite(texts=texts)
+        return texts
     outcome: Final = await _guardrail_outcome(guardrails[0], texts, user_api_key_dict)
     if isinstance(outcome, RealtimeGuardrailBlock):
         return outcome
-    return await _screen(guardrails[1:], outcome, original_texts, user_api_key_dict)
+    return await _screen(guardrails[1:], outcome, user_api_key_dict)
+
+
+def _screening_texts(texts: tuple[str, ...]) -> tuple[str, ...]:
+    return texts if len(texts) < 2 else (*texts, "".join(texts), " ".join(texts))
+
+
+def _rewritten_texts(texts: tuple[str, ...], screened: tuple[str, ...]) -> tuple[str, ...]:
+    parts: Final = screened[: len(texts)]
+    joins: Final = screened[len(texts) :]
+    if not joins or joins == ("".join(parts), " ".join(parts)):
+        return parts
+    unspaced: Final = joins[0]
+    return (unspaced,) if unspaced != "".join(texts) else (joins[1],)
+
+
+def _in_role_scope(guardrail: "CustomGuardrail", role: str) -> bool:
+    from litellm.llms.base_llm.guardrail_translation.utils import (
+        effective_scan_only_tool_results_for_guardrail,
+        effective_skip_system_message_for_guardrail,
+        effective_skip_tool_message_for_guardrail,
+        role_out_of_guardrail_scope,
+    )
+
+    return not role_out_of_guardrail_scope(
+        role,
+        skip_system_message=effective_skip_system_message_for_guardrail(guardrail),
+        skip_tool_message=effective_skip_tool_message_for_guardrail(guardrail),
+        scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail),
+    )
 
 
 def realtime_runner_guardrail(
@@ -202,6 +222,7 @@ def realtime_runner_guardrail(
 
 async def realtime_guardrail_verdict(
     texts: tuple[str, ...],
+    role: str,
     event_hooks: Sequence["GuardrailEventHooks"],
     request_data: Mapping[str, object],
     user_api_key_dict: object | None,
@@ -209,8 +230,16 @@ async def realtime_guardrail_verdict(
 ) -> RealtimeGuardrailVerdict:
     check_data: Final = {**request_data, "transcript": " ".join(texts), "stream": True}
     runner_guardrails: Final = (realtime_runner_guardrail(callback, check_data, event_hooks) for callback in callbacks)
-    guardrails: Final = {id(guardrail): guardrail for guardrail in runner_guardrails if guardrail is not None}
-    return await _screen(tuple(guardrails.values()), texts, texts, user_api_key_dict)
+    guardrails: Final = {
+        id(guardrail): guardrail
+        for guardrail in runner_guardrails
+        if guardrail is not None and _in_role_scope(guardrail, role)
+    }
+    screened: Final = await _screen(tuple(guardrails.values()), _screening_texts(texts), user_api_key_dict)
+    if isinstance(screened, RealtimeGuardrailBlock):
+        return screened
+    rewritten: Final = _rewritten_texts(texts, screened)
+    return None if rewritten == texts else RealtimeGuardrailRewrite(texts=rewritten)
 
 
 def guardrail_violation_error_event(message: str) -> str:

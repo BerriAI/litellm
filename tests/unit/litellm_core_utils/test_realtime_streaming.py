@@ -1981,6 +1981,62 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_response_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    class SecretBlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            if any("hunter2" in text for text in inputs.get("texts", [])):
+                raise HTTPException(status_code=400, detail={"error": "hunter2 is not allowed"})
+            return inputs
+
+    def item_create(role: str, text: str) -> str:
+        return json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]},
+            }
+        )
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [SecretBlockingGuardrail(guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create("system", "never mention hunter2"),
+            item_create("user", "what is the weather"),
+            json.dumps({"type": "response.create"}),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, _mock_logging())
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend: Final = [json.loads(call.args[0]) for call in backend_ws.send.call_args_list]
+    clean_index: Final = next(
+        index
+        for index, event in enumerate(sent_to_backend)
+        if event.get("item", {}).get("content", [{}])[0].get("text") == "what is the weather"
+    )
+    assert [event["type"] for event in sent_to_backend[clean_index + 1 :]] == ["response.create"], sent_to_backend
+
+
+@pytest.mark.asyncio
 async def test_realtime_text_input_masking_guardrail_forwards_only_the_masked_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -26,13 +26,14 @@ from litellm.constants import (
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.litellm_core_utils.realtime_guardrails import (
-    GUARDRAIL_FAILURE_BLOCK,
     RealtimeGuardedItem,
     RealtimeGuardrailBlock,
     RealtimeGuardrailRewrite,
@@ -61,6 +62,7 @@ if TYPE_CHECKING:
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _REQUEST_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _SPEND_LOG_METADATA_KEYS: Final = ("litellm_metadata", "metadata")
+GUARDRAIL_UNAVAILABLE_MESSAGE: Final = "A guardrail could not check this request, so the session was ended"
 
 _EMPTY_JSON_OBJECT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 
@@ -371,6 +373,18 @@ async def _end_guarded_session(client_ws: RealtimeClientWebSocket) -> None:
         await client_ws.close()
 
 
+async def _end_unscreened_session(client_ws: RealtimeClientWebSocket) -> None:
+    with contextlib.suppress(Exception):
+        await client_ws.send_text(realtime_error_event(GUARDRAIL_UNAVAILABLE_MESSAGE, error_type="guardrail_error"))
+    with contextlib.suppress(Exception):
+        await client_ws.close()
+
+
+@dataclass(frozen=True, slots=True)
+class _GuardrailUnavailable:
+    pass
+
+
 def _registered_callbacks() -> Iterable[object]:
     return litellm.callbacks
 
@@ -399,15 +413,23 @@ class BedrockRealtimeGuardrails:
         self._callbacks: Final = callbacks
         self._violation_count = 0
         self._drop_next_response_create = False
+        self._failed = False
 
-    async def _verdict(self, texts: tuple[str, ...], hook: "GuardrailEventHooks") -> RealtimeGuardrailVerdict:
+    @property
+    def failed(self) -> bool:
+        return self._failed
+
+    async def _verdict(
+        self, texts: tuple[str, ...], role: str, hook: "GuardrailEventHooks"
+    ) -> RealtimeGuardrailVerdict | _GuardrailUnavailable:
         try:
             return await realtime_guardrail_verdict(
-                texts, (hook,), self._request_data, self._user_api_key_dict, self._callbacks()
+                texts, role, (hook,), self._request_data, self._user_api_key_dict, self._callbacks()
             )
         except Exception as e:  # noqa: BLE001  # a guardrail that cannot decide fails closed, never as a Bedrock failure
             verbose_proxy_logger.warning("Bedrock Realtime: a guardrail failed, ending the session: %s", e)
-            return GUARDRAIL_FAILURE_BLOCK
+            self._failed = True
+            return _GuardrailUnavailable()
 
     def _ends_session(self, block: RealtimeGuardrailBlock) -> bool:
         self._violation_count += 1
@@ -421,13 +443,17 @@ class BedrockRealtimeGuardrails:
     ) -> _ClientEventRoute:
         from litellm.types.guardrails import GuardrailEventHooks
 
-        if client_event.get("type") == "response.create" and self._drop_next_response_create:
+        event_type: Final = client_event.get("type")
+        if event_type == "response.create" and self._drop_next_response_create:
             self._drop_next_response_create = False
             return _ClientEventRoute.DROP
+        if event_type == "conversation.item.create":
+            self._drop_next_response_create = False
         guarded_item: Final = realtime_guarded_item(client_event)
         if guarded_item is None:
             return _ClientEventRoute.FORWARD
-        match await self._verdict(guarded_item.texts, GuardrailEventHooks.pre_call):
+        role: Final = "tool" if isinstance(guarded_item, RealtimeToolOutput) else guarded_item.role
+        match await self._verdict(guarded_item.texts, role, GuardrailEventHooks.pre_call):
             case None:
                 return _ClientEventRoute.FORWARD
             case RealtimeGuardrailRewrite(texts=texts):
@@ -435,6 +461,9 @@ class BedrockRealtimeGuardrails:
                 return _ClientEventRoute.DROP
             case RealtimeGuardrailBlock() as block:
                 return await self._route_blocked_item(block, guarded_item, client_ws, forward_to_bedrock)
+            case _GuardrailUnavailable():
+                await _end_unscreened_session(client_ws)
+                return _ClientEventRoute.END_SESSION
 
     async def _route_blocked_item(
         self,
@@ -470,12 +499,16 @@ class BedrockRealtimeGuardrails:
             or not transcript
         ):
             return True
-        block: Final = await self._verdict((transcript,), GuardrailEventHooks.realtime_input_transcription)
-        if not isinstance(block, RealtimeGuardrailBlock):
-            return True
-        if await _send_guardrail_violation(client_ws, block):
-            await _end_guarded_session(client_ws)
-        return False
+        match await self._verdict((transcript,), "user", GuardrailEventHooks.realtime_input_transcription):
+            case RealtimeGuardrailBlock() as block:
+                if await _send_guardrail_violation(client_ws, block):
+                    await _end_guarded_session(client_ws)
+                return False
+            case _GuardrailUnavailable():
+                await _end_unscreened_session(client_ws)
+                return False
+            case None | RealtimeGuardrailRewrite():
+                return True
 
 
 async def _close_bedrock_input(
@@ -668,6 +701,7 @@ class BedrockRealtime(BaseAWSLLM):
             "session_configuration_request": None,
         }
 
+        session_guardrails: Final = guardrails if guardrails is not None else BedrockRealtimeGuardrails()
         outcome: Final = await self._bridge(
             websocket,
             bedrock_stream,
@@ -676,8 +710,10 @@ class BedrockRealtime(BaseAWSLLM):
             session_state,
             logging_obj,
             initial_message=pending_opening_message,
-            guardrails=guardrails,
+            guardrails=session_guardrails,
         )
+        if session_guardrails.failed:
+            logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
 
         logged_events: Final = (
             *outcome.logged_events,

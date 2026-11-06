@@ -17,6 +17,7 @@ from typing_extensions import ReadOnly, TypedDict, Unpack
 import litellm
 from litellm.constants import (
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -26,7 +27,12 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.realtime_errors import websocket_close_reason
 from litellm.litellm_core_utils.realtime_guardrails import BLOCKED_TOOL_OUTPUT
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.realtime.handler import BedrockRealtime, BedrockRealtimeGuardrails, SessionEndSignals
+from litellm.llms.bedrock.realtime.handler import (
+    GUARDRAIL_UNAVAILABLE_MESSAGE,
+    BedrockRealtime,
+    BedrockRealtimeGuardrails,
+    SessionEndSignals,
+)
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.realtime_api import main as realtime_main
@@ -1747,6 +1753,10 @@ class MaskingGuardrail(BlockedWordGuardrail):
         return {**inputs, "texts": [text.replace(self.blocked_word, "[MASKED]") for text in inputs["texts"]]}
 
 
+class SystemSkippingGuardrail(BlockedWordGuardrail):
+    skip_system_message_in_guardrail: Final = True
+
+
 class CrashingGuardrail(BlockedWordGuardrail):
     async def apply_guardrail(
         self,
@@ -1927,6 +1937,43 @@ class TestBedrockRealtimeGuardrails:
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
 
     @pytest.mark.asyncio
+    async def test_a_system_message_the_guardrail_skips_reaches_bedrock(self, stub_aws_models: None) -> None:
+        guardrail: Final = SystemSkippingGuardrail(
+            "hunter2",
+            guardrail_name="no_secrets",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            realtime_violation_message=self.VIOLATION,
+        )
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT, role="system"), self._user_text(self.BLOCKED_TEXT)], guardrail
+        )
+
+        assert self.BLOCKED_TEXT in json.dumps(self._bedrock_events(stream))
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
+        assert guardrail.checked == [((self.BLOCKED_TEXT,), None)]
+
+    @pytest.mark.asyncio
+    async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_response_create(
+        self, stub_aws_models: None
+    ) -> None:
+        stream, _ = await self._forward_client(
+            [
+                self._user_text(self.BLOCKED_TEXT, role="system"),
+                self._user_text(self.CLEAN_TEXT),
+                self.RESPONSE_CREATE,
+            ],
+            self._guardrail(),
+        )
+
+        events: Final = self._bedrock_events(stream)
+        clean_text_index: Final = next(
+            i for i, event in enumerate(events) if event.get("textInput", {}).get("content") == self.CLEAN_TEXT
+        )
+        assert any("audioInput" in event for event in events[clean_text_index:]), "the client's response.create runs"
+
+    @pytest.mark.asyncio
     async def test_client_message_the_guardrail_cannot_parse_never_reaches_bedrock(
         self, stub_aws_models: None
     ) -> None:
@@ -2000,20 +2047,37 @@ class TestBedrockRealtimeGuardrails:
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == ["hunter2 is not allowed"]
 
     @pytest.mark.asyncio
-    async def test_guardrail_that_crashes_ends_the_session_without_forwarding_the_text(
+    async def test_guardrail_that_crashes_ends_the_session_as_an_outage_without_forwarding_the_text(
         self, stub_aws_models: None
     ) -> None:
         guardrail: Final = CrashingGuardrail(
             "hunter2", guardrail_name="flaky", event_hook=GuardrailEventHooks.pre_call, default_on=True
         )
+        stream: Final = SessionBoundBedrockStream()
+        client_ws: Final = ConnectedClientWS([self._user_text(self.CLEAN_TEXT), self.RESPONSE_CREATE])
+        logging_obj: Final = FakeLogging()
 
-        stream, client_ws = await self._forward_client(
-            [self._user_text(self.CLEAN_TEXT), self.RESPONSE_CREATE], guardrail, client_ws_type=ConnectedClientWS
+        async def open_stream() -> SessionBoundBedrockStream:
+            return stream
+
+        await asyncio.wait_for(
+            BedrockRealtime()._run_session(
+                client_ws,
+                open_stream,
+                self.MODEL,
+                logging_obj,
+                None,
+                guardrails=BedrockRealtimeGuardrails(callbacks=lambda: (guardrail,)),
+            ),
+            timeout=2,
         )
 
         assert self.CLEAN_TEXT not in json.dumps(self._bedrock_events(stream))
-        assert len(self._guardrail_errors(client_ws)) == 1
+        assert [event["error"] for event in self._client_events(client_ws) if event["type"] == "error"] == [
+            {"type": "guardrail_error", "message": GUARDRAIL_UNAVAILABLE_MESSAGE}
+        ]
         assert client_ws.closed
+        assert logging_obj.model_call_details.get(REALTIME_SESSION_ENDED_ABNORMALLY_KEY) is True
 
     @pytest.mark.asyncio
     async def test_blocked_tool_output_is_replaced_and_answered_by_the_model_itself(

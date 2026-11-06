@@ -52,8 +52,8 @@ from .realtime_guardrails import (
     RealtimeGuardrailBlock,
     RealtimeGuardrailRewrite,
     RealtimeGuardrailVerdict,
+    RealtimeMessageText,
     RealtimeToolOutput,
-    RealtimeUserText,
     guardrail_violation_error_event,
     guardrail_voice_prompt_events,
     realtime_guarded_item,
@@ -1673,7 +1673,7 @@ class RealTimeStreaming:
         if not isinstance(transcript, str):
             return False
         verdict: Final = await self.apply_realtime_guardrails(
-            (transcript,), item_id, pre_block_backend_message, event_hooks
+            (transcript,), "user", item_id, pre_block_backend_message, event_hooks
         )
         return isinstance(verdict, RealtimeGuardrailBlock)
 
@@ -1683,16 +1683,20 @@ class RealTimeStreaming:
         match guarded_item:
             case RealtimeToolOutput(texts=texts, sanitized_event=sanitized_event):
                 return await self.apply_realtime_guardrails(
-                    texts, pre_block_backend_message=sanitized_event, event_hooks=[GuardrailEventHooks.pre_call]
+                    texts,
+                    "tool",
+                    pre_block_backend_message=sanitized_event,
+                    event_hooks=[GuardrailEventHooks.pre_call],
                 )
-            case RealtimeUserText(texts=texts):
-                return await self.apply_realtime_guardrails(texts, event_hooks=[GuardrailEventHooks.pre_call])
+            case RealtimeMessageText(role=role, texts=texts):
+                return await self.apply_realtime_guardrails(texts, role, event_hooks=[GuardrailEventHooks.pre_call])
             case None:
                 return None
 
     async def apply_realtime_guardrails(
         self,
         texts: tuple[str, ...],
+        role: str,
         item_id: str | None = None,
         pre_block_backend_message: str | None = None,
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
@@ -1718,6 +1722,7 @@ class RealTimeStreaming:
 
         block: Final = await realtime_guardrail_verdict(
             texts,
+            role,
             event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
             self.request_data,
             self.user_api_key_dict,
@@ -2229,10 +2234,12 @@ class RealTimeStreaming:
                     msg_obj = json.loads(message)
                     client_event = msg_obj
                     msg_type = client_event.get("type")
+                    if msg_type == "conversation.item.create":
+                        self._pending_guardrail_message = None
 
                     match await self._screen_client_item(guarded_item := realtime_guarded_item(client_event)):
                         case RealtimeGuardrailBlock():
-                            if isinstance(guarded_item, RealtimeUserText):
+                            if isinstance(guarded_item, RealtimeMessageText):
                                 self._pending_guardrail_message = " ".join(guarded_item.texts)
                             continue
                         case RealtimeGuardrailRewrite(texts=masked_texts):

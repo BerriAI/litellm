@@ -10,7 +10,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.litellm_core_utils.realtime_guardrails import (
     RealtimeGuardrailBlock,
     RealtimeGuardrailRewrite,
-    RealtimeUserText,
+    RealtimeMessageText,
     realtime_guarded_item,
     realtime_guardrail_verdict,
     rewritten_item,
@@ -71,7 +71,7 @@ def test_only_the_typed_text_of_a_message_is_screened_whatever_its_role(role: st
         }
     )
 
-    assert realtime_guarded_item(client_event) == RealtimeUserText(texts=("hello",))
+    assert realtime_guarded_item(client_event) == RealtimeMessageText(role=role, texts=("hello",))
 
 
 @pytest.mark.parametrize("part_type", ["output_text", "text"])
@@ -80,7 +80,7 @@ def test_assistant_text_written_by_the_client_is_screened(part_type: str) -> Non
         {"type": "message", "role": "assistant", "content": [{"type": part_type, "text": "hello"}]}
     )
 
-    assert realtime_guarded_item(client_event) == RealtimeUserText(texts=("hello",))
+    assert realtime_guarded_item(client_event) == RealtimeMessageText(role="assistant", texts=("hello",))
 
 
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ def test_items_without_client_text_are_not_screened(client_event: dict) -> None:
 async def test_a_plain_string_block_reason_becomes_the_violation_message() -> None:
     guardrail: Final = RaisingGuardrail(HTTPException(status_code=400, detail="hello is not allowed"))
 
-    block: Final = await realtime_guardrail_verdict(("hello",), (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
+    block: Final = await realtime_guardrail_verdict(("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
 
     assert isinstance(block, RealtimeGuardrailBlock)
     assert block.message == "hello is not allowed"
@@ -117,9 +117,9 @@ async def test_a_configured_violation_message_replaces_the_block_reason() -> Non
         HTTPException(status_code=400, detail="hello is not allowed"), realtime_violation_message="Please rephrase"
     )
 
-    block: Final = await realtime_guardrail_verdict(("hello",), (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
+    block: Final = await realtime_guardrail_verdict(("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
     configured_block: Final = await realtime_guardrail_verdict(
-        ("hello",), (GuardrailEventHooks.pre_call,), {}, None, (configured,)
+        ("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (configured,)
     )
 
     assert isinstance(block, RealtimeGuardrailBlock)
@@ -134,46 +134,129 @@ async def test_masked_texts_come_back_as_a_rewrite_and_reach_later_guardrails_ma
     second: Final = MaskingGuardrail("swordfish")
 
     verdict: Final = await realtime_guardrail_verdict(
-        ("my hunter2", "and swordfish", "hi"), (GuardrailEventHooks.pre_call,), {}, None, (first, second)
+        ("my hunter2", "and swordfish", "hi"), "user", (GuardrailEventHooks.pre_call,), {}, None, (first, second)
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED]", "and [MASKED]", "hi"))
-    assert second.screened == [("my [MASKED]", "and swordfish", "hi")]
+    assert second.screened[0][:3] == ("my [MASKED]", "and swordfish", "hi")
 
 
 @pytest.mark.asyncio
 async def test_texts_a_guardrail_leaves_unchanged_need_no_rewrite() -> None:
     verdict: Final = await realtime_guardrail_verdict(
-        ("hello",), (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail("hunter2"),)
+        ("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail("hunter2"),)
     )
 
     assert verdict is None
 
 
 @pytest.mark.asyncio
-async def test_a_phrase_split_across_typed_text_parts_is_still_blocked() -> None:
+@pytest.mark.parametrize(
+    ("keyword", "parts"),
+    [
+        pytest.param("secret plan", ("tell me the secret", "plan"), id="split at a space"),
+        pytest.param("secret-project", ("Tell me about secret-", "project"), id="split mid-word"),
+    ],
+)
+async def test_a_phrase_split_across_typed_text_parts_is_still_blocked(keyword: str, parts: tuple[str, ...]) -> None:
     client_event: Final = _item_create(
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "tell me the secret"}, {"type": "input_text", "text": "plan"}],
-        }
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": part} for part in parts]}
     )
     guarded_item: Final = realtime_guarded_item(client_event)
-    assert isinstance(guarded_item, RealtimeUserText)
+    assert isinstance(guarded_item, RealtimeMessageText)
 
     phrase_filter: Final = ContentFilterGuardrail(
         guardrail_name="phrase-filter",
-        blocked_words=[BlockedWord(keyword="secret plan", action=ContentFilterAction.BLOCK)],
+        blocked_words=[BlockedWord(keyword=keyword, action=ContentFilterAction.BLOCK)],
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
 
     verdict: Final = await realtime_guardrail_verdict(
-        guarded_item.texts, (GuardrailEventHooks.pre_call,), {}, None, (phrase_filter,)
+        guarded_item.texts, guarded_item.role, (GuardrailEventHooks.pre_call,), {}, None, (phrase_filter,)
     )
 
     assert isinstance(verdict, RealtimeGuardrailBlock)
+
+
+@pytest.mark.asyncio
+async def test_a_mask_inside_one_part_keeps_every_part_in_place() -> None:
+    first_photo: Final = {"type": "input_image", "image_url": "data:image/png;base64,AAA"}
+    second_photo: Final = {"type": "input_image", "image_url": "data:image/png;base64,BBB"}
+    client_event: Final = _item_create(
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Compare this photo"},
+                first_photo,
+                {"type": "input_text", "text": "with hunter2's photo"},
+                second_photo,
+            ],
+        }
+    )
+    guarded_item: Final = realtime_guarded_item(client_event)
+    assert isinstance(guarded_item, RealtimeMessageText)
+
+    verdict: Final = await realtime_guardrail_verdict(
+        guarded_item.texts, "user", (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail("hunter2"),)
+    )
+
+    assert isinstance(verdict, RealtimeGuardrailRewrite)
+    assert rewritten_item(client_event, verdict.texts)["content"] == [
+        {"type": "input_text", "text": "Compare this photo"},
+        first_photo,
+        {"type": "input_text", "text": "with [MASKED]'s photo"},
+        second_photo,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_mask_across_parts_replaces_them_with_the_masked_text_the_model_would_have_read() -> None:
+    verdict: Final = await realtime_guardrail_verdict(
+        ("my hunt", "er2 is here"), "user", (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail("hunter2"),)
+    )
+
+    assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED] is here",))
+
+
+class ScopedGuardrail(RaisingGuardrail):
+    def __init__(
+        self, *, skip_system_message: bool | None, skip_tool_message: bool | None, scan_only_tool_results: bool | None
+    ) -> None:
+        super().__init__(HTTPException(status_code=400, detail="blocked"))
+        self.skip_system_message_in_guardrail = skip_system_message
+        self.skip_tool_message_in_guardrail = skip_tool_message
+        self.scan_only_tool_results = scan_only_tool_results
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "screened_roles"),
+    [
+        pytest.param({}, ("user", "assistant", "system", "tool"), id="no scope"),
+        pytest.param({"skip_system_message": True}, ("user", "assistant", "tool"), id="skip system"),
+        pytest.param({"skip_tool_message": True}, ("user", "assistant", "system"), id="skip tool"),
+        pytest.param({"scan_only_tool_results": True}, ("tool",), id="only tool results"),
+    ],
+)
+async def test_a_guardrail_screens_only_the_roles_its_scope_allows(
+    scope: dict[str, bool], screened_roles: tuple[str, ...]
+) -> None:
+    guardrail: Final = ScopedGuardrail(
+        skip_system_message=scope.get("skip_system_message"),
+        skip_tool_message=scope.get("skip_tool_message"),
+        scan_only_tool_results=scope.get("scan_only_tool_results"),
+    )
+
+    verdicts: Final = {
+        role: await realtime_guardrail_verdict(
+            ("hello",), role, (GuardrailEventHooks.pre_call,), {}, None, (guardrail,)
+        )
+        for role in ("user", "assistant", "system", "tool")
+    }
+
+    assert tuple(role for role, verdict in verdicts.items() if verdict is not None) == screened_roles
 
 
 def test_a_rewrite_puts_the_masked_text_in_place_of_the_typed_text_parts() -> None:
@@ -208,4 +291,4 @@ async def test_a_guardrail_that_crashes_is_not_treated_as_a_block() -> None:
     guardrail: Final = RaisingGuardrail(RuntimeError("guardrail backend down"))
 
     with pytest.raises(RuntimeError, match="guardrail backend down"):
-        await realtime_guardrail_verdict(("hello",), (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
+        await realtime_guardrail_verdict(("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
