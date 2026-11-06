@@ -17,7 +17,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     routed_model_info,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.tool_fields import (
     ROUTES_WITHOUT_MCP_SERVERS,
@@ -713,6 +713,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
+            deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
             drop_params=drop_params,
             target_reads_prompt_cache_breakpoint=_target_reads_prompt_cache_breakpoint(model, extra_kwargs),
         )

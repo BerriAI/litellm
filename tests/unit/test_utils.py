@@ -1354,6 +1354,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_image_size": {"type": "boolean"},
             "supports_native_structured_output": {"type": "boolean"},
             "supports_bedrock_native_structured_output": {"type": "boolean"},
+            "supports_bedrock_native_structured_output_by_default": {"type": "boolean"},
             "use_openai_responses_path": {"type": "boolean"},
             "off_peak_pricing": {
                 "type": "object",
@@ -3011,52 +3012,37 @@ if __name__ == "__main__":
 class TestGetValidModelsWithCLI:
     """Test get_valid_models function as used in CLI token usage"""
 
-    def test_get_valid_models_with_cli_pattern(self):
+    @respx.mock
+    def test_get_valid_models_with_cli_pattern(self, reset_mock_cache: None) -> None:
         """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
 
-        # Mock the HTTP request that get_valid_models makes to the proxy
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "gpt-3.5-turbo", "object": "model"},
-                {"id": "gpt-4", "object": "model"},
-                {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
-                {"id": "claude-3-sonnet", "object": "model"},
-            ]
-        }
+        route: Final = respx.get("https://gateway-cli.example.test/v1/models").respond(
+            200,
+            json={
+                "data": [
+                    {"id": "gpt-3.5-turbo", "object": "model"},
+                    {"id": "gpt-4", "object": "model"},
+                    {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
+                    {"id": "claude-3-sonnet", "object": "model"},
+                ]
+            },
+        )
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
-            # Test the exact pattern used in cli_token_usage.py
-            result = litellm.get_valid_models(
-                check_provider_endpoint=True,
-                custom_llm_provider="litellm_proxy",
-                api_key="sk-test-cli-key-123",
-                api_base="http://localhost:4000/",
-            )
+        result: Final = litellm.get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="litellm_proxy",
+            api_key="sk-test-cli-key-123",
+            api_base="https://gateway-cli.example.test/",
+        )
 
-            # Verify the function returns a list of model names
-            assert isinstance(result, list)
-            assert len(result) == 4
-            # All models get prefixed with "litellm_proxy/" by the get_models method
-            assert "litellm_proxy/gpt-3.5-turbo" in result
-            assert "litellm_proxy/gpt-4" in result
-            # Note: This model already had the prefix, so it gets double-prefixed
-            assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
-            assert "litellm_proxy/claude-3-sonnet" in result
-
-            # Verify the HTTP request was made with correct parameters
-            mock_get.assert_called_once()
-            _, call_kwargs = mock_get.call_args
-
-            # Check that the request was made to the correct endpoint
-            assert call_kwargs["url"].startswith("http://localhost:4000/")
-            assert call_kwargs["url"].endswith("/v1/models")
-
-            # Check that the API key was included in headers
-            assert "headers" in call_kwargs
-            headers = call_kwargs["headers"]
-            assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+        assert result == [
+            "litellm_proxy/gpt-3.5-turbo",
+            "litellm_proxy/gpt-4",
+            "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash",
+            "litellm_proxy/claude-3-sonnet",
+        ]
+        assert route.call_count == 1
+        assert route.calls.last.request.headers["Authorization"] == "Bearer sk-test-cli-key-123"
 
 
 @respx.mock
@@ -10307,36 +10293,33 @@ def test_logprobs_type():
     assert logprobs.top_logprobs is None
 
 
-def test_get_valid_models_openai_proxy(monkeypatch):
-    from litellm.utils import get_valid_models
-    import litellm
-
-    litellm.turn_on_debug()
-
+@respx.mock
+def test_get_valid_models_openai_proxy(monkeypatch: pytest.MonkeyPatch, reset_mock_cache: None) -> None:
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
-    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://gateway-env.example.test/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
 
-    mock_response_data = {
-        "object": "list",
-        "data": [
-            {
-                "id": "gpt-5.5",
-                "object": "model",
-                "created": 1686935002,
-                "owned_by": "organization-owner",
-            },
-        ],
-    }
+    route: Final = respx.get("https://gateway-env.example.test/v1/models").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "id": "gpt-5.5",
+                    "object": "model",
+                    "created": 1686935002,
+                    "owned_by": "organization-owner",
+                },
+            ],
+        },
+    )
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = mock_response_data
+    valid_models: Final = litellm.get_valid_models(check_provider_endpoint=True)
 
-    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_post:
-        valid_models = get_valid_models(check_provider_endpoint=True)
-        assert "litellm_proxy/gpt-5.5" in valid_models
+    assert "litellm_proxy/gpt-5.5" in valid_models
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer sk-9876"
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():

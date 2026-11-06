@@ -14,6 +14,7 @@ import itertools
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 from collections.abc import Mapping
@@ -4869,3 +4870,40 @@ def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed
     litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
 
     assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
+
+
+_MASKED_HOSTED_WEB_CALL_PROBE: Final = """
+import json
+
+from litellm.llms.anthropic.common_utils import write_request_hosted_web_call_arguments
+
+message = {
+    "role": "assistant",
+    "provider_specific_fields": {
+        "web_search_calls": [
+            {
+                "id": "ws_srvtoolu_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {"type": "search", "query": "deploy token 12345", "queries": ["deploy token 12345"]},
+            }
+        ]
+    },
+}
+write_request_hosted_web_call_arguments(message, {"srvtoolu_1": json.dumps({"query": "deploy token [REDACTED]"})})
+print(json.dumps(message["provider_specific_fields"]["web_search_calls"]))
+"""
+
+
+def test_a_masked_replayed_hosted_web_call_serializes_before_its_openai_model_was_ever_built() -> None:
+    result: Final = subprocess.run(
+        (sys.executable, "-I", "-c", _MASKED_HOSTED_WEB_CALL_PROBE),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    hosted: Final = json.loads(result.stdout.strip().splitlines()[-1])
+    assert [call["action"] for call in hosted] == [
+        {"type": "search", "query": "deploy token [REDACTED]", "queries": ["deploy token [REDACTED]"]}
+    ]

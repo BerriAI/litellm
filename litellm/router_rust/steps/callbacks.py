@@ -407,6 +407,28 @@ class OptionalChecks:
         bound: Final = request.get("litellm_logging_obj") in self._bound_requests
         return {"success": bound and not sync, "failure": bound, "make_call": make_call}
 
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """``registry().decryptable_reasoning``: one target decrypting is enough only when encrypted
+        content affinity pins ``model_group`` to the reasoning's origin."""
+        target_dicts: Final = tuple(target.model_dump(exclude_none=True) for target in targets)
+        pinned: Final = any(
+            isinstance(callback, EncryptedContentAffinityCheck) and callback.is_enabled_for_model_group(model_group)
+            for callback in self.optional_callbacks or ()
+        )
+        target_groups: Final = (target_dicts,) if pinned else tuple((target,) for target in target_dicts)
+        kept: Final = list(request_input)
+        for group in target_groups:
+            EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+                self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext serves registry()
+                kept,
+                None,
+                group,
+                unmarked_origin=None,
+            )
+        return tuple(kept)
+
     def routing_callbacks(self) -> Iterable[object]:
         """``_routing_callbacks``: the host's callbacks, or after ``observe(request_scoped=True)`` the
         host's callbacks with the router's own selectors and policies in place of theirs."""

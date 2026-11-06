@@ -342,7 +342,10 @@ pub struct Output {
 }
 
 /// How a provider blocked a response the call otherwise served.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr, strum::EnumString)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, strum::IntoStaticStr, strum::EnumString,
+)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Blocked {
     /// A chat response whose first choice was content-filtered (or that has no choices).
@@ -402,8 +405,10 @@ pub enum SelectStage {
     OverrideCheck(RoutingStrategy),
 }
 
-/// Routing events, delivered through [`Host::observe`].
-#[derive(Clone, Debug, PartialEq)]
+/// Routing events, delivered through [`Host::observe`]. They serialize as JSON objects tagged by
+/// `event` (the variant name), durations in seconds.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "event")]
 pub enum RouterEvent {
     /// A pick for `model` (the level's group) begins: its route phase opens.
     PickStarted {
@@ -413,6 +418,7 @@ pub enum RouterEvent {
         model_group: String,
         deployment_id: String,
         /// How long the pick took (`_acompletion`'s `async_get_available_deployment` service event).
+        #[serde(serialize_with = "seconds")]
         pick: Duration,
     },
     Succeeded {
@@ -425,11 +431,13 @@ pub enum RouterEvent {
     },
     CooldownSet {
         deployment_id: String,
+        #[serde(serialize_with = "seconds")]
         cooldown: Duration,
     },
     Retry {
         model_group: String,
         retry: u32,
+        #[serde(serialize_with = "seconds")]
         delay: Duration,
     },
     Fallback {
@@ -584,6 +592,13 @@ impl PickError {
     }
 }
 
+/// A pick's error serializes as its message.
+impl serde::Serialize for PickError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
 impl PartialEq for PickError {
     fn eq(&self, other: &Self) -> bool {
         format!("{:?}", self.0) == format!("{:?}", other.0)
@@ -591,7 +606,8 @@ impl PartialEq for PickError {
 }
 
 /// Which error a [`RouterEvent::RetryLogged`] records.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "cause", content = "error", rename_all = "snake_case")]
 pub enum RetryCause {
     /// The last attempt's failure.
     Attempt,
@@ -743,5 +759,85 @@ pub trait Host: Send + Sync {
     async fn model_info(&self, lookup: &ModelInfoLookup) -> Result<Value, Error> {
         let _ = lookup;
         Ok(Value::Null)
+    }
+}
+
+fn seconds<S: serde::Serializer>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(duration.as_secs_f64())
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    #[rstest]
+    #[case::selected(
+        RouterEvent::Selected {
+            model_group: "gpt-4o".to_owned(),
+            deployment_id: "azure-eastus".to_owned(),
+            pick: Duration::from_millis(1500),
+        },
+        json!({"event": "Selected", "model_group": "gpt-4o", "deployment_id": "azure-eastus", "pick": 1.5})
+    )]
+    #[case::attempt_failed(
+        RouterEvent::AttemptFailed {
+            deployment_id: "openai".to_owned(),
+            kind: FailureKind::RateLimit,
+            status: Some(429),
+        },
+        json!({"event": "AttemptFailed", "deployment_id": "openai", "kind": "RateLimitError", "status": 429})
+    )]
+    #[case::cooldown_set(
+        RouterEvent::CooldownSet { deployment_id: "openai".to_owned(), cooldown: Duration::from_secs(30) },
+        json!({"event": "CooldownSet", "deployment_id": "openai", "cooldown": 30.0})
+    )]
+    #[case::retry(
+        RouterEvent::Retry { model_group: "gpt-4o".to_owned(), retry: 1, delay: Duration::ZERO },
+        json!({"event": "Retry", "model_group": "gpt-4o", "retry": 1, "delay": 0.0})
+    )]
+    #[case::blocked(
+        RouterEvent::Blocked { level: 0, model: "claude".to_owned(), blocked: Blocked::ContentFilter },
+        json!({"event": "Blocked", "level": 0, "model": "claude", "blocked": "content_filter"})
+    )]
+    #[case::retry_logged_after_an_attempt(
+        RouterEvent::RetryLogged {
+            scope: 0,
+            level: 0,
+            model: "gpt-4o".to_owned(),
+            attempted_retries: None,
+            cause: RetryCause::Attempt,
+        },
+        json!({
+            "event": "RetryLogged", "scope": 0, "level": 0, "model": "gpt-4o",
+            "attempted_retries": null, "cause": {"cause": "attempt"},
+        })
+    )]
+    #[case::retry_logged_after_a_pick(
+        RouterEvent::RetryLogged {
+            scope: 1,
+            level: 1,
+            model: "backup".to_owned(),
+            attempted_retries: Some(2),
+            cause: RetryCause::Pick(PickError(Arc::new(Error::UnknownModel { model: "backup".to_owned() }))),
+        },
+        json!({
+            "event": "RetryLogged", "scope": 1, "level": 1, "model": "backup", "attempted_retries": 2,
+            "cause": {"cause": "pick", "error": "no deployment serves model `backup`"},
+        })
+    )]
+    #[case::mock_failed(
+        RouterEvent::MockFailed {
+            mock: MockFailure::RateLimit,
+            level: 0,
+            model: "gpt-4o".to_owned(),
+            num_retries: None,
+        },
+        json!({"event": "MockFailed", "mock": "rate_limit", "level": 0, "model": "gpt-4o", "num_retries": null})
+    )]
+    fn an_event_serializes_tagged_by_its_name(#[case] event: RouterEvent, #[case] expected: Value) {
+        assert_eq!(serde_json::to_value(&event).unwrap(), expected);
     }
 }

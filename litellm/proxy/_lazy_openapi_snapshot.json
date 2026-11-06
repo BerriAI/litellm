@@ -9633,7 +9633,7 @@
     "paths": {
       "/backend-api/codex/{endpoint}": {
         "get": {
-          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the\nkey's other chat models through LiteLLM.",
           "operationId": "codex_passthrough_route_backend_api_codex__endpoint__get",
           "parameters": [
             {
@@ -9681,7 +9681,7 @@
           ]
         },
         "post": {
-          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the\nkey's other chat models through LiteLLM.",
           "operationId": "codex_passthrough_route_backend_api_codex__endpoint__post",
           "parameters": [
             {
@@ -9724,7 +9724,7 @@
                   }
                 }
               },
-              "description": "Unmodified Codex response or server-sent events"
+              "description": "Codex response, the model catalog with the key's LiteLLM models, or server-sent events"
             },
             "422": {
               "content": {
@@ -16540,6 +16540,22 @@
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
             },
+            "mcp_block_behavior": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tool_result",
+                    "raise"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.",
+              "title": "Mcp Block Behavior"
+            },
             "model": {
               "anyOf": [
                 {
@@ -19115,6 +19131,22 @@
               ],
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
+            },
+            "mcp_block_behavior": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tool_result",
+                    "raise"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.",
+              "title": "Mcp Block Behavior"
             },
             "metadata": {
               "anyOf": [
@@ -49949,6 +49981,10 @@
                 }
               ],
               "title": "Content"
+            },
+            "is_error": {
+              "title": "Is Error",
+              "type": "boolean"
             },
             "role": {
               "const": "tool",

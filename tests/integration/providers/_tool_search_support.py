@@ -317,6 +317,11 @@ def tool_call_ids(assistant: Event) -> list[JsonValue]:
     return [JSON_OBJECT.validate_python(call)["id"] for call in calls]
 
 
+def server_tool_call_ids(assistant: Event) -> list[JsonValue]:
+    calls: Final = JSON_LIST.validate_python(provider_fields(assistant).get("server_tool_calls") or [])
+    return [JSON_OBJECT.validate_python(call)["id"] for call in calls]
+
+
 def wire_content(message: Event) -> list[JsonValue]:
     content: Final = message["content"]
     if isinstance(content, str):

@@ -50,6 +50,7 @@ from litellm.types.utils import (
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
+_REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES: Final = frozenset({"encrypted_content", "id", "status"})
 
 
 class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -678,7 +679,7 @@ class ResponsesAPIRequestUtils:
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
         stripped: Final = tuple(
-            ResponsesAPIRequestUtils._without_encrypted_reasoning(reasoning)
+            ResponsesAPIRequestUtils.readable_reasoning(reasoning)
             if (reasoning := ResponsesAPIRequestUtils._encrypted_reasoning_item(item)) is not None
             and (should_strip is None or should_strip(reasoning))
             else item
@@ -696,14 +697,14 @@ class ResponsesAPIRequestUtils:
         return reasoning
 
     @staticmethod
-    def _without_encrypted_reasoning(reasoning: Mapping[str, object]) -> object | None:
+    def readable_reasoning(reasoning: Mapping[str, object]) -> Mapping[str, object] | None:
         readable: Final = any(
             ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
         )
         if not readable:
             return None
         kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
-            key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
+            key: value for key, value in reasoning.items() if key not in _REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES
         }
         return kept
 

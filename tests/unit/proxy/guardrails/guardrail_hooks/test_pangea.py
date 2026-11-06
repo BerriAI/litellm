@@ -1,4 +1,8 @@
+from typing import Final
 from unittest.mock import AsyncMock, patch
+
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from typing_extensions import ReadOnly, TypedDict
 
 import httpx
 import pytest
@@ -11,6 +15,8 @@ from litellm.proxy.guardrails.guardrail_hooks.pangea.pangea import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -368,3 +374,86 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
         )
 
     assert response.choices[0]["message"]["content"] == "Yes, here is an SSN: <US_SSN>"
+
+
+class _GuardedMessage(TypedDict):
+    tool_calls: ReadOnly[list[ChatCompletionAssistantToolCall]]
+
+
+class _GuardedChoice(TypedDict):
+    message: ReadOnly[_GuardedMessage]
+
+
+class _GuardedOutput(TypedDict):
+    choices: ReadOnly[list[_GuardedChoice]]
+
+
+class _AiGuardRequest(TypedDict):
+    input: ReadOnly[_GuardedOutput]
+
+
+def _claude_fetch_call(url: str) -> ChatCompletionAssistantToolCall:
+    return {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_fetch", "arguments": '{"url": "%s"}' % url},
+    }
+
+
+def _with_masked_tool_calls(choice: _GuardedChoice) -> _GuardedChoice:
+    message: Final = choice["message"]
+    masked_calls: Final = [_claude_fetch_call("<URL>") for _ in message["tool_calls"]]
+    return {**choice, "message": {**message, "tool_calls": masked_calls}}
+
+
+@pytest.mark.asyncio
+async def test_pangea_ai_guard_response_masks_claude_server_tool_call_inputs(pangea_guardrail: PangeaHandler) -> None:
+    data: Final = {"messages": [{"role": "user", "content": "Read https://example.com/"}]}
+    fetch: Final = build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
+    sent_choices: Final[list[_GuardedChoice]] = []
+
+    async def _mask_tool_call_urls(
+        _handler: object, url: str, json: _AiGuardRequest, **_kwargs: object
+    ) -> httpx.Response:
+        choices: Final = json["input"]["choices"]
+        sent_choices.extend(choices)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "result": {
+                    "blocked": False,
+                    "transformed": True,
+                    "output": {"choices": [_with_masked_tool_calls(choice) for choice in choices]},
+                }
+            },
+            request=httpx.Request(method="POST", url=url),
+        )
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new=_mask_tool_call_urls):
+        response: Final = await pangea_guardrail.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=None,
+            response=ModelResponse(
+                choices=[
+                    Choices(
+                        message=Message(
+                            role="assistant",
+                            content="Done",
+                            provider_specific_fields={
+                                "server_tool_calls": [_claude_fetch_call("https://example.com/")],
+                                "web_search_calls": [fetch],
+                            },
+                        )
+                    )
+                ]
+            ),
+        )
+
+    assert sent_choices[0]["message"]["tool_calls"] == [_claude_fetch_call("https://example.com/")]
+    message: Final = response.choices[0]["message"]
+    assert message["tool_calls"] is None
+    assert message["provider_specific_fields"]["server_tool_calls"] == [_claude_fetch_call("<URL>")]
+    hosted_copy: Final = (
+        ResponseFunctionWebSearch.model_validate(message["provider_specific_fields"]["web_search_calls"][0])
+    )
+    assert hosted_copy.action.url == "<URL>"

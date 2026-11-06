@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
     from litellm.router_strategy.quality_router.quality_router import QualityRouter
+    from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
     from litellm.router_utils.cooldown_cache import CooldownCache
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets as _AttemptedFallbackTargets
     from litellm.router_utils.health_state_cache import DeploymentHealthCache
@@ -106,6 +107,7 @@ if TYPE_CHECKING:
         | dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]]
         | dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]]
         | dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]
+        | dict[str, list[TaggedPreRoutingStrategy[SwitchyardRouter]]]
         | list[RoutingPlugin]
         | RouterBudgetLimiting
         | DualCache
@@ -145,6 +147,7 @@ ResolveKind: TypeAlias = Literal[
     "team_model",
     "recognized",
     "upstream",
+    "upstream_provider",
     "group_of_id",
     "wildcard_access_group",
     "team_model_alternatives",
@@ -157,7 +160,9 @@ GroupField: TypeAlias = Literal[
     "display_name",
     "mode",
     "service_tiers",
+    "pinned_reasoning_efforts",
     "max_input_tokens",
+    "deployment_model_info",
     "token_limits",
     "listing_info",
 ]
@@ -168,6 +173,7 @@ PluginKind: TypeAlias = Literal[
     "complexity",
     "quality",
     "adaptive",
+    "switchyard",
     "routing",
     "budget_limiter",
     "prompt_caching_pins",
@@ -757,7 +763,7 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        kind: Literal["alias", "upstream"],
+        kind: Literal["alias", "upstream", "upstream_provider"],
         team_id: str | None = None,
         custom_llm_provider: str | None = None,
         served_model: str | None = None,
@@ -837,6 +843,8 @@ class RouterRegistry:
         - ``team_model``: a team's public name to its group (was ``map_team_model``; ``team_id`` required)
         - ``recognized``: whether the router knows the name (was ``is_recognized_model``)
         - ``upstream``: the upstream model a name routes to (was ``get_routable_upstream_model``)
+        - ``upstream_provider``: the provider the deployment ``upstream`` reads declares, by its
+          ``custom_llm_provider`` or its model's ``provider/`` prefix
         - ``group_of_id``: the group of a deployment id (was ``get_model_group``)
         - ``wildcard_access_group``: whether an access group grants a wildcard route
           (was ``is_model_access_group_for_wildcard_route``)
@@ -866,10 +874,8 @@ class RouterRegistry:
             return name if served_model is None else r._core_resolve_served_model_name(name, served_model)
         if kind == "recognized":
             return r._core_is_recognized_model(name)
-        if kind == "upstream":
-            return r._core_get_routable_upstream_model(name, team_id=team_id)
-        if kind == "search_tool_support":
-            return r._core_get_search_tool_support(name, team_id=team_id)
+        if kind in ("upstream", "upstream_provider", "search_tool_support"):
+            return self._resolve_routable(name, kind, team_id)
         if kind == "group_of_id":
             return r._core_get_model_group(id=name)
         if kind == "wildcard_access_group":
@@ -877,6 +883,19 @@ class RouterRegistry:
         if kind == "team_model_alternatives":
             return r._core_team_model_has_alternatives(name)
         raise ValueError(f"unknown resolve kind {kind!r}")
+
+    def _resolve_routable(
+        self,
+        name: str,
+        kind: Literal["upstream", "upstream_provider", "search_tool_support"],
+        team_id: str | None,
+    ) -> str | tuple[bool | None, ...] | None:
+        r: Final = self._router
+        if kind == "upstream":
+            return r._core_get_routable_upstream_model(name, team_id=team_id)
+        if kind == "upstream_provider":
+            return r._core_get_routable_upstream_provider(name, team_id=team_id)
+        return r._core_get_search_tool_support(name, team_id=team_id)
 
     def aliases(
         self,
@@ -924,7 +943,7 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        field: Literal["service_tiers"],
+        field: Literal["service_tiers", "pinned_reasoning_efforts"],
         include_hidden: bool = False,
         team_id: str | None = None,
     ) -> tuple[object, ...]: ...
@@ -938,6 +957,16 @@ class RouterRegistry:
         include_hidden: bool = False,
         team_id: str | None = None,
     ) -> tuple[int | None, ...]: ...
+
+    @overload
+    def group(
+        self,
+        name: str,
+        *,
+        field: Literal["deployment_model_info"],
+        include_hidden: bool = False,
+        team_id: str | None = None,
+    ) -> "tuple[ModelMapInfo | None, ...]": ...
 
     @overload
     def group(
@@ -976,7 +1005,9 @@ class RouterRegistry:
           (were ``get_configured_display_name``, ``get_configured_mode``,
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
+        - ``pinned_reasoning_efforts``: the ``reasoning_effort`` each routable deployment pins
         - ``max_input_tokens``: each routable deployment's own ``model_info.max_input_tokens``
+        - ``deployment_model_info``: each routable deployment's model info, merged with the pricing map
         """
         r: Final = self._router
         if field == "info":
@@ -989,8 +1020,12 @@ class RouterRegistry:
             return r._core_get_configured_mode(name)
         if field == "service_tiers":
             return r._core_get_configured_service_tiers(name, team_id=team_id)
+        if field == "pinned_reasoning_efforts":
+            return r._core_get_pinned_reasoning_efforts(name, team_id=team_id)
         if field == "max_input_tokens":
             return r._core_get_configured_max_input_tokens(name, team_id=team_id)
+        if field == "deployment_model_info":
+            return r._core_get_routable_deployment_model_info(name, team_id=team_id)
         if field == "token_limits":
             return r._core_get_configured_token_limits(name)
         if field == "listing_info":
@@ -1075,6 +1110,11 @@ class RouterRegistry:
     ) -> "dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]": ...  # mutable-ok: the live dict
 
     @overload
+    def plugins(
+        self, kind: Literal["switchyard"]
+    ) -> "dict[str, list[TaggedPreRoutingStrategy[SwitchyardRouter]]]": ...  # mutable-ok: the live dict
+
+    @overload
     def plugins(self, kind: Literal["routing"]) -> "list[RoutingPlugin]": ...  # mutable-ok: the live list
 
     @overload
@@ -1100,6 +1140,8 @@ class RouterRegistry:
             return r._core_quality_routers
         if kind == "adaptive":
             return r._core_adaptive_routers
+        if kind == "switchyard":
+            return r._core_switchyard_routers
         if kind == "routing":
             return r._core_routing_plugins
         if kind == "budget_limiter":
@@ -1107,6 +1149,18 @@ class RouterRegistry:
         if kind == "prompt_caching_pins":
             return r._core_prompt_caching_pin_cache
         raise ValueError(f"unknown plugin kind {kind!r}")
+
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """
+        ``request_input`` without the encrypted reasoning that ``targets``, the deployments a
+        ``model_group`` request may go to, cannot decrypt, keeping each item's readable summary.
+        When encrypted content affinity is on for the group, the router sends the request to the
+        reasoning's origin, so reasoning one target can decrypt stays; otherwise every target must
+        decrypt it (was reading ``optional_callbacks`` for ``EncryptedContentAffinityCheck``).
+        """
+        return self._router._core_decryptable_reasoning(model_group, request_input, targets)
 
 
 # Settings a caller may read. Assigning one from outside the router goes through apply(ChangeSet(assign=...)).
@@ -1630,6 +1684,11 @@ class RoutingContext:
         metadata_variable_name: str | None = "metadata",
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
+
+    def arm_cooldown_prefetch(self) -> None:
+        from litellm.router_utils.routing_read_batch import RoutingPrefetch
+
+        RoutingPrefetch.arm_cooldowns(self)
 
     def arm_read_prefetch(
         self,
