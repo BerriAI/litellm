@@ -8,11 +8,12 @@ Translations handled by LiteLLM:
 - Other parameters follow base Azure OpenAI Responses API behavior
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-from litellm.utils import supports_reasoning
+from litellm.utils import has_catalog_entry, supports_reasoning
 
 from .transformation import AzureOpenAIResponsesAPIConfig
 
@@ -39,7 +40,9 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         O-series models don't support temperature parameter in responses API.
         """
         # Get the base Azure supported params
-        base_supported_params: Final = super().get_supported_openai_params(model)
+        base_supported_params: Final[Sequence[str]] = super().get_supported_openai_params(model)
+        if has_catalog_entry(model=model, custom_llm_provider="azure") and self._sampling_params_allowed(model, None):
+            return list(base_supported_params)
 
         # O-series models don't support temperature parameter in responses API
         o_series_unsupported_params: Final = ["temperature"]
@@ -63,6 +66,13 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         Drops temperature parameter if drop_params is True since O-series models
         don't support temperature in the responses API.
         """
+        if has_catalog_entry(model=model, custom_llm_provider="azure"):
+            return dict(
+                super().map_openai_params_for_deployment(
+                    response_api_optional_params, model, drop_params, declared_reasoning_efforts=None
+                )
+            )
+
         mapped_params: Final = dict(response_api_optional_params)
 
         # If drop_params is enabled, remove temperature parameter for O-series models

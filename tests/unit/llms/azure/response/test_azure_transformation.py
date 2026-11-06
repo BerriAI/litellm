@@ -1814,3 +1814,12 @@ def test_azure_reasoning_replay_drops_status_always_and_content_under_drop_param
 
     assert request["input"] == [replayable if drop_params else {**replayable, "content": saved_content}]
     assert history == original
+
+
+@pytest.mark.parametrize("model", ["o3", "azure/o3", "azure/us/o3"])
+@pytest.mark.parametrize("param,value", [("temperature", 0.5), ("top_p", 0.9)])
+def test_azure_o_series_responses_sampling_cost_map(model: str, param: str, value: float) -> None:
+    config: Final = AzureOpenAIOSeriesResponsesAPIConfig()
+    assert config.map_openai_params({param: value}, model, drop_params=True) == {}
+    with pytest.raises(litellm.UnsupportedParamsError):
+        config.map_openai_params({param: value}, model, drop_params=False)

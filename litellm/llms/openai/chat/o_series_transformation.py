@@ -25,6 +25,7 @@ from litellm.utils import (
     supports_system_messages,
 )
 
+from .gpt_reasoning_transformation import OpenAIGPT5Config
 from .gpt_transformation import OpenAIGPTConfig
 
 
@@ -60,13 +61,15 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         all_openai_params: Final = super().get_supported_openai_params(model=model)
         non_supported_params: Final = [
             "logprobs",
-            "top_p",
             "presence_penalty",
             "frequency_penalty",
             "top_logprobs",
         ]
 
         o_series_only_param: Final = ["reasoning_effort"]
+
+        if not OpenAIGPT5Config.sampling_params_allowed(model, None, fallback_allowed=False):
+            non_supported_params.append("top_p")
 
         all_openai_params.extend(o_series_only_param)
 
@@ -105,10 +108,22 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     ):
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
+        sampling_params: Final = cast(  # cast-ok: legacy mapper accepts an untyped parameter bag
+            "dict[str, object]", non_default_params
+        )
+        reasoning_effort: Final = sampling_params.get("reasoning_effort")
+        sampling_allowed: Final = OpenAIGPT5Config.sampling_params_allowed(
+            model, reasoning_effort if isinstance(reasoning_effort, str) else None, fallback_allowed=False
+        )
+        if "top_p" in non_default_params and not sampling_allowed:
+            if litellm.drop_params or drop_params:
+                sampling_params.pop("top_p", None)
+            else:
+                raise litellm.utils.UnsupportedParamsError(message=f"{model} doesn't support top_p", status_code=400)
         if "temperature" in non_default_params:
             temperature_value: Final[float | None] = non_default_params.pop("temperature")
             if temperature_value is not None:
-                if temperature_value == 1:
+                if sampling_allowed or temperature_value == 1:
                     optional_params["temperature"] = temperature_value
                 else:
                     ## UNSUPPORTED TOOL CHOICE VALUE
