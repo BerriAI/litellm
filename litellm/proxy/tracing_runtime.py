@@ -31,7 +31,7 @@ async def provide_receiver(request: Request) -> TraceReceiver | None:
 
 async def provide_storage(request: Request) -> LensTraceStorage | None:
     tracing: Final = await provide_receiver(request)
-    return tracing.storage if tracing is not None else None
+    return tracing.storage if tracing is not None and isinstance(tracing.storage, LensTraceStorage) else None
 
 
 @asynccontextmanager
@@ -40,9 +40,10 @@ async def manage_tracing(
     receiver_factory: Callable[[], TraceReceiver] | None = None,
     settings: Mapping[str, object] | None = None,
     client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.lifespan_client,
+    fallback_factory: Callable[[], TraceReceiver | None] = lambda: None,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
     if not enabled:
-        yield None
+        yield fallback_factory()
         return
     try:
         connection: Final = LensConnection.from_env()

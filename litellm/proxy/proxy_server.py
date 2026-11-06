@@ -1057,7 +1057,9 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
+from litellm.tracing import TraceReceiver
 from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.tracing.spend_logs import SpendLogTraceStorage
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
@@ -1568,6 +1570,10 @@ def _forget_prisma_client() -> None:
     prisma_client = None  # rebind-ok: a closed client must not survive into the next lifespan entry
 
 
+def _spend_log_trace_receiver() -> TraceReceiver:
+    return TraceReceiver(storage=SpendLogTraceStorage(lambda: prisma_client.db if prisma_client is not None else None))
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
     with GracefulShutdownManager.capture_sigterm():
@@ -1944,6 +1950,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
+        fallback_factory=_spend_log_trace_receiver,
     ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver, "database": database}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
