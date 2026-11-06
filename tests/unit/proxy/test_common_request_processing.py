@@ -5202,9 +5202,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
@@ -5436,12 +5434,14 @@ class TestAsyncStreamingDataGeneratorFastPath:
         ProxyLogging._callback_capabilities_cache.clear()
 
     @pytest.mark.asyncio
-    async def test_slow_path_records_per_chunk_work_on_the_logging_object(self, monkeypatch):
+    async def test_slow_path_records_per_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
         """The overhead header is stamped before any chunk is read, so the time the proxy spends in
         the per-chunk hook has to be recorded on the logging object for the success callback to add."""
 
         class _StreamingCb(CustomLogger):
-            async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            async def async_post_call_streaming_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, response: object
+            ) -> object:
                 return response
 
         monkeypatch.setattr(litellm, "callbacks", [_StreamingCb()])
@@ -5449,7 +5449,7 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
 
-        async def slow_hook(**kw):
+        async def slow_hook(**kw: object) -> object:
             await asyncio.sleep(0.02)
             return kw["response"]
 

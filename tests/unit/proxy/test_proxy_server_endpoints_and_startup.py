@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import types
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -7582,11 +7582,11 @@ async def test_async_data_generator_records_per_chunk_work_on_the_logging_object
 
     mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
 
-    async def mock_streaming_iterator(*args, **kwargs):
+    async def mock_streaming_iterator(*args: object, **kwargs: object) -> AsyncIterator[object]:
         for chunk in mock_chunks:
             yield chunk
 
-    async def slow_hook(**kwargs):
+    async def slow_hook(**kwargs: object) -> object:
         await asyncio.sleep(0.02)
         return kwargs.get("response")
 
