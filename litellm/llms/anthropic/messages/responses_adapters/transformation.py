@@ -10,6 +10,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -58,6 +60,7 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -584,6 +587,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
+    @staticmethod
+    def _resolve_output_format_strict(strict: bool | None) -> bool:
+        if strict is None:
+            return True
+        return strict
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -693,7 +702,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         "type": "json_schema",
                         "name": "structured_output",
                         "schema": schema,
-                        "strict": output_format.get("strict", False),
+                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
                     }
                 }
 
@@ -799,15 +808,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         content.append(reasoning_block)
                 elif item_type == "function_call":
                     try:
-                        input_data = json.loads(item.get("arguments", "{}"))
+                        input_data = _DECODED_JSON.validate_python(json.loads(item.get("arguments", "{}")))
                     except (json.JSONDecodeError, TypeError):
                         input_data = {}
                     content.append(
-                        AnthropicResponseContentBlockToolUse(
-                            type="tool_use",
-                            id=item.get("call_id") or item.get("id", ""),
-                            name=item.get("name", ""),
-                            input=input_data,
+                        AnthropicResponseContentBlockToolUse.model_validate(
+                            {
+                                "type": "tool_use",
+                                "id": item.get("call_id") or item.get("id", ""),
+                                "name": item.get("name", ""),
+                                "input": input_data,
+                            }
                         ).model_dump(exclude_none=True)
                     )
                     stop_reason = "tool_use"

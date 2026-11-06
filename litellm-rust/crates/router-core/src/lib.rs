@@ -124,8 +124,8 @@ pub use crate::{
     error::{AttemptError, ConfigError, Error, FailureKind, Payload, Unsupported},
     health::{Clock, Health, Outcome, SystemClock},
     host::{
-        Attempt, Blocked, BuildAsk, BuildPath, Built, Host, Output, Provided, RetryCause,
-        RouterEvent, RouterRequest, RoutingContext, SecretAt, SecretRef, SelectStage,
+        Attempt, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered, Host, Output, Provided,
+        RetryCause, RouterEvent, RouterRequest, RoutingContext, SecretAt, SecretRef, SelectStage,
     },
     outcome::{OutcomeCallbacks, OutcomeWrite},
     prerouting::{PreRoute, PreRouted},

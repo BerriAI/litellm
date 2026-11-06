@@ -20,10 +20,10 @@ use std::{
 
 use async_trait::async_trait;
 use litellm_router_core::{
-    Attempt, AttemptError, Blocked, BuildAsk, BuildPath, Built, Deployment, Error, Host, Output,
-    Payload, PreRoute, PreRouted, Provided, Randomness, RouterCache, RouterEvent, RouterRequest,
-    RouterResponse, RoutingContext, SecretRef, SelectStage, ThreadRandomness,
-    build::BuiltDeployment, host::ModelInfoLookup, model_info::MergedModelInfo,
+    Attempt, AttemptError, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered, Deployment,
+    Error, Host, Output, Payload, PreRoute, PreRouted, Provided, Randomness, RouterCache,
+    RouterEvent, RouterRequest, RouterResponse, RoutingContext, SecretRef, SelectStage,
+    ThreadRandomness, build::BuiltDeployment, host::ModelInfoLookup, model_info::MergedModelInfo,
     precall::PreCallFacts,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
@@ -298,8 +298,9 @@ pub(crate) enum HostCallResponse {
     PreCall(PreCallFacts),
     /// The candidate models a `routing_plugins` select step reported.
     Models(Option<Vec<String>>),
-    /// The ids a `callback_filters` select step left, or the error a filter raised.
-    Filtered(Result<Vec<String>, AttemptError>),
+    /// The ids a `callback_filters` select step left with the one a filter prefers, or the error
+    /// a filter raised.
+    Filtered(Result<(Vec<String>, Option<String>), AttemptError>),
     /// What a pick's select or pre-route step, or a fallback check, raised on the host instead of
     /// answering: the walk takes it as the try's failure.
     Raised(AttemptError),
@@ -352,8 +353,10 @@ impl HostCallResponse {
                 got: self.kind(),
             });
         }
-        if let (Self::Select(ids) | Self::Filtered(Ok(ids)), HostCall::Select { candidates, .. }) =
-            (self, call)
+        if let (
+            Self::Select(ids) | Self::Filtered(Ok((ids, _))),
+            HostCall::Select { candidates, .. },
+        ) = (self, call)
             && let Some(id) = ids.iter().find(|id| !candidates.contains(id))
         {
             return Err(DriveError::UnknownCandidate { id: id.clone() });
@@ -890,7 +893,7 @@ impl Host for StepHost {
         &self,
         ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
+    ) -> Result<CallbackFiltered, Error> {
         let (scope, group) = ctx.scope.wire();
         let joined = |own: &[String], walked: &[String]| [own, walked].concat();
         let call = HostCall::Select {
@@ -909,8 +912,11 @@ impl Host for StepHost {
         let HostCallResponse::Filtered(result) = call_host(call).await else {
             unreachable!("{CHECKED}");
         };
-        let ids = result.map_err(Error::Attempt)?;
-        Ok(answered_by_id(&candidates, &ids))
+        let (ids, preferred) = result.map_err(Error::Attempt)?;
+        Ok(CallbackFiltered {
+            kept: answered_by_id(&candidates, &ids),
+            preferred,
+        })
     }
 
     async fn allow_fallback(

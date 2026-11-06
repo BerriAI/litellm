@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
@@ -666,7 +667,7 @@ def _resolve_provider_credentials(
         return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
     def _provider_credentials(model_id: str) -> dict[str, object] | None:
-        credentials: Final = registry.credentials(model_id, form="with_provider", team_id=team_id)
+        credentials: Final = as_str_mapping(registry.credentials(model_id, form="with_provider", team_id=team_id))
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
@@ -1634,6 +1635,10 @@ async def get_batch_from_database(
         return None, None
 
 
+class _BatchCostJobScheduler(Protocol):
+    def get_job(self, job_id: str, /) -> object: ...
+
+
 def batch_cost_poller_is_active() -> bool:
     """
     Whether the CheckBatchCost poller will account for a managed batch's cost itself.
@@ -1654,10 +1659,10 @@ def batch_cost_poller_is_active() -> bool:
     try:
         import litellm.proxy.proxy_server as proxy_server_module
 
-        scheduler = getattr(proxy_server_module, "scheduler", None)
+        scheduler: Final[_BatchCostJobScheduler | None] = getattr(proxy_server_module, "scheduler", None)
         if scheduler is None:
             return False
-        job = scheduler.get_job("check_batch_cost_job")
+        job: Final = scheduler.get_job("check_batch_cost_job")
         if job is None:
             return False
         poller = getattr(getattr(job, "func", None), "__self__", None)

@@ -9,7 +9,7 @@ import orjson
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from starlette.datastructures import FormData
+from starlette.datastructures import FormData, Headers, UploadFile
 from starlette.requests import Request
 
 
@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     safe_get_request_query_params,
     safe_set_request_parsed_body,
     coerce_numeric_form_fields,
+    convert_upload_files_to_file_data,
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
@@ -1764,3 +1765,24 @@ async def test_read_request_body_closes_the_otel_server_span_when_the_client_dis
     with pytest.raises(HTTPException):
         await read_request_body(request)
     assert (span.end.called, request.state.parent_otel_span) == (True, None), "the auth-time span must not dangle"
+
+
+def _upload(filename: str, content: bytes, content_type: str) -> UploadFile:
+    return UploadFile(file=io.BytesIO(content), filename=filename, headers=Headers({"content-type": content_type}))
+
+
+@pytest.mark.asyncio
+async def test_convert_upload_files_to_file_data_reads_every_upload_into_file_tuples():
+    form_data: Final = {
+        "files": [_upload("a.txt", b"alpha", "text/plain"), _upload("b.json", b"{}", "application/json")],
+        "file": _upload("skill.zip", b"PK", "application/zip"),
+        "tags": ["red", "blue"],
+        "display_title": "My skill",
+    }
+
+    assert await convert_upload_files_to_file_data(form_data) == {
+        "files": [("a.txt", b"alpha", "text/plain"), ("b.json", b"{}", "application/json")],
+        "file": [("skill.zip", b"PK", "application/zip")],
+        "tags": ["red", "blue"],
+        "display_title": "My skill",
+    }
