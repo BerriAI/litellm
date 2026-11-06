@@ -19,6 +19,7 @@ from litellm.llms.chatgpt.authenticator import Authenticator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.main import responses_api_bridge_check
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -59,7 +60,7 @@ class TestChatGPTResponsesAPITransformation:
         assert request["reasoning"] == {"effort": effort}
         assert request["stream"] is True
         assert request["store"] is False
-        assert "max_output_tokens" not in request
+        assert request["max_output_tokens"] == 16
         assert "prompt_cache_options" not in request
 
     @pytest.mark.parametrize("requested_tier", [None, "auto", "flex", "unknown"])
@@ -236,9 +237,9 @@ class TestChatGPTResponsesAPITransformation:
                 "top_p": 0.9,
                 "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "metadata": {"foo": "bar"},
-                "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
                 # supported and should be preserved
+                "max_output_tokens": 123,
                 "truncation": "auto",
                 "previous_response_id": "resp_123",
                 "reasoning": {"effort": "medium"},
@@ -254,9 +255,9 @@ class TestChatGPTResponsesAPITransformation:
         assert "top_p" not in request
         assert "context_management" not in request
         assert "metadata" not in request
-        assert "max_output_tokens" not in request
         assert "stream_options" not in request
 
+        assert request["max_output_tokens"] == 123
         assert request["truncation"] == "auto"
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
@@ -627,14 +628,16 @@ def chatgpt_token_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
 
 
-def _completed_codex_upstream(output_text: str) -> MagicMock:
+def _completed_codex_upstream(output_text: str, incomplete_reason: str | None = None) -> MagicMock:
+    status: Final = "completed" if incomplete_reason is None else "incomplete"
     completed: Final = {
-        "type": "response.completed",
+        "type": f"response.{status}",
         "response": {
             "id": "resp_1",
             "object": "response",
             "created_at": 1,
-            "status": "completed",
+            "status": status,
+            "incomplete_details": None if incomplete_reason is None else {"reason": incomplete_reason},
             "model": "gpt-5.5",
             "output": [
                 {
@@ -652,7 +655,7 @@ def _completed_codex_upstream(output_text: str) -> MagicMock:
         side_effect=lambda _request: httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
+            content=f"event: response.{status}\ndata: {json.dumps(completed)}\n\n".encode(),
         )
     )
 
@@ -723,3 +726,40 @@ def test_chat_response_format_reaches_the_codex_backend_as_text_format(
     )
 
     assert json.loads(upstream.call_args.args[0].content)["text"]["format"] == expected_format
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize(
+    ("max_tokens", "expected_max_output_tokens"),
+    [(300, 300), (OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS - 1, OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS)],
+)
+def test_chat_max_tokens_reaches_the_codex_backend_no_lower_than_its_minimum(
+    max_tokens: int, expected_max_output_tokens: int
+) -> None:
+    upstream: Final = _completed_codex_upstream("OK")
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    litellm.completion(
+        model="chatgpt/gpt-5.5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=max_tokens,
+        client=client,
+    )
+
+    assert json.loads(upstream.call_args.args[0].content)["max_output_tokens"] == expected_max_output_tokens
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+def test_non_stream_chat_cut_off_by_max_tokens_returns_the_partial_answer() -> None:
+    upstream: Final = _completed_codex_upstream('{"capitals": ["Paris", "Ber', incomplete_reason="max_output_tokens")
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    response: Final = litellm.completion(
+        model="chatgpt/gpt-5.5",
+        messages=[{"role": "user", "content": "List capitals as JSON."}],
+        max_tokens=16,
+        client=client,
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.content == '{"capitals": ["Paris", "Ber'
