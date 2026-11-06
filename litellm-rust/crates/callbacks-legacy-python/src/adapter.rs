@@ -251,25 +251,39 @@ impl LegacyLogging {
         if !self.asynchronous {
             return pending().sync(py);
         }
-        if !self.internal
-            && self
+        if self.internal {
+            return Ok(());
+        }
+        let defers = logger.defers_async_logging(py);
+        if logger.claim_async_success_log(py)? {
+            let enqueues = self
                 .call
                 .kwargs()
                 .bind(py)
                 .get_item("fallbacks")?
-                .is_none_or(|value| value.is_none())
-        {
-            if logger.defers_async_logging(py) {
+                .is_none_or(|value| value.is_none());
+            if defers {
                 let pending = Py::new(
                     py,
                     PendingLogging {
                         pending: Some(pending()),
+                        enqueues,
                     },
                 )?;
-                logger.defer_success(py, pending.bind(py).as_any())?;
-            } else {
+                return logger.defer_success(
+                    py,
+                    pending.bind(py).as_any(),
+                    &self.response,
+                    &self.start,
+                    &self.end,
+                );
+            }
+            if enqueues {
                 pending().asynchronous(py)?;
             }
+        }
+        if defers {
+            return Ok(());
         }
         logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
     }
@@ -1873,10 +1887,15 @@ mod terminal_tests {
     #[case::async_listened(
         true,
         c"",
-        &["async_success_handler", "enqueued", "sync_success_for_async_call"]
+        &["async_success_handler", "mark_async_success_enqueued", "enqueued", "sync_success_for_async_call"]
     )]
-    #[case::async_deferred(true, c"logger._defer_async_logging = True", &["sync_success_for_async_call"])]
+    #[case::async_deferred(true, c"logger._defer_async_logging = True", &[])]
     #[case::async_with_fallbacks(true, c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
+    #[case::async_deferred_with_fallbacks(
+        true,
+        c"logger._defer_async_logging = True\nkwargs = {'fallbacks': ['other']}",
+        &[]
+    )]
     fn success_reaches_the_logging_handlers(
         #[case] asynchronous: bool,
         #[case] script: &CStr,
@@ -1902,8 +1921,84 @@ mod terminal_tests {
                 &locals,
                 c"
 assert all(value is response for name, value in logger.calls if name.endswith('_handler'))
-assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_async_logging', False)
+assert hasattr(logger, 'enqueue_deferred_logging') == getattr(logger, '_defer_async_logging', False)
+assert getattr(logger, 'deferred_success_result', (response,))[0] is response
 ",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::accepted(c"", &["sync_success_for_async_call", "async_success_handler", "mark_async_success_enqueued", "enqueued"])]
+    #[case::accepted_with_fallbacks(c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
+    fn a_deferred_success_runs_sync_callbacks_only_once_released(
+        #[case] script: &CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"response = object()\nlogger._defer_async_logging = True",
+            );
+            run(py, &locals, script);
+            let mut logging = logged(py, &locals, true);
+            succeed(py, &locals, &mut logging);
+            run(
+                py,
+                &locals,
+                c"
+assert logger.names() == [], logger.calls
+logger.enqueue_deferred_logging()
+logger.enqueue_deferred_logging()
+",
+            );
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+        });
+    }
+
+    #[rstest]
+    #[case::deferred(
+        c"logger._defer_async_logging = True",
+        c"logger.enqueue_deferred_logging()",
+        &["sync_success_for_async_call", "async_success_handler", "mark_async_success_enqueued", "enqueued"]
+    )]
+    #[case::deferred_and_blocked(c"logger._defer_async_logging = True", c"", &[])]
+    #[case::immediate(
+        c"",
+        c"",
+        &["async_success_handler", "mark_async_success_enqueued", "enqueued", "sync_success_for_async_call", "sync_success_for_async_call"]
+    )]
+    fn a_fallback_attempt_on_the_same_logger_leaves_the_first_success_claimed(
+        #[case] script: &CStr,
+        #[case] release: &CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"refused = object()\nresponse = refused");
+            run(py, &locals, script);
+            let mut first = logged(py, &locals, true);
+            succeed(py, &locals, &mut first);
+            run(py, &locals, c"response = object()");
+            let mut fallback = logged(py, &locals, true);
+            succeed(py, &locals, &mut fallback);
+            run(py, &locals, release);
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+            run(
+                py,
+                &locals,
+                c"assert all(value is refused for name, value in logger.calls if name == 'async_success_handler')",
             );
         });
     }
@@ -1933,10 +2028,10 @@ assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_asy
             ));
             assert_eq!(sender.dropped_events(), 1);
             run(py, &locals, c"
-assert logger.names() == ['sync_success_for_async_call'], logger.calls
-logger._native_pending_logging.release(True)
-logger._native_pending_logging.release(True)
-assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued'], logger.calls
+assert logger.names() == [], logger.calls
+logger.enqueue_deferred_logging()
+logger.enqueue_deferred_logging()
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'mark_async_success_enqueued', 'enqueued'], logger.calls
 assert logger.calls[0][1] is response
 assert logger.calls[1][1] is response
 ");
@@ -2009,7 +2104,7 @@ assert chunks[1] is last
     }
 
     #[rstest::rstest]
-    fn internal_async_calls_skip_the_async_success_fan_out() {
+    fn internal_async_calls_skip_success_logging() {
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"response = object()");
@@ -2018,11 +2113,7 @@ assert chunks[1] is last
                 ..logged(py, &locals, true)
             };
             succeed(py, &locals, &mut logging);
-            run(
-                py,
-                &locals,
-                c"assert logger.names() == ['sync_success_for_async_call'], logger.calls",
-            );
+            run(py, &locals, c"assert logger.calls == [], logger.calls");
         });
     }
 

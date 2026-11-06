@@ -72,7 +72,11 @@ FAKES = {
         llm_api_duration_ms=(end - start) * 1000
     ),
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
-    'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),
+    'claim_async_success_log': lambda logger: logger.claim_async_success_log(),
+    'defer_success': lambda logger, pending, response, start, end: (
+        setattr(logger, 'deferred_success_result', (response, start, end)),
+        setattr(logger, 'enqueue_deferred_logging', pending),
+    ),
     'sync_success_for_async_call': lambda logger, response, start, end: logger.handle_sync_success_callbacks_for_async_calls(
         response, start, end
     ),
@@ -81,6 +85,7 @@ FAKES = {
     )(error, ''.join(traceback.format_exception(error)), start, end),
     'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
     'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'mark_async_success_enqueued': lambda logger: logger.record('mark_async_success_enqueued', None),
     'enqueue_logging': lambda coroutine: coroutine.enqueue(),
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
@@ -155,6 +160,10 @@ class StubLogger:
     def async_success_handler(self, response, start, end):
         self.record('async_success_handler', response)
         return StubCoroutine(self)
+
+    def claim_async_success_log(self):
+        claimed, self.claimed = getattr(self, 'claimed', False), True
+        return not claimed
 
     def handle_sync_success_callbacks_for_async_calls(self, response, start, end):
         self.record('sync_success_for_async_call', response)
