@@ -67,7 +67,7 @@ class _TraceKeyRow(TypedDict):
     last_activity: ReadOnly[str]
 
 
-class _SpendLogRow(TypedDict):
+class SpendLogRow(TypedDict):
     request_id: ReadOnly[str]
     trace_key: ReadOnly[str]
     call_type: ReadOnly[str]
@@ -82,11 +82,12 @@ class _SpendLogRow(TypedDict):
     request_tags: ReadOnly[str | None]
     metadata: ReadOnly[str | None]
     messages: ReadOnly[str | None]
+    proxy_server_request: ReadOnly[str | None]
     response: ReadOnly[str | None]
 
 
 _TRACE_KEY_ROWS: Final = TypeAdapter(tuple[_TraceKeyRow, ...])
-_SPEND_LOG_ROWS: Final = TypeAdapter(tuple[_SpendLogRow, ...])
+_SPEND_LOG_ROWS: Final = TypeAdapter(tuple[SpendLogRow, ...])
 _JSON: Final = TypeAdapter(object)
 _OBJECT_MAPPING: Final = TypeAdapter(dict[str, object])
 _OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
@@ -102,7 +103,7 @@ class _ToolCall:
 
 @dataclass(frozen=True, slots=True)
 class _Call:
-    row: _SpendLogRow
+    row: SpendLogRow
     start_ms: float
     end_ms: float
     framework: str
@@ -271,10 +272,17 @@ def _response_text(response: Mapping[str, object]) -> str:
     return next((text for text in (anthropic, openai.strip(), responses_api.strip()) if text), "")
 
 
-def _call(row: _SpendLogRow) -> _Call:
+def _request_messages(row: SpendLogRow) -> object:
+    stored: Final = _loads(row["messages"])
+    if _sequence(stored):
+        return stored
+    return _mapping(_loads(row["proxy_server_request"])).get("messages")
+
+
+def _call(row: SpendLogRow) -> _Call:
     metadata: Final = _mapping(_loads(row["metadata"]))
     tags: Final = _sequence(_loads(row["request_tags"]))
-    messages: Final = _loads(row["messages"])
+    messages: Final = _request_messages(row)
     response: Final = _mapping(_loads(row["response"]))
     error_message: Final = _text(_mapping(metadata.get("error_information")).get("error_message"))
     return _Call(
@@ -470,7 +478,7 @@ def _agent_node(run: _AgentRun) -> AgentNode:
     )
 
 
-def build_trace(rows: Sequence[_SpendLogRow]) -> Trace:
+def build_trace(rows: Sequence[SpendLogRow]) -> Trace:
     calls: Final = tuple(sorted(map(_call, rows), key=lambda call: (call.start_ms, call.row["request_id"])))
     placed: Final = _place(calls)
     runs: Final = _agent_runs(placed)
@@ -515,7 +523,7 @@ def build_trace(rows: Sequence[_SpendLogRow]) -> Trace:
     )
 
 
-def _span_detail(trace_rows: Sequence[_SpendLogRow], span_id: str) -> SpanDetail | None:
+def _span_detail(trace_rows: Sequence[SpendLogRow], span_id: str) -> SpanDetail | None:
     calls: Final = tuple(sorted(map(_call, trace_rows), key=lambda call: (call.start_ms, call.row["request_id"])))
     llm: Final = next((call for call in calls if call.row["request_id"] == span_id), None)
     if llm is not None:
@@ -528,7 +536,7 @@ def _span_detail(trace_rows: Sequence[_SpendLogRow], span_id: str) -> SpanDetail
                 "gen_ai.request.model": llm.row["model"],
                 "agent.framework": llm.framework,
             },
-            input=json.dumps(_loads(llm.row["messages"])),
+            input=json.dumps(_request_messages(llm.row)),
             input_ui=UIMessages(kind="messages", messages=llm.input_messages),
             output=llm.output_text,
             output_ui=UIText(kind="text", text=llm.output_text or (llm.error or "")),
@@ -636,7 +644,7 @@ class SpendLogTraceStorage:
         )
         return _TRACE_KEY_ROWS.validate_python(rows)
 
-    async def _rows(self, trace_keys: Sequence[str], scope: TraceScope) -> tuple[_SpendLogRow, ...]:
+    async def _rows(self, trace_keys: Sequence[str], scope: TraceScope) -> tuple[SpendLogRow, ...]:
         if not trace_keys:
             return ()
         scope_sql, scope_args = _scope_sql(scope, 2)
@@ -645,7 +653,7 @@ class SpendLogTraceStorage:
             SELECT request_id, {TRACE_KEY_SQL} AS trace_key, call_type, model, status, spend, prompt_tokens,
                    completion_tokens, "startTime"::text AS start_time, "endTime"::text AS end_time, agent_id,
                    request_tags::text AS request_tags, metadata::text AS metadata, messages::text AS messages,
-                   response::text AS response
+                   proxy_server_request::text AS proxy_server_request, response::text AS response
             FROM "LiteLLM_SpendLogs"
             WHERE (session_id = ANY($1::text[]) OR request_id = ANY($1::text[]))
               AND {TRACE_KEY_SQL} = ANY($1::text[])

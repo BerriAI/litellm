@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -6,7 +7,7 @@ import pytest
 
 from litellm.tracing.generated.models import TraceAgentsParams
 from litellm.tracing.generated.types import TraceScope
-from litellm.tracing.spend_logs import SpendLogTraceStorage, build_trace
+from litellm.tracing.spend_logs import SpendLogRow, SpendLogTraceStorage, build_trace
 
 ALL: Final = TraceScope(all_teams=1, user_id="", team_ids=())
 OWNED: Final = TraceScope(all_teams=0, user_id="u1", team_ids=("t1",))
@@ -27,28 +28,29 @@ def row(
     error: str | None = None,
     spend: float = 0.01,
     agent_id: str | None = None,
-) -> dict[str, object]:
+) -> SpendLogRow:
     metadata: Final = {
         "user_agent": user_agent,
         **({"error_information": {"error_message": error}} if error else {}),
     }
-    return {
-        "request_id": request_id,
-        "trace_key": trace_key,
-        "call_type": "acompletion",
-        "model": "gpt-4o-mini",
-        "status": status,
-        "spend": spend,
-        "prompt_tokens": 10,
-        "completion_tokens": 5,
-        "start_time": f"2026-11-06 05:51:{start}",
-        "end_time": f"2026-11-06 05:51:{end}",
-        "agent_id": agent_id,
-        "request_tags": json.dumps(list(tags)),
-        "metadata": json.dumps(metadata),
-        "messages": json.dumps(messages),
-        "response": json.dumps(response or {}),
-    }
+    return SpendLogRow(
+        request_id=request_id,
+        trace_key=trace_key,
+        call_type="acompletion",
+        model="gpt-4o-mini",
+        status=status,
+        spend=spend,
+        prompt_tokens=10,
+        completion_tokens=5,
+        start_time=f"2026-11-06 05:51:{start}",
+        end_time=f"2026-11-06 05:51:{end}",
+        agent_id=agent_id,
+        request_tags=json.dumps(list(tags)),
+        metadata=json.dumps(metadata),
+        messages="{}",
+        proxy_server_request=json.dumps({"messages": messages, "tags": list(tags)}),
+        response=json.dumps(response or {}),
+    )
 
 
 class FakeDatabase:
@@ -89,15 +91,15 @@ def test_tagged_calls_become_an_agent_tree_with_tool_spans() -> None:
     assert spans["r2"]["parent_span_id"] == "agent:classifier"
     assert spans["r1:tool:0"]["parent_span_id"] == "r1"
     assert spans["r1:tool:0"]["name"] == "classify_ticket"
-    assert spans["r1:tool:0"]["duration_ms"] == pytest.approx(2000)
+    assert math.isclose(spans["r1:tool:0"]["duration_ms"], 2000)
     assert spans["r3"]["status"] == "error" and spans["r3"]["error"] == "boom"
     summary: Final = trace["summary"]
     assert summary["name"] == "triage"
     assert summary["llm_calls"] == 3 and summary["tool_calls"] == 1 and summary["error_count"] == 1
     assert summary["status"] == "error"
-    assert summary["spend"] == pytest.approx(0.04)
+    assert math.isclose(summary.get("spend") or 0, 0.04)
     assert summary["input_tokens"] == 30 and summary["output_tokens"] == 15
-    assert summary["duration_ms"] == pytest.approx(4000)
+    assert summary["duration_ms"] == 4000
     assert summary["input_preview"] == "refund me"
 
 
@@ -139,7 +141,7 @@ def test_claude_agent_sdk_subagent_is_inferred_from_its_task_prompt() -> None:
         "researcher",
         "claude-agent-sdk",
     )
-    assert trace["summary"]["frameworks"] == ("claude-agent-sdk",)
+    assert trace["summary"].get("frameworks") == ("claude-agent-sdk",)
     assert trace["summary"]["input_preview"] == "research MVCC"
 
 
