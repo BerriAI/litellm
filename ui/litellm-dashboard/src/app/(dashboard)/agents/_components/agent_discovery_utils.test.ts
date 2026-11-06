@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { selectionsFromSavedAgentCard, selectionsFromUpstreamCard, skillId } from "./agent_discovery_utils";
+import {
+  buildDiscoveryRequest,
+  selectionsFromSavedAgentCard,
+  selectionsFromUpstreamCard,
+  skillId,
+} from "./agent_discovery_utils";
 
 const upstreamCard = {
   name: "Upstream Agent",
@@ -48,5 +53,46 @@ describe("selectionsFromUpstreamCard", () => {
     const result = selectionsFromUpstreamCard(upstreamCard);
     expect(result.selectedSkillIds.size).toBe(3);
     expect(result.editedName).toBe("Upstream Agent");
+  });
+});
+
+describe("buildDiscoveryRequest", () => {
+  it("sends the LangGraph API key typed into the form", () => {
+    const values = { api_base: "https://lg.example.com/", assistant_id: "asst_1", api_key: "sk-1" };
+
+    const plan = {
+      url: "https://lg.example.com",
+      discovery_mode: "langgraph_platform",
+      params: { assistant_id: "asst_1" },
+      display_url: "https://lg.example.com/.well-known/agent-card.json?assistant_id=asst_1",
+      api_key: "sk-1",
+    };
+
+    expect(buildDiscoveryRequest("langgraph", values)).toEqual(plan);
+  });
+
+  it("sends no key when the edit form holds the redacted saved one", () => {
+    const values = { api_base: "https://lg.example.com", assistant_id: "asst_1", api_key: "REDACTED_BY_LITELM" };
+
+    expect(buildDiscoveryRequest("langgraph", values)).not.toHaveProperty("api_key");
+  });
+
+  it("sends an A2A agent's named static headers", () => {
+    const values = {
+      url: "https://agent.example.com",
+      static_headers: [
+        { header: " Authorization ", value: "Basic abc" },
+        { header: " ", value: "orphan" },
+      ],
+    };
+
+    const plan = {
+      url: "https://agent.example.com",
+      discovery_mode: "well_known_fallback",
+      display_url: "https://agent.example.com/.well-known/agent-card.json",
+      static_headers: { Authorization: "Basic abc" },
+    };
+
+    expect(buildDiscoveryRequest("a2a", values)).toEqual(plan);
   });
 });

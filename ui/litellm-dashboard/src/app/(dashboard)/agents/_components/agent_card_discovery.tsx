@@ -5,7 +5,7 @@ import { ChevronDown, CircleAlert, CircleCheck, Info, Link as LinkIcon, RotateCw
 import { Trans, useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
 
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
 import { DiscoveredAgentCard, discoverAgentCardCall } from "@/components/networking";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Badge } from "@/components/ui/badge";
@@ -118,67 +118,75 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     [discoveryRequest?.params],
   );
 
-  const handleDiscover = useCallback(async () => {
-    if (!accessToken) {
-      setError(i18n.t("agents.cardDiscovery.errors.noAccessToken"));
-      onApplyRef.current(null);
-      return;
-    }
-    const trimmed = effectiveUrl.trim();
-    if (!trimmed) {
-      setError(
-        isParentDriven
-          ? i18n.t("agents.cardDiscovery.errors.fillConnectionDetails")
-          : i18n.t("agents.cardDiscovery.errors.enterBaseUrl"),
-      );
-      setCard(null);
-      onApplyRef.current(null);
-      return;
-    }
-
-    const currentDiscoveryRequest = discoveryRequestRef.current;
-    const requestId = ++discoverRequestIdRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await discoverAgentCardCall(
-        accessToken,
-        trimmed,
-        isParentDriven && currentDiscoveryRequest
-          ? {
-              discovery_mode: currentDiscoveryRequest.discovery_mode,
-              params: currentDiscoveryRequest.params,
-            }
-          : undefined,
-      );
-      if (requestId !== discoverRequestIdRef.current) return;
-      lastSyncedSelectionRef.current = null;
-      setCard(response.agent_card);
-      resetSelections(response.agent_card);
-    } catch (e: any) {
-      if (requestId !== discoverRequestIdRef.current) return;
-      setError(e?.message ? String(e.message) : i18n.t("agents.cardDiscovery.errors.discoverFailed"));
-      setCard(null);
-      lastSyncedSelectionRef.current = null;
-      onApplyRef.current(null);
-    } finally {
-      if (requestId === discoverRequestIdRef.current) {
-        setLoading(false);
+  // Credentials go only with an explicit Discover, never to a URL the admin is still typing.
+  const handleDiscover = useCallback(
+    async (withCredentials?: boolean) => {
+      if (!accessToken) {
+        setError(i18n.t("agents.cardDiscovery.errors.noAccessToken"));
+        onApplyRef.current(null);
+        return;
       }
-    }
-    // ``discoveryMode`` / ``discoveryParamsKey`` are primitive proxies for
-    // ``discoveryRequest`` content; the actual object is read via the ref
-    // above so identity churn from the parent doesn't recreate this callback.
-    // ``savedAgentCard`` is intentionally NOT a dep — it's read via
-    // ``savedAgentCardRef`` inside ``resetSelections``. Including it here
-    // would recreate this callback whenever the parent hands us a new
-    // ``savedAgentCard`` object (e.g. a background refresh of agent data
-    // during editing), which would re-fire the auto-discover effect and
-    // wipe in-progress user selections.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, effectiveUrl, isParentDriven, discoveryMode, discoveryParamsKey]);
+      const trimmed = effectiveUrl.trim();
+      if (!trimmed) {
+        setError(
+          isParentDriven
+            ? i18n.t("agents.cardDiscovery.errors.fillConnectionDetails")
+            : i18n.t("agents.cardDiscovery.errors.enterBaseUrl"),
+        );
+        setCard(null);
+        onApplyRef.current(null);
+        return;
+      }
 
-  const debouncedDiscover = useDebouncedCallback(
+      const currentDiscoveryRequest = discoveryRequestRef.current;
+      const requestId = ++discoverRequestIdRef.current;
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await discoverAgentCardCall(
+          accessToken,
+          trimmed,
+          isParentDriven && currentDiscoveryRequest
+            ? {
+                discovery_mode: currentDiscoveryRequest.discovery_mode,
+                params: currentDiscoveryRequest.params,
+                ...(withCredentials && {
+                  api_key: currentDiscoveryRequest.api_key,
+                  static_headers: currentDiscoveryRequest.static_headers,
+                }),
+              }
+            : undefined,
+        );
+        if (requestId !== discoverRequestIdRef.current) return;
+        lastSyncedSelectionRef.current = null;
+        setCard(response.agent_card);
+        resetSelections(response.agent_card);
+      } catch (e: any) {
+        if (requestId !== discoverRequestIdRef.current) return;
+        setError(e?.message ? String(e.message) : i18n.t("agents.cardDiscovery.errors.discoverFailed"));
+        setCard(null);
+        lastSyncedSelectionRef.current = null;
+        onApplyRef.current(null);
+      } finally {
+        if (requestId === discoverRequestIdRef.current) {
+          setLoading(false);
+        }
+      }
+      // ``discoveryMode`` / ``discoveryParamsKey`` are primitive proxies for
+      // ``discoveryRequest`` content; the actual object is read via the ref
+      // above so identity churn from the parent doesn't recreate this callback.
+      // ``savedAgentCard`` is intentionally NOT a dep — it's read via
+      // ``savedAgentCardRef`` inside ``resetSelections``. Including it here
+      // would recreate this callback whenever the parent hands us a new
+      // ``savedAgentCard`` object (e.g. a background refresh of agent data
+      // during editing), which would re-fire the auto-discover effect and
+      // wipe in-progress user selections.
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [accessToken, effectiveUrl, isParentDriven, discoveryMode, discoveryParamsKey],
+  );
+
+  const { maybeExecute: debouncedDiscover, cancel: cancelDebouncedDiscover } = useDebouncer(
     () => {
       if (!accessToken || !effectiveUrl.trim()) return;
       void handleDiscover();
@@ -203,6 +211,12 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
 
     debouncedDiscover();
   }, [accessToken, effectiveUrl, handleDiscover, debouncedDiscover]);
+
+  // A pending as-you-type discovery would otherwise land after this one and replace its card.
+  const discoverWithCredentials = () => {
+    cancelDebouncedDiscover();
+    void handleDiscover(true);
+  };
 
   const toggleSkill = (id: string, checked: boolean) => {
     setSelectedSkillIds((prev) => {
@@ -283,7 +297,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
             )}
           </div>
           <div className="flex justify-end">
-            <Button onClick={handleDiscover} disabled={loading || !effectiveUrl.trim()}>
+            <Button onClick={discoverWithCredentials} disabled={loading || !effectiveUrl.trim()}>
               {renderDiscoverIcon()}
               {discoverLabel}
             </Button>
@@ -312,7 +326,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
               }}
               disabled={loading}
             />
-            <Button onClick={handleDiscover} disabled={loading}>
+            <Button onClick={() => handleDiscover()} disabled={loading}>
               {renderDiscoverIcon()}
               {discoverLabel}
             </Button>
