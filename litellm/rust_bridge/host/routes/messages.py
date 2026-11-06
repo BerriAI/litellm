@@ -183,9 +183,19 @@ def _upstream_failure(
         return 408, _timeout_text(timeout_phase, request), ()
     try:
         status, text = _UPSTREAM_ARGS.validate_python(error.args)
-        return status, text, _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
+        headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
     except ValidationError:
         return None
+    # Python's `MaskedHTTPStatusError` rebuilds the response from its decoded body without the
+    # wire's content-encoding and content-length, so httpx states a length only for a non-empty body.
+    rebuilt: Final = httpx.Response(
+        status,
+        content=text.encode(),
+        headers=[
+            (name, value) for name, value in headers if name.lower() not in ("content-encoding", "content-length")
+        ],
+    )
+    return status, text, tuple(rebuilt.headers.items())
 
 
 def _provider_error(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception | None:

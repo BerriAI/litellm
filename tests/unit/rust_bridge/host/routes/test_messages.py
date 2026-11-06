@@ -218,6 +218,31 @@ def test_an_upstream_status_maps_through_the_provider_error_class() -> None:
     assert mapped.__context__ is upstream
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("", {"content-type": "text/plain"}),
+        ("gateway", {"content-type": "text/plain", "content-length": "7"}),
+    ],
+)
+def test_upstream_failure_headers_match_the_python_clients_rebuilt_response(
+    body: str, expected: dict[str, str]
+) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import _get_response_headers
+
+    upstream: Final = ValueError(504, body)
+    upstream.headers = [  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+        ("content-type", "text/plain"),
+        ("content-encoding", "gzip"),
+        ("content-length", "42"),
+    ]
+
+    mapped: Final = messages_host.map_failure(upstream, {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert isinstance(mapped, litellm.Timeout)
+    assert dict(_get_response_headers(mapped) or {}) == expected
+
+
 def test_a_late_rejection_tells_the_logger_the_resolved_call_first() -> None:
     import datetime
 
