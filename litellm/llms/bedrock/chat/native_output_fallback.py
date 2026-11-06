@@ -43,6 +43,12 @@ def _native_output_rejection_retry(
     return retry
 
 
+def _buffered(retry: NativeOutputFallback) -> NativeOutputFallback:
+    return NativeOutputFallback(
+        optional_params={**retry.optional_params, "fake_stream": True}, litellm_params=retry.litellm_params
+    )
+
+
 def _buffered_stream_retry(fallback: NativeOutputFallbackFactory, model: str) -> NativeOutputFallback | None:
     retry: Final = fallback()
     if retry is None or retry.optional_params.get("fake_stream") is not True:
@@ -130,7 +136,9 @@ def _next_retry(
         and is_bedrock_native_output_rejection(error.status_code, error.message)
     ):
         rejection_retry: Final = _native_output_rejection_retry(error, fallback, model)
-        return None if rejection_retry is None else _SelectedFallback(rejection_retry, native_output_retry=True)
+        return (
+            None if rejection_retry is None else _SelectedFallback(_buffered(rejection_retry), native_output_retry=True)
+        )
     composed_retry: Final = _strict_tools_retry_after_native_output_retry(error, retry, strict_tools_fallback, model)
     return None if composed_retry is None else _SelectedFallback(composed_retry, native_output_retry=False)
 

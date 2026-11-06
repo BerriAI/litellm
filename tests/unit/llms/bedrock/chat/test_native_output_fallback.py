@@ -167,6 +167,12 @@ _BUFFERED_NATIVE_STREAM: Final = NativeOutputFallback(
 )
 
 
+def _buffered(fallback: NativeOutputFallback) -> NativeOutputFallback:
+    return NativeOutputFallback(
+        optional_params={**fallback.optional_params, "fake_stream": True}, litellm_params=fallback.litellm_params
+    )
+
+
 def _call_with_buffered_stream_fallback(
     bedrock: ScriptedBedrock, fallback: NativeOutputFallback | None, buffered_stream_fallback: NativeOutputFallback
 ) -> object:
@@ -195,7 +201,9 @@ def test_a_denied_native_stream_is_sent_again_once_as_a_buffered_native_request(
 
 
 @_MODES
-def test_a_buffered_native_request_bedrock_rejects_is_sent_again_with_the_fallback_params(asynchronous: bool) -> None:
+def test_a_buffered_native_request_bedrock_rejects_is_sent_again_buffered_with_the_fallback_params(
+    asynchronous: bool,
+) -> None:
     bedrock: Final = ScriptedBedrock(
         errors=(_STREAM_PERMISSION_DENIAL, _GRAMMAR_REJECTION, None), asynchronous=asynchronous
     )
@@ -203,11 +211,11 @@ def test_a_buffered_native_request_bedrock_rejects_is_sent_again_with_the_fallba
     response: Final = _call_with_buffered_stream_fallback(bedrock, _FALLBACK, _BUFFERED_NATIVE_STREAM)
 
     assert isinstance(response, ModelResponse) and response.id == "answer-3"
-    assert bedrock.sent == (None, _BUFFERED_NATIVE_STREAM, _FALLBACK)
+    assert bedrock.sent == (None, _BUFFERED_NATIVE_STREAM, _buffered(_FALLBACK))
 
 
 @_MODES
-def test_strict_tools_bedrock_rejects_after_a_buffered_native_retry_are_dropped_on_the_json_tool_retry(
+def test_strict_tools_bedrock_rejects_after_a_buffered_native_retry_are_dropped_on_the_buffered_json_tool_retry(
     asynchronous: bool,
 ) -> None:
     bedrock: Final = ScriptedBedrock(
@@ -225,14 +233,22 @@ def test_strict_tools_bedrock_rejects_after_a_buffered_native_retry_are_dropped_
     )
 
     assert isinstance(response, ModelResponse) and response.id == "answer-4"
-    assert bedrock.sent == (None, _BUFFERED_NATIVE_STREAM, _NATIVE_RETRY_WITH_STRICT_TOOLS, _COMPOSED_FALLBACK)
+    assert bedrock.sent == (
+        None,
+        _BUFFERED_NATIVE_STREAM,
+        _buffered(_NATIVE_RETRY_WITH_STRICT_TOOLS),
+        _buffered(_COMPOSED_FALLBACK),
+    )
 
 
 @_MODES
 @pytest.mark.parametrize(
     ("error", "buffered_stream_fallback"),
     [
-        (_STREAM_PERMISSION_DENIAL, NativeOutputFallback(optional_params={"outputConfig": "native"}, litellm_params={})),
+        (
+            _STREAM_PERMISSION_DENIAL,
+            NativeOutputFallback(optional_params={"outputConfig": "native"}, litellm_params={}),
+        ),
         (_INVOKE_PERMISSION_DENIAL, _BUFFERED_NATIVE_STREAM),
     ],
     ids=["retry_would_stream_again", "invoke_denied"],
