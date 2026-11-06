@@ -2132,7 +2132,9 @@ async def test_new_project_quota_policy_reads_providers_from_router_deployments(
 
 
 @pytest.mark.asyncio
-async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(monkeypatch: pytest.MonkeyPatch):
+async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
     _enforced_new_project_mocks(
         monkeypatch,
         team_models=["runway-gen4-turbo"],
@@ -2144,7 +2146,8 @@ async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_i
         await _run_new_project(NewProjectRequest(team_id="test-team", models=["runway-gen4-turbo"]))
 
     assert exc_info.value.code == "500"
-    assert "general_settings.enforce_project_model_quota is invalid" in str(exc_info.value.message)
+    assert exc_info.value.message == "Internal server error"
+    assert "general_settings.enforce_project_model_quota is invalid" in caplog.text
 
 
 @pytest.mark.asyncio
