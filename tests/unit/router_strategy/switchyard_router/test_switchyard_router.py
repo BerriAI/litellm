@@ -255,9 +255,32 @@ async def test_llm_judge_verdict_selects_the_target(p_solve: float, expected: st
     assert model == expected
 
 
+def decision_answer(advantage: float) -> OpenAIDecisionResponse:
+    return OpenAIDecisionResponse.model_validate(
+        {
+            "model": "jev",
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "route",
+                    "choice": "advantage",
+                    "probabilities": [
+                        {"value": "advantage", "probability": advantage},
+                        {"value": "no_advantage", "probability": 1 - advantage},
+                    ],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+        }
+    )
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
-async def test_judge_call_routes_with_the_callers_tags(bucket: str) -> None:
+@pytest.mark.parametrize("parent_bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("classifier", [{}, {"kind": "decision"}])
+async def test_judge_calls_carry_the_callers_tags_and_origin_where_their_endpoint_reads_them(
+    parent_bucket: str, classifier: Mapping[str, object]
+) -> None:
     seen: Final[list[Mapping[str, object]]] = []  # mutable-ok: collects the judge request
 
     async def judge(request: Mapping[str, object]) -> ModelResponse:
@@ -265,38 +288,30 @@ async def test_judge_call_routes_with_the_callers_tags(bucket: str) -> None:
         verdict: Final = {"crux": "c", "primary_rule": "none", "capability_boundary": "unmatched", "p_solve": 1.0}
         return ModelResponse(choices=[{"message": {"role": "assistant", "content": json.dumps(verdict)}}])
 
-    caller: Final = {bucket: {"tags": ["eu-only"], "inherited_tags": ["team-eu"]}}
-    await route(config(classifier={}), HELLO, completion=judge, request_kwargs=caller)
+    async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
+        seen.append(request)
+        return decision_answer(0.0)
+
+    caller: Final = {parent_bucket: {"tags": ["eu-only"], "inherited_tags": ["team-eu"]}}
+    await route(
+        config(classifier=classifier, threshold=1.0), HELLO, completion=judge, decide=decide, request_kwargs=caller
+    )
     (request,) = seen
-    routed_metadata: Final = request[get_metadata_variable_name_from_kwargs(request)]
-    assert routed_metadata["tags"] == ["eu-only"]  # pyright: ignore[reportIndexIssue]  # the judge request's metadata dict
-    assert routed_metadata["inherited_tags"] == ["team-eu"]  # pyright: ignore[reportIndexIssue]  # same
+    read_by_endpoint: Final = "litellm_metadata" if classifier else "metadata"
+    assert set(request) & {"metadata", "litellm_metadata"} == {read_by_endpoint}
+    metadata: Final = request[read_by_endpoint]
+    assert metadata["tags"] == ["eu-only"]  # pyright: ignore[reportIndexIssue]  # the judge request's metadata dict
+    assert metadata["inherited_tags"] == ["team-eu"]  # pyright: ignore[reportIndexIssue]  # same
+    assert metadata["internal_call_origin"] == "autorouter_classifier"  # pyright: ignore[reportIndexIssue]  # same
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("advantage", "expected"), [(0.61, "strong"), (0.6, "fast")])
 async def test_decision_model_advantage_must_exceed_the_cutoff(advantage: float, expected: str) -> None:
     async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
-        assert "autorouter_classifier" in str(request["metadata"])
         (question,) = request["questions"]  # pyright: ignore[reportGeneralTypeIssues]  # the decisions request shape
         assert {choice["value"] for choice in question["choices"]} == {"advantage", "no_advantage"}
-        return OpenAIDecisionResponse.model_validate(
-            {
-                "model": "jev",
-                "answers": [
-                    {
-                        "type": "choice",
-                        "name": "route",
-                        "choice": "advantage",
-                        "probabilities": [
-                            {"value": "advantage", "probability": advantage},
-                            {"value": "no_advantage", "probability": 1 - advantage},
-                        ],
-                    }
-                ],
-                "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
-            }
-        )
+        return decision_answer(advantage)
 
     model, decision = await route(
         config(classifier={"kind": "decision", "cutoff": 0.6}, threshold=1.0), HELLO, decide=decide

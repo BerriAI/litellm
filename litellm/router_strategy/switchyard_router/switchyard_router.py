@@ -123,14 +123,17 @@ class SwitchyardRouter:
             },
         )
 
-    def _internal_call(self, request: Mapping[str, object], caller: Mapping[str, object]) -> Mapping[str, object]:
-        bucket: Final = get_metadata_variable_name_from_kwargs(caller)
+    def _internal_call(
+        self,
+        request: Mapping[str, object],
+        caller: Mapping[str, object],
+        bucket: Literal["metadata", "litellm_metadata"],
+    ) -> Mapping[str, object]:
+        caller_metadata: Final = mapping(caller.get(get_metadata_variable_name_from_kwargs(caller)) or {})
         return {
             **request,
             bucket: {
-                **forwarded_internal_call_metadata(
-                    mapping(caller.get(bucket) or {}), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
-                ),
+                **forwarded_internal_call_metadata(caller_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
             },
             "proxy_server_request": {"body": request},
@@ -158,7 +161,9 @@ class SwitchyardRouter:
     async def _answer_judge(self, call: ModelCall, caller: Mapping[str, object]) -> None:
         try:
             converted: Final = judge_response(
-                await self.completion(self._internal_call(judge_request(call.request, call.models[0]), caller))
+                await self.completion(
+                    self._internal_call(judge_request(call.request, call.models[0]), caller, "metadata")
+                )
             )
         except Exception as error:  # noqa: BLE001  # judge/provider failures are inputs to Switchyard's fall-open decision
             await call.fail(error)
@@ -168,7 +173,9 @@ class SwitchyardRouter:
     async def _answer_decision(self, call: DecisionCall, caller: Mapping[str, object]) -> None:
         try:
             answer: Final = decision_response(
-                await self.decide(self._internal_call(decision_request(call.request, call.model), caller)),
+                await self.decide(
+                    self._internal_call(decision_request(call.request, call.model), caller, "litellm_metadata")
+                ),
                 call.request,
             )
         except Exception as error:  # noqa: BLE001  # decision/provider failures are inputs to Switchyard's fall-open decision
