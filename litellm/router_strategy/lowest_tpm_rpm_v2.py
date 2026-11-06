@@ -227,7 +227,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     num_retries=deployment.get("num_retries"),
                 )
             else:
-                result = await self.router_cache.async_get_cache(key=rpm_key)
+                result: Final = await self.router_cache.async_get_cache(key=rpm_key)
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={result}",

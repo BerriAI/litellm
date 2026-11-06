@@ -5,9 +5,11 @@ The router charges one request before the routing pre-call checks run, hands it 
 refuses the attempt, and charges the tokens of each logged success. Nothing else writes these keys.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -23,11 +25,7 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span
-else:
-    Span = Any
+    from opentelemetry.trace import Span
 
 USAGE_TTL: Final = 60
 
@@ -71,7 +69,9 @@ class DeploymentUsageCounter(CustomLogger):
         return usage_counter_keys(deployment, self._minute())[1]
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def charge_request(self, deployment: Mapping[str, object], parent_otel_span: Span | None = None) -> int | None:
+    async def charge_request(
+        self, deployment: Mapping[str, object], parent_otel_span: Span | None = None
+    ) -> int | None:
         """One more request this minute; returns the count, or None when the cache could not say."""
         return await self._async_increment(self.rpm_key(deployment), 1, parent_otel_span)
 
@@ -129,16 +129,22 @@ class DeploymentUsageCounter(CustomLogger):
         return f"{model_id}:{model}", int(tokens)
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):  # pyright: ignore[reportMissingParameterType]  # CustomLogger's untyped hook
-        counted: Final = self._logged_tokens(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # see above
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        counted: Final = self._logged_tokens(kwargs)
         if counted is None:
             return
         prefix, tokens = counted
-        _ = await self._async_increment(f"{prefix}:tpm:{self._minute()}", tokens, get_parent_otel_span_from_kwargs(kwargs))  # pyright: ignore[reportUnknownArgumentType]  # see above
+        _ = await self._async_increment(
+            f"{prefix}:tpm:{self._minute()}", tokens, get_parent_otel_span_from_kwargs(kwargs)
+        )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):  # pyright: ignore[reportMissingParameterType]  # CustomLogger's untyped hook
-        counted: Final = self._logged_tokens(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # see above
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        counted: Final = self._logged_tokens(kwargs)
         if counted is None:
             return
         prefix, tokens = counted
