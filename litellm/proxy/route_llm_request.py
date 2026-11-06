@@ -965,9 +965,10 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             team_file_deployment: Final = get_team_provider_deployment(
                 llm_router, model_less_team_file_call.caller, model_less_team_file_call.custom_llm_provider
             )
-            if team_file_deployment is None:
-                return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
-            return getattr(llm_router, f"{route_type}")(**{**data, "model": team_file_deployment.deployment_id})
+            team_file_credentials: Final[Mapping[str, object]] = (
+                {} if team_file_deployment is None else team_file_deployment.credentials
+            )
+            return getattr(litellm, f"{route_type}")(**{**direct_litellm_kwargs(), **team_file_credentials})
         if route_type in [
             "avideo_list",
             "avideo_status",

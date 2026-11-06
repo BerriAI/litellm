@@ -2428,19 +2428,44 @@ def _registered_bedrock_kb_search(team_id: str) -> dict[str, object]:
     }
 
 
+def _team_a_deployment(public_name: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": f"internal-team-a-{public_name}",
+        "litellm_params": dict(litellm_params),
+        "model_info": {
+            "id": f"team-a-{public_name}",
+            "team_id": "team-a",
+            "team_public_model_name": public_name,
+        },
+    }
+
+
 def _team_a_router(*team_models: tuple[str, Mapping[str, object]]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[_team_a_deployment(public_name, litellm_params) for public_name, litellm_params in team_models]
+    )
+
+
+_PROXY_OPENAI_BASE: Final = "https://proxy-openai.example/v1"
+
+
+def _team_a_openai_router_beside_a_proxy_openai_wildcard() -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
-                "model_name": f"internal-team-a-{public_name}",
-                "litellm_params": dict(litellm_params),
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "proxy-openai-key", "api_base": _PROXY_OPENAI_BASE},
+            },
+            {
+                "model_name": "model_name_team-a_6f0c8a52",
+                "litellm_params": dict(_TEAM_OPENAI_PARAMS),
                 "model_info": {
-                    "id": f"team-a-{public_name}",
+                    "id": "team-a-openai",
                     "team_id": "team-a",
-                    "team_public_model_name": public_name,
+                    "team_public_model_name": "openai/*",
+                    "db_model": True,
                 },
-            }
-            for public_name, litellm_params in team_models
+            },
         ]
     )
 
@@ -2605,6 +2630,53 @@ async def test_team_key_model_less_vector_store_file_call_reaches_openai_with_th
 
     assert route.call_count == 1
     assert route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.asyncio
+async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    method, path, _ = _VECTOR_STORE_FILE_CALLS[route_type]
+    router: Final = _team_a_openai_router_beside_a_proxy_openai_wildcard()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        file_route: Final = respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(404, json={"error": {"message": "No file found", "type": "invalid_request_error"}})
+        )
+        chat_route: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-5.4-mini")
+        )
+        for _ in range(5):
+            with pytest.raises(litellm.NotFoundError):
+                await (
+                    await route_request(
+                        dict(_model_less_vector_store_file_request(route_type)),
+                        router,
+                        None,
+                        route_type,
+                        user_api_key_dict=_TEAM_A_MEMBER,
+                    )
+                )
+        response: Final = await (
+            await route_request(
+                {
+                    "model": "openai/gpt-5.4-mini",
+                    "messages": list(_HELLO_MESSAGES),
+                    "metadata": {"user_api_key_team_id": "team-a"},
+                },
+                router,
+                None,
+                "acompletion",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert file_route.call_count == 5
+    assert response.choices[0].message.content == "hi", response
+    assert chat_route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
 
 
 @pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))

@@ -191,9 +191,20 @@ async def _update_request_data_with_managed_file_id(
                 llm_output_file_id,
             )
 
-            # Set the model for routing
-            if target_model_names and len(target_model_names) > 0:
-                routing_model: Final = target_model_names[0]
+            stored_deployment_match: Final = re.search(r";llm_output_file_model_id,([^;]+)", decoded_id)
+            stored_deployment_id: Final = stored_deployment_match.group(1).strip() if stored_deployment_match else None
+            stored_deployment: Final = (
+                llm_router.registry().credentials(stored_deployment_id, form="deployment")
+                if stored_deployment_id and llm_router
+                else None
+            )
+            routing_model: Final = (
+                stored_deployment_id
+                if stored_deployment is not None
+                and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
+                else (target_model_names[0] if target_model_names else None)
+            )
+            if routing_model:
                 data["model"] = routing_model
 
                 # Get credentials for the model
