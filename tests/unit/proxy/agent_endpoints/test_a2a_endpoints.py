@@ -518,6 +518,17 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_name_url_agents_by_their_configured_name(method: str):
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict)
+
+    assert captured.agent_name == "Test Agent"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_forward_caller_identity_headers(method: str):
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="user-abc", team_id="team-xyz")
@@ -1697,7 +1708,10 @@ async def test_handle_stream_message_frames_events_as_sse():
         },
     ]
 
+    stream_kwargs: Final[list[dict[str, object]]] = []
+
     async def fake_stream(**kwargs):
+        stream_kwargs.append(kwargs)
         for event in events:
             yield event
 
@@ -1720,11 +1734,13 @@ async def test_handle_stream_message_frames_events_as_sse():
                     "messageId": "msg-1",
                 }
             },
+            agent_name="Test Agent",
         )
 
         assert response.media_type == "text/event-stream"
         chunks = [chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator]
 
+    assert [kwargs["agent_name"] for kwargs in stream_kwargs] == ["Test Agent"]
     assert len(chunks) == len(events)
     for chunk, event in zip(chunks, events):
         assert chunk.startswith("data: ")

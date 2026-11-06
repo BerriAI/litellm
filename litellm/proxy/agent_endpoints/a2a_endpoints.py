@@ -887,6 +887,7 @@ async def invoke_agent_a2a(
                 proxy_server_request=data.get("proxy_server_request"),
                 litellm_logging_obj=logging_obj,
                 agent_extra_headers=agent_extra_headers,
+                agent_name=str(agent_name),
             )
 
             try:
