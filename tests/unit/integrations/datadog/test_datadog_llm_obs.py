@@ -112,7 +112,7 @@ def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMOb
 
 
 def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: DataDogLLMObsLogger) -> None:
-    payload = build(
+    payload: Final = build(
         logger,
         response_message={
             "role": "assistant",

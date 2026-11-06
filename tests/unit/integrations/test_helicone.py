@@ -18,7 +18,7 @@ def _claude_mapping(messages, response_obj):
 
 
 @pytest.fixture()
-def anthropic_prompts(monkeypatch):
+def anthropic_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     Stub the anthropic module unconditionally: the SDK may be absent (it lives in the
     proxy-runtime extra), and the tests/unit/llms/anthropic test package can
@@ -65,7 +65,7 @@ def test_claude_mapping_serializes_custom_tool_calls():
 
 @pytest.mark.usefixtures("anthropic_prompts")
 def test_claude_mapping_puts_server_tool_calls_first_as_tool_use_blocks():
-    response_obj = {
+    response_obj: Final = {
         "id": "chatcmpl-1",
         "choices": [
             {
@@ -94,7 +94,7 @@ def test_claude_mapping_puts_server_tool_calls_first_as_tool_use_blocks():
         ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 2},
     }
-    mapped = _claude_mapping([{"role": "user", "content": "hi"}], response_obj)
+    mapped: Final = _claude_mapping([{"role": "user", "content": "hi"}], response_obj)
     assert mapped["content"] == [
         {"type": "tool_use", "id": "srvtoolu_01", "name": "web_search", "input": '{"query": "persimmon"}'},
         {"type": "tool_use", "id": "call_f", "name": "read_file", "input": '{"path": "a.py"}'},

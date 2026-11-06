@@ -6,7 +6,7 @@ plus the LiteLLM_DailyToolSpend rollup in one transaction.
 
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -231,7 +231,7 @@ class TestResponseToolCallNames:
                 },
             ]
         }
-        completion_response = ModelResponse(**response) if as_object else response
+        completion_response: Final = ModelResponse(**response) if as_object else response
 
         assert response_tool_call_names(completion_response) == ("web_search", "web_fetch", "get_weather")
 

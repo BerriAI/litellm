@@ -672,18 +672,18 @@ async def test_post_call_hook_with_tool_calls(
 
 @pytest.mark.asyncio
 async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
-    env_setup,
-    sample_request_data,
-    user_api_key_dict,
-    pillar_clean_response,
-    pillar_flagged_response,
-):
-    server_call = {
+    env_setup: None,
+    sample_request_data: dict[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    pillar_clean_response: Response,
+    pillar_flagged_response: Response,
+) -> None:
+    server_call: Final = {
         "id": "srvtoolu_01",
         "type": "function",
         "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
     }
-    response = ModelResponse(
+    response: Final = ModelResponse(
         choices=[
             Choices(
                 message=Message(
@@ -709,7 +709,7 @@ async def test_post_call_hook_blocks_a_flagged_claude_server_tool_call(
             scanned_tool_calls: Final = messages[-1].get("tool_calls") or []
             return pillar_flagged_response if server_call in scanned_tool_calls else pillar_clean_response
 
-    guardrail = PillarGuardrail(
+    guardrail: Final = PillarGuardrail(
         guardrail_name="pillar-test",
         api_key="test-pillar-key",
         api_base="https://api.pillar.security",

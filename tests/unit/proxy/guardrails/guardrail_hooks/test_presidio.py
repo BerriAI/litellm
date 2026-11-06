@@ -1784,7 +1784,7 @@ async def test_pii_tokens_in_metadata_used_for_unmasking():
 
 
 @pytest.mark.asyncio
-async def test_output_unmasking_restores_server_tool_call_arguments(mock_user_api_key):
+async def test_output_unmasking_restores_server_tool_call_arguments(mock_user_api_key: UserAPIKeyAuth) -> None:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
     response: Final = ModelResponse(
         choices=[

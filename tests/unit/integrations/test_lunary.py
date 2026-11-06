@@ -1,5 +1,7 @@
 
 
+from typing import Final
+
 import litellm
 from litellm.integrations.lunary import parse_messages, parse_tool_calls
 from litellm.types.utils import (
@@ -39,7 +41,7 @@ def test_parse_tool_calls_none_passthrough():
 
 
 def test_parse_messages_lists_server_tool_calls_before_client_calls():
-    response = litellm.ModelResponse(
+    response: Final = litellm.ModelResponse(
         choices=[
             litellm.Choices(
                 index=0,

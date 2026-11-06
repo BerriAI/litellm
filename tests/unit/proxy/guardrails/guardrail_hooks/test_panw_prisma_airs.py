@@ -6548,7 +6548,9 @@ class TestPanwAirsServerToolCalls:
         return handler, transport
 
     @pytest.mark.asyncio
-    async def test_post_call_scan_sends_server_tool_call_query_to_airs(self, user_api_key_dict):
+    async def test_post_call_scan_sends_server_tool_call_query_to_airs(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
         handler, transport = self._airs({"action": "allow", "category": "benign", "scan_id": "s1"})
         response: Final = self._response(
             ChatCompletionMessageToolCall(
@@ -6568,7 +6570,9 @@ class TestPanwAirsServerToolCalls:
         assert sent_contents == [[{"response": '{"query": "persimmon"} {"city": "Paris"}'}]]
 
     @pytest.mark.asyncio
-    async def test_post_call_masking_rewrites_server_tool_call_arguments(self, user_api_key_dict):
+    async def test_post_call_masking_rewrites_server_tool_call_arguments(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
         masked: Final = '{"query": "*********"}'
         handler, _ = self._airs(
             {

@@ -378,7 +378,9 @@ class TestExtractMessageContent:
         ],
         ids=["dict", "message"],
     )
-    def test_server_tool_call_only_message_serializes_the_server_call(self, message):
+    def test_server_tool_call_only_message_serializes_the_server_call(
+        self, message: dict[str, object] | litellm.Message
+    ) -> None:
         assert json.loads(self.logger._extract_message_content(message)) == [_SERVER_CALL]
 
     def test_multimodal_list_serialized_as_json(self):

@@ -1291,7 +1291,7 @@ class TestStreamingTransform:
 
     @pytest.mark.asyncio
     async def test_claude_server_tool_call_chunks_keep_their_provider_fields(self):
-        server_fields = {
+        server_fields: Final = {
             "server_tool_calls": [
                 {
                     "id": "srvtoolu_01",
@@ -1305,17 +1305,19 @@ class TestStreamingTransform:
                 ).model_dump()
             },
         }
-        server_chunk = ModelResponseStream(
+        server_chunk: Final = ModelResponseStream(
             choices=[StreamingChoices(index=0, delta=Delta(content=None, provider_specific_fields=server_fields))],
         )
 
-        out = await _drive_stream(
+        out: Final = await _drive_stream(
             UnifiedLLMGuardrails(),
             _StreamingTextGuardrail(),
             [server_chunk, _stream_chunk("done", finish_reason="stop")],
         )
 
-        delivered = [getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices]
+        delivered: Final = (
+            [getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices]
+        )
         assert server_fields in delivered
         assert "".join(_delta_text(item) for item in out) == "DONE"
 

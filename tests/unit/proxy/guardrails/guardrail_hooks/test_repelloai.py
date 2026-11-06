@@ -1,4 +1,6 @@
 import os
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -853,9 +855,9 @@ class TestRepelloAIPostCall:
         )
 
     @pytest.mark.asyncio
-    async def test_server_tool_call_arguments_scanned(self, monkeypatch):
-        guardrail = _guardrail(event_hook="post_call")
-        response = ModelResponse(
+    async def test_server_tool_call_arguments_scanned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        guardrail: Final = _guardrail(event_hook="post_call")
+        response: Final = ModelResponse(
             choices=[
                 Choices(
                     index=0,
@@ -889,9 +891,11 @@ class TestRepelloAIPostCall:
                 )
             ]
         )
-        captured = {}
+        captured: Final = {}
 
-        async def capture(url, headers, json, **_kwargs):
+        async def capture(
+            url: str, headers: Mapping[str, str], json: Mapping[str, object], **_kwargs: object
+        ) -> Response:
             captured["json"] = json
             return _verdict_response("passed", url)
 

@@ -896,7 +896,7 @@ class TestRestoration:
     @pytest.mark.asyncio
     async def test_server_tool_call_arguments_are_restored(self):
         guardrail, _ = _shielded({"[EMAIL_1]": "a@b.com", "[URL_1]": "https://b.com/a"})
-        response = ModelResponse(
+        response: Final = ModelResponse(
             choices=[
                 Choices(
                     index=0,
@@ -923,7 +923,7 @@ class TestRestoration:
             ]
         )
 
-        result = await guardrail.async_post_call_success_hook(
+        result: Final = await guardrail.async_post_call_success_hook(
             data={"messages": []}, user_api_key_dict=None, response=response
         )
 

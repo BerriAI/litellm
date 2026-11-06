@@ -2186,8 +2186,8 @@ class TestCompletionResponseTextPartsToolCalls:
 
         from litellm.types.llms.openai import ResponsesAPIResponse
 
-        guardrail = _make_guardrail()
-        response = ResponsesAPIResponse(
+        guardrail: Final = _make_guardrail()
+        response: Final = ResponsesAPIResponse(
             id="resp-ws-1",
             created_at=0,
             output=[

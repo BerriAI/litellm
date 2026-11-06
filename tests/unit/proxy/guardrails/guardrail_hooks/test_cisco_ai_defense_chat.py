@@ -540,9 +540,9 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.parametrize("action", _CLAUDE_HOSTED_WEB_ACTIONS)
     @pytest.mark.asyncio
-    async def test_post_call_scans_claude_hosted_web_call(self, action):
-        g = _make_guardrail(event_hook="post_call")
-        post_mock = AsyncMock(return_value=_safe_response())
+    async def test_post_call_scans_claude_hosted_web_call(self, action: Action) -> None:
+        g: Final = _make_guardrail(event_hook="post_call")
+        post_mock: Final = AsyncMock(return_value=_safe_response())
 
         with _patch_inspection_post(g, post_mock):
             await g.async_post_call_success_hook(
@@ -551,8 +551,8 @@ class TestCiscoAIDefenseResponsesAPIOutput:
                 response=_claude_hosted_web_call_response(action),
             )
 
-        sent = post_mock.call_args.kwargs["json"]
-        joined = " ".join(m.get("content", "") for m in (sent.get("messages") or []))
+        sent: Final = post_mock.call_args.kwargs["json"]
+        joined: Final = " ".join(m.get("content", "") for m in (sent.get("messages") or []))
         assert "123-45-6789" in joined
 
     @pytest.mark.asyncio
@@ -625,18 +625,18 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
 
     @pytest.mark.parametrize("action", _CLAUDE_HOSTED_WEB_ACTIONS)
     @pytest.mark.asyncio
-    async def test_redact_clears_claude_hosted_web_call(self, action):
-        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
-        cisco_resp = _redact_response(sanitized_text="[REDACTED]")
+    async def test_redact_clears_claude_hosted_web_call(self, action: Action) -> None:
+        g: Final = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        cisco_resp: Final = _redact_response(sanitized_text="[REDACTED]")
 
         with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
-            result = await g.async_post_call_success_hook(
+            result: Final = await g.async_post_call_success_hook(
                 data={"input": [{"role": "user", "content": "look it up"}]},
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=_claude_hosted_web_call_response(action),
             )
 
-        call = result.output[0]
+        call: Final = result.output[0]
         assert (call.id, call.action.type) == ("ws_srvtoolu_01", action.type)
         assert "123-45-6789" not in call.action.model_dump_json()
 
@@ -1730,8 +1730,8 @@ class TestCiscoAIDefenseToolCallBypass:
 
     @pytest.mark.asyncio
     async def test_pre_call_scans_function_tool_call_that_also_carries_a_custom_key(self):
-        g = _make_guardrail(event_hook="pre_call")
-        post_mock = AsyncMock(return_value=_safe_response())
+        g: Final = _make_guardrail(event_hook="pre_call")
+        post_mock: Final = AsyncMock(return_value=_safe_response())
         data: Final = {
             "messages": [
                 {
@@ -1757,7 +1757,7 @@ class TestCiscoAIDefenseToolCallBypass:
                 call_type="completion",
             )
 
-        sent = post_mock.call_args.kwargs["json"]
+        sent: Final = post_mock.call_args.kwargs["json"]
         assert "123-45-6789" in " ".join(m.get("content", "") for m in (sent.get("messages") or []))
 
     @pytest.mark.parametrize(
@@ -1912,8 +1912,8 @@ class TestCiscoAIDefenseToolCallBypass:
 
     @pytest.mark.asyncio
     async def test_post_call_scan_sends_server_tool_call_arguments_to_cisco(self):
-        g = _make_guardrail(event_hook="post_call")
-        post_mock = AsyncMock(return_value=_safe_response())
+        g: Final = _make_guardrail(event_hook="post_call")
+        post_mock: Final = AsyncMock(return_value=_safe_response())
 
         with _patch_inspection_post(g, post_mock):
             await g.async_post_call_success_hook(
@@ -1931,17 +1931,17 @@ class TestCiscoAIDefenseToolCallBypass:
 
     @pytest.mark.asyncio
     async def test_post_call_redact_clears_server_tool_call_arguments(self):
-        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
-        cisco_resp = _redact_response(sanitized_text="[REDACTED]")
+        g: Final = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        cisco_resp: Final = _redact_response(sanitized_text="[REDACTED]")
 
         with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
-            result = await g.async_post_call_success_hook(
+            result: Final = await g.async_post_call_success_hook(
                 data={"messages": [{"role": "user", "content": "look up persimmon"}]},
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=self._server_tool_call_response(),
             )
 
-        message = result.choices[0].message
+        message: Final = result.choices[0].message
         assert message.provider_specific_fields == {
             "server_tool_calls": [
                 {"id": "srvtoolu_01", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}

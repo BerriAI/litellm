@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from typing import Any, Final
 from unittest.mock import AsyncMock, patch
 
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
@@ -373,7 +375,7 @@ async def test_pangea_ai_guard_response_transformed(pangea_guardrail):
     assert response.choices[0]["message"]["content"] == "Yes, here is an SSN: <US_SSN>"
 
 
-def _claude_fetch_call(url):
+def _claude_fetch_call(url: str) -> dict[str, object]:
     return {
         "id": "srvtoolu_01",
         "type": "function",
@@ -381,20 +383,22 @@ def _claude_fetch_call(url):
     }
 
 
-def _with_masked_tool_calls(choice):
-    message = choice["message"]
-    masked_calls = [_claude_fetch_call("<URL>") for _ in message["tool_calls"]]
+def _with_masked_tool_calls(choice: Mapping[str, Any]) -> dict[str, object]:
+    message: Final = choice["message"]
+    masked_calls: Final = [_claude_fetch_call("<URL>") for _ in message["tool_calls"]]
     return {**choice, "message": {**message, "tool_calls": masked_calls}}
 
 
 @pytest.mark.asyncio
-async def test_pangea_ai_guard_response_masks_claude_server_tool_call_inputs(pangea_guardrail):
-    data = {"messages": [{"role": "user", "content": "Read https://example.com/"}]}
-    fetch = build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
-    sent_choices = []
+async def test_pangea_ai_guard_response_masks_claude_server_tool_call_inputs(pangea_guardrail: PangeaHandler) -> None:
+    data: Final = {"messages": [{"role": "user", "content": "Read https://example.com/"}]}
+    fetch: Final = build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
+    sent_choices: Final = []
 
-    async def _mask_tool_call_urls(_handler, **kwargs):
-        choices = kwargs["json"]["input"]["choices"]
+    async def _mask_tool_call_urls(
+        _handler: object, url: str, json: Mapping[str, Any], **_kwargs: object
+    ) -> httpx.Response:
+        choices: Final = json["input"]["choices"]
         sent_choices.extend(choices)
         return httpx.Response(
             status_code=200,
@@ -405,11 +409,11 @@ async def test_pangea_ai_guard_response_masks_claude_server_tool_call_inputs(pan
                     "output": {"choices": [_with_masked_tool_calls(choice) for choice in choices]},
                 }
             },
-            request=httpx.Request(method="POST", url=kwargs["url"]),
+            request=httpx.Request(method="POST", url=url),
         )
 
     with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new=_mask_tool_call_urls):
-        response = await pangea_guardrail.async_post_call_success_hook(
+        response: Final = await pangea_guardrail.async_post_call_success_hook(
             data=data,
             user_api_key_dict=None,
             response=ModelResponse(
@@ -429,8 +433,10 @@ async def test_pangea_ai_guard_response_masks_claude_server_tool_call_inputs(pan
         )
 
     assert sent_choices[0]["message"]["tool_calls"] == [_claude_fetch_call("https://example.com/")]
-    message = response.choices[0]["message"]
+    message: Final = response.choices[0]["message"]
     assert message["tool_calls"] is None
     assert message["provider_specific_fields"]["server_tool_calls"] == [_claude_fetch_call("<URL>")]
-    hosted_copy = ResponseFunctionWebSearch.model_validate(message["provider_specific_fields"]["web_search_calls"][0])
+    hosted_copy: Final = (
+        ResponseFunctionWebSearch.model_validate(message["provider_specific_fields"]["web_search_calls"][0])
+    )
     assert hosted_copy.action.url == "<URL>"

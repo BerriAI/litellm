@@ -957,7 +957,7 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
 
     @pytest.mark.asyncio
     async def test_input_guardrail_rewrite_of_a_replayed_server_tool_call_lands_on_the_request(self):
-        handler = OpenAIChatCompletionsHandler()
+        handler: Final = OpenAIChatCompletionsHandler()
         data: Final = {
             "messages": [
                 {"role": "user", "content": "look up jane and the weather"},
@@ -984,9 +984,9 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
 
     @pytest.mark.asyncio
     async def test_output_guardrail_sees_a_response_that_only_carries_server_tool_calls(self):
-        handler = OpenAIChatCompletionsHandler()
-        guardrail = TestOpenAIChatCompletionsHandlerStreamingOutput._recording_guardrail()
-        response = ModelResponse(
+        handler: Final = OpenAIChatCompletionsHandler()
+        guardrail: Final = TestOpenAIChatCompletionsHandlerStreamingOutput._recording_guardrail()
+        response: Final = ModelResponse(
             model="claude-sonnet-4-5",
             choices=[
                 Choices(
@@ -1011,9 +1011,9 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
 
     @pytest.mark.asyncio
     async def test_output_guardrail_rewrite_of_a_server_tool_call_lands_in_server_tool_calls_only(self):
-        handler = OpenAIChatCompletionsHandler()
-        weather_args = json.dumps({"city": "Paris", "query": "forecast"})
-        response = ModelResponse(
+        handler: Final = OpenAIChatCompletionsHandler()
+        weather_args: Final = json.dumps({"city": "Paris", "query": "forecast"})
+        response: Final = ModelResponse(
             model="claude-sonnet-4-5",
             choices=[
                 Choices(
@@ -1070,8 +1070,8 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
 
     @pytest.mark.asyncio
     async def test_output_guardrail_rewrite_of_a_server_web_call_reaches_its_hosted_copy(self):
-        handler = OpenAIChatCompletionsHandler()
-        response = ModelResponse(
+        handler: Final = OpenAIChatCompletionsHandler()
+        response: Final = ModelResponse(
             model="claude-sonnet-4-5",
             choices=[
                 Choices(
@@ -1677,7 +1677,9 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
             )
 
-        search = {**_server_tool_call("srvtoolu_01Search", "web_search", {"query": "jane@example.com"}), "index": 0}
+        search: Final = (
+            {**_server_tool_call("srvtoolu_01Search", "web_search", {"query": "jane@example.com"}), "index": 0}
+        )
         return [
             chunk(Delta(content="Searching")),
             chunk(Delta(content=None, provider_specific_fields={"server_tool_calls": [search]})),
@@ -1704,7 +1706,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 )
             }
 
-        fetch = {**_server_tool_call("srvtoolu_01Fetch", "web_fetch", _FETCH_INPUT), "index": 0}
+        fetch: Final = {**_server_tool_call("srvtoolu_01Fetch", "web_fetch", _FETCH_INPUT), "index": 0}
         return [
             chunk(
                 Delta(
@@ -1734,8 +1736,8 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_reach_every_hosted_copy_of_a_server_web_call(self):
-        handler = OpenAIChatCompletionsHandler()
-        chunks = self._ended_server_fetch_stream_chunks()
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = self._ended_server_fetch_stream_chunks()
 
         await handler.process_output_streaming_response(
             responses_so_far=chunks,
@@ -1755,8 +1757,8 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
 
     @pytest.mark.asyncio
     async def test_ended_stream_guardrail_sees_streamed_server_tool_calls(self):
-        handler = OpenAIChatCompletionsHandler()
-        guardrail = self._recording_guardrail()
+        handler: Final = OpenAIChatCompletionsHandler()
+        guardrail: Final = self._recording_guardrail()
 
         await handler.process_output_streaming_response(
             responses_so_far=self._ended_server_tool_call_stream_chunks(),
@@ -1771,8 +1773,8 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_writes_server_tool_call_arguments_back_into_chunks(self):
-        handler = OpenAIChatCompletionsHandler()
-        chunks = self._ended_server_tool_call_stream_chunks()
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = self._ended_server_tool_call_stream_chunks()
 
         await handler.process_output_streaming_response(
             responses_so_far=chunks,
@@ -1781,7 +1783,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             deliver_ended_stream_rewrites=True,
         )
 
-        delta = chunks[1].choices[0].delta
+        delta: Final = chunks[1].choices[0].delta
         assert _tool_call_ids_names_and_arguments(delta.provider_specific_fields["server_tool_calls"]) == [
             ("srvtoolu_01Search", "web_search", '{"query": "[REDACTED]"}')
         ]
@@ -2652,8 +2654,8 @@ class TestStreamingScanKey:
     def test_server_tool_calls_hold_the_window_and_enter_the_key_once_the_stream_has_ended(self):
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
-        handler = OpenAIChatCompletionsHandler()
-        server_chunk = ModelResponseStream(
+        handler: Final = OpenAIChatCompletionsHandler()
+        server_chunk: Final = ModelResponseStream(
             choices=[
                 StreamingChoices(
                     index=0,
@@ -2666,8 +2668,8 @@ class TestStreamingScanKey:
                 )
             ]
         )
-        open_key = handler.get_streaming_scan_key([self._chunk("hi"), server_chunk])
-        ended_key = handler.get_streaming_scan_key([self._chunk("hi"), server_chunk, self._chunk(None, "stop")])
+        open_key: Final = handler.get_streaming_scan_key([self._chunk("hi"), server_chunk])
+        ended_key: Final = handler.get_streaming_scan_key([self._chunk("hi"), server_chunk, self._chunk(None, "stop")])
         assert open_key.tool_calls_in_flight is True
         assert len(ended_key.tool_calls) == 1 and "web_search" in ended_key.tool_calls[0]
         assert ended_key != open_key

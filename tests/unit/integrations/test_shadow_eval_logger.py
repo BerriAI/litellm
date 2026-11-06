@@ -1906,7 +1906,7 @@ class TestShadowPipeline:
         assert "Let me look that up. [tool call] Read({})" in judge_prompt
 
     async def test_a_server_tool_call_reaches_the_judge_ahead_of_client_tool_calls(self):
-        router = _shadow_reply_router(
+        router: Final = _shadow_reply_router(
             {
                 "content": None,
                 "tool_calls": [
@@ -1930,7 +1930,7 @@ class TestShadowPipeline:
         )
         await self._judged_shadow_row(router)
 
-        judge_prompt = next(
+        judge_prompt: Final = next(
             call.kwargs["messages"][-1]["content"]
             for call in router.acompletion.call_args_list
             if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN

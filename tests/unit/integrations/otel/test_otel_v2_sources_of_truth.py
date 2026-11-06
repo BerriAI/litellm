@@ -800,24 +800,26 @@ def test_responses_tool_calls_fold_into_the_assistant_message_with_tool_calls_fi
 
 
 def test_responses_claude_web_calls_lead_the_tool_calls_without_ending_the_turn_on_tool_calls():
-    claude_fetch = build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
-    openai_search = {
+    claude_fetch: Final = (
+        build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
+    )
+    openai_search: Final = {
         "type": "web_search_call",
         "id": "ws_1",
         "status": "completed",
         "action": {"type": "search", "query": "news"},
     }
-    client_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
-    claude_tool_call = {
+    client_call: Final = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+    claude_tool_call: Final = {
         "id": "srvtoolu_01",
         "type": "function",
         "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
     }
 
-    hosted_only = LLMCallSpanData.from_standard_logging_payload(
+    hosted_only: Final = LLMCallSpanData.from_standard_logging_payload(
         _responses_payload([_RESPONSES_TEXT_ITEM, claude_fetch.model_dump(), openai_search]), capture_content=True
     )
-    with_client_call = LLMCallSpanData.from_standard_logging_payload(
+    with_client_call: Final = LLMCallSpanData.from_standard_logging_payload(
         _responses_payload([_RESPONSES_TEXT_ITEM, claude_fetch.model_dump(), client_call]), capture_content=True
     )
 

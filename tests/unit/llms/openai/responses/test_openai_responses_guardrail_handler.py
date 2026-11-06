@@ -1852,8 +1852,8 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
 
     @pytest.mark.asyncio
     async def test_process_output_response_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
-        guardrail = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
-        response = ResponsesAPIResponse(
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        response: Final = ResponsesAPIResponse(
             id="resp_1",
             created_at=1,
             model="claude-sonnet-5-5",
@@ -1862,7 +1862,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
             output=_claude_web_calls_and_a_native_search(),
         )
 
-        result = await OpenAIResponsesHandler().process_output_response(response, guardrail)
+        result: Final = await OpenAIResponsesHandler().process_output_response(response, guardrail)
 
         assert guardrail.seen_tool_calls == [
             ("web_search", '{"query": "persimmon"}'),
@@ -2816,8 +2816,8 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             ResponsesAPIStreamEvents,
         )
 
-        items = _claude_web_calls_and_a_native_search()
-        added = [
+        items: Final = _claude_web_calls_and_a_native_search()
+        added: Final = [
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=index,
@@ -2825,7 +2825,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             )
             for index, item in enumerate(items)
         ]
-        done = [
+        done: Final = [
             OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=index,
@@ -2834,7 +2834,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             )
             for index, item in enumerate(items)
         ]
-        completed = ResponseCompletedEvent(
+        completed: Final = ResponseCompletedEvent(
             type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
             response=ResponsesAPIResponse(
                 id="resp_1",
@@ -2845,7 +2845,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 output=_claude_web_calls_and_a_native_search(),
             ),
         )
-        guardrail = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
 
         await OpenAIResponsesHandler().process_output_streaming_response(
             responses_so_far=[*added, *done, completed],
@@ -2864,12 +2864,12 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_dict_shaped_claude_web_calls_but_not_native_search(self):
-        items = [item.model_dump() for item in _claude_web_calls_and_a_native_search()]
-        done = [
+        items: Final = [item.model_dump() for item in _claude_web_calls_and_a_native_search()]
+        done: Final = [
             {"type": "response.output_item.done", "output_index": index, "item": dict(item)}
             for index, item in enumerate(items)
         ]
-        completed = {
+        completed: Final = {
             "type": "response.completed",
             "response": {
                 "id": "resp_1",
@@ -2878,7 +2878,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 "output": [dict(item) for item in items],
             },
         }
-        guardrail = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
 
         await OpenAIResponsesHandler().process_output_streaming_response(
             responses_so_far=[*done, completed],
@@ -2899,7 +2899,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
         from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
 
-        done = OutputItemDoneEvent(
+        done: Final = OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=0,
             sequence_number=1,
@@ -2907,7 +2907,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 **build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed").model_dump()
             ),
         )
-        guardrail = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
 
         await OpenAIResponsesHandler().process_output_streaming_response(
             responses_so_far=[done],
