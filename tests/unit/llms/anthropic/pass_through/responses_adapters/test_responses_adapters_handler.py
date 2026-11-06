@@ -2,10 +2,11 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
+from typing import Final, Protocol, runtime_checkable
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -684,3 +685,112 @@ def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypa
     )
 
     assert [tool["name"] for tool in responses_kwargs["tools"]] == ["get_weather"]
+
+
+class _RecordingSSEBody(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield RESPONSES_SSE_BODY
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@runtime_checkable
+class _ClosableByteStream(Iterator[bytes], Protocol):
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class _AsyncClosableByteStream(AsyncIterable[bytes], Protocol):
+    async def aclose(self) -> None: ...
+
+
+def _sync_stream_from_create(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: _RecordingSSEBody
+) -> _ClosableByteStream:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-sync-stream-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body)
+    )
+    stream: Final = litellm.anthropic.messages.create(
+        model="openai/gpt-5.6-luna", max_tokens=16, messages=MESSAGES, stream=True
+    )
+    assert isinstance(stream, _ClosableByteStream)
+    return stream
+
+
+def test_a_sync_streamed_create_on_an_openai_model_is_read_with_a_plain_for_loop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+
+    frames: Final = [frame.decode() for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]
+    assert json.loads(frames[1].split("data: ", 1)[1])["usage"] == {"input_tokens": 3, "output_tokens": 4}
+
+
+def test_closing_a_sync_stream_part_way_closes_the_upstream_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body: Final = _RecordingSSEBody()
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body)
+
+    first: Final = next(stream)
+    assert not body.closed
+    stream.close()
+
+    assert first.startswith(b"event: message_start\n")
+    assert body.closed
+    assert list(stream) == []
+
+
+@pytest.mark.asyncio
+async def test_closing_a_sync_stream_also_ends_an_async_read_of_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body: Final = _RecordingSSEBody()
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body)
+    assert isinstance(stream, AsyncIterator)
+
+    stream.close()
+
+    assert [frame async for frame in stream] == []
+    assert body.closed
+
+
+@pytest.mark.asyncio
+async def test_aclose_on_a_sync_streamed_create_still_ends_an_async_read_of_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    assert isinstance(stream, _AsyncClosableByteStream)
+
+    await stream.aclose()
+
+    assert [frame async for frame in stream] == []
+
+
+@pytest.mark.asyncio
+async def test_a_sync_streamed_create_on_an_openai_model_can_still_be_read_with_async_for(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    assert isinstance(stream, AsyncIterator)
+
+    frames: Final = [frame.decode() async for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]
