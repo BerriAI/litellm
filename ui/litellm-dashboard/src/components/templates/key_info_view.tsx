@@ -113,7 +113,7 @@ export default function KeyInfoView({
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "activity", "savings", "auto-router-usage", "settings"],
+    ["overview", "activity", "savings", ...(hasProxyWideSpendView(userRole) ? ["auto-router-usage"] : []), "settings"],
     "overview",
     tabQueryKey,
   );

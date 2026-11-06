@@ -11,8 +11,10 @@ from integration._support.client import Gateway
 from psycopg import sql
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.ptu_pricing import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.repositories.bounded_daily_activity import BoundedDailyActivityRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import BoundedDailyActivityResponse
+from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -201,3 +203,43 @@ async def test_bounded_activity_routes_keep_exact_totals_and_scoped_permissions(
         finally:
             await repository.database.query_raw('DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id=$1', owner)
             await repository.database.query_raw('DELETE FROM "LiteLLM_DailyTeamSpend" WHERE team_id=$1', team)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_bounded_team_activity_honors_ptu_reporting_flag(
+    db: ManagementDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository: Final = BoundedDailyActivityRepository.from_prisma(db.prisma)
+    identity: Final = uuid4().hex
+    day: Final = "2026-10-01"
+    await repository.database.query_raw(
+        """INSERT INTO "LiteLLM_DailyTeamSpend"
+        (id,team_id,date,api_key,model,spend,ptu_flat_cost,updated_at)
+        VALUES ($1||'-a',$1,$2,'','model-a',2,5,CURRENT_TIMESTAMP),
+               ($1||'-b',$1,$2,'','model-b',3,7,CURRENT_TIMESTAMP)""",
+        identity,
+        day,
+    )
+    scope: Final = DailyActivityScope(
+        table=DailyActivityTable.TEAM,
+        entity_id_field="team_id",
+        entity_ids=(identity,),
+        exclude_entity_ids=(),
+        api_keys=None,
+        start_date=day,
+        end_date=day,
+        model=None,
+        timezone_offset_minutes=0,
+    )
+    try:
+        for enabled, expected in ((False, 0), (True, 12), (False, 0)):
+            monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, str(enabled).lower())
+            result: Final = await repository.aggregate(scope, model_limit=1)
+            assert result.metadata.total_flat_cost == expected
+            assert result.metadata.total_spend == 5
+            assert result.results[0].metrics.flat_cost == expected
+            assert result.model_breakdown is not None and result.model_breakdown.other is not None
+            assert result.model_breakdown.models[0].metrics.flat_cost == (7 if enabled else 0)
+            assert result.model_breakdown.other.metrics.flat_cost == (5 if enabled else 0)
+    finally:
+        await repository.database.query_raw('DELETE FROM "LiteLLM_DailyTeamSpend" WHERE team_id=$1', identity)
