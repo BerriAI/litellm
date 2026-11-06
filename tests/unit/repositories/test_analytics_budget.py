@@ -6,7 +6,10 @@ from contextlib import asynccontextmanager, nullcontext
 from datetime import timedelta
 from typing import Final, Literal
 
+import httpx
 import pytest
+from prisma.engine.errors import EngineRequestError
+from prisma.http import Response
 
 from litellm.repositories.analytics_budget import (
     AnalyticsCapacityError,
@@ -36,11 +39,16 @@ class _ClockedLoop(asyncio.SelectorEventLoop):
 
 
 class _Driver:
-    def __init__(self, stage: Literal["begin", "query", "commit", "rollback", "healthy"]) -> None:
+    def __init__(
+        self, stage: Literal["begin", "query", "commit", "rollback", "healthy"], *, error: BaseException | None = None
+    ) -> None:
         self.stage = stage
+        self.error = error
         self.cancelled = asyncio.Event()
 
     async def _stall(self) -> None:
+        if self.error is not None:
+            raise self.error
         try:
             await asyncio.Event().wait()
         finally:
@@ -220,6 +228,21 @@ async def test_cancelled_analytics_keeps_admission_until_detached_engine_work_an
         await asyncio.sleep(0)
         await asyncio.sleep(0)
     assert not any(driver.engine._detached for driver in drivers)  # pyright: ignore[reportPrivateUsage]  # verify detached engine tasks drained
+    healthy: Final = BoundedAnalyticsDatabase(_Driver("healthy"))
+    assert await asyncio.gather(healthy.query_raw("SELECT 1 AS result"), healthy.query_raw("SELECT 1 AS result")) == [
+        ({"result": 1},),
+        ({"result": 1},),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", (503, 504, 422))
+async def test_engine_admission_timeout_is_retryable_but_invalid_requests_are_not(status: int) -> None:
+    response: Final = Response(httpx.Response(status))
+    error: Final = EngineRequestError(response, '{"error_code":"P2028"}')
+    expected: Final = AnalyticsCapacityError if status in (503, 504) else EngineRequestError
+    with pytest.raises(expected):
+        await BoundedAnalyticsDatabase(_Driver("begin", error=error)).query_raw("SELECT 1 AS result")
     healthy: Final = BoundedAnalyticsDatabase(_Driver("healthy"))
     assert await asyncio.gather(healthy.query_raw("SELECT 1 AS result"), healthy.query_raw("SELECT 1 AS result")) == [
         ({"result": 1},),
