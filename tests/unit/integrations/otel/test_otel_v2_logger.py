@@ -1803,13 +1803,16 @@ def test_proxy_pre_call_hook_seeds_request_metadata_without_a_listed_otel_callba
     from litellm.proxy import proxy_server
     from litellm.proxy.utils import ProxyLogging
 
-    cfg = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["requester_metadata.trace_id"])
-    exporter = InMemorySpanExporter()
-    logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["requester_metadata.trace_id"])
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
     monkeypatch.setattr(litellm, "callbacks", [])
-    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
-    data = {"model": "resolved-deployment", "metadata": {"requester_metadata": {"trace_id": "abc", "other": "x"}}}
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    data: Final = {
+        "model": "resolved-deployment",
+        "metadata": {"requester_metadata": {"trace_id": "abc", "other": "x"}},
+    }
 
     async def _flow():
         logger.seed_request_identity(_Auth(), model="client-alias")
@@ -1822,9 +1825,9 @@ def test_proxy_pre_call_hook_seeds_request_metadata_without_a_listed_otel_callba
         asyncio.run(_flow())
     server.end()
 
-    spans = {s.name: s for s in exporter.get_finished_spans()}
-    seeded = None if guardrails_only else "abc"
-    observed = {
+    spans: Final = {s.name: s for s in exporter.get_finished_spans()}
+    seeded: Final = None if guardrails_only else "abc"
+    observed: Final = {
         name: (
             spans[name].attributes.get(f"{LiteLLM.METADATA_PREFIX}trace_id"),
             spans[name].attributes.get("gen_ai.request.model"),
@@ -1835,7 +1838,7 @@ def test_proxy_pre_call_hook_seeds_request_metadata_without_a_listed_otel_callba
         LITELLM_PROXY_REQUEST_SPAN_NAME: (seeded, "client-alias"),
         "redis set": (seeded, "client-alias"),
     }, observed
-    assert not any(k.endswith("other") for s in spans.values() for k in s.attributes), sorted(spans)
+    assert not any(any(k.endswith("other") for k in s.attributes) for s in spans.values()), sorted(spans)
 
 
 def test_pre_call_hook_promotes_nested_request_metadata_key():

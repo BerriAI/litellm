@@ -30,10 +30,13 @@ def _chat(_request: Request) -> Reply:
     )
 
 
-def _config(directory: Path, callbacks: list[str]) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"] = {**config.get("litellm_settings", {}), "callbacks": callbacks}
-    config["general_settings"] = {**config.get("general_settings", {}), "user_api_key_cache_ttl": 2}
+def _config(directory: Path, callbacks: tuple[str, ...]) -> Path:
+    loaded: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {
+        **loaded,
+        "litellm_settings": {**loaded.get("litellm_settings", {}), "callbacks": list(callbacks)},
+        "general_settings": {**loaded.get("general_settings", {}), "user_api_key_cache_ttl": 2},
+    }
     path: Final = directory / "team-request-metadata.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -51,7 +54,7 @@ def newrelic(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ConnectSink]:
         yield sink
 
 
-@pytest.fixture(scope="module", params=[[], ["otel"]], ids=["team-only", "with-proxy-otel"])
+@pytest.fixture(scope="module", params=[(), ("otel",)], ids=["team-only", "with-proxy-otel"])
 def proxy(
     request: pytest.FixtureRequest, newrelic: ConnectSink, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Gateway]:
