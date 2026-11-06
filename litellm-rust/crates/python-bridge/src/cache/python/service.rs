@@ -45,6 +45,7 @@ pub(crate) enum CacheCall {
     },
     Store {
         value: Value,
+        unary: bool,
         reply: Reply<Result<(), Error>>,
     },
 }
@@ -101,8 +102,13 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async move {
             let value = to_python(value)?;
+            let unary = value.get(STREAM_EVENTS_KEY).is_none();
             self.services
-                .call(|reply| CacheCall::Store { value, reply })
+                .call(|reply| CacheCall::Store {
+                    value,
+                    unary,
+                    reply,
+                })
                 .await
                 .map_err(Error::unavailable)?
         })

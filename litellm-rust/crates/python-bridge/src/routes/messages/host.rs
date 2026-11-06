@@ -241,7 +241,9 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
+        let response = public_response(py, ROUTE_HOST_MODULE, response.as_ref())?;
+        self.cache.store_response(py, response.bind(py))?;
+        Ok(response)
     }
 
     fn encode_stream_head(
