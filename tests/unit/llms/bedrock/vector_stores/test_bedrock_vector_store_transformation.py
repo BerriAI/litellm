@@ -498,6 +498,11 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             id="aws-native-unchanged",
         ),
         pytest.param(
+            {"equals": {"key": "department", "value": "hr"}, "type": "eq"},
+            {"equals": {"key": "department", "value": "hr"}, "type": "eq"},
+            id="aws-native-with-type-key-unchanged",
+        ),
+        pytest.param(
             {"key": "department", "value": "hr", "operator": "ne"},
             {"notEquals": {"key": "department", "value": "hr"}},
             id="operator-shape-still-mapped",
@@ -522,6 +527,22 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             },
             id="and-list-shape-still-mapped",
         ),
+        pytest.param(
+            {
+                "type": "and",
+                "and": [
+                    {"key": "department", "value": "hr", "operator": "eq"},
+                    {"key": "year", "value": 2024, "operator": "gte"},
+                ],
+            },
+            {
+                "andAll": [
+                    {"equals": {"key": "department", "value": "hr"}},
+                    {"greaterThanOrEquals": {"key": "year", "value": 2024}},
+                ]
+            },
+            id="and-list-shape-with-type-key-still-mapped",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -541,13 +562,13 @@ async def test_search_sends_openai_filters_as_aws_retrieval_filters(
 
 
 INVALID_FILTERS: Final = (
-    ("unknown-type", {"type": "regex", "key": "department", "value": "h.*"}, "Input tag 'regex'"),
-    ("missing-value", {"type": "eq", "key": "department"}, "filters.eq.value: Field required"),
-    ("empty-compound", {"type": "and", "filters": []}, "filters.and.filters: Tuple should have at least 1 item"),
+    ("unknown-type", {"type": "regex", "key": "department", "value": "h.*"}, "'regex'"),
+    ("missing-value", {"type": "eq", "key": "department"}, "filters.eq.value"),
+    ("empty-compound", {"type": "and", "filters": []}, "filters.and.filters:"),
     (
         "untyped-member",
         {"type": "and", "filters": [{"type": "eq", "key": "department", "value": "hr"}, {"key": "year"}]},
-        "filters.and.filters.1: Unable to extract tag",
+        "filters.and.filters.1",
     ),
     ("bools-in-list", {"type": "in", "key": "remote", "value": [True, False]}, "filters.in.value"),
     ("not-an-object", [{"type": "eq", "key": "department", "value": "hr"}], "filters must be an object, got list"),

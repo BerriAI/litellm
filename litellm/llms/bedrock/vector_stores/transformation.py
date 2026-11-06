@@ -52,6 +52,15 @@ _AWS_COMPARISON_OPERATORS: Final = MappingProxyType(
     }
 )
 _AWS_LOGICAL_OPERATORS: Final = MappingProxyType({"and": "andAll", "or": "orAll"})
+_AWS_FILTER_KEYS: Final = frozenset(
+    (
+        *_AWS_COMPARISON_OPERATORS.values(),
+        *_AWS_LOGICAL_OPERATORS.values(),
+        "startsWith",
+        "listContains",
+        "stringContains",
+    )
+)
 _OPENAI_FILTER: Final[TypeAdapter[OpenAIComparisonFilter | OpenAICompoundFilter]] = TypeAdapter(OpenAIVectorStoreFilter)
 
 
@@ -185,7 +194,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             return self._map_operator_filter(filters)
         if "and" in filters or "or" in filters:
             return self._map_and_or_filters(filters)
-        if "type" in filters:
+        if "type" in filters and filters.keys().isdisjoint(_AWS_FILTER_KEYS):
             try:
                 return _aws_retrieval_filter(_OPENAI_FILTER.validate_python(filters))
             except ValidationError as error:
