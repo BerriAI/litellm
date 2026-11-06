@@ -114,6 +114,7 @@ class TestVertexAITextToSpeechConfig:
             ("europe-west12", "eu-texttospeech.googleapis.com"),
             ("us", "us-texttospeech.googleapis.com"),
             ("us-central1", "us-texttospeech.googleapis.com"),
+            ("us-west2", "us-texttospeech.googleapis.com"),
             ("us-west5", "us-texttospeech.googleapis.com"),
         ],
     )
@@ -1916,6 +1917,7 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_with_a_numeric_speaking_rate_ret
     (
         ("us-central1", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("us-east5", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us-west3", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("us-west5", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("us", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("europe-west4", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),

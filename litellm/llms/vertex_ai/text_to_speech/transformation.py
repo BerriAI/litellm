@@ -66,6 +66,8 @@ _CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
                 "us-east5",
                 "us-south1",
                 "us-west1",
+                "us-west2",
+                "us-west3",
                 "us-west4",
                 "us-west5",
             ),
