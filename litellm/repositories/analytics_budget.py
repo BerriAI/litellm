@@ -6,6 +6,7 @@ from datetime import timedelta
 from threading import BoundedSemaphore
 from typing import Final, Protocol
 
+from prisma.engine.errors import EngineRequestError
 from prisma.errors import RawQueryError, TransactionExpiredError, TransactionNotStartedError
 from pydantic import BaseModel
 
@@ -109,6 +110,10 @@ class BoundedAnalyticsDatabase:
                 return await asyncio.wait_for(
                     self._query(query, args), timeout=6.25 if remaining is None else min(6.25, remaining)
                 )
+            except EngineRequestError as error:
+                if error.response.status not in (503, 504):
+                    raise
+                raise AnalyticsCapacityError("Analytics exceeded its connection budget. Try again shortly") from error
             except RawQueryError as error:
                 if _PostgresError.model_validate(error.meta or {}).code not in ("57014", "55P03"):
                     raise
