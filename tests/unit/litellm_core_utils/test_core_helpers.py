@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.core_helpers import (
     response_cost_in_hidden_params,
     set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
+    without,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
@@ -852,3 +853,21 @@ def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bil
     stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
     assert unreported.usage.cost == 0.0015
     assert billed_usage_cost(unreported, "openai") is None
+
+
+def test_without_drops_the_named_keys_and_keeps_the_rest_in_order() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    assert list(without(source, "b", "d").items()) == [("a", 1), ("c", 3)]
+    assert without(source, "missing") == source
+    assert without(source) == source
+
+
+def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2}
+
+    result: Final = without(source, "a")
+    result["c"] = 3
+
+    assert source == {"a": 1, "b": 2}
+    assert result == {"b": 2, "c": 3}

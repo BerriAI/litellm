@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowUpRight, Newspaper } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ const Row = ({ children }: { children: React.ReactNode }) => (
 
 /** Latest posts from the LiteLLM blog RSS feed, via /public/litellm_blog_posts, one row per post. */
 export default function UpdatesFeed({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const disabled = useDisableBlogPosts();
   const { data, isLoading, isError, refetch } = useBlogPosts();
   if (disabled) return null;
@@ -43,10 +45,10 @@ export default function UpdatesFeed({ className }: { className?: string }) {
     <section aria-labelledby="home-updates-title" data-testid="home-updates" className={className}>
       <div className="flex items-center justify-between gap-2">
         <h2 id="home-updates-title" className="text-lg font-semibold">
-          Updates
+          {t("home.updatesFeed.title")}
         </h2>
         <Button variant="ghost" size="sm" render={<a href={BLOG_URL} target="_blank" rel="noopener noreferrer" />}>
-          View all
+          {t("home.updatesFeed.viewAll")}
           <ArrowUpRight className="size-3.5" />
         </Button>
       </div>
@@ -63,13 +65,15 @@ export default function UpdatesFeed({ className }: { className?: string }) {
       )}
       {isError && (
         <div className="flex items-center justify-between gap-2 py-3 text-sm">
-          <span className="text-destructive">Failed to load posts</span>
+          <span className="text-destructive">{t("home.updatesFeed.failed")}</span>
           <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Retry
+            {t("home.updatesFeed.retry")}
           </Button>
         </div>
       )}
-      {data && posts.length === 0 && <p className="py-3 text-sm text-muted-foreground">No posts yet</p>}
+      {data && posts.length === 0 && (
+        <p className="py-3 text-sm text-muted-foreground">{t("home.updatesFeed.empty")}</p>
+      )}
       {posts.length > 0 && (
         <ol className="m-0 list-none p-0">
           {posts.map((post: BlogPost) => (
