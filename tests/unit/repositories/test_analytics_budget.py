@@ -47,7 +47,7 @@ class _Driver:
             self.cancelled.set()
 
     @asynccontextmanager
-    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction]:
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction, None]:
         if self.stage == "begin":
             await self._stall()
         try:
@@ -161,7 +161,7 @@ class _TrackedDriver:
         self.engine = _TrackedPrismaEngine(engine, self.tracker)
 
     @asynccontextmanager
-    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction]:
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction, None]:
         identifier: Final = await self.engine.start_transaction(content="{}")
         try:
             yield self
