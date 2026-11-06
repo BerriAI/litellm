@@ -577,6 +577,29 @@ async def test_search_sends_aws_native_filters_with_a_type_key_unchanged(
     assert _sent_filter(retrieve_route) == aws_filter
 
 
+@pytest.mark.parametrize(
+    "filters",
+    [
+        pytest.param([], id="empty-list"),
+        pytest.param([{"type": "eq", "key": "department", "value": "hr"}], id="list"),
+        pytest.param("department=hr", id="string"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_without_drop_params_ignores_non_object_filters(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    retrieve_route: Final = await _search_with_filters(respx_mock, filters)
+
+    assert retrieve_route.call_count == 1
+    assert _sent_filter(retrieve_route) is None
+
+
 INVALID_FILTERS: Final = (
     ("unknown-type", {"type": "regex", "key": "department", "value": "h.*"}, "'regex'"),
     ("missing-value", {"type": "eq", "key": "department"}, "filters.eq.value"),
@@ -587,7 +610,6 @@ INVALID_FILTERS: Final = (
         "filters.and.filters.1",
     ),
     ("bools-in-list", {"type": "in", "key": "remote", "value": [True, False]}, "filters.in.value"),
-    ("not-an-object", [{"type": "eq", "key": "department", "value": "hr"}], "filters must be an object, got list"),
 )
 
 
