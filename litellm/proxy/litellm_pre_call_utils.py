@@ -1959,7 +1959,7 @@ class LiteLLMProxyRequestSetup:
 
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
-        chain_id: Final = get_chain_id_from_headers(dict(headers))
+        chain_id: Final = get_chain_id_from_headers(dict(normalized_headers))
         child_tier_metadata: Final = _child_tier_session_metadata(
             normalized_headers, request_body, _metadata_variable_name
         )

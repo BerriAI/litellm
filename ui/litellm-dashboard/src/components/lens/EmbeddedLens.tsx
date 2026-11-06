@@ -10,7 +10,7 @@ import { serverRootPath } from "@/lib/serverRootPath";
 const host: LensHost = {
   surface: "embedded",
   analysis: "deployment",
-  traces: "auto",
+  traces: "spend-logs",
   spendLogs: { lookup: uiSpendLogsCall, Drawer: LogDetailsDrawer },
 };
 
