@@ -263,6 +263,36 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "extra_field" not in result
         assert "another_field" not in result
 
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "detail": "auto",
+                        "bucket_owner": "111122223333",
+                    },
+                },
+                id="input-image",
+            ),
+            pytest.param(
+                {"type": "input_file", "file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                {
+                    "type": "file",
+                    "file": {"file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                },
+                id="input-file",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_keeps_bucket_owner(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
+
     def test_transform_chat_completion_response_with_reasoning_content(self):
         """Test that reasoning content is preserved in the full transformation pipeline"""
         # Setup

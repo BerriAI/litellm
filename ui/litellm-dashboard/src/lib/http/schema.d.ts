@@ -28710,6 +28710,8 @@ export interface components {
         };
         /** ChatCompletionFileObjectFile */
         ChatCompletionFileObjectFile: {
+            /** Bucket Owner */
+            bucket_owner?: string;
             /** Detail */
             detail?: string;
             /** File Data */
@@ -28751,6 +28753,8 @@ export interface components {
         };
         /** ChatCompletionImageUrlObject */
         ChatCompletionImageUrlObject: {
+            /** Bucket Owner */
+            bucket_owner?: string;
             /** Detail */
             detail?: string;
             /** Format */

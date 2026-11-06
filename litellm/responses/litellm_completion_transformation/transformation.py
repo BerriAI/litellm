@@ -2257,6 +2257,8 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
+        if item.get("bucket_owner"):
+            file_dict["bucket_owner"] = item["bucket_owner"]
 
         new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
         if "cache_control" in item:
@@ -2270,8 +2272,13 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API input_image item to a Chat Completion image item
         """
-        image_url_obj: Final = ChatCompletionImageUrlObject(
-            url=item.get("image_url") or "", detail=item.get("detail") or "auto"
+        url: Final = item.get("image_url") or ""
+        detail: Final = item.get("detail") or "auto"
+        bucket_owner: Final = item.get("bucket_owner")
+        image_url_obj: Final = (
+            ChatCompletionImageUrlObject(url=url, detail=detail, bucket_owner=bucket_owner)
+            if bucket_owner
+            else ChatCompletionImageUrlObject(url=url, detail=detail)
         )
 
         return ChatCompletionImageObject(type="image_url", image_url=image_url_obj)

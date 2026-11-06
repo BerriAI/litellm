@@ -46591,6 +46591,10 @@
         },
         "ChatCompletionFileObjectFile": {
           "properties": {
+            "bucket_owner": {
+              "title": "Bucket Owner",
+              "type": "string"
+            },
             "detail": {
               "title": "Detail",
               "type": "string"
@@ -46697,6 +46701,10 @@
         },
         "ChatCompletionImageUrlObject": {
           "properties": {
+            "bucket_owner": {
+              "title": "Bucket Owner",
+              "type": "string"
+            },
             "detail": {
               "title": "Detail",
               "type": "string"

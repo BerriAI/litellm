@@ -8,11 +8,13 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
+from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypedDict, cast, overload
+from typing import Any, Final, TypeAlias, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, JsonValue, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 import litellm.types
@@ -31,7 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
-from litellm.types.files import get_file_extension_from_mime_type
+from litellm.types.files import get_file_extension_from_mime_type, get_file_mime_type_from_extension
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
@@ -3647,6 +3649,7 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
+from litellm.types.llms.bedrock import S3Location as BedrockS3Location
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
@@ -3819,10 +3822,8 @@ class BedrockImageProcessor:
         return valid_extensions[0]
 
     @staticmethod
-    def _create_bedrock_block(image_bytes: str, mime_type: str, image_format: str) -> BedrockContentBlock:
+    def _create_bedrock_block(source: BedrockSourceBlock, mime_type: str, image_format: str) -> BedrockContentBlock:
         """Create appropriate Bedrock content block based on mime type."""
-        _blob: Final = BedrockSourceBlock(bytes=image_bytes)
-
         document_types: Final = ["application", "text"]
         is_document: Final = any(mime_type.startswith(doc_type) for doc_type in document_types)
 
@@ -3832,12 +3833,10 @@ class BedrockImageProcessor:
         HASH_SAMPLE_BYTES: Final = 64 * 1024  # hash up to 64 KB of data
 
         if is_document:
-            # --- Prepare normalized bytes for hashing (without modifying original) ---
-            if isinstance(image_bytes, str):
-                # Remove whitespace/newlines so base64 variations hash identically
-                normalized = "".join(image_bytes.split()).encode("utf-8")
-            else:
-                normalized = image_bytes
+            s3_location: Final = source.get("s3Location")
+            hashed_content: Final = s3_location["uri"] if s3_location is not None else source.get("bytes") or ""
+            # Remove whitespace/newlines so base64 variations hash identically
+            normalized: Final = "".join(hashed_content.split()).encode("utf-8")
 
             # --- Use only the first 64 KB for speed ---
             if len(normalized) <= HASH_SAMPLE_BYTES:
@@ -3857,20 +3856,63 @@ class BedrockImageProcessor:
             # --- Return content block ---
             return BedrockContentBlock(
                 document=BedrockDocumentBlock(
-                    source=_blob,
+                    source=source,
                     format=image_format,
                     name=document_name,
                 )
             )
         elif is_video:
-            return BedrockContentBlock(video=BedrockVideoBlock(source=_blob, format=image_format))
+            return BedrockContentBlock(video=BedrockVideoBlock(source=source, format=image_format))
         else:
-            return BedrockContentBlock(image=BedrockImageBlock(source=_blob, format=image_format))
+            return BedrockContentBlock(image=BedrockImageBlock(source=source, format=image_format))
+
+    @staticmethod
+    def _s3_key_mime_type(uri: str) -> str | None:
+        extension: Final = PurePosixPath(uri).suffix.removeprefix(".").lower()
+        if not extension:
+            return None
+        bedrock_format: Final = "jpeg" if extension == "jpg" else extension
+        config: Final = litellm.AmazonConverseConfig()
+        if bedrock_format in config.get_supported_image_types():
+            return f"image/{bedrock_format}"
+        if bedrock_format in config.get_supported_video_types():
+            return f"video/{bedrock_format}"
+        try:
+            return get_file_mime_type_from_extension(extension)
+        except ValueError:
+            return None
 
     @classmethod
-    def process_image_sync(cls, image_url: str, format: str | None = None) -> BedrockContentBlock:
+    def _create_s3_block(cls, uri: str, format: str | None, bucket_owner: str | None) -> BedrockContentBlock:
+        mime_type: Final = format or cls._s3_key_mime_type(uri)
+        if mime_type is None:
+            raise litellm.BadRequestError(
+                message=f"Cannot tell the media type of {uri} from its file extension. "
+                "Set the part's `format` to its MIME type, e.g. `image/png`.",
+                model="",
+                llm_provider="bedrock",
+            )
+        try:
+            image_format: Final = cls.validate_format(mime_type, mime_type.partition("/")[2])
+        except ValueError as e:
+            raise litellm.BadRequestError(
+                message=f"Bedrock Converse does not accept {uri} as {mime_type}. {e}",
+                model="",
+                llm_provider="bedrock",
+            ) from e
+        s3_location: Final = (
+            BedrockS3Location(uri=uri) if bucket_owner is None else BedrockS3Location(uri=uri, bucketOwner=bucket_owner)
+        )
+        return cls._create_bedrock_block(BedrockSourceBlock(s3Location=s3_location), mime_type, image_format)
+
+    @classmethod
+    def process_image_sync(
+        cls, image_url: str, format: str | None = None, bucket_owner: str | None = None
+    ) -> BedrockContentBlock:
         """Synchronous image processing."""
 
+        if image_url.startswith("s3://"):
+            return cls._create_s3_block(image_url, format, bucket_owner)
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -3884,12 +3926,16 @@ class BedrockImageProcessor:
             image_format = mime_type.split("/")[1]
 
         image_format = cls.validate_format(mime_type, image_format)
-        return cls._create_bedrock_block(img_bytes, mime_type, image_format)
+        return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
     @classmethod
-    async def process_image_async(cls, image_url: str, format: str | None) -> BedrockContentBlock:
+    async def process_image_async(
+        cls, image_url: str, format: str | None = None, bucket_owner: str | None = None
+    ) -> BedrockContentBlock:
         """Asynchronous image processing."""
 
+        if image_url.startswith("s3://"):
+            return cls._create_s3_block(image_url, format, bucket_owner)
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
@@ -3903,7 +3949,7 @@ class BedrockImageProcessor:
             image_format = mime_type.split("/")[1]
 
         image_format = cls.validate_format(mime_type, image_format)
-        return cls._create_bedrock_block(img_bytes, mime_type, image_format)
+        return cls._create_bedrock_block(BedrockSourceBlock(bytes=img_bytes), mime_type, image_format)
 
 
 def _convert_to_bedrock_tool_call_invoke(
@@ -4045,6 +4091,18 @@ def _append_bedrock_tool_result_media_block(
         )
 
 
+class _S3MediaOwner(TypedDict, total=False):
+    bucket_owner: ReadOnly[object]
+
+
+_S3_MEDIA_OWNER: Final = TypeAdapter(_S3MediaOwner)
+
+
+def _s3_bucket_owner(media: _S3MediaOwner) -> str | None:
+    owner: Final = media.get("bucket_owner")
+    return owner if isinstance(owner, str) else None
+
+
 def _append_bedrock_tool_result_image_url_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     content: dict,
@@ -4055,9 +4113,15 @@ def _append_bedrock_tool_result_image_url_block(
         format = content["image_url"].get("format")
     else:
         image_url = content["image_url"]
+    bucket_owner: Final = (
+        _s3_bucket_owner(_S3_MEDIA_OWNER.validate_python(content["image_url"]))
+        if isinstance(content["image_url"], dict)
+        else None
+    )
     processed_block: Final = BedrockImageProcessor.process_image_sync(
         image_url=image_url,
         format=format,
+        bucket_owner=bucket_owner,
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "image_url")
 
@@ -4080,6 +4144,7 @@ def _append_bedrock_tool_result_file_block(
     processed_block: Final = BedrockImageProcessor.process_image_sync(
         image_url=cast(str, file_id or file_data),
         format=file_obj.get("format"),
+        bucket_owner=_s3_bucket_owner(_S3_MEDIA_OWNER.validate_python(file_obj)),
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "file")
 
@@ -4699,8 +4764,13 @@ class BedrockConverseMessagesProcessor:
                                     format = element["image_url"].get("format")
                                 else:
                                     image_url = element["image_url"]
+                                bucket_owner: str | None = (
+                                    element["image_url"].get("bucket_owner")
+                                    if isinstance(element["image_url"], dict)
+                                    else None
+                                )
                                 _part = await BedrockImageProcessor.process_image_async(
-                                    image_url=image_url, format=format
+                                    image_url=image_url, format=format, bucket_owner=bucket_owner
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "file":
@@ -4960,7 +5030,9 @@ class BedrockConverseMessagesProcessor:
                 llm_provider="bedrock",
             )
         format: Final = file_message.get("format")
-        return BedrockImageProcessor.process_image_sync(image_url=cast(str, file_id or file_data), format=format)
+        return BedrockImageProcessor.process_image_sync(
+            image_url=cast(str, file_id or file_data), format=format, bucket_owner=file_message.get("bucket_owner")
+        )
 
     _process_file_message = process_file_message
 
@@ -4984,7 +5056,9 @@ class BedrockConverseMessagesProcessor:
                 model="",
                 llm_provider="bedrock",
             )
-        return await BedrockImageProcessor.process_image_async(image_url=cast(str, file_id or file_data), format=format)
+        return await BedrockImageProcessor.process_image_async(
+            image_url=cast(str, file_id or file_data), format=format, bucket_owner=file_message.get("bucket_owner")
+        )
 
     @staticmethod
     def _process_document_message(element: dict) -> BedrockContentBlock:
@@ -5111,9 +5185,13 @@ def _bedrock_converse_messages_pt(
                                 format = element["image_url"].get("format")
                             else:
                                 image_url = element["image_url"]
+                            bucket_owner: str | None = (
+                                element["image_url"].get("bucket_owner")
+                                if isinstance(element["image_url"], dict)
+                                else None
+                            )
                             _part = BedrockImageProcessor.process_image_sync(
-                                image_url=image_url,
-                                format=format,
+                                image_url=image_url, format=format, bucket_owner=bucket_owner
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
