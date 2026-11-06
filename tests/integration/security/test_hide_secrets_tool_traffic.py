@@ -413,3 +413,71 @@ def test_resent_tool_history_is_scanned_once(single_worker: Rig, shape: str) -> 
     second: Final = timed(lambda: single_worker.proxy.request("POST", path, following))
     assert first.value.status_code == 200 and second.value.status_code == 200, (first.value.text, second.value.text)
     assert_within_factor_of_control(second.seconds, control=first.seconds, factor=0.5)
+
+
+@pytest.mark.parametrize("placement", ("guardrail", "global"))
+def test_skip_tool_message_in_guardrail_forwards_tool_results(tmp_path: Path, placement: str) -> None:
+    def configure(configuration: dict[str, JsonValue]) -> None:
+        guardrails: Final = configuration["guardrails"]
+        settings: Final = configuration["litellm_settings"]
+        assert isinstance(guardrails, list) and isinstance(guardrails[0], dict) and isinstance(settings, dict)
+        params: Final = guardrails[0]["litellm_params"]
+        assert isinstance(params, dict)
+        (params if placement == "guardrail" else settings)["skip_tool_message_in_guardrail"] = True
+
+    with tool_rig(tmp_path, configure=configure) as rig:
+        rig.wire.drain()
+        replies: Final = (
+            rig.proxy.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": "claude",
+                    "max_tokens": 32,
+                    "cache": {"no-cache": True},
+                    "messages": [
+                        {"role": "user", "content": TEXT},
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "tool_use", "id": "tool_1", "name": "read_file", "input": {"env": TEXT}}
+                            ],
+                        },
+                        {
+                            "role": "user",
+                            "content": [{"type": "tool_result", "tool_use_id": "tool_1", "content": TEXT}],
+                        },
+                    ],
+                },
+            ),
+            rig.proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": "gpt",
+                    "cache": {"no-cache": True},
+                    "messages": [
+                        {"role": "user", "content": TEXT},
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "read_file", "arguments": json.dumps({"env": TEXT})},
+                                }
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "call_1", "content": TEXT},
+                    ],
+                },
+            ),
+        )
+        assert all(reply.status_code == 200 for reply in replies), [reply.text for reply in replies]
+        sent: Final = rig.wire.drain()
+        assert len(sent) == 2
+        for request in sent:
+            messages = json.loads(request.body)["messages"]
+            assert SECRET not in json.dumps(messages[:2])
+            assert SECRET in json.dumps(messages[2])

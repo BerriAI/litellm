@@ -132,7 +132,7 @@ jobs:
   windows-sdk:
     name: windows-sdk
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     defaults:
@@ -154,8 +154,11 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --group dev --python 3.11
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --group dev --python 3.11
 
       - name: Run the Windows tests
         run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests

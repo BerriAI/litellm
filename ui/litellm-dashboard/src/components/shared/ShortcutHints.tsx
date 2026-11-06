@@ -1,8 +1,10 @@
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment } from "react";
 import { useHotkeysContext } from "react-hotkeys-hook";
+import { useTranslation } from "react-i18next";
 
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/cva.config";
 
 type BoundShortcut = ReturnType<typeof useHotkeysContext>["hotkeys"][number];
@@ -59,22 +61,15 @@ export function shortcutHints(shortcuts: readonly BoundShortcut[]): readonly Sho
     >((hints, [key, shortcut]) => mergeAdjacent(hints, key, shortcut.description ?? ""), []);
 }
 
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground">
-      {children}
-    </kbd>
-  );
-}
-
 /** The shortcuts active right now, read from what is bound rather than typed by hand. */
 export function ShortcutHints({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const { hotkeys } = useHotkeysContext();
   const hints = shortcutHints(hotkeys);
   if (hints.length === 0) return null;
   return (
     <div
-      aria-label="Keyboard shortcuts"
+      aria-label={t("shared.shortcutHints.label")}
       data-slot="shortcut-hints"
       className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground", className)}
     >

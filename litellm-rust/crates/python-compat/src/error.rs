@@ -6,19 +6,23 @@ use crate::MAX_DEPTH;
 pub enum Error {
     #[error("malformed Python literal at byte {0}")]
     InvalidLiteral(usize),
+    #[error("malformed JSON at byte {0}")]
+    InvalidJson(usize),
     #[error("unhashable type: '{0}'")]
     Unhashable(&'static str),
     #[error("value nests deeper than {MAX_DEPTH} levels")]
     TooDeep,
-    #[error("invalid pickle: {0}")]
-    InvalidPickle(String),
+    #[error("invalid pickle")]
+    InvalidPickle(#[source] serde_pickle::Error),
+    #[error("could not write pickle")]
+    PickleWrite(#[source] serde_pickle::Error),
     #[error("Object of type {0} is not JSON serializable")]
     NotJsonSerializable(&'static str),
     #[error("keys must be str, int, float, bool or None, not {0}")]
     InvalidJsonKey(&'static str),
     #[error("Out of range float values are not JSON compliant")]
     NonFiniteFloat,
-    #[error("integer does not fit in the JSON number range")]
+    #[error("integer does not fit in 64 bits")]
     IntegerOutOfRange,
     #[error("Object of type {0} cannot be pickled as plain data")]
     NotPicklable(&'static str),

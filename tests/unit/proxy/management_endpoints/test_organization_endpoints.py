@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1560,6 +1561,12 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     prisma_client.db.litellm_jwtkeymapping = jwt_table
     prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
 
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
@@ -1615,6 +1622,37 @@ async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu
     prisma_client.db.litellm_teamtable.delete_many.assert_not_called()
     prisma_client.db.litellm_verificationtoken.delete_many.assert_not_called()
     prisma_client.db.litellm_organizationtable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        OrganizationMemberAddRequest,
+        OrgMember,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await organization_member_add(
+            data=OrganizationMemberAddRequest(
+                organization_id="no-such-org",
+                member=OrgMember(role="internal_user", user_id="someone"),
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
 
 
 @pytest.mark.asyncio
