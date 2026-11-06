@@ -1131,7 +1131,7 @@ class GuardrailLiteLLMParams(TypedDict, total=False):
     mode: Required[str]
     api_key: str | None
     api_base: str | None
-    weight: int | None  # For load balancing
+    weight: float | None  # For load balancing
 
 
 class GuardrailTypedDict(TypedDict, total=False):

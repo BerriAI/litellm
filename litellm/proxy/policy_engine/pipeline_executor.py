@@ -332,25 +332,12 @@ def _prepare_hook_input(
 
 def pipeline_callback_eligible(
     callback: CustomGuardrail,
-    step: PipelineStep,
     data: Mapping[str, object],
-    raw_request_snapshot: Mapping[str, object] | None,
     mode: str,
     streaming_chunks: list[object] | None,  # mutable-ok: shared buffered-stream chunks, read only here
     endpoint_translation: "BaseTranslation | None",
 ) -> bool:
-    source: Final = raw_request_snapshot if callback.scan_raw_request and raw_request_snapshot is not None else data
-    metadata: Final = source.get("metadata")
-    hook_input: Final[Mapping[str, object]] = {
-        **source,
-        "metadata": {
-            **(_PIPELINE_DATA_FIELDS.validate_python(metadata) if isinstance(metadata, Mapping) else {}),
-            "guardrails": [step.guardrail],
-        },
-        **({"stream": True} if streaming_chunks is not None else {}),
-    }
-    event_type: Final = _PIPELINE_EVENT_HOOKS.get(mode)
-    return (event_type is None or callback.should_run_guardrail(data=hook_input, event_type=event_type) is True) and (  # pyright: ignore[reportUnknownMemberType]  # legacy method accepts the str-keyed request payload
+    return _pipeline_stream_scope_allows(callback, data, mode, streaming_chunks) and (
         streaming_chunks is None
         or PipelineExecutor.supports_unified_execution(callback)
         or (
@@ -638,9 +625,7 @@ class PipelineExecutor:
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
         callbacks: Final = load_balanced_callbacks(
             (callback,),
-            lambda cb: pipeline_callback_eligible(
-                cb, step, data, raw_request_snapshot, mode, streaming_chunks, endpoint_translation
-            ),
+            lambda cb: pipeline_callback_eligible(cb, data, mode, streaming_chunks, endpoint_translation),
             eligible_only=True,
         )
         working_data = data

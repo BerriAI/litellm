@@ -682,13 +682,8 @@ async def test_missing_callback_does_not_poison_healthy_replica(
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     logging: Final = ProxyLogging(user_api_key_cache=DualCache())
-    if healthy:
-        await _dispatch_scoped_hook(logging, hook)
-        assert guardrail.calls == 1
-    else:
-        with pytest.raises(ValueError, match="No callback found for guardrail: partial-lb"):
-            await _dispatch_scoped_hook(logging, hook)
-        assert guardrail.calls == 0
+    await _dispatch_scoped_hook(logging, hook)
+    assert guardrail.calls == 1
 
 
 @pytest.mark.asyncio
@@ -726,16 +721,17 @@ async def test_pipeline_balanced_step_splits_traffic_once_per_request(mode, monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ("mode", "stream_scope", "none", "weights", "single"))
+@pytest.mark.parametrize("scenario", ("stream_scope", "none", "weights", "single"))
 async def test_pipeline_balancing_respects_eligibility_weights_and_single_copy(scenario, monkeypatch):
     first: Final = MockGuardrail(
         "pipeline-scoped", "east",
-        event_hook=GuardrailEventHooks.pre_call if scenario in ("mode", "single", "none") else GuardrailEventHooks.post_call,
-        stream_scope="streaming" if scenario == "stream_scope" else "both",
+        event_hook=GuardrailEventHooks.post_call,
+        stream_scope="streaming" if scenario in ("stream_scope", "none") else "both",
     )
     second: Final = MockGuardrail(
         "pipeline-scoped", "west",
-        event_hook=GuardrailEventHooks.pre_call if scenario == "none" else GuardrailEventHooks.post_call,
+        event_hook=GuardrailEventHooks.post_call,
+        stream_scope="streaming" if scenario == "none" else "both",
     )
     copies: Final = (first, second)
     router: Final = Router(
@@ -764,6 +760,89 @@ async def test_pipeline_balancing_respects_eligibility_weights_and_single_copy(s
         assert result.step_results[0].outcome == ("skip" if scenario == "none" else "pass")
     assert first.calls == (20 if scenario == "single" else 0)
     assert second.calls == (0 if scenario in ("single", "none") else 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment_count", (1, 2))
+async def test_balanced_pipeline_step_runs_a_copy_whatever_its_own_mode(deployment_count, monkeypatch):
+    copies: Final = tuple(
+        MockGuardrail("mcp-guard", region, event_hook=GuardrailEventHooks.pre_mcp_call, fail=True)
+        for region in ("east", "west")
+    )
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {"guardrail_name": "mcp-guard", "callback": cb, "litellm_params": {"guardrail": "custom", "mode": "pre_mcp_call"}}
+            for cb in copies[:deployment_count]
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", list(copies[:deployment_count]))
+    for index in range(20):
+        result = await PipelineExecutor.execute_steps(
+            steps=[PipelineStep(guardrail="mcp-guard")],
+            mode="pre_call",
+            data={"name": "echo", "arguments": {"text": "raw"}},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+            policy_name="mcp-pipeline",
+        )
+        assert result.terminal_action == "block"
+        assert sum(cb.calls for cb in copies) == index + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outside_position", (0, 2))
+async def test_same_name_guardrail_outside_the_router_pool_still_runs(outside_position, monkeypatch):
+    pooled: Final = tuple(MockGuardrail("pii", region, default_on=True) for region in ("east", "west"))
+    outside: Final = MockGuardrail("pii", "db", default_on=True)
+    router: Final = Router(
+        model_list=[],
+        guardrail_list=[
+            {"guardrail_name": "pii", "callback": cb, "litellm_params": {"guardrail": "custom", "mode": "pre_call"}}
+            for cb in pooled
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    callbacks: Final = list(pooled)
+    callbacks.insert(outside_position, outside)
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    for index in range(20):
+        await _dispatch_scoped_hook(logging, "pre_call")
+        assert outside.calls == index + 1
+        assert sum(cb.calls for cb in pooled) == index + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weights", ((0, 1), ("heavy", "light")))
+async def test_config_weights_steer_the_pick(weights, monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", InMemoryGuardrailHandler())
+    monkeypatch.setattr(litellm, "callbacks", [])
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "presidio-weighted",
+                "litellm_params": {
+                    "guardrail": "presidio",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "presidio_filter_scope": "both",
+                    "presidio_analyzer_api_base": "https://presidio.invalid/analyze",
+                    "presidio_anonymizer_api_base": "https://presidio.invalid/anonymize",
+                    "mock_redacted_text": {"text": masked, "items": []},
+                    "weight": weight,
+                },
+            }
+            for masked, weight in zip(("masked-east", "masked-west"), weights)
+        ],
+        llm_router=router,
+    )
+    logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    outputs: Final = frozenset([await _guarded_output(logging, streaming=False) for _ in range(40)])
+    assert outputs == ({"masked-west"} if weights == (0, 1) else {"masked-east", "masked-west"})
 
 
 @pytest.mark.asyncio
@@ -873,16 +952,15 @@ async def test_streamed_pipeline_selects_replica_compatible_with_endpoint(route,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ("mode", "stream_scope", "overlap", "none"))
+@pytest.mark.parametrize("scenario", ("stream_scope", "overlap", "none"))
 @pytest.mark.parametrize("output", ("normal", "empty", "error"))
 async def test_streaming_pipeline_falls_back_when_eligible_and_capable_replicas_do_not_overlap(
     scenario, output, monkeypatch,
 ):
     unified: Final = RelayGuardrail("unified", fail=output == "error")
-    unified.event_hook = GuardrailEventHooks.pre_call if scenario in ("mode", "none") else GuardrailEventHooks.post_call
-    unified.apply_stream_scope("non_streaming" if scenario == "stream_scope" else "both")
+    unified.apply_stream_scope("both" if scenario == "overlap" else "non_streaming")
     native: Final = FallbackIteratorGuardrail(fail=output == "error")
-    native.event_hook = GuardrailEventHooks.pre_call if scenario == "none" else GuardrailEventHooks.post_call
+    native.apply_stream_scope("non_streaming" if scenario == "none" else "both")
     router: Final = Router(
         model_list=[],
         guardrail_list=[
@@ -917,7 +995,7 @@ async def test_streaming_pipeline_falls_back_when_eligible_and_capable_replicas_
             )
         ]
         assert "".join(_chunk_text(chunk) for chunk in delivered) == ("" if output == "empty" else "raw")
-    assert native.calls == (1 if scenario in ("mode", "stream_scope") else 0)
+    assert native.calls == (1 if scenario == "stream_scope" else 0)
     assert unified.calls == (1 if scenario == "overlap" and output != "empty" else 0)
 
 

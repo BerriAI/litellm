@@ -963,6 +963,11 @@ def _deployment_callbacks(deployment: "GuardrailTypedDict") -> tuple[CustomGuard
     return (target, *siblings)
 
 
+def _pooled_member_names(deployments: Sequence["GuardrailTypedDict"]) -> Iterator[tuple[int, str]]:
+    for deployment in deployments:
+        yield from ((id(member), deployment["guardrail_name"]) for member in _deployment_callbacks(deployment))
+
+
 @overload
 def load_balanced_callbacks(
     callbacks: Sequence[CustomLogger], eligible: Callable[[CustomGuardrail], bool], *, eligible_only: bool = False
@@ -1009,31 +1014,30 @@ def _iter_load_balanced_callbacks(
         for entry in settings.guardrail_list
         if sum(other["guardrail_name"] == entry["guardrail_name"] for other in settings.guardrail_list) > 1
     )
+    deployments_with_callbacks: Final = tuple(
+        entry
+        for entry in settings.guardrail_list
+        if entry["guardrail_name"] in balanced_names and entry.get("callback") is not None
+    )
+    pooled_names: Final = MappingProxyType(dict(_pooled_member_names(deployments_with_callbacks)))
 
     def selected(index: int, callback: object) -> tuple[object, ...]:
-        if not isinstance(callback, CustomGuardrail) or callback.guardrail_name not in balanced_names:
+        name: Final = pooled_names.get(id(callback))
+        if name is None:
             return (callback,)
-        if any(
-            isinstance(previous, CustomGuardrail) and previous.guardrail_name == callback.guardrail_name
-            for previous in callbacks[:index]
-        ):
+        if any(pooled_names.get(id(previous)) == name for previous in callbacks[:index]):
             return ()
-        deployments: Final = tuple(
-            entry for entry in settings.guardrail_list if entry["guardrail_name"] == callback.guardrail_name
-        )
-        if not any(entry.get("callback") is not None for entry in deployments):
-            raise ValueError(f"No callback found for guardrail: {callback.guardrail_name}")
         candidates: Final = tuple(
             entry
-            for entry in deployments
-            if entry.get("callback") is not None and any(eligible(member) for member in _deployment_callbacks(entry))
+            for entry in deployments_with_callbacks
+            if entry["guardrail_name"] == name and any(eligible(member) for member in _deployment_callbacks(entry))
         )
         if not candidates:
             return ()
         deployment: Final = simple_shuffle(
-            resolve_model_alias=lambda name: registry.resolve(name, kind="alias"),
+            resolve_model_alias=lambda alias: registry.resolve(alias, kind="alias"),
             healthy_deployments=candidates,
-            model=callback.guardrail_name,
+            model=name,
             request_kwargs=None,
         )
         return tuple(member for member in _deployment_callbacks(deployment) if not eligible_only or eligible(member))
@@ -1116,11 +1120,10 @@ def _pipeline_step_supports_streaming(
     eligible_callbacks: Final = tuple(
         callback
         for callback in callbacks
-        if pipeline_callback_eligible(callback, step, streaming_data, None, "post_call", None, translation)
+        if pipeline_callback_eligible(callback, streaming_data, "post_call", None, translation)
     )
     return not eligible_callbacks or any(
-        pipeline_callback_eligible(callback, step, data, None, "post_call", [], translation)
-        for callback in eligible_callbacks
+        pipeline_callback_eligible(callback, data, "post_call", [], translation) for callback in eligible_callbacks
     )
 
 
