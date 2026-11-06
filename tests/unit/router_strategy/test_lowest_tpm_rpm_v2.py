@@ -8,12 +8,8 @@ import io
 import os
 import time
 import traceback
-from typing import Dict, Final, Iterator
-
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -23,12 +19,16 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.router_rust.steps.selection import routing_pre_call_checks_sync
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
 from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_utc_datetime
+from litellm.utils import _invalidate_model_cost_lowercase_map, get_utc_datetime
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
 
@@ -45,6 +45,17 @@ def restore_verbose_logger_level() -> Iterator[None]:
 
 
 @pytest.mark.usefixtures("restore_verbose_logger_level")
+
+def _router_usage_counter(router: Router) -> DeploymentUsageCounter:
+    return next(callback for callback in router.optional_callbacks or () if isinstance(callback, DeploymentUsageCounter))
+
+
+def _log_success(handler: LowestTPMLoggingHandler, counter: DeploymentUsageCounter, **kwargs) -> None:
+    """A logged success as the router fans it out: the counter's tokens, then the strategy's hook."""
+    counter.log_success_event(**kwargs)
+    handler.log_success_event(**kwargs)
+
+
 def test_tpm_rpm_updated():
     from tests.unit.create_mock_standard_logging_payload import create_standard_logging_payload
 
@@ -80,8 +91,10 @@ def test_tpm_rpm_updated():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
-    lowest_tpm_logger.pre_call_check(deployment=litellm_deployment_dict)
-    lowest_tpm_logger.log_success_event(
+    routing_pre_call_checks_sync((lowest_tpm_logger,), litellm_deployment_dict, DeploymentUsageCounter(test_cache))
+    _log_success(
+        lowest_tpm_logger,
+        DeploymentUsageCounter(test_cache),
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -140,7 +153,9 @@ def test_get_available_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
-    lowest_tpm_logger.log_success_event(
+    _log_success(
+        lowest_tpm_logger,
+        DeploymentUsageCounter(test_cache),
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -167,7 +182,9 @@ def test_get_available_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
-    lowest_tpm_logger.log_success_event(
+    _log_success(
+        lowest_tpm_logger,
+        DeploymentUsageCounter(test_cache),
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -245,7 +262,9 @@ def test_router_get_available_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
-    router.lowesttpm_logger_v2.log_success_event(
+    _log_success(
+        router.lowesttpm_logger_v2,
+        _router_usage_counter(router),
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -269,7 +288,9 @@ def test_router_get_available_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 20}}
     end_time = time.time()
-    router.lowesttpm_logger_v2.log_success_event(
+    _log_success(
+        router.lowesttpm_logger_v2,
+        _router_usage_counter(router),
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -331,7 +352,9 @@ def test_router_skip_rate_limited_deployments():
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": total_tokens}}
     end_time = time.time()
-    router.lowesttpm_logger_v2.log_success_event(
+    _log_success(
+        router.lowesttpm_logger_v2,
+        _router_usage_counter(router),
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -345,9 +368,9 @@ def test_router_skip_rate_limited_deployments():
             model="azure-model",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-        pytest.fail(f"Should have raised No Models Available error")
+        pytest.fail("Should have raised No Models Available error")
     except Exception as e:
-        print(f"An exception occurred! {str(e)}")
+        print(f"An exception occurred! {e!s}")
 
 
 def _embedding_image_uri() -> str:
@@ -375,7 +398,7 @@ def _embedding_image_uri() -> str:
     ids=["image-model", "image-base-model", "text-model"],
 )
 async def test_deployment_tpm_counts_embedding_image_as_media_only_on_image_models(
-    routing_strategy: str, litellm_params: Dict[str, str], model_info: Dict[str, str], admitted: bool
+    routing_strategy: str, litellm_params: dict[str, str], model_info: dict[str, str], admitted: bool
 ) -> None:
     uri: Final = _embedding_image_uri()
     assert len(uri) // 4 > 75_000
@@ -485,9 +508,9 @@ def test_single_deployment_tpm_zero():
             model=model,
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-        pytest.fail(f"Should have raised No Models Available error")
+        pytest.fail("Should have raised No Models Available error")
     except Exception as e:
-        print(f"it worked - {str(e)}! \n{traceback.format_exc()}")
+        print(f"it worked - {e!s}! \n{traceback.format_exc()}")
 
 
 @pytest.mark.asyncio
@@ -573,7 +596,7 @@ def test_return_potential_deployments():
     test_cache = DualCache()
     lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
 
-    args: Dict = {
+    args: dict = {
         "healthy_deployments": [
             {
                 "model_name": "model-test",

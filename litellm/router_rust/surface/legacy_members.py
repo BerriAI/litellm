@@ -36,6 +36,7 @@ from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.websocket import admit_deployment_turn
 from litellm.router_rust.steps.callbacks import RustOptionalChecks
 from litellm.router_rust.steps.prerouting import TIER_PARAMS_NEVER_DROPPED as _TIER_PARAMS_NEVER_DROPPED
+from litellm.router_rust.steps.selection import routing_pre_call_checks_sync
 from litellm.router_rust.surface.members import RustRegistryMembers
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GatedAutoRouterCapability,
@@ -331,10 +332,9 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         self,
         deployment: dict[str, object],  # mutable-ok: CustomLogger takes the deployment dict
     ) -> None:
-        """``routing_strategy_pre_call_checks``: the sync check of each ``CustomLogger`` callback."""
-        for callback in self._opt.routing_callbacks():
-            if isinstance(callback, CustomLogger):
-                callback.pre_call_check(deployment)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
+        """``routing_strategy_pre_call_checks``: the request counted once, then the sync check of each
+        ``CustomLogger`` callback."""
+        routing_pre_call_checks_sync(self._opt.routing_callbacks(), deployment, self._opt.usage_counter)
 
     async def async_routing_strategy_pre_call_checks(
         self,
@@ -346,11 +346,14 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         under the Python rules (``set_cooldown_deployments``, cooldown event included)."""
         from litellm import exceptions as litellm_exceptions
 
+        counter: Final = self._opt.usage_counter
+        _ = await counter.charge_request(deployment, parent_otel_span)
         for callback in self._opt.routing_callbacks():
             if isinstance(callback, CustomLogger):
                 try:
                     await callback.async_pre_call_check(deployment, parent_otel_span)  # pyright: ignore[reportUnknownMemberType]  # see above
                 except litellm_exceptions.RateLimitError as e:
+                    await counter.refund_request(deployment, parent_otel_span)
                     _dispatch_failure(logging_obj, e)
                     _ = set_cooldown_deployments(
                         ctx=RoutingContext(self),  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
@@ -361,6 +364,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                     )
                     raise
                 except Exception as e:
+                    await counter.refund_request(deployment, parent_otel_span)
                     _dispatch_failure(logging_obj, e)
                     raise
 
