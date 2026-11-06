@@ -1,3 +1,8 @@
+import asyncio
+import heapq
+from collections import deque
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Final
@@ -5,12 +10,124 @@ from typing import Final
 import pytest
 
 from litellm.proxy.spend_tracking.daily_usage_alerts import DailyComparison, compare_daily_usage
-from litellm.proxy.spend_tracking.usage_alert_job import completed_day
-from litellm.repositories.usage_alert_metrics import DailyAlertMetrics
+from litellm.proxy.spend_tracking.usage_alert_job import UsageAlertJob, completed_day
+from litellm.repositories.analytics_budget import AnalyticsTransaction, BoundedAnalyticsDatabase
+from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
+from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, UsageAlertMetricsRepository
+from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
-from litellm.types.proxy.usage_alerts import UsageAlertRule, UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertChannel, UsageAlertRule, UsageAlertRuleInput
 
 _DAY: Final = date(2026, 10, 20)
+
+
+class _JobBudgetClock(asyncio.SelectorEventLoop):
+    _ready: deque[asyncio.Handle]
+    _scheduled: list[asyncio.TimerHandle]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.now = 1000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def _run_once(self) -> None:
+        while self._scheduled and self._scheduled[0].cancelled():
+            heapq.heappop(self._scheduled)
+        if not self._ready and self._scheduled:
+            self.now = max(self.now, self._scheduled[0].when())
+        super()._run_once()  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]  # CPython loop hook lacks stubs
+
+
+class _BudgetTransaction:
+    def __init__(self, database: "_BudgetDatabase", index: int) -> None:
+        self.database = database
+        self.index = index
+        self.configured = False
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if not self.configured:
+            self.configured = True
+            return ({"acquired": True},)
+        if self.index == 0:
+            return ({"count": 1},)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.database.cancelled_queries += (self.index,)
+        raise AssertionError("stalled query unexpectedly completed")
+
+
+class _BudgetDatabase:
+    def __init__(self) -> None:
+        self.transactions = 0
+        self.active = 0
+        self.cancelled_queries: tuple[int, ...] = ()
+        self.query_rollback_finished = False
+        self.lease_rollback_cancelled = False
+
+    @asynccontextmanager
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction]:
+        transaction: Final = _BudgetTransaction(self, self.transactions)
+        self.transactions += 1
+        self.active += 1
+        try:
+            yield transaction
+        finally:
+            try:
+                if transaction.index == 1:
+                    await asyncio.sleep(0.5)
+                    self.query_rollback_finished = True
+                elif transaction.index == 2:
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        self.lease_rollback_cancelled = True
+            finally:
+                self.active -= 1
+
+
+class _UnexpectedDelivery:
+    async def send(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> bool:
+        raise AssertionError("stalled evaluation must not deliver alerts")
+
+
+def test_job_budget_includes_query_cancellation_and_lease_cleanup() -> None:
+    async def scenario() -> None:
+        existing: Final = asyncio.all_tasks()
+        loop: Final = asyncio.get_running_loop()
+        driver: Final = _BudgetDatabase()
+        database: Final = BoundedAnalyticsDatabase(driver, background=True)
+
+        async def projection(now: datetime) -> None:
+            await asyncio.sleep(57)
+            await database.query_raw("SELECT 1")
+
+        job: Final = UsageAlertJob(
+            UsageAlertsRepository(database),
+            UsageAlertMetricsRepository(database),
+            UsageAlertHealthRepository(database),
+            _UnexpectedDelivery(),
+            defaults=(),
+            deprecation_projection=projection,
+            work_budget_seconds=60,
+        )
+        started: Final = loop.time()
+        await asyncio.wait_for(job.run(datetime(2026, 10, 21, 2, tzinfo=timezone.utc)), timeout=65)
+        elapsed: Final = loop.time() - started
+        assert elapsed <= 60, f"Job exceeded its 60-second budget including cleanup: {elapsed:g}s"
+        assert driver.cancelled_queries == (1, 2)
+        assert driver.query_rollback_finished and driver.lease_rollback_cancelled
+        assert driver.active == 0 and asyncio.all_tasks() == existing
+        healthy: Final = BoundedAnalyticsDatabase(_BudgetDatabase(), background=True)
+        assert await healthy.query_raw("SELECT 1") == ({"count": 1},)
+
+    loop: Final = _JobBudgetClock()
+    try:
+        loop.run_until_complete(scenario())
+    finally:
+        loop.close()
 
 
 def _row(day: date, requests: int = 200, spend: float = 20, ms: float = 100_000, timed: int = 200) -> DailyAlertMetrics:

@@ -176,7 +176,8 @@ class UsageAlertJob:
 
     async def run(self, now: datetime | None = None) -> None:
         owner: Final = str(uuid4())
-        deadline: Final = asyncio.get_running_loop().time() + self._work_budget_seconds - 1
+        finish_at: Final = asyncio.get_running_loop().time() + self._work_budget_seconds
+        deadline: Final = finish_at - 2
         try:
             with analytics_deadline(deadline):
                 claimed: Final = await self._store.claim_job(owner, lease_seconds=int(self._work_budget_seconds) + 15)
@@ -198,14 +199,14 @@ class UsageAlertJob:
             verbose_proxy_logger.exception("Daily usage alert evaluation failed")
         finally:
             try:
-                with analytics_deadline(asyncio.get_running_loop().time() + 1):
+                with analytics_deadline(finish_at - 1):
                     await self._store.release_job(owner)
             except AnalyticsCapacityError:
                 verbose_proxy_logger.info("Usage alert lease will expire after bounded cleanup")
 
     async def _run(self, now: datetime, stop_at: float | None = None) -> None:
         deadline: Final = (
-            stop_at if stop_at is not None else asyncio.get_running_loop().time() + self._work_budget_seconds - 1
+            stop_at if stop_at is not None else asyncio.get_running_loop().time() + self._work_budget_seconds - 2
         )
         with analytics_deadline(deadline):
             await self._work(now, deadline)
