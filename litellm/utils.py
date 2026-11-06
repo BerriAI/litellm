@@ -85,10 +85,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    CHAT_ALLOWED_TOOLS_LAYOUT,
-    RESPONSES_ALLOWED_TOOLS_LAYOUT,
     chat_allowed_tools_tool_choice,
-    parse_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice_or_refuse,
 )
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
@@ -9669,23 +9667,14 @@ def validate_chat_completion_tool_choice(
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
         if tool_choice_type == "allowed_tools":
-            allowed_tools: Final = parse_allowed_tools_tool_choice(
+            allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(
                 cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                     object, tool_choice
-                )
+                ),
+                model,
+                drop_params,
             )
-            if allowed_tools is None and drop_params:
-                return None
-            if allowed_tools is None:
-                raise BadRequestError(
-                    message=(
-                        f"Invalid tool choice, tool_choice={tool_choice}. An allowed_tools tool_choice must be "
-                        f"{CHAT_ALLOWED_TOOLS_LAYOUT} or {RESPONSES_ALLOWED_TOOLS_LAYOUT}"
-                    ),
-                    model=model,
-                    llm_provider="",
-                )
-            return dict(chat_allowed_tools_tool_choice(allowed_tools))
+            return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice_type is None or tool_choice.get("function") is None:

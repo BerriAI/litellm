@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import Never, ReadOnly
 
 import litellm
@@ -38,7 +39,10 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
-from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_builtin_as_function
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_with_builtin_as_function,
+    is_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
@@ -100,6 +104,8 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
 _RESPONSE_CONTENT_FIELD: Final = "content"
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 _CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
 
@@ -274,6 +280,11 @@ def _tool_choice_naming_litellm_web_search(
             kwargs["tool_choice"], is_search_tool, LITELLM_WEB_SEARCH_TOOL_NAME
         )
     }
+
+
+def _kept_allowed_tools_tool_choice(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    tool_choice: Final = optional_params.get("tool_choice")
+    return {"tool_choice": tool_choice} if is_allowed_tools_tool_choice(tool_choice) else MappingProxyType({})
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -1863,9 +1874,11 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         if request_patch.messages is None:
             raise ValueError("WebSearchInterception: missing follow-up messages")
-        params: Final = dict(optional_params)
-        params.update(request_patch.optional_params)
-        params.pop("tool_choice", None)
+        merged_params: Final = {**optional_params, **request_patch.optional_params}
+        params: Final = {
+            **{key: value for key, value in merged_params.items() if key != "tool_choice"},
+            **_kept_allowed_tools_tool_choice(merged_params),
+        }
         patch_kwargs: Final = dict[str, object](request_patch.kwargs)
         return await litellm.acompletion(
             model=request_patch.model or model,
@@ -1978,17 +1991,20 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         tools_param: Final = optional_params.get("tools")
         optional_params_clean: Final = {
-            k: v
-            for k, v in optional_params.items()
-            if k
-            not in {
-                "tools",
-                "tool_choice",
-                "extra_body",
-                "model_alias_map",
-                "stream_response",
-                "custom_prompt_dict",
-            }
+            **{
+                k: v
+                for k, v in optional_params.items()
+                if k
+                not in {
+                    "tools",
+                    "tool_choice",
+                    "extra_body",
+                    "model_alias_map",
+                    "stream_response",
+                    "custom_prompt_dict",
+                }
+            },
+            **_kept_allowed_tools_tool_choice(_OPTIONAL_PARAMS.validate_python(optional_params)),
         }
         if tools_param is not None:
             optional_params_clean["tools"] = tools_param

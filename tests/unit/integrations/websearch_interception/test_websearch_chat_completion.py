@@ -422,6 +422,85 @@ async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "required"])
+async def test_execute_chat_completion_agentic_loop_keeps_an_allowed_tools_choice(mode):
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
+    tool_choice = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}],
+        },
+    }
+    captured_kwargs: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return ModelResponse(id="followup", model="gpt-4o", object="chat.completion")
+
+    async def fake_search(query, **_):
+        return ("Bitcoin price is $60,000", None)
+
+    with patch.object(websearch_logger, "_execute_search", side_effect=fake_search):
+        with patch("litellm.acompletion", side_effect=fake_acompletion):
+            await websearch_logger._execute_chat_completion_agentic_loop(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "What is Bitcoin price?"}],
+                tool_calls=[{"id": "call_1", "name": "litellm_web_search", "input": {"query": "bitcoin price"}}],
+                optional_params={
+                    "tools": [
+                        {"type": "function", "function": {"name": "litellm_web_search"}},
+                        {"type": "function", "function": {"name": "get_time"}},
+                    ],
+                    "tool_choice": tool_choice,
+                },
+                logging_obj=MagicMock(),
+                stream=False,
+                kwargs={},
+            )
+
+    assert captured_kwargs["tool_choice"] == tool_choice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "kept"),
+    [
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+            True,
+        ),
+        ({"type": "function", "function": {"name": "litellm_web_search"}}, False),
+        ("required", False),
+    ],
+)
+async def test_chat_followup_plan_keeps_only_an_allowed_tools_choice(
+    tool_choice: object, kept: bool, perplexity_search: respx.Route
+) -> None:
+    plan: Final = await WebSearchInterceptionLogger().async_build_chat_completion_agentic_loop_plan(
+        tools={
+            "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest ai news"}}],
+            "tool_type": "websearch",
+            "provider": "openai",
+            "response_format": "openai",
+        },
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=MagicMock(),
+        optional_params={"tool_choice": tool_choice, "max_tokens": 512},
+        logging_obj=None,
+        stream=False,
+        kwargs={"custom_llm_provider": "openai"},
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.optional_params.get("tool_choice") == (tool_choice if kept else None)
+
+
 if __name__ == "__main__":
     # Run with: pytest test_websearch_chat_completion.py -v -s
     pytest.main([__file__, "-v", "-s"])

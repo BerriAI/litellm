@@ -29,21 +29,6 @@ def names_whole_gateway(tool: object) -> bool:
     )
 
 
-def _server_label_serving(tool: object, server_name: str) -> str | None:
-    match tool:
-        case {"type": "mcp", "server_label": str() as label} if (
-            names_whole_gateway(tool) or _mcp_server_url(tool) == f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{server_name}"
-        ):
-            return label
-        case _:
-            return None
-
-
-def server_labels_serving(mcp_tools: Iterable[object], server_name: str | None) -> frozenset[str]:
-    labels: Final = () if server_name is None else tuple(_server_label_serving(tool, server_name) for tool in mcp_tools)
-    return frozenset(label for label in labels if label is not None)
-
-
 def proxy_path_mcp_name(tool: object) -> str | None:
     server_url: Final = _mcp_server_url(tool)
     match: Final = None if server_url is None else _PROXY_MCP_PATH_RE.match(server_url)

@@ -23,7 +23,7 @@ they stay out of the body even without it.
 import datetime
 import json
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Dict, Final, List, Optional, Tuple
+from typing import Any, ClassVar, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1284,3 +1284,60 @@ async def test_acompletion_hands_the_callers_choice_to_the_chat_hooks(tool_choic
     )
 
     assert (hook.runs, mock_client.post.await_count, response.choices[0].message.tool_calls) == (hook_runs, 1, None)
+
+
+
+class _RetrievalHookLogger(_ChatHookLogger):
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({"litellm_code_execution"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_response", [_tool_call_model_response, _custom_tool_call_model_response])
+async def test_a_chat_hook_runs_a_tool_litellm_serves_itself_that_no_choice_can_list(
+    model_response: Callable[[], ModelResponse],
+):
+    hook: Final = _RetrievalHookLogger()
+
+    result: Final = await run_chat_completion_agentic_hooks(
+        response=model_response(),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={"_agentic_loop_tool_choice": _ALLOWS_ONLY_GET_WEATHER},
+        logging_obj=_logging_with(hook),
+        custom_llm_provider="openai",
+        stream=False,
+    )
+
+    assert hook.runs == 1
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "ran the hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "auto", "tools": []},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_weather"]}]},
+    ],
+)
+async def test_a_malformed_choice_dropped_by_drop_params_never_holds_back_the_chat_hooks(
+    tool_choice: dict[str, object],
+):
+    hook: Final = _ChatHookLogger()
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(_tool_call_model_response()))
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_key="sk-test",
+        client=mock_client,
+        success_callback=[hook],
+    )
+
+    assert (hook.runs, response.choices[0].message.content) == (1, "ran the hook")

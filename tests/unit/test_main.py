@@ -656,7 +656,7 @@ def test_completion_drop_params_drops_an_allowed_tools_tool_choice_it_cannot_sen
         {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}},
     ],
 )
-async def test_a_malformed_allowed_tools_tool_choice_stays_a_400_on_mcp_gateway_tools(
+async def test_a_malformed_allowed_tools_tool_choice_is_a_400_on_mcp_gateway_tools_without_drop_params(
     tool_choice: dict[str, object], respx_mock: respx.MockRouter
 ):
     with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc:
@@ -665,7 +665,6 @@ async def test_a_malformed_allowed_tools_tool_choice_stays_a_400_on_mcp_gateway_
             messages=[{"role": "user", "content": "What time is it?"}],
             tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
             tool_choice=tool_choice,
-            drop_params=True,
             api_base="http://localhost:12346/v1",
             api_key="fake_api_key",
         )

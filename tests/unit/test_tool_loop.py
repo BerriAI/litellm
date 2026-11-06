@@ -350,11 +350,43 @@ def test_a_malformed_choice_is_refused_before_any_request(
             tools=WEATHER_TOOLS,
             execute_tool=_tool_result,
             tool_choice=tool_choice,
-            drop_params=True,
             api_key="sk-test",
         )
 
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [_EMPTY_ALLOWED_TOOLS, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}],
+)
+def test_a_malformed_choice_under_drop_params_runs_the_loop_as_if_never_sent(
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_response(None, [_TIME_CALL])),
+            httpx.Response(200, json=_openai_response("done")),
+        ]
+    )
+    executed: Final[list[str | None]] = []
+
+    def execute(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tool_call.function.name)
+        return _tool_result(tool_call)
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=execute,
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_key="sk-test",
+    )
+
+    assert (answer, executed) == ("done", ["get_time"])
+    assert all("tool_choice" not in body for body in _request_bodies(respx_mock))
 
 
 def test_a_choice_on_a_model_alias_reaches_the_loop(

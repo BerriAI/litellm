@@ -40,6 +40,16 @@ async def every_claimed_tool_call(
     return MappingProxyType({"tool_calls": (*_claimed_calls(refused_tool_calls), *chain.from_iterable(claims))})
 
 
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "tool_use"})
+
+
+def called_tool_names(response: object) -> frozenset[str]:
+    items: Final = (*parts_of(message_field(response, "output")), *parts_of(message_field(response, "content")))
+    return _strings(
+        message_field(item, "name") for item in items if message_field(item, "type") in _TOOL_CALL_ITEM_TYPES
+    )
+
+
 def _call_ids(call: object) -> frozenset[str]:
     return _strings((message_field(call, "id"), message_field(call, "call_id")))
 

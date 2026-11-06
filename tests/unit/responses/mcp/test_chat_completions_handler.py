@@ -2773,10 +2773,19 @@ _DEMO_MCP_SERVER: Final = MCPServer(
 )
 
 
-def _served_by_a_recording_mcp_server(monkeypatch: pytest.MonkeyPatch, call_tool: AsyncMock) -> None:
+def _demo_server_named(name: str) -> MCPServer | None:
+    return _DEMO_MCP_SERVER if name.lower() == "demo" else None
+
+
+def _served_by_a_recording_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+    call_tool: AsyncMock,
+    listed: MCPTool = _MCP_ECHO_TOOL,
+    catalog: SimpleNamespace = SimpleNamespace(operation=nullcontext),
+) -> None:
     monkeypatch.setattr(
         "litellm.proxy.mcp_server.server._get_tools_from_mcp_servers",
-        AsyncMock(return_value=AggregateToolListing(tools=[_MCP_ECHO_TOOL], outcomes={})),
+        AsyncMock(return_value=AggregateToolListing(tools=[listed], outcomes={})),
     )
     monkeypatch.setitem(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
@@ -2784,11 +2793,11 @@ def _served_by_a_recording_mcp_server(monkeypatch: pytest.MonkeyPatch, call_tool
     monkeypatch.setattr(
         "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
-            catalog=SimpleNamespace(operation=nullcontext),
+            catalog=catalog,
             get_registry=MagicMock(return_value={}),
             call_tool=call_tool,
             get_mcp_server_from_tool_name=MagicMock(return_value=None),
-            get_mcp_server_by_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(side_effect=_demo_server_named),
             get_allowed_mcp_servers=AsyncMock(return_value=[_DEMO_MCP_SERVER.server_id]),
             get_mcp_servers_from_ids=MagicMock(return_value=[_DEMO_MCP_SERVER]),
         ),
@@ -2824,7 +2833,7 @@ async def test_an_mcp_tool_the_choice_excludes_never_runs_when_the_model_ignored
     call_tool.assert_not_awaited()
 
 
-def _anthropic_call_to_echo() -> Response:
+def _anthropic_call_to_echo(name: str = "echo") -> Response:
     return Response(
         200,
         json={
@@ -2832,7 +2841,7 @@ def _anthropic_call_to_echo() -> Response:
             "type": "message",
             "role": "assistant",
             "model": "claude-haiku-4-5",
-            "content": [{"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}}],
+            "content": [{"type": "tool_use", "id": "toolu_echo", "name": name, "input": {"value": "PING"}}],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 10, "output_tokens": 5},
         },
@@ -2918,3 +2927,163 @@ async def test_a_dropped_choice_still_runs_an_mcp_call_it_lists(
 
     assert call_tool.await_count == 1
     assert response.choices[0].message.content == "PING back"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "auto", "tools": []},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["echo"]}]},
+    ],
+)
+async def test_a_malformed_choice_under_drop_params_runs_an_mcp_call_as_if_never_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_choice: object
+):
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    response, route = await _call_echo_on_anthropic_under_drop_params(
+        respx_mock, monkeypatch, (_anthropic_call_to_echo(), _anthropic_answer()), tool_choice
+    )
+
+    assert call_tool.await_count == 1
+    assert response.choices[0].message.content == "PING back"
+    assert all("tool_choice" not in json.loads(call.request.content) for call in route.calls)
+
+
+_DEMO_ECHO_TOOL: Final = MCPTool.model_validate(
+    {"name": "demo-echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+    by_name=False,
+)
+_DEMO_IN_AN_ACCESS_GROUP: Final = _DEMO_MCP_SERVER.model_copy(update={"access_groups": ["demo_group"]})
+
+
+def _choice_of(*tools: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "allowed_tools", "mode": "auto", "tools": list(tools)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "server_url", "listed"),
+    [
+        (_choice_of({"type": "mcp", "server_label": "demo", "name": "echo"}), "litellm_proxy/mcp/demo", _DEMO_ECHO_TOOL),
+        (
+            _choice_of({"type": "mcp", "server_label": "demo", "name": "demo-echo"}),
+            "litellm_proxy/mcp/demo",
+            _DEMO_ECHO_TOOL,
+        ),
+        (_WHOLE_DEMO_SERVER, "litellm_proxy/mcp/DEMO", _MCP_ECHO_TOOL),
+        (_WHOLE_DEMO_SERVER, "litellm_proxy/mcp/demo_group", _MCP_ECHO_TOOL),
+    ],
+)
+async def test_an_mcp_entry_allows_the_tool_the_gateway_resolves_for_its_label_and_name(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_choice: object,
+    server_url: str,
+    listed: MCPTool,
+):
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    _served_by_a_recording_mcp_server(
+        monkeypatch,
+        call_tool,
+        listed,
+        SimpleNamespace(
+            operation=nullcontext,
+            current=lambda: SimpleNamespace(servers={_DEMO_MCP_SERVER.server_id: _DEMO_IN_AN_ACCESS_GROUP}),
+        ),
+    )
+
+    response, _route = await _call_echo_on_anthropic_under_drop_params(
+        respx_mock, monkeypatch, (_anthropic_call_to_echo(listed.name), _anthropic_answer()), tool_choice, server_url
+    )
+
+    assert call_tool.await_count == 1
+    assert response.choices[0].message.content == "PING back"
+
+
+@pytest.mark.asyncio
+async def test_a_named_mcp_entry_allows_no_other_tool_on_its_server(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool, _DEMO_ECHO_TOOL)
+
+    response, _route = await _call_echo_on_anthropic_under_drop_params(
+        respx_mock,
+        monkeypatch,
+        (_anthropic_call_to_echo("demo-echo"),),
+        _choice_of({"type": "mcp", "server_label": "demo", "name": "reverse"}),
+    )
+
+    call_tool.assert_not_awaited()
+    assert [call.function.name for call in response.choices[0].message.tool_calls] == ["demo-echo"]
+
+
+async def _call_echo_on_openai_with_the_demo_server(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], tool_choice: object
+) -> tuple[object, ...]:
+    _serve_chat_rounds(respx_mock, monkeypatch, rounds)
+    await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        tools=[
+            {
+                "type": "mcp",
+                "server_label": "demo",
+                "server_url": "litellm_proxy/mcp/demo",
+                "require_approval": "never",
+            },
+            {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}},
+        ],
+        tool_choice=tool_choice,
+        api_key="sk-mcp-chat-rounds",
+        api_base="https://mcp-chat-rounds.example.com/v1",
+    )
+    return tuple(json.loads(call.request.content).get("tool_choice") for call in respx_mock.calls)
+
+
+@pytest.mark.asyncio
+async def test_the_provider_gets_the_converted_function_in_place_of_a_gateway_mcp_entry(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    sent: Final = await _call_echo_on_openai_with_the_demo_server(
+        respx_mock,
+        monkeypatch,
+        (_ok(_CHAT_ROUND_ONE), _ok(_CHAT_ROUND_TWO)),
+        _choice_of({"type": "mcp", "server_label": "demo"}, {"type": "function", "name": "get_time"}),
+    )
+
+    assert sent[0] == {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": "auto",
+            "tools": [
+                {"type": "function", "function": {"name": "get_time"}},
+                {"type": "function", "function": {"name": "echo"}},
+            ],
+        },
+    }
+    assert call_tool.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_mcp_entry_that_allows_no_converted_tool_sends_none_and_runs_nothing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    sent: Final = await _call_echo_on_openai_with_the_demo_server(
+        respx_mock,
+        monkeypatch,
+        (_ok(_CHAT_ROUND_ONE),),
+        _choice_of({"type": "mcp", "server_label": "demo", "name": "reverse"}),
+    )
+
+    assert sent == ("none",)
+    call_tool.assert_not_awaited()

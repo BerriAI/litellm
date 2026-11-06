@@ -74,7 +74,7 @@ from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
-    is_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -5594,8 +5594,7 @@ def completion(
         model=model,
         drop_params=drops_unsupported_params(
             cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
-        )
-        and not may_name_litellm_mcp_gateway(tools),  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
+        ),
     )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
@@ -6212,7 +6211,7 @@ def completion(
                 **(
                     {AGENTIC_LOOP_TOOL_CHOICE_KEY: requested_tool_choice}
                     if AGENTIC_LOOP_TOOL_CHOICE_KEY not in kwargs
-                    and is_allowed_tools_tool_choice(requested_tool_choice)
+                    and parse_allowed_tools_tool_choice(requested_tool_choice) is not None
                     else {}
                 ),
             },
