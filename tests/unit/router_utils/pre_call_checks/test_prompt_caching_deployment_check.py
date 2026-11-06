@@ -2,6 +2,9 @@ import asyncio
 import copy
 import os
 import functools
+import json
+import logging
+import threading
 import uuid
 from typing import Final, cast
 
@@ -10,7 +13,11 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
+from litellm.constants import (
+    DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    PROMPT_CACHE_LOOKBACK_POSITIONS,
+    REDACTED_BY_LITELLM,
+)
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -19,6 +26,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     _honors_one_hour_cache_ttl,
     _get_min_token_count_for_deployments,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardLoggingPayload
@@ -138,10 +146,13 @@ def test_bedrock_application_profile_uses_its_base_model_for_one_hour_ttl() -> N
         },
     )
 
-    assert _honors_one_hour_cache_ttl(
-        standard_logging_object,
-        {"model": None, "base_model": "bedrock/us.anthropic.claude-sonnet-5-5"},
-    ) is True
+    assert (
+        _honors_one_hour_cache_ttl(
+            standard_logging_object,
+            {"model": None, "base_model": "bedrock/us.anthropic.claude-sonnet-5-5"},
+        )
+        is True
+    )
 
 
 def test_bedrock_application_profile_cache_hit_reads_base_model_from_metadata_model_info() -> None:
@@ -1480,3 +1491,580 @@ async def test_a_pin_written_without_tools_is_read_when_tools_is_an_empty_list()
     )
 
     assert filtered == [deployments[0]]
+
+
+RESPONSES_BRIDGED_MODEL: Final = "anthropic/claude-sonnet-4-6"
+RESPONSES_NATIVE_MODEL: Final = "openai/gpt-5.4-mini"
+_RESPONSES_TOOL: Final = {
+    "type": "function",
+    "name": "get_time",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+def _marked_input_text(text: str) -> dict[str, object]:
+    return {"type": "input_text", "text": text, "cache_control": {"type": "ephemeral"}}
+
+
+def _marked_responses_input() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [_marked_input_text(LONG_PROMPT)]},
+        {"role": "user", "content": "hello"},
+    ]
+
+
+def _responses_router(model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": model, "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-1", "dep-2")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+
+
+async def _serve_response(router: litellm.Router, request_input: object) -> str:
+    response = await router.aresponses(
+        model=MODEL_GROUP_ALIAS,
+        input=copy.deepcopy(request_input),
+        instructions="Be terse.",
+        tools=[_RESPONSES_TOOL],
+        mock_response="ok",
+    )
+    return response._hidden_params["model_id"]
+
+
+async def _deployments_serving_repeats(router: litellm.Router, request_input: object) -> set[str]:
+    await _serve_response(router, request_input)
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    return {await _serve_response(router, request_input) for _ in range(8)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [RESPONSES_BRIDGED_MODEL, RESPONSES_NATIVE_MODEL], ids=["bridged", "native"])
+async def test_repeated_responses_request_pins_to_one_deployment(model: str):
+    assert len(await _deployments_serving_repeats(_responses_router(model), _marked_responses_input())) == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_request_pins_after_prompt_caching_is_turned_off_and_on_again():
+    router: Final = _responses_router(RESPONSES_NATIVE_MODEL)
+    await _serve_response(router, _marked_responses_input())
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    router.update_settings(optional_pre_call_checks=[])
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router.prompt_caching_pin_cache.in_memory_cache.flush_cache()
+
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input())) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [RESPONSES_BRIDGED_MODEL, RESPONSES_NATIVE_MODEL], ids=["bridged", "native"])
+async def test_responses_thread_stays_on_the_deployment_holding_its_prefix(model: str):
+    router = _responses_router(model)
+    first_turn = _marked_responses_input()
+    pinned_deployment = await _serve_response(router, first_turn)
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+
+    later_turns = (
+        [*first_turn, {"role": "assistant", "content": "ok"}, {"role": "user", "content": f"question {turn}"}]
+        for turn in range(8)
+    )
+
+    assert {await _serve_response(router, turn) for turn in later_turns} == {pinned_deployment}
+
+
+@pytest.mark.asyncio
+async def test_responses_mark_on_the_input_item_pins_to_one_deployment():
+    request_input = [
+        {"role": "system", "content": LONG_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "hello"},
+    ]
+
+    assert len(await _deployments_serving_repeats(_responses_router(RESPONSES_BRIDGED_MODEL), request_input)) == 1
+
+
+async def _read_responses_pin(
+    check: PromptCachingDeploymentCheck,
+    request: dict[str, object],
+    models: tuple[str, ...] = (AUTO_CACHING_MODEL, AUTO_CACHING_MODEL),
+) -> tuple[str, ...]:
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=_deployments(*models),
+        messages=None,
+        request_kwargs=request,
+    )
+    return tuple(str(deployment["model_info"]["id"]) for deployment in filtered)
+
+
+async def _log_responses_success(
+    check: PromptCachingDeploymentCheck,
+    logged_messages: object,
+    metadata: dict[str, object],
+    model_id: str = "dep-1",
+    model_map_value: dict[str, float | None] | None = None,
+) -> None:
+    event = _success_kwargs(
+        call_type="aresponses",
+        model=AUTO_CACHING_MODEL,
+        model_id=model_id,
+        request_messages=logged_messages,
+        request_kwargs={},
+    )
+    await check.async_log_success_event(
+        kwargs={
+            **event,
+            "standard_logging_object": {
+                **event["standard_logging_object"],
+                "model_map_information": {"model_map_key": AUTO_CACHING_MODEL, "model_map_value": model_map_value},
+            },
+            "litellm_params": {"litellm_metadata": metadata},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+
+async def _pinned_deployment_ids(
+    first_request: dict[str, object], logged_messages: object, next_request: dict[str, object]
+) -> tuple[str, ...]:
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**first_request, "litellm_metadata": metadata})
+    await _log_responses_success(check, logged_messages, metadata)
+    return await _read_responses_pin(check, {**next_request, "litellm_metadata": {}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "logged_messages",
+    [
+        _marked_responses_input(),
+        [
+            {"role": "system", "content": "Be terse."},
+            {"role": "system", "content": LONG_PROMPT, "cache_control": {"type": "ephemeral"}},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        ],
+        [{"role": "user", "content": REDACTED_BY_LITELLM}],
+    ],
+    ids=["client_input", "bridged_chat_messages", "redacted"],
+)
+async def test_responses_pin_does_not_depend_on_what_the_success_event_logged(
+    logged_messages: list[dict[str, object]],
+):
+    request = {"input": _marked_responses_input(), "instructions": "Be terse.", "tools": [_RESPONSES_TOOL]}
+
+    pinned = await _pinned_deployment_ids(request, logged_messages, request)
+
+    assert pinned == ("dep-1",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged_pin",
+    [["forged-redis-key", 3600], {"cache_key": "forged-redis-key", "marked_ttl_seconds": 3600}],
+    ids=["array", "object"],
+)
+async def test_responses_pin_sent_in_the_request_metadata_is_never_written(forged_pin: object):
+    cache = DualCache()
+
+    await _log_responses_success(
+        PromptCachingDeploymentCheck(cache=cache),
+        _marked_responses_input(),
+        {"responses_prompt_cache_pin": forged_pin},
+    )
+
+    assert not cache.in_memory_cache.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_interleaved_responses_requests_each_pin_their_own_prompt():
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    terse = {"input": _marked_responses_input(), "instructions": "Be terse."}
+    verbose = {"input": _marked_responses_input(), "instructions": "Be verbose."}
+    terse_metadata: dict[str, object] = {}
+    verbose_metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**terse, "litellm_metadata": terse_metadata})
+    await _read_responses_pin(check, {**verbose, "litellm_metadata": verbose_metadata})
+
+    await _log_responses_success(check, _marked_responses_input(), terse_metadata, model_id="dep-1")
+    await _log_responses_success(check, _marked_responses_input(), verbose_metadata, model_id="dep-2")
+
+    assert await _read_responses_pin(check, {**terse, "litellm_metadata": {}}) == ("dep-1",)
+    assert await _read_responses_pin(check, {**verbose, "litellm_metadata": {}}) == ("dep-2",)
+
+
+@pytest.mark.asyncio
+async def test_retried_responses_request_leaves_no_pin_in_flight_once_it_succeeds():
+    pins_in_flight: Final = InMemoryCache()
+    check: Final = PromptCachingDeploymentCheck(cache=DualCache(), responses_pins_in_flight=pins_in_flight)
+    metadata: Final[dict[str, object]] = {}
+    request: Final = {"input": _marked_responses_input(), "instructions": "Be terse.", "litellm_metadata": metadata}
+    await _read_responses_pin(check, request)
+    await _read_responses_pin(check, request)
+    assert len(pins_in_flight.cache_dict) == 1
+
+    await _log_responses_success(check, _marked_responses_input(), metadata)
+
+    assert not pins_in_flight.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_responses_with_other_instructions_are_a_different_prefix():
+    pinned = await _pinned_deployment_ids(
+        {"input": _marked_responses_input(), "instructions": "Be terse."},
+        _marked_responses_input(),
+        {"input": _marked_responses_input(), "instructions": "Be verbose."},
+    )
+
+    assert len(pinned) == 2
+
+
+@pytest.mark.asyncio
+async def test_responses_with_another_tool_set_are_a_different_prefix():
+    other_tool = {**_RESPONSES_TOOL, "name": "get_weather"}
+
+    pinned = await _pinned_deployment_ids(
+        {"input": _marked_responses_input(), "tools": [_RESPONSES_TOOL]},
+        _marked_responses_input(),
+        {"input": _marked_responses_input(), "tools": [other_tool]},
+    )
+
+    assert len(pinned) == 2
+
+
+@pytest.mark.asyncio
+async def test_responses_marked_tool_set_long_enough_to_cache_pins_on_its_own():
+    marked_tool = {**_RESPONSES_TOOL, "description": LONG_PROMPT, "cache_control": {"type": "ephemeral"}}
+    request = {"input": "hello", "tools": [marked_tool]}
+
+    pinned = await _pinned_deployment_ids(request, [{"role": "user", "content": "hello"}], request)
+
+    assert pinned == ("dep-1",)
+
+
+@pytest.mark.asyncio
+async def test_responses_continuation_turn_is_left_to_the_deployment_holding_its_previous_response(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    new_thread = {"input": "hello", "instructions": LONG_PROMPT}
+
+    pinned = await _pinned_deployment_ids(
+        new_thread, [{"role": "user", "content": "hello"}], {**new_thread, "previous_response_id": "resp_1"}
+    )
+
+    assert len(pinned) == 2
+
+
+@pytest.mark.asyncio
+async def test_responses_answer_from_a_fallback_group_keeps_the_primary_groups_pin():
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    request = {"input": _marked_responses_input()}
+    assert await _serve_turn(check, request["input"]) == 2
+    fallback_hop_metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**request, "litellm_metadata": fallback_hop_metadata})
+
+    await _log_responses_success(check, request["input"], fallback_hop_metadata, model_id="fallback-dep")
+
+    pinned = await _read_responses_pin(check, {**request, "litellm_metadata": {}})
+    assert pinned == ("dep-1",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answering_deployment,expected_pin",
+    [("dep-1", ("dep-1", "dep-2")), ("dep-2", ("dep-2",))],
+    ids=["below_its_minimum", "above_its_minimum"],
+)
+async def test_responses_pin_goes_only_to_a_deployment_whose_model_caches_the_prefix(
+    answering_deployment: str, expected_pin: tuple[str, ...]
+):
+    mixed_group = ("anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-5")
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    request = {"input": [{"role": "user", "content": [_marked_input_text("word " * 1400)]}]}
+    metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**request, "litellm_metadata": metadata}, mixed_group)
+
+    await _log_responses_success(check, request["input"], metadata, model_id=answering_deployment)
+
+    pinned = await _read_responses_pin(check, {**request, "litellm_metadata": {}}, mixed_group)
+    assert pinned == expected_pin
+
+
+@pytest.mark.asyncio
+async def test_embedding_request_never_takes_a_responses_pin():
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    pinned_input = _marked_responses_input()
+    assert await _serve_turn(check, pinned_input) == 2
+    assert len(await _read_responses_pin(check, {"input": pinned_input, "litellm_metadata": {}})) == 1
+
+    filtered = await _read_responses_pin(check, {"input": pinned_input, "metadata": {}})
+
+    assert len(filtered) == 2
+
+
+class _InputReadOnlyOnceTheLoopTurns(list[dict[str, object]]):
+    def __init__(self, items: list[dict[str, object]], loop_turned: threading.Event) -> None:
+        super().__init__(items)
+        self.loop_turned: Final = loop_turned
+        self.loop_turned_before_first_read: bool | None = None
+
+    def __iter__(self):
+        if self.loop_turned_before_first_read is None:
+            self.loop_turned_before_first_read = self.loop_turned.wait(timeout=5)
+        return super().__iter__()
+
+
+@pytest.mark.asyncio
+async def test_responses_thread_is_converted_off_the_event_loop():
+    loop_turned = threading.Event()
+    thread = _InputReadOnlyOnceTheLoopTurns(_marked_responses_input(), loop_turned)
+    asyncio.get_running_loop().call_soon(loop_turned.set)
+
+    await _read_responses_pin(
+        PromptCachingDeploymentCheck(cache=DualCache()), {"input": thread, "litellm_metadata": {}}
+    )
+
+    assert thread.loop_turned_before_first_read is True
+
+
+@pytest.mark.asyncio
+async def test_responses_long_instructions_count_toward_the_caching_minimum(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    request = {"input": "hello", "instructions": LONG_PROMPT}
+
+    pinned = await _pinned_deployment_ids(request, [{"role": "user", "content": "hello"}], request)
+
+    assert pinned == ("dep-1",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_map_value,pinned_past_five_minutes",
+    [
+        pytest.param({"cache_creation_input_token_cost_above_1hr": 6.6e-06}, True, id="one-hour-cache-writes"),
+        pytest.param({"cache_creation_input_token_cost_above_1hr": None}, False, id="no-one-hour-cache-writes"),
+    ],
+)
+async def test_responses_one_hour_pin_follows_the_deployments_one_hour_cache_support(
+    model_map_value: dict[str, float | None], pinned_past_five_minutes: bool
+):
+    clock = _ManualClock()
+    check = PromptCachingDeploymentCheck(cache=DualCache(in_memory_cache=InMemoryCache(clock=clock)))
+    marked = {**_marked_input_text(LONG_PROMPT), "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    request = {"input": [{"role": "user", "content": [marked]}]}
+    metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**request, "litellm_metadata": metadata})
+    await _log_responses_success(check, request["input"], metadata, model_map_value=model_map_value)
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert (len(await _read_responses_pin(check, {**request, "litellm_metadata": {}})) == 1) is pinned_past_five_minutes
+
+
+@pytest.mark.asyncio
+async def test_responses_turn_without_input_leaves_routing_to_its_previous_response(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    request = {"previous_response_id": "resp_1", "instructions": LONG_PROMPT}
+
+    pinned = await _pinned_deployment_ids(request, None, request)
+
+    assert len(pinned) == 2
+
+
+async def _serve_turn(check: PromptCachingDeploymentCheck, request_input: object) -> int:
+    metadata: dict[str, object] = {}
+    pinned = await _read_responses_pin(check, {"input": request_input, "litellm_metadata": metadata})
+    await _log_responses_success(check, request_input, metadata)
+    return len(pinned)
+
+
+@pytest.mark.asyncio
+async def test_responses_thread_longer_than_the_lookback_window_keeps_its_deployment(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    turns = [
+        {"role": "system", "content": LONG_PROMPT},
+        *(
+            {"role": "assistant" if index % 2 else "user", "content": f"turn {index}"}
+            for index in range(2 * PROMPT_CACHE_LOOKBACK_POSITIONS)
+        ),
+    ]
+
+    served = [await _serve_turn(check, turns[:end]) for end in range(2, len(turns) + 1, 2)]
+
+    assert served[1:] == [1] * (len(served) - 1)
+
+
+@pytest.mark.asyncio
+async def test_responses_failover_writes_the_pin_for_the_deployment_that_answered():
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    request = {"input": _marked_responses_input()}
+    metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**request, "litellm_metadata": metadata})
+    await _read_responses_pin(check, {**request, "litellm_metadata": metadata})
+    await _log_responses_success(check, _marked_responses_input(), metadata, model_id="dep-2")
+
+    pinned = await _read_responses_pin(check, {**request, "litellm_metadata": {}})
+
+    assert pinned == ("dep-2",)
+
+
+@pytest.mark.asyncio
+async def test_responses_image_in_the_prefix_pins_to_one_deployment():
+    request_input = [
+        {
+            "role": "user",
+            "content": [{"type": "input_image", "image_url": ONE_PIXEL_PNG}, _marked_input_text(LONG_PROMPT)],
+        },
+        {"role": "user", "content": "hello"},
+    ]
+
+    assert len(await _deployments_serving_repeats(_responses_router(RESPONSES_BRIDGED_MODEL), request_input)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_input",
+    [[{"role": "system", "content": LONG_PROMPT}, {"role": "user", "content": "hello"}], LONG_PROMPT],
+    ids=["item_list", "plain_string"],
+)
+async def test_responses_auto_cached_prefix_pins_to_one_deployment(monkeypatch, request_input: object):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    assert len(await _deployments_serving_repeats(_responses_router(RESPONSES_BRIDGED_MODEL), request_input)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_input",
+    [
+        [LONG_PROMPT, LONG_PROMPT],
+        [{"role": "user", "content": 7}],
+        7,
+        [{"type": "web_search_call"}],
+        [{"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search"}}],
+        [{"type": ["message"], "role": "user", "content": LONG_PROMPT}],
+        [{"role": "user", "content": [{"type": "input_image"}]}],
+    ],
+    ids=[
+        "embedding_strings",
+        "non_text_item_content",
+        "integer",
+        "web_search_call_without_id",
+        "search_action_without_query",
+        "unhashable_item_type",
+        "image_without_a_source",
+    ],
+)
+async def test_input_that_is_not_a_responses_prompt_never_narrows_or_raises(request_input: object):
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    metadata: dict[str, object] = {}
+
+    filtered = await _read_responses_pin(check, {"input": request_input, "litellm_metadata": metadata})
+    await _log_responses_success(check, request_input, metadata)
+
+    assert filtered == ("dep-1", "dep-2")
+    assert not cache.in_memory_cache.cache_dict
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "next_tools,expected_pin",
+    [([{"type": "image_generation"}], ("dep-1",)), ([{"type": "web_search"}], ("dep-1", "dep-2"))],
+    ids=["same_native_tool", "other_native_tool"],
+)
+async def test_responses_native_tools_are_part_of_the_prefix(
+    next_tools: list[dict[str, object]], expected_pin: tuple[str, ...]
+):
+    request_input = _marked_responses_input()
+
+    pinned = await _pinned_deployment_ids(
+        {"input": request_input, "tools": [{"type": "image_generation"}]},
+        request_input,
+        {"input": request_input, "tools": next_tools},
+    )
+
+    assert pinned == expected_pin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_tool_type", ["shell", "image_generation", "computer_use", "local_shell"])
+async def test_responses_native_tool_routed_to_a_native_model_logs_no_dropped_tool_warning(
+    caplog: pytest.LogCaptureFixture, native_tool_type: str
+):
+    router = _responses_router(RESPONSES_NATIVE_MODEL)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        await router.aresponses(
+            model=MODEL_GROUP_ALIAS,
+            input=_marked_responses_input(),
+            tools=[{"type": native_tool_type}],
+            mock_response="ok",
+        )
+
+    assert not [record for record in caplog.records if "Dropping Responses API tool" in record.getMessage()]
+
+
+class _MetadataSerializingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.serialized_metadata: list[str] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.serialized_metadata.append(json.dumps(kwargs["litellm_params"]["metadata"]))
+
+
+@pytest.mark.asyncio
+async def test_logger_serializing_the_request_metadata_never_sees_the_prompt_cache_key(monkeypatch):
+    serializing_logger = _MetadataSerializingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [serializing_logger])
+    router = _responses_router(RESPONSES_NATIVE_MODEL)
+
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input())) == 1
+
+    assert await _eventually(lambda: len(serializing_logger.serialized_metadata) == 9)
+    logged_metadata = "".join(serializing_logger.serialized_metadata)
+    pin_keys = tuple(router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    assert pin_keys
+    assert not [pin_key for pin_key in pin_keys if pin_key.split(":")[1] in logged_metadata]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_in_request,expected_deployments",
+    [({}, ("dep-2",)), ({"_excluded_deployment_ids": ["dep-2"]}, ("dep-1", "dep-2"))],
+    ids=["previous_deployment_healthy", "previous_deployment_failed_this_request"],
+)
+async def test_responses_continuation_turn_goes_to_the_deployment_that_answered_its_previous_response(
+    failed_in_request: dict[str, object], expected_deployments: tuple[str, ...]
+):
+    previous_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id("anthropic", "dep-2", "resp_x")
+    request: dict[str, object] = {
+        "input": "hello",
+        "previous_response_id": previous_response_id,
+        "litellm_metadata": {},
+    }
+
+    pinned = await _read_responses_pin(
+        PromptCachingDeploymentCheck(cache=DualCache()), {**request, **failed_in_request}
+    )
+
+    assert pinned == expected_deployments
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_tool", ["get_time", None, 42], ids=["string", "null", "number"])
+async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(bad_tool: object):
+    request: dict[str, object] = {"input": _marked_responses_input(), "tools": [bad_tool], "litellm_metadata": {}}
+
+    pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
+
+    assert pinned == ("dep-1", "dep-2")

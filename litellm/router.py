@@ -280,6 +280,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+    new_responses_pins_in_flight,
 )
 from litellm.router_utils.ptu_shares import (
     PTUTeamCeiling,
@@ -1298,6 +1299,7 @@ class Router:
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(max_size_in_memory=PROMPT_CACHE_PIN_CACHE_MAX_SIZE),
         )
+        self.prompt_caching_pins_in_flight: Final = new_responses_pins_in_flight()
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
@@ -2721,7 +2723,9 @@ class Router:
                 continue
             if pre_call_check == "prompt_caching":
                 _callback = PromptCachingDeploymentCheck(
-                    cache=self.prompt_caching_pin_cache, is_priority_group=self._is_priority_routing_group
+                    cache=self.prompt_caching_pin_cache,
+                    is_priority_group=self._is_priority_routing_group,
+                    responses_pins_in_flight=self.prompt_caching_pins_in_flight,
                 )
             elif pre_call_check == "router_budget_limiting":
                 if self.get_router_deployment_budget_limiter() is not None:
