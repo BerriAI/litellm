@@ -9,12 +9,27 @@ _BARE_FUNCTION: Final = {"name": "g", "parameters": {}}
 
 
 # Tool schemas as rendered by render_tools in encoding/encoding_dsv4.py (deepseek-ai/DeepSeek-V4-Flash) and by
-# chat_template.jinja (Qwen/Qwen3.5-122B-A10B), both read on Hugging Face on 2026-10-17
+# chat_template.jinja (Qwen/Qwen3.5-122B-A10B), both read on Hugging Face on 2026-10-17, and by chat_template.jinja
+# (deepseek-ai/DeepSeek-V4.1-Flash) read on 2026-10-29. Grok's template is closed, so its two renderings are the ones
+# whose token counts left a constant preamble across seven tool shapes billed by Azure AI Foundry
+# grok-4-1-fast-reasoning and xAI grok-4.3 on 2026-10-29
 @pytest.mark.parametrize(
     ("model", "rendered"),
     [
         (
             "DeepSeek-V4-Flash-0731",
+            '{"name": "f", "description": "é", "parameters": {}}\n{"name": "g", "parameters": {}}',
+        ),
+        (
+            "DeepSeek-V4.1-Flash",
+            '{"name": "f", "description": "é", "parameters": {}}\n{"name": "g", "parameters": {}}',
+        ),
+        (
+            "grok-4-1-fast-reasoning",
+            '{"name":"f","description":"é","parameters":{}}\n{"name":"g","parameters":{}}',
+        ),
+        (
+            "grok-4.3",
             '{"name": "f", "description": "é", "parameters": {}}\n{"name": "g", "parameters": {}}',
         ),
         (

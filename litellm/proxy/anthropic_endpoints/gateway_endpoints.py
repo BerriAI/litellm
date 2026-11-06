@@ -45,7 +45,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_set_request_parsed_body,
 )
 from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
-from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
+from litellm.proxy.management_endpoints.ui_sso import (
+    CLI_SSO_BROWSER_TEAM_CHOICE,
+    CLI_SSO_CHOSEN_TEAM_ID,
+    CliSsoTeamDetail,
+)
 from litellm.proxy.mcp_server.gateway_dcr_flow import (
     PROXY_API_AUDIENCE,
     MintedProxyCredential,
@@ -235,6 +239,7 @@ async def device_authorization(request: Request) -> JSONResponse:
         "sso_complete": False,
         "user_code_verified": False,
         "session_data": None,
+        CLI_SSO_BROWSER_TEAM_CHOICE: True,
     }
     _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
@@ -267,7 +272,15 @@ def _validate_login(flow: Mapping[str, object]) -> _GatewayLogin | _OAuthError:
             status_code=400, error="invalid_grant", description="The login session is malformed; sign in again"
         )
 
-    team_id: Final = session_data.teams[0] if session_data.teams else None
+    chosen: Final = flow.get(CLI_SSO_CHOSEN_TEAM_ID)
+    chosen_team_id: Final = chosen if isinstance(chosen, str) else None
+    if chosen_team_id is not None and chosen_team_id not in session_data.teams:
+        return _OAuthError(
+            status_code=400,
+            error="invalid_grant",
+            description="The team picked at sign-in is no longer one of your teams; sign in again",
+        )
+    team_id: Final = chosen_team_id or next(iter(session_data.teams), None)
     selected_team: Final = selected_cli_sso_team_detail(team_details=session_data.team_details, team_id=team_id)
     if selected_team is None:
         return _OAuthError(

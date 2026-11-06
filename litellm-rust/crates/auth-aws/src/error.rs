@@ -2,6 +2,8 @@ use litellm_error::Source;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
+    #[error("AWS credential provider returned expired credentials")]
+    ExpiredCredentials,
     #[error("could not load AWS {flow} credentials")]
     Credentials {
         flow: CredentialFlow,
