@@ -2506,6 +2506,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    enable_workflows: bool = Field(
+        default=False, description="Enable durable typed workflows and the optional Monty worker"
+    )
+
     use_spend_logs_ledger: bool = Field(
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
@@ -2785,7 +2789,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alert_to_webhook_url: dict | None = Field(
         None,
-        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
+        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': '$ALERT_WEBHOOK_URL'}`",
     )
     alerting_args: dict | None = Field(None, description="Controllable params for slack alerting - e.g. ttl in cache.")
     alerting_threshold: int | None = Field(

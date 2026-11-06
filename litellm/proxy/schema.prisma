@@ -1986,6 +1986,7 @@ model LiteLLM_WorkflowRun {
   input         Json?
   output        Json?
   metadata      Json?
+  engine_owned  Boolean  @default(false)
 
   events   LiteLLM_WorkflowEvent[]
   messages LiteLLM_WorkflowMessage[]
@@ -1994,6 +1995,72 @@ model LiteLLM_WorkflowRun {
   @@index([session_id])
   @@index([created_at])
   @@index([created_by])
+}
+
+model LiteLLM_WorkflowDefinition {
+  workflow_id           String @id
+  team_id               String
+  name                  String
+  etag                  String
+  bundle_json           String
+  contributors          String[]
+  published_snapshot_id String?
+
+  @@unique([team_id, name])
+}
+
+model LiteLLM_WorkflowSnapshot {
+  snapshot_id  String   @id
+  workflow_id  String
+  team_id      String
+  name         String
+  bundle_json  String
+  published_by String
+  created_at   DateTime @default(now())
+  origin       String   @default("publication")
+
+  @@index([workflow_id])
+}
+
+model LiteLLM_WorkflowExecution {
+  run_id           String   @id
+  snapshot_id      String
+  team_id          String
+  name             String
+  principal        String
+  dispatch_key     String   @unique
+  request_digest   String
+  request_json     String
+  state            String   @default("pending")
+  deadline         DateTime
+  lease_owner      String?
+  lease_until      DateTime?
+  cancel_requested Boolean  @default(false)
+  checkpoints      Json     @default("[]")
+  response_json    String?
+  error            String?
+
+  @@index([team_id, name])
+}
+
+model LiteLLM_WorkflowStep {
+  step_id           String   @id
+  run_id            String
+  node_id           String
+  state             String   @default("running")
+  input             Json
+  output            Json?
+  attempts          Int      @default(0)
+  deadline          DateTime
+  started_at        DateTime @default(now())
+  finished_at       DateTime?
+  error             String?
+  prompt_tokens     Int      @default(0)
+  completion_tokens Int      @default(0)
+  response_cost     Float?
+  request_id        String?
+
+  @@unique([run_id, node_id])
 }
 
 // Append-only log of state transitions. Never mutate rows here.
