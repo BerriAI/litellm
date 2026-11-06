@@ -17,7 +17,6 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
-from litellm.proxy.db.db_span import db_span
 from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
 from litellm.tracing.generated.types import (
     AgentNode,
@@ -60,8 +59,8 @@ DEFAULT_FRAMEWORK: Final = "litellm"
 SUBAGENT_TOOL_NAMES: Final = frozenset(("Task", "Agent"))
 
 
-class _SupportsQueryRaw(Protocol):
-    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+class SpendLogReader(Protocol):
+    async def fetch(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _TraceKeyRow(TypedDict):
@@ -618,15 +617,14 @@ def _scope_sql(scope: TraceScope, first_index: int) -> tuple[str, tuple[object, 
 
 
 class SpendLogTraceStorage:
-    def __init__(self, database: Callable[[], _SupportsQueryRaw | None]) -> None:
+    def __init__(self, database: Callable[[], SpendLogReader | None]) -> None:
         self._database: Final = database
 
     async def _query(self, sql: str, *args: object) -> Sequence[Mapping[str, object]]:
         db: Final = self._database()
         if db is None:
             return ()
-        async with db_span("lens_spend_log_traces", "LiteLLM_SpendLogs", "select"):
-            return await db.query_raw(sql, *args)
+        return await db.fetch(sql, *args)
 
     async def _trace_keys(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: tuple[str, str] | None, limit: int

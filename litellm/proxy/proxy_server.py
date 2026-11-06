@@ -655,6 +655,7 @@ from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -1575,8 +1576,9 @@ def _forget_prisma_client() -> None:
 class _SpendLogReads:
     prisma: PrismaClient
 
-    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-        return await query_raw_within_statement_timeout(self.prisma, query, *args, what="Lens traces")
+    async def fetch(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        async with db_span("lens_spend_log_traces", "LiteLLM_SpendLogs", "select"):
+            return await query_raw_within_statement_timeout(self.prisma, query, *args, what="Lens traces")
 
 
 def _spend_log_trace_receiver(database: database_runtime.Database | None) -> TraceReceiver | None:

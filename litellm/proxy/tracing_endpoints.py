@@ -54,6 +54,7 @@ from litellm.tracing.generated.types import (
     TraceScope,
 )
 from litellm.tracing.otlp_http import encode_otlp_response
+from litellm.tracing.spend_logs import SpendLogTraceStorage
 from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgentList
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -61,6 +62,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
+_SQL_NEEDS_LENS_DETAIL: Final = "Trace SQL queries need the Lens service. Configure LITELLM_LENS_URL."
 
 
 async def current_time_ms() -> int:
@@ -250,6 +252,8 @@ async def provide_trace_query_access(
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceQueryAccess:
     storage: Final = require_receiver(tracing).storage
+    if isinstance(storage, SpendLogTraceStorage):
+        raise HTTPException(status_code=501, detail=_SQL_NEEDS_LENS_DETAIL)
     scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     if scope is None:
         raise HTTPException(status_code=403, detail="Not allowed to view logs")

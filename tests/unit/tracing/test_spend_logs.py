@@ -58,7 +58,7 @@ class FakeDatabase:
         self.responses: Final = responses
         self.calls: tuple[tuple[str, tuple[object, ...]], ...] = ()
 
-    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+    async def fetch(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         self.calls = (*self.calls, (query, args))
         return self.responses[len(self.calls) - 1]
 
