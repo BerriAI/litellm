@@ -10,19 +10,29 @@ from liteflow import ChatCompletion, Draft, GatewayClient, Input, Workflow, bund
 from litellm.models.workflow_definition import DefinitionPage
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.deps.repositories import get_workflow_definition_repository
+from litellm.proxy.deps.repositories import get_workflow_definition_repository, get_workflow_execution_repository
 from litellm.proxy.management_endpoints.workflow_definition_endpoints import router
+from litellm.proxy.management_endpoints.workflow_execution_endpoints import router as execution_router
 from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository
 from tests.unit.proxy.workflow_definition_rows import DefinitionRows, bundle, caller
+
+
+@pytest.fixture(autouse=True)
+def enable_workflows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True})
 
 
 def _client(database: DefinitionRows | None, identity: UserAPIKeyAuth) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
+    app.include_router(execution_router)
     app.dependency_overrides[user_api_key_auth] = lambda: identity
     app.dependency_overrides[get_workflow_definition_repository] = lambda: (
         None if database is None else WorkflowDefinitionRepository(database.database)
     )
+    app.dependency_overrides[get_workflow_execution_repository] = lambda: None
     return TestClient(app)
 
 
@@ -49,6 +59,20 @@ def _register(client: TestClient, name: str = "example") -> Draft:
     response: Final = client.post("/v1/workflows", json=_body(name))
     assert response.status_code == 201, response.text
     return Draft.model_validate(response.json())
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("method,path,status", [
+    ("POST", "/v1/workflows", 201), ("GET", "/v1/workflows/runs/missing/steps", 503),
+])
+def test_workflow_routes_require_opt_in(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, method: str, path: str, status: int,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True} if enabled else {})
+    response: Final = _client(DefinitionRows(), caller()).request(method, path, json=_body())
+    assert response.status_code == (status if enabled else 404), response.text
 
 
 def test_real_sdk_registers_validates_replaces_and_publishes_with_an_independent_admin() -> None:

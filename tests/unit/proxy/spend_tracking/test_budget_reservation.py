@@ -148,6 +148,78 @@ async def test_repeated_token_counting_never_touches_a_tiny_budget(
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "wrapper"),
+    [
+        ("/v1/chat/completions", True),
+        ("/chat/completions", True),
+        ("/engines/example/chat/completions", True),
+        ("/openai/deployments/example/chat/completions", True),
+        ("/v1/responses", False),
+        ("/v1/completions", False),
+    ],
+)
+async def test_priced_workflow_wrapper_never_holds_budget_but_child_call_still_reserves(
+    spend_counter_cache: DualCache,
+    route: str,
+    wrapper: bool,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "workflow/example",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+            }
+        ]
+    )
+    messages: Final = [{"role": "user", "content": "hello"}]
+    body: Final = {
+        "model": "workflow/example",
+        "messages": messages,
+        "input": "hello",
+        "prompt": "hello",
+        "max_tokens": 16,
+    }
+    estimate: Final = estimate_request_max_cost(body, route, router)
+    assert estimate is not None and estimate > 0
+    reservation: Final = await reserve_budget_for_request(
+        request_body=body,
+        route=route,
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token=TINY_BUDGET_KEY_TOKEN, max_budget=0.01, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+    if wrapper:
+        assert reservation is None and spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    else:
+        assert reservation is not None and reservation["reserved_cost"] > 0
+        assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(
+            reservation["reserved_cost"]
+        )
+        await release_unbound_budget_reservation(reservation)
+    child: Final = await _reserve_for_tiny_budget_key(
+        "/v1/chat/completions",
+        {"model": "gpt-4o", "messages": messages, "max_tokens": 16},
+    )
+    assert child is not None
+    reserved_cost: Final = child["reserved_cost"]
+    assert isinstance(reserved_cost, float) and reserved_cost > 0
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
+    await release_unbound_budget_reservation(child)
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.0)
+    router.reset()
+
+
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"
 CONVERSE_BODY: Final = {
     "messages": [{"role": "user", "content": [{"text": "Reply with one word: pong"}]}],

@@ -9,9 +9,13 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
 from litellm.proxy import common_request_processing, proxy_server
 
@@ -126,3 +130,16 @@ def test_chat_completion_pipeline_error(client, auth_as, patched_chat_error, pat
         response = client.post(path, json=payload)
     assert response.status_code == 400
     assert "error" in response.json() or response.text != ""
+
+
+@pytest.mark.parametrize("path", _CHAT_PATHS)
+def test_workflow_chat_requires_opt_in(
+    client: TestClient, auth_as: Callable[[], AbstractContextManager[None]], monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    with auth_as():
+        response: Final = client.post(
+            path, json={"model": "workflow/example", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "Workflows are not enabled"

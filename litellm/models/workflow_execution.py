@@ -13,6 +13,8 @@ from liteflow import (  # pyright: ignore[reportMissingTypeStubs]  # pinned SDK 
 )
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from litellm.models.workflow_definition import WorkflowSnapshot
+
 __all__: Final = ("RunState",)
 
 
@@ -128,6 +130,7 @@ class WorkflowExecutionStore(Protocol):
         input: RunInput,
         digest: str,
         idempotency_key: str | None,
+        draft_snapshot: WorkflowSnapshot | None = None,
     ) -> RunAdmission | ExecutionError: ...
 
     async def get(self, run_id: str) -> EngineRun | None: ...

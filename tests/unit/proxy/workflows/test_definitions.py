@@ -14,7 +14,7 @@ from litellm.models.workflow_definition import (
     WorkflowSnapshot,
 )
 from litellm.proxy._types import LitellmUserRoles
-from litellm.proxy.workflows.definitions import authorize_team, freeze_draft, published_workflow, validate_bundle
+from litellm.proxy.workflows.definitions import authorize_team, prepare_draft, published_workflow, validate_bundle
 from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository
 from tests.unit.proxy.workflow_definition_rows import DefinitionRows, bundle, caller
 
@@ -114,5 +114,5 @@ async def test_application_identity_can_invoke_but_cannot_freeze_a_draft() -> No
     snapshot: Final = await store.publish(draft.workflow_id, "team", draft.etag, draft.digest, "reviewer")
     assert isinstance(snapshot, WorkflowSnapshot)
     assert await published_workflow(store, caller(None), "example") == snapshot
-    denied: Final = await freeze_draft(store, caller(None), draft.workflow_id, draft.etag)
+    denied: Final = await prepare_draft(store, caller(None), draft.workflow_id, draft.etag)
     assert isinstance(denied, DefinitionError) and denied.code == "not_found"

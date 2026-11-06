@@ -31189,6 +31189,12 @@ export interface components {
              */
             enable_public_model_hub: boolean;
             /**
+             * Enable Workflows
+             * @description Enable LiteFlow workflow authoring and execution. Off by default; restart the proxy after changing this setting.
+             * @default false
+             */
+            enable_workflows: boolean;
+            /**
              * Enforce Fallback Model Access
              * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.
              */

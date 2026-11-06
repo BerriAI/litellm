@@ -14,6 +14,7 @@ import pytest_asyncio
 from fastapi import HTTPException, Request
 from openai.types.chat import ChatCompletion
 from prisma import Json, Prisma
+from prisma.errors import RawQueryError
 from prisma.types import DatasourceOverride
 from psycopg import sql
 
@@ -62,12 +63,13 @@ class Storage:
 
     async def admit(self, *, key: str | None = None, digest: str = "input", owner: str = "owner",
                     team: str = "team", snapshot: WorkflowSnapshot | None = None,
-                    deadline: datetime | None = None) -> RunAdmission | ExecutionError:
+                    deadline: datetime | None = None, draft: bool = False) -> RunAdmission | ExecutionError:
         return await self.runs.admit(
             workflow_id=snapshot.workflow_id if snapshot else "workflow",
             snapshot_id=snapshot.snapshot_id if snapshot else "snapshot",
-            team_id=team, key_hash=owner, input=RunInput(messages=_MESSAGES, draft=False,
+            team_id=team, key_hash=owner, input=RunInput(messages=_MESSAGES, draft=draft,
             deadline=deadline or datetime.now(timezone.utc) + timedelta(minutes=5)), digest=digest, idempotency_key=key,
+            draft_snapshot=snapshot if draft else None,
         )
 
     async def snapshot(self, team: str = "team") -> WorkflowSnapshot:
@@ -87,7 +89,10 @@ def schema_sql() -> bytes:
 
 
 @pytest_asyncio.fixture(loop_scope="function")
-async def store(schema_sql: bytes) -> AsyncIterator[Storage]:
+async def store(schema_sql: bytes, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Storage]:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True})
     with scratch_database("workflow_execution") as url, psycopg.connect(url, autocommit=True) as connection:
         connection.execute(schema_sql)
         connection.execute(sql.SQL("ALTER DATABASE {} SET timezone TO 'Asia/Singapore'").format(
@@ -125,10 +130,14 @@ class ChatReplies:
 
 
 async def test_concurrent_idempotency_pins_first_snapshot_and_conflicts_on_input(store: Storage) -> None:
-    original: Final = await store.snapshot()
+    draft: Final = await store.definitions.create(two_nodes(), "team", "member")
+    assert isinstance(draft, WorkflowDraft)
+    original: Final = await store.definitions.prepare_draft(draft.workflow_id, "team", draft.etag)
+    assert isinstance(original, WorkflowSnapshot)
+    assert await store.definitions.get_snapshot(original.snapshot_id) is None
     different: Final = original.model_copy(update={"snapshot_id": "later-snapshot"})
     results: Final = await asyncio.gather(*(
-        store.admit(key="same", snapshot=snapshot) for snapshot in (original, different) * 4
+        store.admit(key="same", snapshot=snapshot, draft=True) for snapshot in (original, different) * 4
     ))
     assert all(isinstance(result, RunAdmission) for result in results)
     admitted: Final = tuple(result for result in results if isinstance(result, RunAdmission))
@@ -136,19 +145,39 @@ async def test_concurrent_idempotency_pins_first_snapshot_and_conflicts_on_input
     assert len({result.run.run_id for result in admitted}) == 1
     assert len({result.run.snapshot_id for result in admitted}) == 1
     assert all(result.run == admitted[0].run for result in admitted)
-    assert await store.admit(key="same", snapshot=different, digest="changed") == ExecutionError(
+    pinned: Final = await store.definitions.get_snapshot(admitted[0].run.snapshot_id)
+    assert pinned is not None and pinned.bundle == original.bundle and pinned.published_by is None
+    assert await store.admit(key="same", snapshot=different, digest="changed", draft=True) == ExecutionError(
         "idempotency_conflict", "Idempotency key was used with different input"
     )
     assert isinstance(await store.admit(key="same", snapshot=original, owner="another"), RunAdmission)
     assert isinstance(await store.admit(key="same", snapshot=original, team="other"), RunAdmission)
     assert await store.db.litellm_workflowrun.count() == 3
+    await store.db.execute_raw(
+        'ALTER TABLE "LiteLLM_WorkflowRun" ADD CHECK (request_digest <> \'reject-admission\')'
+    )
+    with pytest.raises(RawQueryError):
+        await store.admit(
+            snapshot=original.model_copy(update={"snapshot_id": "must-roll-back"}),
+            digest="reject-admission", draft=True,
+        )
+    assert await store.db.litellm_workflowrun.count() == 3
+    assert await store.db.litellm_workflowsnapshot.count() == 1
 
 
-async def test_draft_test_retry_after_edit_recovers_only_the_same_scoped_request(store: Storage) -> None:
+async def test_draft_admission_rejects_without_snapshots_and_replays_only_same_scope(store: Storage) -> None:
     draft: Final = await store.definitions.create(two_nodes(), "team", "member")
     assert isinstance(draft, WorkflowDraft)
     caller: Final = _CALLER.model_copy(update={"user_id": "member", "user_role": LitellmUserRoles.INTERNAL_USER})
     data: Final = PaidRunRequest(messages=_MESSAGES, authorize_billing=True)
+    for messages, status in ((({"role": "invalid", "content": "bad"},), 400), (_MESSAGES, 503)):
+        with pytest.raises(HTTPException) as unavailable:
+            await run_draft_test(
+                _REQUEST, draft.workflow_id, data.model_copy(update={"messages": messages}),
+                caller, store.definitions, store.runs, if_match=draft.etag,
+            )
+        assert unavailable.value.status_code == status
+    assert await store.db.litellm_workflowrun.count() == await store.db.litellm_workflowsnapshot.count() == 0
     chat: Final = ChatReplies(store, (
         ChildCallResult(list(_MESSAGES), 1, 1, "first", 0.125), ChildCallResult("done", 1, 1, "last", 0.125),
     ))
@@ -190,6 +219,16 @@ async def test_draft_test_retry_after_edit_recovers_only_the_same_scoped_request
         assert rejected.value.status_code == status
     assert await store.db.litellm_workflowrun.count() == await store.db.litellm_workflowsnapshot.count() == 1
     assert len(chat.calls) == 2
+    for _ in range(64):
+        assert isinstance(await store.admit(), RunAdmission)
+    with pytest.raises(HTTPException) as full:
+        await run_draft_test(
+            request, draft.workflow_id, data, caller, store.definitions, store.runs,
+            if_match=changed.etag, idempotency_key="new-key",
+        )
+    assert full.value.status_code == 429
+    assert await store.db.litellm_workflowrun.count() == 65
+    assert await store.db.litellm_workflowsnapshot.count() == 1
 
 
 async def test_nullable_history_filters_cursor_ties_and_utc_in_non_utc_database(store: Storage) -> None:

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
+from litellm.models.workflow_definition import WorkflowSnapshot
 from litellm.models.workflow_execution import (
     EngineRun,
     ExecutionError,
@@ -18,9 +19,10 @@ from litellm.models.workflow_execution import (
     RunView,
     StepTrace,
 )
+from litellm.repositories.workflow_definition_repository import SnapshotTransaction, persist_snapshot
 
 
-class ExecutionQueries(Protocol):
+class ExecutionQueries(SnapshotTransaction, Protocol):
     async def query_raw(self, query: str, *args: object) -> object: ...
 
 
@@ -110,6 +112,7 @@ class WorkflowExecutionRepository:
         input: RunInput,
         digest: str,
         idempotency_key: str | None,
+        draft_snapshot: WorkflowSnapshot | None = None,
     ) -> RunAdmission | ExecutionError:
         await self._expire_team(team_id)
         async with self._database.tx() as transaction:
@@ -140,6 +143,8 @@ class WorkflowExecutionRepository:
             )
             if len(capacity) >= 64:
                 return ExecutionError("capacity_exceeded", "The team's workflow execution queue is full")
+            if draft_snapshot is not None:
+                await persist_snapshot(transaction, draft_snapshot)
             created: Final = await _first_run(
                 transaction,
                 'INSERT INTO "LiteLLM_WorkflowRun" '
@@ -157,8 +162,7 @@ class WorkflowExecutionRepository:
                 digest,
                 idempotency_key,
             )
-            if created is None:
-                return ExecutionError("storage_error", "Workflow admission did not create a run")
+            assert created is not None
             return RunAdmission(created, True)
 
     async def _expire_team(self, team_id: str) -> None:

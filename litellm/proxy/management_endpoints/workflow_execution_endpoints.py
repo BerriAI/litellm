@@ -28,16 +28,16 @@ from litellm.proxy.management_endpoints.workflow_definition_endpoints import rai
 from litellm.proxy.workflows.definitions import (
     authorize_team,
     authorized_draft,
-    freeze_draft,
+    prepare_draft,
     published_workflow,
     requested_team,
 )
-from litellm.proxy.workflows.lifespan import get_workflow_runner
+from litellm.proxy.workflows.lifespan import get_workflow_runner, require_workflows_enabled
 from litellm.proxy.workflows.monty.models import MontyFailure
 from litellm.proxy.workflows.monty.runtime import validate_json
 from litellm.proxy.workflows.runner import utc_now
 
-router: Final = APIRouter(tags=["workflow management"])
+router: Final = APIRouter(tags=["workflow management"], dependencies=[Depends(require_workflows_enabled)])
 _Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 _Idempotency: TypeAlias = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=256)]
 _MESSAGES: Final = TypeAdapter(list[ChatCompletionMessageParam])
@@ -139,7 +139,6 @@ async def _admit(
     *,
     draft: bool,
 ) -> EngineRun:
-    _validate_messages(messages)
     runner: Final = get_workflow_runner(request)
     if runner is None:
         _error(ExecutionError("database_unavailable", "Workflow execution is unavailable"))
@@ -156,6 +155,7 @@ async def _admit(
         ),
         digest=digest,
         idempotency_key=key,
+        draft_snapshot=snapshot if draft else None,
     )
     if isinstance(admitted, ExecutionError):
         _error(admitted)
@@ -210,11 +210,12 @@ async def test_workflow(
     if if_match is None:
         raise_public(DefinitionError("precondition_required", "If-Match is required", "If-Match"))
     key_hash: Final = _execution_key(caller, draft.team_id)
+    _validate_messages(data.messages)
     digest: Final = _digest(data.messages, caller.end_user_id, if_match)
     key: Final = _idempotency_key("test", idempotency_key)
     if (replay := await _replay_test(runs, draft, key_hash, key, digest)) is not None:
         return replay
-    snapshot: Final = await freeze_draft(store, caller, workflow_id, if_match)
+    snapshot: Final = await prepare_draft(store, caller, workflow_id, if_match)
     if isinstance(snapshot, DefinitionError):
         if (
             snapshot.code == "stale_draft"
@@ -311,6 +312,7 @@ async def list_engine_runs(
     definitions: WorkflowDefinitionStore | None,
     executions: WorkflowExecutionStore | None,
 ) -> RunPage:
+    require_workflows_enabled()
     store, runs = _stores(definitions, executions)
     definition: Final = await store.get_draft(workflow_id, team_id)
     if definition is None:
@@ -390,6 +392,7 @@ async def invoke_workflow(
     key: Final = request.headers.get("Idempotency-Key")
     if key is not None and not 1 <= len(key) <= 256:
         _error(ExecutionError("invalid_idempotency_key", "Idempotency-Key must contain 1 to 256 characters"))
+    _validate_messages(data.messages)
     admitted: Final = await _admit(
         request,
         runs,

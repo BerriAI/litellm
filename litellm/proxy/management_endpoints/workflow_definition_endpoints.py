@@ -25,8 +25,9 @@ from litellm.proxy.workflows.definitions import (
     requested_team,
     validate_bundle,
 )
+from litellm.proxy.workflows.lifespan import require_workflows_enabled
 
-router: Final = APIRouter(tags=["workflow management"])
+router: Final = APIRouter(tags=["workflow management"], dependencies=[Depends(require_workflows_enabled)])
 _Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 _Team: TypeAlias = Annotated[str | None, Query(min_length=1, max_length=256)]
 _ETag: TypeAlias = Annotated[str | None, Header(alias="If-Match")]

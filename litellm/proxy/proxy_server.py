@@ -13174,7 +13174,9 @@ async def chat_completion(
             get_workflow_execution_repository,
         )
         from litellm.proxy.management_endpoints.workflow_execution_endpoints import invoke_workflow
+        from litellm.proxy.workflows.lifespan import require_workflows_enabled
 
+        require_workflows_enabled()
         workflow_database: Final = await get_database(request)
         await release_unbound_budget_reservation(user_api_key_dict.budget_reservation)
         return await invoke_workflow(

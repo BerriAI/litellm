@@ -32,6 +32,7 @@ from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
+    end_user_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -181,6 +182,76 @@ async def test_internal_execution_route_keeps_proxy_network_policy(monkeypatch: 
             route="/v1/chat/completions", expected_team_id="original-team",
         )
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restriction", ["blocked", "budget"])
+async def test_internal_execution_preserves_and_rechecks_end_user_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    restriction: str,
+) -> None:
+    from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
+
+    cache: Final = await _internal_key_cache(monkeypatch)
+    permissions: Final = LiteLLM_ObjectPermissionTable(object_permission_id="end-user-permissions")
+    end_user: Final = LiteLLM_EndUserTable(
+        user_id="restricted-user",
+        blocked=False,
+        spend=0.0,
+        allowed_model_region="eu",
+        object_permission=permissions,
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="end-user-budget",
+            rpm_limit=1,
+            tpm_limit=100,
+            tpd_limit=1000,
+            max_budget=100,
+        ),
+    )
+    await cache.async_set_cache(key=end_user_cache_key(end_user.user_id), value=end_user)
+    auth: Final = await authorize_internal_virtual_key(
+        "b" * 64,
+        _internal_management_request(),
+        {"model": "workflow-model", "user": end_user.user_id},
+        route="/v1/chat/completions",
+        expected_team_id="original-team",
+    )
+    assert auth.end_user_id == end_user.user_id
+    assert (auth.end_user_rpm_limit, auth.end_user_tpm_limit, auth.end_user_tpd_limit) == (1, 100, 1000)
+    assert auth.allowed_model_region == "eu" and auth.end_user_object_permission == permissions
+    changed: Final = end_user.model_copy(
+        update={
+            "spend": 101.0 if restriction == "budget" else 0.0,
+        }
+    )
+    await cache.async_set_cache(key=end_user_cache_key(end_user.user_id), value=changed)
+    litellm.proxy.proxy_server.spend_counter_cache.in_memory_cache.set_cache(
+        key=f"spend:end_user:{end_user.user_id}",
+        value=changed.spend,
+    )
+    invocation: Final = authorize_internal_virtual_key(
+        "b" * 64,
+        _internal_management_request(),
+        {"model": "workflow-model", "user": end_user.user_id},
+        route="/v1/chat/completions",
+        expected_team_id="original-team",
+    )
+    if restriction == "budget":
+        with pytest.raises(ProxyException) as exceeded:
+            await invocation
+        assert exceeded.value.type == ProxyErrorTypes.budget_exceeded
+        return
+    next_auth: Final = await invocation
+    monkeypatch.setattr(litellm, "blocked_user_list", [end_user.user_id])
+    monkeypatch.setattr(litellm, "callbacks", [ENTERPRISE_BlockedUserList(prisma_client=None)])
+    logging: Final = proxy_utils.ProxyLogging(user_api_key_cache=cache)
+    with pytest.raises(HTTPException, match="User blocked") as blocked:
+        await logging.pre_call_hook(
+            user_api_key_dict=next_auth,
+            call_type="acompletion",
+            data={"model": "workflow-model", "user": next_auth.end_user_id, "messages": []},
+        )
+    assert blocked.value.status_code == 400
 
 
 @pytest.mark.asyncio

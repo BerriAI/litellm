@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime, timezone
 from typing import Final, Protocol, TypeVar
 from uuid import uuid4
 
@@ -23,12 +24,14 @@ _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _STRING: Final = TypeAdapter(str)
 
 
-class DefinitionTransaction(Protocol):
-    @property
-    def litellm_workflowdefinition(self) -> TableActions[DbRecord]: ...
-
+class SnapshotTransaction(Protocol):
     @property
     def litellm_workflowsnapshot(self) -> TableActions[DbRecord]: ...
+
+
+class DefinitionTransaction(SnapshotTransaction, Protocol):
+    @property
+    def litellm_workflowdefinition(self) -> TableActions[DbRecord]: ...
 
     @property
     def litellm_teamtable(self) -> TableActions[DbRecord]: ...
@@ -86,19 +89,24 @@ async def _locked_definition(
     return row
 
 
-async def _snapshot(
-    transaction: DefinitionTransaction, row: _DefinitionRow, published_by: str | None
-) -> WorkflowSnapshot:
+def _prepared_snapshot(row: _DefinitionRow, published_by: str | None) -> WorkflowSnapshot:
+    return WorkflowSnapshot.model_validate(
+        {
+            **row.draft.model_dump(exclude={"etag", "published_snapshot_id"}),
+            "snapshot_id": str(uuid4()),
+            "contributors": row.contributors,
+            "published_by": published_by,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+
+async def persist_snapshot(transaction: SnapshotTransaction, snapshot: WorkflowSnapshot) -> WorkflowSnapshot:
     stored: Final = await transaction.litellm_workflowsnapshot.create(
         data={
-            "snapshot_id": str(uuid4()),
-            "workflow_id": row.draft.workflow_id,
-            "team_id": row.draft.team_id,
-            "name": row.draft.name,
-            "digest": row.draft.digest,
-            "bundle_json": _JSON.dump_json(dict(row.draft.bundle)).decode(),
-            "contributors": list(row.contributors),
-            "published_by": published_by,
+            **snapshot.model_dump(exclude={"bundle", "contributors"}),
+            "bundle_json": snapshot.bundle.model_dump_json(by_alias=True, exclude_unset=True),
+            "contributors": list(snapshot.contributors),
         }
     )
     return _decoded(stored, WorkflowSnapshot)
@@ -198,16 +206,16 @@ class WorkflowDefinitionRepository:
                 )
                 assert existing is not None
                 return _decoded(existing, WorkflowSnapshot)
-            snapshot: Final = await _snapshot(transaction, row, publisher)
+            snapshot: Final = await persist_snapshot(transaction, _prepared_snapshot(row, publisher))
             await transaction.litellm_workflowdefinition.update(
                 where={"workflow_id": workflow_id},
                 data={"published_snapshot_id": snapshot.snapshot_id, "published_etag": etag},
             )
             return snapshot
 
-    async def freeze_draft(self, workflow_id: str, team_id: str, etag: str) -> WorkflowSnapshot | DefinitionError:
+    async def prepare_draft(self, workflow_id: str, team_id: str, etag: str) -> WorkflowSnapshot | DefinitionError:
         async with self._database.tx() as transaction:
             row: Final = await _locked_definition(transaction, workflow_id, team_id, etag)
             if isinstance(row, DefinitionError):
                 return row
-            return await _snapshot(transaction, row, None)
+            return _prepared_snapshot(row, None)

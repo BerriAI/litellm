@@ -5,8 +5,8 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from referencing.jsonschema import DRAFT202012
 
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import schema_children
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.workflow_definition import (
     Binding,
@@ -26,7 +26,6 @@ from litellm.proxy.workflows.monty.compiler import compile_program
 from litellm.proxy.workflows.monty.models import MontyFailure, MontyLimits
 
 _MESSAGES: Final = TypeAdapter(list[ChatCompletionMessageParam])
-_SCHEMA: Final = TypeAdapter[Mapping[str, JsonValue] | bool](Mapping[str, JsonValue] | bool)
 _LIMITS: Final = MontyLimits()
 _WRITER_ROLES: Final = frozenset(
     {LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.ORG_ADMIN, LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM}
@@ -121,7 +120,7 @@ def check_etag(draft: WorkflowDraft, etag: str | None) -> DefinitionError | None
     return None
 
 
-async def freeze_draft(
+async def prepare_draft(
     store: WorkflowDefinitionStore,
     caller: UserAPIKeyAuth,
     workflow_id: str,
@@ -135,22 +134,18 @@ async def freeze_draft(
         return failure
     if (invalid := validate_bundle(parsed_bundle(draft.bundle))) is not None:
         return invalid
-    return await store.freeze_draft(workflow_id, draft.team_id, draft.etag)
+    return await store.prepare_draft(workflow_id, draft.team_id, draft.etag)
 
 
-def _local_references(value: Mapping[str, JsonValue] | bool, depth: int = 0) -> bool:
+def _local_references(schema: Mapping[str, object], depth: int = 0) -> bool:
     if depth > 64:
         return False
-    if isinstance(value, Mapping):
-        if any(keyword in value for keyword in ("$id", "$dynamicRef", "$recursiveRef", "$dynamicAnchor")):
-            return False
-        reference: Final = value.get("$ref")
-        if reference is not None and (not isinstance(reference, str) or not reference.startswith("#/")):
-            return False
-        return all(
-            _local_references(_SCHEMA.validate_python(child), depth + 1) for child in DRAFT202012.subresources_of(value)
-        )
-    return True
+    if any(keyword in schema for keyword in ("$id", "$dynamicRef", "$recursiveRef", "$dynamicAnchor")):
+        return False
+    reference: Final = schema.get("$ref")
+    if reference is not None and (not isinstance(reference, str) or not reference.startswith("#/")):
+        return False
+    return all(_local_references(child, depth + 1) for child in schema_children(schema))
 
 
 def _schema_error(schema: Mapping[str, JsonValue], param: str) -> DefinitionError | None:

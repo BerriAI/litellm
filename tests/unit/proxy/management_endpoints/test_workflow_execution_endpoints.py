@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.workflow_execution_endpoints import (
-    TestRunRequest as PaidRunRequest, WorkflowInvocation, _execution_key,
+    TestRunRequest as PaidRunRequest, WorkflowInvocation, _execution_key, list_engine_runs,
 )
 
 
@@ -33,3 +33,17 @@ def test_workflow_invocation_rejects_unsupported_chat_parameters(extra: dict[str
 def test_paid_test_requires_explicit_boolean_billing_consent(consent: object) -> None:
     with pytest.raises(ValidationError):
         PaidRunRequest.model_validate({"messages": [{"role": "user", "content": "go"}], "authorize_billing": consent})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_legacy_history_entry_requires_opt_in(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": enabled})
+    with pytest.raises(HTTPException) as rejected:
+        await list_engine_runs(
+            workflow_id="missing", team_id="team", status=None, limit=10, after=None,
+            caller=UserAPIKeyAuth(), definitions=None, executions=None,
+        )
+    assert rejected.value.status_code == (503 if enabled else 404)
