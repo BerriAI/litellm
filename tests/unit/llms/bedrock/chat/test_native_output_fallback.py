@@ -207,6 +207,28 @@ def test_a_buffered_native_request_bedrock_rejects_is_sent_again_with_the_fallba
 
 
 @_MODES
+def test_strict_tools_bedrock_rejects_after_a_buffered_native_retry_are_dropped_on_the_json_tool_retry(
+    asynchronous: bool,
+) -> None:
+    bedrock: Final = ScriptedBedrock(
+        errors=(_STREAM_PERMISSION_DENIAL, _GRAMMAR_REJECTION, _GRAMMAR_REJECTION, None), asynchronous=asynchronous
+    )
+
+    response: Final = _resolve(
+        call_with_native_output_fallback(
+            bedrock,
+            lambda: _NATIVE_RETRY_WITH_STRICT_TOOLS,
+            "us.anthropic.claude-sonnet-4-6",
+            strict_tools_fallback=lambda: _STRICT_FALLBACK,
+            buffered_stream_fallback=lambda: _BUFFERED_NATIVE_STREAM,
+        )
+    )
+
+    assert isinstance(response, ModelResponse) and response.id == "answer-4"
+    assert bedrock.sent == (None, _BUFFERED_NATIVE_STREAM, _NATIVE_RETRY_WITH_STRICT_TOOLS, _COMPOSED_FALLBACK)
+
+
+@_MODES
 @pytest.mark.parametrize(
     ("error", "buffered_stream_fallback"),
     [
