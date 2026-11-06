@@ -1,10 +1,11 @@
 import json
-from collections.abc import Mapping
-from itertools import chain
+from collections.abc import Callable, Mapping
+from functools import cache
+from itertools import chain, count
 from typing import Final
 
 from jsonschema import Draft202012Validator, SchemaError
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.models.workflow_bundle import (
     Binding,
@@ -21,6 +22,7 @@ from litellm.proxy.workflows.monty.compiler import compile_program
 from litellm.proxy.workflows.monty.models import MontyFailure, MontyLimits
 
 DEFAULT_MONTY_LIMITS: Final = MontyLimits()
+_JSON: Final = TypeAdapter[JsonValue](JsonValue)
 
 
 def schema_is_local(value: JsonValue, depth: int = 0) -> bool:
@@ -82,15 +84,32 @@ def validate_bundle(bundle: WorkflowBundle) -> WorkflowFailure | None:
 
 
 def _types(
-    schema: JsonValue | Mapping[str, JsonValue], root: Mapping[str, JsonValue], seen: frozenset[str] = frozenset()
-) -> frozenset[str]:
+    schema: JsonValue | Mapping[str, JsonValue], root: Mapping[str, JsonValue]
+) -> frozenset[str] | WorkflowFailure:
+    work: Final = count()
+
+    @cache
+    def visit(encoded: str, seen: frozenset[str]) -> frozenset[str] | WorkflowFailure:
+        if next(work) >= 4096 or len(seen) > 48:
+            return WorkflowFailure(code="schema_complexity", message="Schema compatibility traversal limit exceeded")
+        return _schema_types(_JSON.validate_json(encoded), root, seen, visit)
+
+    return visit(json.dumps(schema, sort_keys=True), frozenset[str]())
+
+
+def _schema_types(
+    schema: JsonValue,
+    root: Mapping[str, JsonValue],
+    seen: frozenset[str],
+    visit: Callable[[str, frozenset[str]], frozenset[str] | WorkflowFailure],
+) -> frozenset[str] | WorkflowFailure:
     if not isinstance(schema, Mapping):
         return frozenset()
     reference: Final = schema.get("$ref")
     if isinstance(reference, str) and reference.startswith("#/$defs/") and reference not in seen:
         definitions: Final = root.get("$defs")
         return (
-            _types(definitions.get(reference[8:]), root, seen | {reference})
+            visit(json.dumps(definitions.get(reference[8:]), sort_keys=True), seen | {reference})
             if isinstance(definitions, dict)
             else frozenset()
         )
@@ -99,7 +118,11 @@ def _types(
         return frozenset({type_})
     alternatives: Final = schema.get("anyOf", schema.get("oneOf"))
     if isinstance(alternatives, list):
-        return frozenset(chain.from_iterable(_types(alternative, root, seen) for alternative in alternatives))
+        results: Final = tuple(visit(json.dumps(alternative, sort_keys=True), seen) for alternative in alternatives)
+        failures: Final = tuple(result for result in results if isinstance(result, WorkflowFailure))
+        if failures:
+            return failures[0]
+        return frozenset(chain.from_iterable(result for result in results if isinstance(result, frozenset)))
     return frozenset()
 
 
@@ -122,6 +145,10 @@ def _binding_compatibility(
     actual: Final = _result_schema(bundle, binding.source)
     actual_types: Final = _types(actual, actual)
     expected_types: Final = _types(expected, expected_root)
+    if isinstance(actual_types, WorkflowFailure):
+        return actual_types
+    if isinstance(expected_types, WorkflowFailure):
+        return expected_types
     if (
         actual_types
         and expected_types

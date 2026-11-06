@@ -69,6 +69,7 @@ class GatewayChildCaller:
                 param=node.id,
             )
         original_request: Final = _OBJECT.validate_json(execution.request_json)
+        metadata: Final = original_request.get("metadata")
         payload: Final = {
             **node.model_dump(
                 mode="json",
@@ -82,6 +83,7 @@ class GatewayChildCaller:
             "timeout": remaining,
             **({"user": original_request["user"]} if "user" in original_request else {}),
             "metadata": {
+                **({"tags": metadata["tags"]} if isinstance(metadata, dict) and "tags" in metadata else {}),
                 "workflow_run_id": execution.run_id,
                 "workflow_node_id": node.id,
                 "workflow_snapshot_id": execution.snapshot_id,

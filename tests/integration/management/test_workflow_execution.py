@@ -3,6 +3,7 @@ import json
 import threading
 import uuid
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -220,7 +221,7 @@ def test_draft_execution_requires_its_owning_team_key_even_for_multiteam_members
     with workflow_gateway.scenario() as scenario, wire_server(_completion) as wire:
         model: Final = scenario.model(model="openai/gpt-6-sol", api_base=wire.url + "/v1")
         author: Final = scenario.user(user_role="internal_user")
-        members: Final = [{"role": "admin", "user_id": author}]
+        members: Final[JsonValue] = [{"role": "admin", "user_id": author}]
         owning_team: Final = scenario.team(models=[model], members_with_roles=members)
         other_team: Final = scenario.team(models=[model], members_with_roles=members)
         owning_key: Final = scenario.key(team_id=owning_team, user_id=author, models=[model])
@@ -297,6 +298,86 @@ def test_etags_and_independent_publication_do_not_execute_drafts(workflow_gatewa
         invoked: Final = workflow_gateway.request("POST", "/v1/chat/completions", _request(), key=actors.caller)
         assert invoked.status_code == 200, invoked.text
         assert len(wire.drain()) == 2
+
+
+def test_shared_schema_references_do_not_expand_repeatedly(workflow_gateway: Gateway) -> None:
+    with workflow_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        actors: Final = _actors(scenario, model)
+        definitions: Final = _OBJECT.validate_python(
+            {
+                "level_0": dict(_MESSAGES),
+                **{f"level_{index}": {"anyOf": [{"$ref": f"#/$defs/level_{index - 1}"}] * 2} for index in range(1, 31)},
+            }
+        )
+        response: Final = workflow_gateway.client.post(
+            "/v1/workflows",
+            json={
+                "bundle": {
+                    **_bundle(model),
+                    "input_schema": {
+                        "$defs": definitions,
+                        "$ref": "#/$defs/level_30",
+                    },
+                }
+            },
+            headers={"Authorization": f"Bearer {actors.author}"},
+            timeout=10,
+        )
+        assert response.status_code == 201, response.text
+
+
+def test_draft_test_retries_reuse_one_snapshot(workflow_gateway: Gateway) -> None:
+    with workflow_gateway.scenario() as scenario, wire_server(_completion) as wire:
+        model: Final = scenario.model(model="openai/gpt-6-sol", api_base=wire.url + "/v1")
+        actors: Final = _actors(scenario, model)
+        draft: Final = _register(workflow_gateway, actors, model)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            responses: Final = tuple(
+                pool.map(
+                    lambda _: workflow_gateway.request(
+                        "POST",
+                        f"/v1/workflows/{draft.workflow_id}/test",
+                        {"messages": _request()["messages"], "authorize_billing": True},
+                        key=actors.author,
+                        headers={"If-Match": draft.etag, "Idempotency-Key": "draft-retry"},
+                    ),
+                    range(4),
+                )
+            )
+        assert all(response.status_code == 202 for response in responses)
+        assert all(response.json() == responses[0].json() for response in responses)
+        run_id: Final = str(responses[0].json()["run_id"])
+        trace: Final = eventually(
+            lambda: _trace(workflow_gateway, actors, run_id), lambda value: value.state == "completed", seconds=30
+        )
+        snapshots: Final = workflow_gateway.rows(
+            'SELECT snapshot_id FROM "LiteLLM_WorkflowSnapshot" WHERE workflow_id=%s', (draft.workflow_id,)
+        )
+        assert snapshots == [{"snapshot_id": trace.snapshot_id}]
+        assert len(wire.drain()) == 2
+
+
+def test_workflow_child_spend_keeps_request_budget_tags(workflow_gateway: Gateway) -> None:
+    with workflow_gateway.scenario() as scenario, wire_server(_completion) as wire:
+        model: Final = scenario.model(model="openai/gpt-6-sol", api_base=wire.url + "/v1")
+        actors: Final = _actors(scenario, model)
+        draft: Final = _register(workflow_gateway, actors, model)
+        _publish(workflow_gateway, actors, draft)
+        tag: Final = f"workflow-tag-{uuid.uuid4().hex}"
+        response: Final = workflow_gateway.request(
+            "POST", "/v1/chat/completions", {**_request(), "metadata": {"tags": [tag]}}, key=actors.caller
+        )
+        assert response.status_code == 200, response.text
+        run_id: Final = response.headers["x-litellm-workflow-run-id"]
+        charges: Final = eventually(
+            lambda: workflow_gateway.rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE session_id=%s', (run_id,)
+            ),
+            lambda rows: len(rows) == 2,
+            seconds=70,
+        )
+        assert all(tag in TypeAdapter(tuple[str, ...]).validate_python(row["request_tags"]) for row in charges)
 
 
 @pytest.mark.parametrize("structured", [False, True])
