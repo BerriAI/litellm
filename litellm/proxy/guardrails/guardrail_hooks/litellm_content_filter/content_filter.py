@@ -2284,5 +2284,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.realtime_input_transcription,
             GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
             GuardrailEventHooks.post_mcp_call,
         ]
