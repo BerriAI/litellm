@@ -45,7 +45,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
@@ -626,7 +626,13 @@ export default function ModelInfoView({
               <Card className="block p-6">
                 <p className="text-sm">{t("modelInfoView.overview.provider")}</p>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
+                  {modelData.provider && (
+                    <ProviderLogo
+                      provider={modelData.provider}
+                      logoUrl={modelData.model_info.logo_url}
+                      className="w-4 h-4"
+                    />
+                  )}
                   <h3 className="text-lg font-medium">{modelData.provider || t("modelInfoView.notSet")}</h3>
                 </div>
               </Card>

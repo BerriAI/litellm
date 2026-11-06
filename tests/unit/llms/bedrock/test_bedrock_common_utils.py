@@ -10,6 +10,7 @@ from litellm.llms.bedrock.common_utils import (
     NativeOutputFallback,
     bedrock_native_output_is_opt_in,
     bedrock_strict_tools_fallback,
+    bedrock_model_name_without_provider,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
     for_bedrock_json_tool_retry,
@@ -282,6 +283,26 @@ def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
     assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5") == "mantle"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("bedrock/us.openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("global.openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("bedrock/converse/eu.anthropic.claude-sonnet-5-5", "claude-sonnet-5-5"),
+        ("us-east-1/openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("openai.gpt-5.5", "gpt-5.5"),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama4-scout-17b", "llama4-scout-17b"),
+        ("us.deepseek.r1-v1:0", "r1-v1:0"),
+        ("moonshotai.kimi-k2-thinking", "kimi-k2-thinking"),
+        ("bedrock/qwen.qwen3-32b-v1:0", "qwen3-32b-v1:0"),
+        ("gpt-5.5", "gpt-5.5"),
+        ("arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123", "abc123"),
+    ],
+)
+def test_bedrock_model_name_without_provider_strips_routing_region_and_provider_prefixes_only(model, expected):
+    assert bedrock_model_name_without_provider(model) == expected
 
 
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):

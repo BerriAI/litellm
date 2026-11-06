@@ -16,13 +16,13 @@ import contextlib
 import inspect
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm._internal_context import service_target
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
@@ -32,6 +32,8 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_parent_o
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.routing_groups import validate_routing_strategy
 from litellm.litellm_core_utils.token_counter import served_openai_models as _served_openai_models
+from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
 from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.websocket import admit_deployment_turn
 from litellm.router_rust.steps.callbacks import RustOptionalChecks
@@ -46,8 +48,6 @@ from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
 from litellm.router_utils.endpoint_eligibility import endpoint_selection
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
-from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
-from litellm.types.router import RouterCacheEnum
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -238,6 +238,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
 
     # RustCore sets these in its constructor.
     _cache: "DualCache"
+    _usage: RouterUsage
     _cooldown_given: object
     _custom_strategy: "CustomRoutingStrategyBase | None"
     # The constructor's argument, or the attribute as assigned.
@@ -336,6 +337,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
             if isinstance(callback, CustomLogger):
                 callback.pre_call_check(deployment)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
 
+    @with_service_target(ROUTER_COOLDOWNS_TARGET)
     async def async_routing_strategy_pre_call_checks(
         self,
         deployment: dict[str, object],  # mutable-ok: CustomLogger takes the deployment dict
@@ -461,6 +463,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                 "litellm.router.Router::increment_deployment_usage_for_response(): Exception occured - %s", e
             )
 
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def _increment_deployment_usage(
         self,
         *,
@@ -470,30 +473,13 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         total_tokens: float,
         parent_otel_span: "Span | None",
     ) -> None:
-        """``_increment_deployment_usage`` with its one request, in one pipeline; this worker's memory
-        then holds what Redis answered."""
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
+        """``_increment_deployment_usage`` with its one request."""
         if not self._registry_state.cached_deployment_tracks_usage(deployment_id, model_group):
             return
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
-        tpm_key: Final = RouterCacheEnum.TPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
-        )
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
-        )
-        operations: Final[Sequence[RedisPipelineIncrementOperation]] = [
-            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=_USAGE_TTL)
-            for key, increment_value in ((tpm_key, total_tokens), (rpm_key, 1))
-        ]
-        values: Final = await self._cache.async_increment_cache_pipeline(
-            increment_list=list(operations), parent_otel_span=parent_otel_span
-        )
-        if values is not None and self._cache.redis_cache is not None:
-            for operation, value in zip(operations, values):
-                await self._cache.async_set_cache(operation["key"], int(value), local_only=True, ttl=_USAGE_TTL)  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
+        await self._usage.increment_deployment(deployment_id, deployment_name, current_minute, total_tokens, 1)
 
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_deployment_callback_on_failure(
         self, kwargs: Mapping[str, object], completion_response: object, start_time: object, end_time: object
     ) -> None:
@@ -507,18 +493,9 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         deployment_id: Final = model_info.get("id", None)
         if model_group is None or deployment_id is None:
             return
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(
-            id=deployment_id,
-            current_minute=get_utc_datetime().strftime("%H-%M"),
-            model=deployment_name,
-        )
-        with service_target(ROUTER_USAGE_TARGET):
-            await self._cache.async_increment_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache's writes are untyped
-                key=rpm_key,
-                value=1,
-                parent_otel_span=get_parent_otel_span_from_kwargs(dict(kwargs)),
-                ttl=_USAGE_TTL,
-            )
+        model: Final = None if deployment_name is None else str(deployment_name)
+        counter: Final = UsageCounter(str(deployment_id), model, get_utc_datetime().strftime("%H-%M"), "rpm")
+        await self._usage.increment(counter=counter, value=1, ttl=_USAGE_TTL)
 
     # -- the plugin context ------------------------------------------------------------------------
 

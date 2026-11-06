@@ -69,8 +69,9 @@ def cooled(core: RouterCore, *ids: str) -> Mapping[str, Mapping[str, object]]:
 
 async def settle() -> None:
     """Let the tasks a failed stream scheduled run."""
-    for _ in range(20):
-        await asyncio.sleep(0)
+    while pending := asyncio.all_tasks() - {asyncio.current_task()}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
 
 
 async def failed_with(core: RouterCore, **request: object) -> BaseException:  # kwargs-ok: request kwargs
