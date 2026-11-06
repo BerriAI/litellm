@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     ScopeMapping,
 )
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
-from litellm.proxy.auth.auth_checks import TeamNotFoundError
+from litellm.proxy.auth.auth_checks import TeamNotFoundError, can_key_call_model
 from litellm.proxy.auth.handle_jwt import (
     ID_JAG_TYP,
     JWKS_FETCH_ATTEMPTS,
@@ -54,16 +54,17 @@ import litellm.proxy.proxy_server as proxy_server
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model,matching,enabled,allowed",
+    "model,matching,enabled,allowed,fallback",
     (
-        ("group-model", True, True, True),
-        ("outside", True, True, False),
-        ("group-model", False, True, False),
-        ("group-model", True, False, False),
+        ("group-model", True, True, True, None),
+        ("outside", True, True, False, None),
+        ("group-model", False, True, False, None),
+        ("group-model", True, False, False, None),
+        ("group-model", True, True, False, "outside"),
     ),
 )
 async def test_jwt_group_rules_defer_team_rejection_until_central_authorization(
-    monkeypatch: pytest.MonkeyPatch, model: str, matching: bool, enabled: bool, allowed: bool
+    monkeypatch: pytest.MonkeyPatch, model: str, matching: bool, enabled: bool, allowed: bool, fallback: str | None
 ) -> None:
     handler: Final = JWTHandler()
     handler.litellm_jwtauth = LiteLLM_JWTAuth(enforce_team_based_model_access=True)
@@ -104,18 +105,21 @@ async def test_jwt_group_rules_defer_team_rejection_until_central_authorization(
     principal: Final = UserAPIKeyAuth(jwt_claims={"groups": ["science" if matching else "other"]})
     principal.defer_model_checks((original_team_check,))
     request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    request_data: Final = {"model": model, **({"fallbacks": [fallback]} if fallback else {})}
     if allowed:
         assert (
             await _authorize_authenticated_request(
-                principal, request, {"model": model}, "/chat/completions", "synthetic"
+                principal, request, request_data, "/chat/completions", "synthetic"
             )
             is None
         )
         assert principal.access_group_ids == ["science-id"]
+        with pytest.raises(ProxyException, match="model"):
+            await can_key_call_model("outside", None, principal, None)
     else:
-        with pytest.raises(ProxyException, match="No teams found in token"):
+        with pytest.raises(ProxyException, match="model" if fallback else "No teams found in token"):
             await _authorize_authenticated_request(
-                principal, request, {"model": model}, "/chat/completions", "synthetic"
+                principal, request, request_data, "/chat/completions", "synthetic"
             )
 
 

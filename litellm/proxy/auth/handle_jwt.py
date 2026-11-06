@@ -2544,6 +2544,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
+        defer_for_access_group_rules: bool = False,
     ) -> JWTAuthBuilderResult:
         return await JWTAuthManager.authorize_jwt(
             api_key=api_key,
@@ -2557,6 +2558,7 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             request_headers=request_headers,
             request_method=request_method,
+            defer_for_access_group_rules=defer_for_access_group_rules,
             provisioning=_JWTProvisioning(
                 user_id_upsert=jwt_handler.litellm_jwtauth.user_id_upsert,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
@@ -2642,11 +2644,12 @@ class JWTAuthManager:
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
         provisioning: _JWTProvisioning | None = None,
+        defer_for_access_group_rules: bool = False,
     ) -> JWTAuthBuilderResult:
         """Resolve and authorize JWT context; only normal admission supplies provisioning."""
         handler: Final = jwt_handler
         jwt_valid_token: Final = await JWTAuthManager.authenticate_jwt(api_key, handler)
-        defer_model_access: Final = bool(general_settings.get("access_group_rules"))
+        defer_model_access: Final = defer_for_access_group_rules and bool(general_settings.get("access_group_rules"))
         managed: Final = await resolve_managed_agent(jwt_valid_token, prisma_client, cache=user_api_key_cache)
         if managed is not None:
             if not handler.managed_issuer_is_trusted(jwt_valid_token.get("iss")):

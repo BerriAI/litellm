@@ -56,6 +56,17 @@ def test_invalid_rule_fails_general_settings_validation(rule: Mapping[str, str])
         )
 
 
+def test_caller_editable_metadata_is_rejected_as_a_grant_attribute() -> None:
+    with pytest.raises(ValidationError, match="administrator- or IdP-controlled"):
+        ConfigGeneralSettings.model_validate(
+            {
+                "access_group_rules": [
+                    {"attribute": "metadata.department", "equals": "science", "access_group": "science"}
+                ]
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_missing_group_and_no_database_grant_nothing() -> None:
     rules: Final = (AccessGroupRule(attribute="user_id", equals="subject", access_group="absent"),)
@@ -88,10 +99,8 @@ async def test_database_failure_does_not_turn_into_an_unrestricted_grant() -> No
 
 
 @pytest.mark.asyncio
-async def test_virtual_key_metadata_grants_are_additive_and_do_not_mutate_cached_identity() -> None:
-    identity: Final = UserAPIKeyAuth(
-        models=["explicit"], metadata={"department": "science"}, access_group_ids=["existing"]
-    )
+async def test_virtual_key_team_grants_are_additive_and_do_not_mutate_cached_identity() -> None:
+    identity: Final = UserAPIKeyAuth(models=["explicit"], team_id="science", access_group_ids=["existing"])
     group: Final = LiteLLM_AccessGroupTable(
         access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
     )
@@ -100,7 +109,7 @@ async def test_virtual_key_metadata_grants_are_additive_and_do_not_mutate_cached
     cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
     ids: Final = await access_group_ids_for_identity(
         identity,
-        rules=(AccessGroupRule(attribute="metadata.department", equals="science", access_group="science"),),
+        rules=(AccessGroupRule(attribute="team_id", equals="science", access_group="science"),),
         cache=cache,
         prisma_client=_Database(object()),
     )
@@ -140,14 +149,14 @@ async def test_authenticated_identity_fields_and_claims_are_available_without_me
     table: Final = MagicMock()
     table.find_unique = AsyncMock(return_value={"access_group_id": "science-id", "access_group_name": "science"})
     identity: Final = UserAPIKeyAuth(
-        user_id="verified-user", metadata={"department": "science"}, jwt_claims={"groups": ["science"]}
+        user_id="verified-user", team_id="science-team", jwt_claims={"groups": ["science"]}
     )
     rules: Final = tuple(
         AccessGroupRule.model_validate({"attribute": attribute, operator: value, "access_group": "science"})
         for attribute, operator, value in (
             ("user_id", "equals", "verified-user"),
             ("jwt_claims.groups", "contains", "science"),
-            ("metadata.department", "equals", "science"),
+            ("team_id", "equals", "science-team"),
         )
     )
     database: Final = _Database(MagicMock(litellm_accessgrouptable=table))
@@ -193,7 +202,10 @@ async def test_name_resolution_is_cached_and_renamed_group_does_not_keep_grantin
     )
 
 
-@pytest.mark.parametrize("attribute", ("groups", "department", "access_group_rule_grants", "jwt_claims..groups"))
+@pytest.mark.parametrize(
+    "attribute",
+    ("groups", "department", "metadata.department", "models", "access_group_rule_grants", "jwt_claims..groups"),
+)
 def test_attribute_requires_a_real_principal_field(attribute: str) -> None:
     with pytest.raises(ValidationError, match="attribute"):
         ConfigGeneralSettings.model_validate(

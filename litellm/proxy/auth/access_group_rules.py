@@ -12,6 +12,8 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AUTH_OBJECTS_TARGET
 
+_TRUSTED_ATTRIBUTES: Final = frozenset(("jwt_claims", "user_id", "user_email", "user_role", "team_id", "org_id"))
+
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -34,6 +36,11 @@ class AccessGroupRule(BaseModel):
 
         if not self.attribute or any(not part for part in self.attribute.split(".")) or not self.access_group:
             raise ValueError("An access group rule requires a nonempty attribute path and access_group")
+        if self.attribute.split(".")[0] not in _TRUSTED_ATTRIBUTES:
+            raise ValueError(
+                "An access group rule attribute must start with an administrator- or IdP-controlled field: "
+                + ", ".join(sorted(_TRUSTED_ATTRIBUTES))
+            )
         if self.attribute.split(".")[0] not in UserAPIKeyAuth.model_fields:
             raise ValueError("An access group rule attribute must start with a UserAPIKeyAuth field")
         return self

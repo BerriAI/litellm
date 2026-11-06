@@ -2486,6 +2486,7 @@ async def user_api_key_auth_builder(
                             parent_otel_span=parent_otel_span,
                             request_headers=safe_get_request_headers(request),
                             request_method=RouteChecks.get_request_method(request=request),
+                            defer_for_access_group_rules=pending_auto_register is None,
                         )
 
                     is_proxy_admin: Final = result["is_proxy_admin"]
@@ -4257,7 +4258,14 @@ async def _authorize_authenticated_request(
                     llm_router=llm_router,
                 )
             )
-            if not group_grants_model:
+            if group_grants_model:
+                try:
+                    await user_api_key_auth_obj.run_deferred_model_checks()
+                except HTTPException as team_denial:
+                    if team_denial.status_code != 403:
+                        raise
+                    user_api_key_auth_obj.restrict_models_to_access_group_rules()
+            else:
                 await user_api_key_auth_obj.run_deferred_model_checks()
             await enforce_key_and_fallback_model_access(
                 valid_token=user_api_key_auth_obj,

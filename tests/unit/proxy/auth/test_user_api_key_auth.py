@@ -42,7 +42,7 @@ class Request:
     "model,enabled,allowed",
     (("group-model", True, True), ("outside", True, False), ("group-model", False, False), ("explicit", False, True)),
 )
-async def test_metadata_access_group_rules_are_enforced_at_central_authorization(
+async def test_team_access_group_rules_are_enforced_at_central_authorization(
     monkeypatch: pytest.MonkeyPatch, model: str, enabled: bool, allowed: bool
 ) -> None:
     server: Final = litellm.proxy.proxy_server
@@ -55,7 +55,7 @@ async def test_metadata_access_group_rules_are_enforced_at_central_authorization
     monkeypatch.setattr(
         server,
         "general_settings",
-        {"access_group_rules": [{"attribute": "metadata.department", "equals": "science", "access_group": "science"}]}
+        {"access_group_rules": [{"attribute": "team_id", "equals": "science", "access_group": "science"}]}
         if enabled
         else {},
     )
@@ -63,7 +63,7 @@ async def test_metadata_access_group_rules_are_enforced_at_central_authorization
     monkeypatch.setattr(server, "prisma_client", MagicMock())
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
-    principal: Final = UserAPIKeyAuth(models=["explicit"], metadata={"department": "science"})
+    principal: Final = UserAPIKeyAuth(models=["explicit"], team_id="science")
     request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     if not enabled and not allowed:
         with pytest.raises(ProxyException, match="model"):

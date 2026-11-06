@@ -134,6 +134,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     api_key: str | None = None
     _access_group_rule_grants: tuple[str, ...] = PrivateAttr(default=())
     _deferred_model_checks: tuple[Callable[[], Awaitable[object]], ...] = PrivateAttr(default=())
+    _access_group_rules_only: bool = PrivateAttr(default=False)
+
+    @property
+    def access_group_rules_only(self) -> bool:
+        return self._access_group_rules_only
+
+    def restrict_models_to_access_group_rules(self) -> None:
+        self._access_group_rules_only = True
 
     def defer_model_checks(self, checks: tuple[Callable[[], Awaitable[object]], ...]) -> None:
         self._deferred_model_checks = checks
