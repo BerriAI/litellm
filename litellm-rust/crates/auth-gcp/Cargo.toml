@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-google-sdk = ["dep:google-cloud-auth", "dep:http"]
+google-sdk = ["dep:http"]
 
 [dependencies]
 litellm-secret-value.workspace = true
@@ -21,10 +21,14 @@ tokio.workspace = true
 veil.workspace = true
 
 gcp_auth = "0.12.7"
-google-cloud-auth = { workspace = true, optional = true }
+google-cloud-auth.workspace = true
 http = { workspace = true, optional = true }
 
 [dev-dependencies]
+time = { workspace = true, features = ["formatting"] }
+axum = { workspace = true, features = ["json"] }
 litellm-error.workspace = true
 rstest.workspace = true
+rustls.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

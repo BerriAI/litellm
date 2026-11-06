@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_no_callback_env_reference,
 )
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
-from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
 )
@@ -89,6 +88,7 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -450,6 +450,28 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
 
+    skill_hub_routes = (
+        "/skill-hub/skills",
+        "/skill-hub/skills/upload",
+        "/skill-hub/skills/import",
+        "/skill-hub/skills/{name}",
+        "/skill-hub/skills/{name}/archive",
+        "/skill-hub/skills/{name}/content",
+        "/skill-hub/skills/{plugin_name}/downloads",
+        "/skill-hub/skills/{name}/versions",
+        "/skill-hub/skills/{name}/versions/{version_id}",
+        "/skill-hub/skills/{name}/versions/{version_id}/archive",
+        "/skill-hub/skills/{name}/publish",
+        "/skill-hub/skills/{name}/unpublish",
+        "/skill-hub/skills/{name}/upload",
+        "/skill-hub/submissions",
+        "/skill-hub/submissions/{submission_id}",
+        "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/approve",
+        "/skill-hub/submissions/{submission_id}/reject",
+        "/skill-hub/submissions/{submission_id}/scan",
+    )
+
     litellm_native_routes = [
         "/rag/ingest",
         "/v1/rag/ingest",
@@ -469,6 +491,7 @@ class LiteLLMRoutes(enum.Enum):
         "/claude-code/plugins",
         "/claude-code/plugins/upload",
         "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
+        "/claude-code/plugins/{plugin_name}/downloads",
         "/claude-code/plugins/{plugin_name}",
     ]
 
@@ -699,6 +722,7 @@ class LiteLLMRoutes(enum.Enum):
         + key_management_routes
         + mcp_management_routes
         + list(agent_management_routes)
+        + list(skill_hub_routes)
     )
 
     spend_tracking_routes = [
@@ -941,6 +965,7 @@ class LiteLLMRoutes(enum.Enum):
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
+        *skill_hub_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2481,20 +2506,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
-    accounting_capture: UsageCaptureSettings | None = Field(
-        None,
-        description="Opt-in durable usage capture. Legacy spend updates remain active. Requires local Prisma writes.",
-    )
-    accounting_sync_ack: bool = Field(
-        False,
-        description="Wait for usage commit on foreground non-stream chat, text, embedding and Responses requests. "
-        "Other requests remain supported with asynchronous usage capture.",
-    )
-    accounting_sync_ack_timeout_seconds: float = Field(
-        20.0, gt=0, description="Maximum response wait for usage commit, including the batch flush interval"
-    )
-    accounting_sync_ack_failure_policy: Literal["fail_closed", "log"] = Field(
-        "fail_closed", description="Return 503 or log the persistence failure after the response wait expires"
+    use_spend_logs_ledger: bool = Field(
+        True,
+        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
@@ -3030,6 +3044,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
+    skill_scanner: SkillScannerConfig | None = Field(
+        None, description="Opt-in external scanner for manual admin review of skill submissions"
     )
     mcp_required_fields: list[str] | None = Field(
         None,
@@ -3817,6 +3834,9 @@ class SpendLogsMetadata(TypedDict):
 
 
 class SpendLogsPayload(TypedDict):
+    accounting_payload: NotRequired[Mapping[str, object]]  # writable-ok: capture before buffering
+    accounting_log_disabled: NotRequired[bool]  # writable-ok: capture logging mode before buffering
+    accounting_delivery_id: NotRequired[str]  # writable-ok: assigned once before buffering
     request_id: str
     call_type: str
     api_key: str

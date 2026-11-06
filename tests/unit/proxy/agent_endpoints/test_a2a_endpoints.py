@@ -1268,6 +1268,153 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     assert failure_data.get("agent_id") == "test-agent"
 
 
+_ENTRA_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_ENTRA_TRACE_ID: Final = "f0c149d3-ef20-4194-8b81-c81a5e002500"
+
+
+class _JsonRpcError(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: int
+    message: str
+
+
+class _JsonRpcErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    error: _JsonRpcError
+
+
+async def _send_message_to_entra_agent(
+    litellm_params: Mapping[str, str], *patches: AbstractContextManager[object]
+) -> tuple[int, _JsonRpcError]:
+    agent = _make_agent_mock()
+    agent.litellm_params = dict(litellm_params)
+    mock_request = _make_request_mock(
+        "message/send",
+        {"message": {"role": "user", "parts": [{"kind": "text", "text": "Hello"}], "messageId": "msg-1"}},
+    )
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in (*_base_patches(agent), *patches):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook tests use
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    return response.status_code, _JsonRpcErrorBody.model_validate_json(response.body).error
+
+
+@pytest.mark.asyncio
+async def test_entra_rejecting_the_agent_credential_returns_401_with_only_the_aadsts_reason():
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def rejected_token() -> str:
+        raise ClientAuthenticationError(
+            message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being "
+            f"sent in the request is the client secret value, for a secret added to app '{_ENTRA_APP_CLIENT_ID}'."
+        )
+
+    status_code, error = await _send_message_to_entra_agent(
+        {"tenant_id": "tenant", "client_id": _ENTRA_APP_CLIENT_ID, "client_secret": "wrong-secret"},
+        patch(  # test-quality-ok: stands in for the Entra token endpoint answering a wrong secret, the shape azure-identity raises
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=rejected_token
+        ),
+    )
+
+    assert status_code == 401
+    assert "AADSTS7000215" in error.message
+    assert _ENTRA_APP_CLIENT_ID not in error.message
+
+
+@pytest.mark.asyncio
+async def test_entra_rejecting_the_agent_oidc_token_returns_401_with_only_the_aadsts_reason(monkeypatch, respx_mock):
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    respx_mock.post("https://login.microsoftonline.com/qa-tenant/oauth2/v2.0/token").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": "invalid_client",
+                "error_description": "AADSTS700213: No matching federated identity record found for app "
+                f"'{_ENTRA_APP_CLIENT_ID}'. Trace ID: {_ENTRA_TRACE_ID}",
+            },
+        )
+    )
+
+    status_code, error = await _send_message_to_entra_agent(
+        {
+            "tenant_id": "qa-tenant",
+            "client_id": _ENTRA_APP_CLIENT_ID,
+            "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+        }
+    )
+
+    assert status_code == 401
+    assert error.code == -32000
+    assert "AADSTS700213" in error.message
+    assert _ENTRA_APP_CLIENT_ID not in error.message
+    assert _ENTRA_TRACE_ID not in error.message
+
+
+@pytest.mark.asyncio
+async def test_upstream_authentication_error_without_an_entra_rejection_stays_an_internal_error():
+    agent = _make_agent_mock()
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(
+        side_effect=litellm.AuthenticationError(
+            message="Incorrect API key provided.", llm_provider="openai", model="gpt-4.1"
+        )
+    )
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: stands in for the upstream agent rejecting the provider key it was sent
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=mock_handler
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook tests use
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=_make_request_mock("tasks/get", {"id": "task-1"}),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1"),
+        )
+
+    assert response.status_code == 500
+    assert json.loads(response.body.decode())["error"]["code"] == -32603
+
+
 @pytest.mark.asyncio
 async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
     from litellm.proxy._types import UserAPIKeyAuth

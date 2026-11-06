@@ -23,7 +23,7 @@ import {
   createPolicyVersion,
   updatePolicyVersionStatus,
 } from "@/components/networking";
-import { getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
+import { COMPLIANCE_FRAMEWORK_LABEL_KEYS, getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
 import type { CompliancePrompt } from "@/data/compliancePrompts";
 
 const TEST_SOURCE_QUICK = "quick_chat";
@@ -853,7 +853,11 @@ type TestSourceOption = { value: string; labelKey: ParseKeys } | { value: string
 
 const testSourceOptions: TestSourceOption[] = [
   { value: TEST_SOURCE_QUICK, labelKey: "policies.flowBuilder.testPanel.sources.quickChat" },
-  ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
+  ...getFrameworks().map((f) =>
+    Object.hasOwn(COMPLIANCE_FRAMEWORK_LABEL_KEYS, f.name)
+      ? { value: f.name, labelKey: COMPLIANCE_FRAMEWORK_LABEL_KEYS[f.name] }
+      : { value: f.name, label: f.name },
+  ),
   { value: TEST_SOURCE_ALL, labelKey: "policies.flowBuilder.testPanel.sources.allDatasets" },
 ];
 
@@ -1033,7 +1037,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               ? t("policies.flowBuilder.testPanel.allDatasetsDescription")
               : t("policies.flowBuilder.testPanel.frameworkDescription", {
                   promptCount: promptsForSource.length,
-                  source: testSource,
+                  source: selectedSource ? testSourceLabel(selectedSource, t) : testSource,
                 })}
           </div>
         )}

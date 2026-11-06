@@ -5,6 +5,23 @@ use litellm_tracing::Level;
 use serde::{Deserialize, de::DeserializeOwned};
 
 #[derive(Deserialize)]
+pub(super) struct LogSettings {
+    rust_log: Option<String>,
+}
+
+impl LogSettings {
+    pub fn log_level(&self) -> Level {
+        log_level(self.rust_log.as_deref())
+    }
+}
+
+fn log_level(rust_log: Option<&str>) -> Level {
+    rust_log
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(Level::INFO)
+}
+
+#[derive(Deserialize)]
 #[serde(default)]
 pub(super) struct Settings {
     pub host: String,
@@ -26,10 +43,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn log_level(&self) -> Level {
-        self.rust_log
-            .as_deref()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(Level::INFO)
+        log_level(self.rust_log.as_deref())
     }
 }
 

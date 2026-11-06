@@ -1,6 +1,8 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { BookOpen, Github, Newspaper, ScrollText, Slack } from "lucide-react";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
@@ -19,21 +21,43 @@ function DiscordIcon() {
 }
 
 const COMMUNITY = [
-  { href: "https://www.litellm.ai/support", label: "Slack", accessibleLabel: "Join Slack", Icon: Slack },
-  { href: "https://discord.gg/wuPM9dRgDw", label: "Discord", accessibleLabel: "Join Discord", Icon: DiscordIcon },
-  { href: "https://github.com/BerriAI/litellm", label: "GitHub", accessibleLabel: "LiteLLM on GitHub", Icon: Github },
+  {
+    href: "https://www.litellm.ai/support",
+    label: "Slack",
+    accessibleLabel: "shell.dashboardCommunityLinks.joinSlack",
+    Icon: Slack,
+  },
+  {
+    href: "https://discord.gg/wuPM9dRgDw",
+    label: "Discord",
+    accessibleLabel: "shell.dashboardCommunityLinks.joinDiscord",
+    Icon: DiscordIcon,
+  },
+  {
+    href: "https://github.com/BerriAI/litellm",
+    label: "GitHub",
+    accessibleLabel: "shell.dashboardCommunityLinks.github",
+    Icon: Github,
+  },
+] as const;
+type ResourceLink = { href: string; label: ParseKeys; Icon: typeof BookOpen };
+
+const DOCS: readonly ResourceLink[] = [
+  { href: "https://docs.litellm.ai/docs/", label: "shell.dashboardResources.links.docs", Icon: BookOpen },
+  { href: "https://docs.litellm.ai/release_notes", label: "shell.dashboardResources.links.releases", Icon: ScrollText },
 ];
-const DOCS = [
-  { href: "https://docs.litellm.ai/docs/", label: "Docs", Icon: BookOpen },
-  { href: "https://docs.litellm.ai/release_notes", label: "Releases", Icon: ScrollText },
-];
-const BLOG = { href: "https://docs.litellm.ai/blog", label: "Blog", Icon: Newspaper };
+const BLOG: ResourceLink = {
+  href: "https://docs.litellm.ai/blog",
+  label: "shell.dashboardResources.links.blog",
+  Icon: Newspaper,
+};
 
 export function DashboardCommunityLinks({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const hidden = useDisableShowPrompts();
   if (hidden) return null;
   return (
-    <nav aria-label="Community links" className={cn("items-center gap-0.5", className)}>
+    <nav aria-label={t("shell.dashboardCommunityLinks.label")} className={cn("items-center gap-0.5", className)}>
       <TooltipProvider>
         {COMMUNITY.map(({ href, label, accessibleLabel, Icon }) => (
           <Tooltip key={label}>
@@ -43,7 +67,7 @@ export function DashboardCommunityLinks({ className }: { className?: string }) {
                   href={href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label={accessibleLabel}
+                  aria-label={t(accessibleLabel)}
                   className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "text-muted-foreground")}
                 />
               }
@@ -60,18 +84,24 @@ export function DashboardCommunityLinks({ className }: { className?: string }) {
 }
 
 export function DashboardResources({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation();
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const { data, isPending, isError, refetch } = useBlogPosts();
-  const links = [...DOCS, ...(hideBlog ? [] : [BLOG]), ...(hideCommunity ? [] : COMMUNITY)];
+  const links = [
+    ...[...DOCS, ...(hideBlog ? [] : [BLOG])].map((link) => ({ ...link, label: t(link.label) })),
+    ...(hideCommunity ? [] : COMMUNITY),
+  ];
   return (
     <>
       {!hideBlog && (
-        <section aria-label="Latest posts" className="border-t border-border px-2 py-2">
-          {isPending && <p className="px-2 py-3 text-xs text-muted-foreground">Loading posts…</p>}
+        <section aria-label={t("shell.dashboardResources.latestPosts")} className="border-t border-border px-2 py-2">
+          {isPending && (
+            <p className="px-2 py-3 text-xs text-muted-foreground">{t("shell.dashboardResources.loadingPosts")}</p>
+          )}
           {isError && (
             <Button variant="ghost" size="sm" onClick={() => void refetch()}>
-              Retry loading posts
+              {t("shell.dashboardResources.retryPosts")}
             </Button>
           )}
           {data?.posts.slice(0, 3).map((post) => (
@@ -91,7 +121,7 @@ export function DashboardResources({ children }: { children?: ReactNode }) {
         </section>
       )}
       <div className="border-t border-border bg-muted/25 p-2">
-        <nav aria-label="Help and resources" className="grid grid-cols-3 gap-1">
+        <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="grid grid-cols-3 gap-1">
           {links.map(({ href, label, Icon }) => (
             <a
               key={label}
