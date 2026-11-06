@@ -67,6 +67,7 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.router import server_owned_wif_fields_named, server_owned_wif_fields_written
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
+from .nim_model_discovery import router as nim_model_discovery_router
 from .user_provider_credentials import (
     GithubCopilotUserConnectionPayload,
     decode_user_provider_credential,
@@ -80,6 +81,7 @@ from .user_provider_credentials import (
 )
 
 router: Final = APIRouter()
+router.include_router(nim_model_discovery_router)
 _CREDENTIAL_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _GITHUB_COPILOT_PROVIDER: Final = "github_copilot"
 _DISPLAY_NAME_MAX_LENGTH: Final = 255
