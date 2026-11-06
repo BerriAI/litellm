@@ -42,9 +42,24 @@ mod _native {
     #[pymodule_export]
     use crate::redis::client::native_redis_breaker_states;
     #[pymodule_export]
+    use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
+    #[pymodule_export]
+    use crate::redis::store::rate_limits::{
+        NativeRateLimits, PyAtomicApplied, PyAtomicOverLimit, PyGaugeOverLimit, PyGaugesAcquired,
+        PyGuardedReply, PyWindowCount,
+    };
+    #[pymodule_export]
     use crate::redis::store::request::{NativeRequestRedis, NativeSend};
     #[pymodule_export]
-    use crate::redis::store::{NativePending, NativeRedisStoreError};
+    use crate::redis::store::router_usage::NativeRouterUsage;
+    #[pymodule_export]
+    use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
+    #[pymodule_export]
+    use crate::redis::store::spend_counters::{NativeSpendCounters, PySpendRead};
+    #[pymodule_export]
+    use crate::redis::store::{
+        NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
+    };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};
     #[pymodule_export]
@@ -123,8 +138,22 @@ mod tests {
                 "NativeRedisClient",
                 "NativeRequestRedis",
                 "NativeSend",
+                "NativeAuthCache",
+                "NativeRateLimits",
+                "WindowCount",
+                "AtomicApplied",
+                "AtomicOverLimit",
+                "GuardedReply",
+                "GaugesAcquired",
+                "GaugeOverLimit",
                 "NativePending",
+                "NativeRouterCooldowns",
+                "NativeRouterUsage",
+                "NativeSensitiveRoutePins",
                 "NativeRedisStoreError",
+                "NativeSpendCounters",
+                "SpendRead",
+                "LocalSizes",
                 "native_redis_breaker_states",
                 "NativeClickHouseSpendConfig",
                 "NativeClickHouseSpendStorage",

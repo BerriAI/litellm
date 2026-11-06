@@ -41,7 +41,7 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 _MODEL_LISTING_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-model-listing")
 
 _PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset(
-    {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+    {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value, LlmProviders.LITELLM_PROXY.value}
 )
 
 _Listed = TypeVar("_Listed")
@@ -83,7 +83,11 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
         return None
     if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
         return None
-    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    return get_valid_models(
+        check_provider_endpoint=llm_provider == LlmProviders.LITELLM_PROXY,
+        custom_llm_provider=provider,
+        litellm_params=litellm_params,
+    )
 
 
 def _get_models_from_access_groups(

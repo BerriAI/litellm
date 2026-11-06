@@ -622,9 +622,11 @@ class RequestRedisBatches:
         self._deadline_flush = asyncio.ensure_future(self.flush_post_call())
 
     async def flush_all(self) -> None:
-        """Batch whatever is still declared (write-backs nobody awaits) before the request scope closes."""
+        """Batch whatever is still declared (write-backs nobody awaits) before the request scope closes. The pre-call
+        flush hooks are skipped: they declare reads for later readers, and none are left."""
         await asyncio.gather(
-            *(batch.flush() for batch in self._batches.values() if batch.pending), self.flush_native_pre()
+            *(batch.flush() for batch in self._batches.values() if batch.pending),
+            *(() if self._native is None else (self._native.flush_pre(),)),
         )
 
     async def flush_post_call(self) -> None:
