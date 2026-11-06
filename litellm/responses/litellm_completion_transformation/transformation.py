@@ -199,6 +199,8 @@ ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool | AnthropicToolSearchToolRegex
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
+RESPONSES_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM: Final = frozenset({"computer_use", "image_generation", "local_shell", "shell"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
     MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
 )
@@ -2948,7 +2950,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_type: Final = tool.get("type")
         if tool_type == "mcp":
             return ResponsesToolChatForm(chat_tools=(cast(OpenAIMcpServerTool, tool),), web_search_options=None)
-        if tool_type == "web_search_preview" or tool_type == "web_search":
+        if tool_type in RESPONSES_WEB_SEARCH_TOOL_TYPES:
             _search_context_size: Final[Literal["low", "medium", "high"]] = cast(
                 Literal["low", "medium", "high"], tool.get("search_context_size")
             )
@@ -3001,7 +3003,7 @@ class LiteLLMCompletionResponsesConfig:
             return ResponsesToolChatForm(chat_tools=(client_tool_search_chat_tool(tool),), web_search_options=None)
         if tool_type == "tool_search":
             return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "local_shell", "shell"):
+        if tool_type in RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM:
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
