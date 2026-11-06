@@ -1113,8 +1113,17 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
-                params = normalize_request_params(params, served_version, method=method)
+            normalized_params: Final[dict[str, object] | None] = (
+                normalize_request_params(params, served_version, method=method) if isinstance(params, dict) else None
+            )
+            conversion_failed: Final = (
+                normalized_params is not None
+                and served_version == "1.0"
+                and method == "tasks/pushNotificationConfig/set"
+                and normalized_params is params
+            )
+            if normalized_params is not None:
+                params = normalized_params
             if method == "tasks/pushNotificationConfig/set":
                 if not isinstance(params, dict):
                     raise HTTPException(
@@ -1127,7 +1136,13 @@ async def invoke_agent_a2a(
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
                     )
-                for callback_url in (params.get("url"), push_config.get("url")):
+                config: Final = params.get("config", {})
+                if "config" in params and not isinstance(config, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="config must be an object",
+                    )
+                for callback_url in (params.get("url"), push_config.get("url"), config.get("url")):
                     if not callback_url:
                         continue
                     if not isinstance(callback_url, str):
@@ -1136,6 +1151,11 @@ async def invoke_agent_a2a(
                             detail="Push notification URL must be a string",
                         )
                     _validate_push_notification_url(callback_url)
+                if conversion_failed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid push notification config",
+                    )
             forward_body: dict[str, object] = {
                 "jsonrpc": "2.0",
                 "id": request_id,
