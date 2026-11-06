@@ -6,12 +6,22 @@ type DateInput = Date | number | string;
 type InterpolationOptions = { readonly interpolationkey?: string };
 type Build<Value, Options> = (lng: string, options: Options) => (value: Value) => string;
 
+const cacheKey = (language: string, options: InterpolationOptions): string | null => {
+  try {
+    return (
+      language + JSON.stringify(options, (name, option) => (name === options.interpolationkey ? undefined : option))
+    );
+  } catch {
+    return null;
+  }
+};
+
 export const cachedFormat = <Value, Options extends object>(build: Build<Value, Options>) => {
   const renders = new Map<string, (value: Value) => string>();
   return (value: Value, lng: string | undefined, options: Options & InterpolationOptions): string => {
-    const language = lng ?? DEFAULT_LANGUAGE;
-    const key =
-      language + JSON.stringify(options, (name, option) => (name === options.interpolationkey ? undefined : option));
+    const language = (lng ?? DEFAULT_LANGUAGE).replaceAll("_", "-");
+    const key = cacheKey(language, options);
+    if (key === null) return build(language, options)(value);
     const existing = renders.get(key);
     if (existing) return existing(value);
     const render = build(language, options);
@@ -67,11 +77,11 @@ const duration = cachedFormat((lng: string) => {
 
 const FORMATS = {
   number: cachedFormat((lng, options: Intl.NumberFormatOptions) => {
-    const format = new Intl.NumberFormat(lng, options);
+    const format = new Intl.NumberFormat(lng, { ...options, currency: USD.currency });
     return (value: number) => format.format(value);
   }),
   compact: cachedFormat((lng, options: Intl.NumberFormatOptions) => {
-    const format = new Intl.NumberFormat(lng, { ...options, ...COMPACT });
+    const format = new Intl.NumberFormat(lng, { ...options, ...COMPACT, currency: USD.currency });
     return (value: number) => format.format(value);
   }),
   usd: cachedFormat((lng, options: Intl.NumberFormatOptions) => {

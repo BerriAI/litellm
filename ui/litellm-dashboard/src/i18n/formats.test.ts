@@ -8,8 +8,12 @@ type Messages = { readonly [key: string]: string | Messages };
 type DurationFormatter = { format: (duration: Readonly<Record<string, number>>) => string };
 type DurationFormatConstructor = new (lng: string, options: { style: "narrow" }) => DurationFormatter;
 
-const strings = (node: Messages): readonly string[] =>
-  Object.values(node).flatMap((value) => (typeof value === "string" ? [value] : strings(value)));
+const entries = (node: Messages, prefix: string): ReadonlyArray<readonly [string, string]> =>
+  Object.entries(node).flatMap(([key, value]) =>
+    typeof value === "string" ? [[`${prefix}${key}`, value] as const] : entries(value, `${prefix}${key}.`),
+  );
+
+const strings = (node: Messages): readonly string[] => entries(node, "").map(([, text]) => text);
 
 const formatsInEnglish = [
   ...new Set(strings(en).flatMap((text) => [...text.matchAll(/\{\{\s*\w+\s*,\s*([^}]+?)\s*\}\}/g)].map(([, f]) => f))),
@@ -89,6 +93,28 @@ describe("format keys in English", () => {
       (format) => typeof i18n.services.formatter?.format(0, format, "en", {}) !== "string",
     );
     expect(unformatted).toEqual([]);
+  });
+
+  it("keeps every formatted placeholder alone in a format key", () => {
+    const formatted = entries(en, "").filter(([, text]) => /\{\{[^}]*,[^}]*\}\}/.test(text));
+    expect(formatted.length).toBeGreaterThan(0);
+    const mixed = formatted.filter(([key, text]) => !key.startsWith("format.") || !/^\{\{val, [a-z]+\}\}$/.test(text));
+    expect(mixed).toEqual([]);
+  });
+
+  it("keeps a currency asked of the number formats in US dollars", () => {
+    expect(i18n.t("format.number", { val: 1234.5, style: "currency", currency: "EUR" })).toBe("$1,234.50");
+    expect(i18n.t("format.compactNumber", { val: 1_234_567, style: "currency", currency: "EUR" })).toBe("$1.2M");
+  });
+
+  it("reads underscore language codes the way i18next does", () => {
+    expect(i18n.t("format.number", { val: 1234.5, lng: "de_DE" })).toBe(new Intl.NumberFormat("de-DE").format(1234.5));
+  });
+
+  it("still formats when the options cannot be serialized", () => {
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    expect(i18n.t("format.number", { val: 1234.5, circular })).toBe("1,234.5");
   });
 
   it("builds one formatter per language and options, not one per value", () => {

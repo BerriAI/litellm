@@ -21,6 +21,13 @@ const totals: OverviewTotals = {
 };
 
 const asRendered = (text: string) => text.replace(/\s+/g, " ");
+const SECONDS = {
+  style: "unit",
+  unit: "second",
+  unitDisplay: "narrow",
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+} as const;
 
 const defaultProps = {
   results: [],
@@ -91,5 +98,28 @@ describe("UsageStatStrip in another UI language", () => {
     expect(screen.getByText(`${oneDecimal.format(80)}% success rate`)).toBeInTheDocument();
     expect(screen.getByTitle(`${german.format(9123456)} tokens`)).toBeInTheDocument();
     expect(screen.queryByText(asRendered(euros.format(42.5)))).not.toBeInTheDocument();
+  });
+
+  it("should format large counts, compact tokens, seconds and the token breakdown in the selected language", async () => {
+    const user = userEvent.setup();
+    i18n.addResourceBundle("de", "translation", {});
+    await i18n.changeLanguage("de");
+    const german = new Intl.NumberFormat("de");
+    const compact = new Intl.NumberFormat("de", { notation: "compact", maximumFractionDigits: 1 });
+    const large = { ...totals, requests: 8123456, successful: 7654321, failed: 469135, avgLatencyMs: 1234 };
+
+    render(<UsageStatStrip {...defaultProps} totals={large} />);
+
+    expect(screen.getByText(german.format(8123456))).toBeInTheDocument();
+    expect(screen.getByText(german.format(7654321))).toBeInTheDocument();
+    expect(screen.getByText(german.format(469135))).toBeInTheDocument();
+    expect(screen.getByText(asRendered(compact.format(9123456)))).toBeInTheDocument();
+    expect(screen.getByText(asRendered(new Intl.NumberFormat("de", SECONDS).format(1.234)))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "View token breakdown" }));
+    const breakdown = await screen.findByRole("dialog", { name: "What counts toward total tokens?" });
+    [8123456, 5123456, 2000000, 1000000, 9123456].forEach((count) =>
+      expect(breakdown).toHaveTextContent(german.format(count)),
+    );
   });
 });
