@@ -3491,15 +3491,6 @@ class RustCore(
         read: Final[object] = self._cache.batch_get_cache(keys=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
         return read if isinstance(read, list) else [None] * len(keys)  # pyright: ignore[reportUnknownVariableType]  # see above
 
-    def _corrected_cooldowns(self, keys: Sequence[str], results: object) -> Sequence[object]:
-        """The cooldowns a batch read found, once ``active_cooldowns_from_results`` corrected the in-memory
-        TTL of each it promoted from Redis and dropped each that expired."""
-        if not isinstance(results, list):
-            return [None] * len(keys)
-        ids: Final = [key.removeprefix("deployment:").removesuffix(":cooldown") for key in keys]
-        _ = self._cooldowns.active_cooldowns_from_results(ids, results)  # pyright: ignore[reportUnknownArgumentType]  # see above
-        return results  # pyright: ignore[reportUnknownVariableType]  # see above
-
     async def _increment_usage(self, keys: Sequence[object], amounts: Sequence[object]) -> None:
         try:
             counted: Final = await self._stores.increment_usage(keys, amounts)
