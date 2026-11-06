@@ -6,7 +6,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
@@ -128,6 +128,15 @@ def _with_hoisted_additional_tools(responses_request: Mapping[str, object], drop
     return {**responses_request, "input": hoisted.input, "tools": list(hoisted.tools)}
 
 
+def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam | None:
+    responses_input: Final = responses_request.get("input")
+    return (
+        cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
+        if isinstance(responses_input, list)
+        else None
+    )
+
+
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
     tools: Final = responses_request.get("tools")
     if tools is None:
@@ -200,6 +209,7 @@ async def chat_count_request(
                 ),
                 custom_llm_provider,
                 policy.drop_params,
+                caller_input=_caller_input(responses_request),
             ),
             model,
             custom_llm_provider,

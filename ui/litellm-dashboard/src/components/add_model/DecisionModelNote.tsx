@@ -1,5 +1,6 @@
 import { Info } from "lucide-react";
 import { useFormContext, useWatch } from "react-hook-form";
+import { Trans, useTranslation } from "react-i18next";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import {
   DECISIONS_DOCS_URL,
@@ -23,6 +24,7 @@ const selectedModelNames = (value: unknown): string[] => {
 };
 
 export default function DecisionModelNote({ catalog, litellmProvider }: DecisionModelNoteProps) {
+  const { t } = useTranslation();
   const { control } = useFormContext<MountedFormValues>();
   const model = useWatch({ control, name: "model" });
 
@@ -31,21 +33,23 @@ export default function DecisionModelNote({ catalog, litellmProvider }: Decision
   }
 
   return (
-    <Alert variant="info" role="note" aria-label="Decision model notice" className="mb-4">
+    <Alert variant="info" role="note" aria-label={t("addModel.decisionModelNote.ariaLabel")} className="mb-4">
       <Info />
-      <AlertTitle>Decision model</AlertTitle>
+      <AlertTitle>{t("addModel.decisionModelNote.title")}</AlertTitle>
       <AlertDescription>
         <p>
-          For decision requests, call <code>/v1/decisions</code> (OpenAI format) or <code>/v1/systemone</code> (System
-          One format).{" "}
+          <Trans
+            i18nKey="addModel.decisionModelNote.callInstructions"
+            components={{ decisions: <code />, systemOne: <code /> }}
+          />{" "}
           <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
-            How to call decision models
+            {t("addModel.decisionModelNote.howToCall")}
           </a>
         </p>
         <p>
-          After you add it,{" "}
+          {t("addModel.decisionModelNote.afterYouAddIt")}{" "}
           <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
-            test it in the Decisions playground
+            {t("addModel.decisionModelNote.testInPlayground")}
           </a>
         </p>
       </AlertDescription>

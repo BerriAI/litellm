@@ -1523,6 +1523,37 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
 
 
 @pytest.mark.parametrize(
+    "data",
+    [
+        {"model": "gemini-4-argon", "input": "prove the prime number theorem"},
+        {"model": "gemini-4-argon", "previous_interaction_id": "v1_abc", "continuation_token": "tok-1"},
+        {"model": "gemini-4-argon", "input": "prove it again", "continuation_token": "tok-1"},
+    ],
+)
+def test_create_interaction_accepts_input_or_a_continuation_token(data: dict[str, object]) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert raise_if_required_body_param_missing(route_type="acreate_interaction", data=data, llm_router=None) is None
+
+
+def test_create_interaction_without_input_or_continuation_token_names_input() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="acreate_interaction",
+            data={"model": "gemini-4-argon", "previous_interaction_id": "v1_abc"},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == "input"
+    assert exc_info.value.message == "/interactions: Missing required parameter: 'input'."
+
+
+@pytest.mark.parametrize(
     "data, param",
     [
         ({"endpoint": "/v1/chat/completions", "completion_window": "24h"}, "input_file_id"),

@@ -367,7 +367,7 @@ _UpstreamSessionKey: TypeAlias = tuple[
     str,
     str,
     str,
-    tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool],
+    tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool, bool],
 ]
 
 
@@ -3705,7 +3705,7 @@ class MCPServerManager:
 
         Priority:
         1. If object_permission.mcp_servers is explicitly set, use it (even for admins)
-        2. If admin and no object_permission, return all servers
+        2. If admin, not bound to a real team, and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
         if managed_agent_policy(user_api_key_auth) is not None:
@@ -6253,9 +6253,9 @@ class MCPServerManager:
             "server_name": server_name,
             "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
             "user_api_key_auth": checked_auth,
-            "user_api_key_user_id": (getattr(checked_auth, "user_id", None) if checked_auth else None),
-            "user_api_key_team_id": (getattr(checked_auth, "team_id", None) if checked_auth else None),
-            "user_api_key_end_user_id": (getattr(checked_auth, "end_user_id", None) if checked_auth else None),
+            "user_api_key_user_id": checked_auth.user_id if checked_auth else None,
+            "user_api_key_team_id": checked_auth.team_id if checked_auth else None,
+            "user_api_key_end_user_id": checked_auth.end_user_id if checked_auth else None,
             "user_api_key_hash": (getattr(checked_auth, "api_key_hash", None) if checked_auth else None),
             "incoming_bearer_token": caller_bearer.get_secret_value() if caller_bearer is not None else None,
             "headers": logging_safe_mcp_headers(raw_headers),

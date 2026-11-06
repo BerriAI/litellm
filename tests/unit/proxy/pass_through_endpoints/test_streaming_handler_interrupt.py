@@ -41,12 +41,13 @@ def _make_streaming_response(chunks):
     return mock
 
 
-def _unarmed_logging_obj():
+def _unarmed_logging_obj(model: str = "unknown"):
     """Real Logging objects only carry _on_deferred_stream_complete when the
     proxy arms deferred dispatch; a bare MagicMock's auto-attribute is truthy
     and would spuriously trigger the deferral branch."""
     obj = MagicMock()
     obj._on_deferred_stream_complete = None
+    obj.model = model
     return obj
 
 
@@ -409,7 +410,7 @@ async def _collect_openai_passthrough_chunks(chunks, endpoint_type):
     async for chunk in PassThroughStreamingHandler.chunk_processor(
         response=response,
         request_body={"model": "gpt-4o-mini", "stream": True},
-        litellm_logging_obj=_unarmed_logging_obj(),
+        litellm_logging_obj=_unarmed_logging_obj(model="gpt-4o-mini"),
         endpoint_type=endpoint_type,
         start_time=datetime(2026, 1, 1),
         passthrough_success_handler_obj=MagicMock(),
