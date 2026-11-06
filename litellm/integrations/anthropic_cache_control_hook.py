@@ -140,7 +140,7 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
-_MessageT: Final = TypeVar("_MessageT")
+_MessageT = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
 

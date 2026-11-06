@@ -12,7 +12,7 @@ from starlette.routing import BaseRoute, Route
 from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 
 OpenAPISchema: TypeAlias = JsonObject
-Inputs: Final = TypeVar("Inputs")
+Inputs = TypeVar("Inputs")
 _SERVERS: Final = TypeAdapter(list[dict[str, object]])
 
 

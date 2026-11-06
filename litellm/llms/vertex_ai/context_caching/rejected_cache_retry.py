@@ -13,8 +13,8 @@ from litellm.utils import is_cached_message
 
 from .known_cached_contents import names_rejected_cache
 
-Built: Final = TypeVar("Built")
-Sent: Final = TypeVar("Sent")
+Built = TypeVar("Built")
+Sent = TypeVar("Sent")
 
 
 def _build_from_copies(

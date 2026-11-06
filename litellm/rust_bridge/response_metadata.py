@@ -5,7 +5,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
 )
 
-ResultT: Final = TypeVar("ResultT")
+ResultT = TypeVar("ResultT")
 
 
 def mark_rust_response(response: ResultT) -> ResultT:

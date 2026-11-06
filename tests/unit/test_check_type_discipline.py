@@ -303,6 +303,24 @@ def test_single_leading_underscore_is_not_exempt(tmp_path):
     assert "LIT010" in _codes(tmp_path, "_x = 1\n")
 
 
+@pytest.mark.parametrize(
+    "declaration",
+    ("TypeVar('_T')", "ParamSpec('_T')", "TypeVarTuple('_T')", "typing.TypeVar('_T')", "typing_extensions.ParamSpec('_T')"),
+)
+def test_a_type_variable_stays_bare_and_a_final_one_trips(tmp_path, declaration):
+    assert "LIT010" not in _codes(tmp_path, f"_T = {declaration}\n")
+    assert "LIT010" in _codes(tmp_path, f"_T: Final = {declaration}\n")
+    assert "LIT010" in _codes(tmp_path, f"_T: Final[object] = {declaration}\n")
+
+
+def test_rebinding_a_bare_type_variable_still_trips(tmp_path):
+    assert "LIT010" in _codes(tmp_path, "_T = TypeVar('_T')\n_T = 1\n")
+
+
+def test_a_final_call_to_any_other_factory_stays_clean(tmp_path):
+    assert "LIT010" not in _codes(tmp_path, "limit: Final = int('1')\n")
+
+
 def test_rebind_ok_suppresses_a_repeated_unpack(tmp_path):
     src = "a, b = (1, 2)\na, b = (b, a)  # rebind-ok: swap in place\n"
     assert "LIT010" not in _codes(tmp_path, src)

@@ -20,7 +20,7 @@ from litellm.llms.azure.ptu_capacity import (
     is_str_keyed_mapping,
 )
 
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 WildcardRoute: TypeAlias = Callable[[str], Sequence[Mapping[str, object]]]
 
 

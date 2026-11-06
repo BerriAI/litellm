@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     from litellm.router import Router
 
-_Tool: Final = TypeVar("_Tool")
+_Tool = TypeVar("_Tool")
 
 
 class SemanticToolFilterContextWindowError(Exception):

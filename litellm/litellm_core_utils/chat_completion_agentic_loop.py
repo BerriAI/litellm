@@ -37,7 +37,7 @@ from litellm.types.integrations.custom_logger import (
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-_DispatchResult: Final = TypeVar("_DispatchResult")
+_DispatchResult = TypeVar("_DispatchResult")
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (

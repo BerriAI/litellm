@@ -8,7 +8,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm.caching.redis_batch import Batch, NativePending, RequestRedisBatches, active_request_redis_batches
 from litellm.rust_bridge._native import NativeRequestRedis, NativeSend
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)

@@ -80,7 +80,7 @@ BULK_NEW_USER_CONCURRENCY: Final = 10
 
 TeamRole: TypeAlias = Literal["user", "admin"]
 KeyGenerator: TypeAlias = Callable[..., Awaitable[object]]
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)

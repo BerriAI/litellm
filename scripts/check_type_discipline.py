@@ -54,8 +54,11 @@ LIT010  Variable assignment without a `Final` declaration. Every local and modul
         that namespace is the SDK's runtime-settable config surface (users follow
         the documented `litellm.api_key = ...` pattern and the proxy rebinds these
         via setattr), and the package ships py.typed, so a Final there turns every
-        documented downstream assignment into a mypy error. Suppress a deliberately
-        rebindable name with `# rebind-ok: <reason>` on each offending line.
+        documented downstream assignment into a mypy error. Type variables are the
+        reverse: a `TypeVar`, `ParamSpec`, or `TypeVarTuple` stays bare, and a Final one
+        trips, since mypy reads it as a plain variable and every signature using it as
+        Any. Suppress a deliberately rebindable name with `# rebind-ok: <reason>` on
+        each offending line.
 LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
         `param += ...`, a `for`/`with`/unpacking/walrus target, `del param`, or a
         re-bind in a nested function under `nonlocal param`) or mutated in place
@@ -458,6 +461,7 @@ def iter_guard_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 # --------------------------------------------------------------------------- #
 
 CONSTANT_DECLARATIONS = frozenset(("Final", "TypeAlias"))
+TYPE_VARIABLE_FACTORIES = frozenset(("TypeVar", "ParamSpec", "TypeVarTuple"))
 CONFIG_SURFACE_PARTS = ("litellm", "__init__.py")
 SELF_PARAMS = frozenset(("self", "cls"))
 NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
@@ -478,6 +482,14 @@ def _declares_constant(annotation: ast.expr) -> bool:
     if isinstance(root, ast.Name):
         return root.id in CONSTANT_DECLARATIONS
     return isinstance(root, ast.Attribute) and root.attr in CONSTANT_DECLARATIONS
+
+
+def _creates_type_variable(value: ast.expr | None) -> bool:
+    match value:
+        case ast.Call(func=ast.Name(id=name) | ast.Attribute(attr=name)):
+            return name in TYPE_VARIABLE_FACTORIES
+        case _:
+            return False
 
 
 def _defaults(args: ast.arguments) -> tuple[ast.expr, ...]:
@@ -561,6 +573,8 @@ def _bound_names(target: ast.expr) -> Iterator[tuple[str, int]]:
 
 def _node_bindings(node: ast.AST, in_loop: bool) -> Iterator[Binding]:
     match node:
+        case ast.Assign(targets=[ast.Name(id=name, lineno=line)], value=value) if _creates_type_variable(value):
+            yield Binding(name, line, "other", in_loop)
         case ast.Assign(targets=targets):
             for target in targets:
                 if isinstance(target, ast.Name):
@@ -569,7 +583,7 @@ def _node_bindings(node: ast.AST, in_loop: bool) -> Iterator[Binding]:
                     yield from (Binding(n, line, "unpack", in_loop) for n, line in _bound_names(target))
         case ast.AnnAssign(target=ast.Name(id=name, lineno=line), annotation=annotation, value=value):
             if _declares_constant(annotation):
-                yield Binding(name, line, "declared", in_loop)
+                yield Binding(name, line, "final_type_variable" if _creates_type_variable(value) else "declared", in_loop)
             elif value is not None:
                 yield Binding(name, line, "annassign", in_loop)
         case ast.AugAssign(target=ast.Name(id=name, lineno=line)):
@@ -646,6 +660,15 @@ def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
         declared = frozenset(b.name for b in bindings if b.form == "declared")
         first = _first_binding_index(bindings)
         for i, b in enumerate(bindings):
+            if b.form == "final_type_variable":
+                yield Violation(
+                    path,
+                    b.line,
+                    "LIT010",
+                    f"`{b.name}` is a type variable declared Final: mypy then reads it as a plain "
+                    f"variable and every signature using it as Any, so remove the Final",
+                )
+                continue
             if b.name in declared or b.name in params or b.in_loop:
                 continue
             if _exempt_final_name(b.name):

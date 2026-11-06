@@ -63,7 +63,7 @@ def _router_init(
     ## CACHING ##
     redis_url: str | None = None,
     redis_host: str | None = None,
-    redis_port: int | None = None,
+    redis_port: int | str | None = None,
     redis_password: str | None = None,
     redis_db: int | None = None,
     cache_responses: bool | None = False,
@@ -128,7 +128,7 @@ def _router_init(
         model_list (Optional[list]): List of models to be used. Defaults to None.
         redis_url (Optional[str]): URL of the Redis server. Defaults to None.
         redis_host (Optional[str]): Hostname of the Redis server. Defaults to None.
-        redis_port (Optional[int]): Port of the Redis server. Defaults to None.
+        redis_port (int | str | None): Port of the Redis server. Defaults to None.
         redis_password (Optional[str]): Password of the Redis server. Defaults to None.
         cache_responses (Optional[bool]): Flag to enable caching of responses. Defaults to False.
         cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
@@ -227,7 +227,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
 
-    _P = ParamSpec("_P")  # rebind-ok: mypy rejects a Final ParamSpec
+    _P = ParamSpec("_P")
 
     def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
 

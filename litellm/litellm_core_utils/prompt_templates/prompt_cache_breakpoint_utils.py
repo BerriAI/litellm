@@ -11,7 +11,7 @@ from litellm.types.llms.openai import (
     PromptCacheBreakpoint,
 )
 
-_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
+_MarkedT = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT: Final = (
@@ -33,7 +33,7 @@ _PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
 _CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(ChatCompletionPromptCacheBreakpoint)
 
 
-_AcceptedBreakpointT: Final = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
+_AcceptedBreakpointT = TypeVar("_AcceptedBreakpointT", bound=Mapping[str, object])
 
 
 def _accepted_prompt_cache_breakpoint(

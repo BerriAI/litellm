@@ -38,7 +38,7 @@ def _endpoint_path(endpoint: str) -> str:
 
 
 CHAT_ENDPOINTS: Final = frozenset(_endpoint_path(endpoint) for endpoint in CHAT_ENDPOINT_BY_CALL.values())
-_Deployment: Final = TypeVar("_Deployment", bound=Mapping[str, object])
+_Deployment = TypeVar("_Deployment", bound=Mapping[str, object])
 _ENFORCE_FLAG: Final = TypeAdapter(bool | None)
 _REQUEST_SELECTION: Final[ContextVar[tuple[str | None, str | None]]] = ContextVar(
     "router_request_endpoint", default=(None, None)
