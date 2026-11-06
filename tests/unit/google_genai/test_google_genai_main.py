@@ -423,6 +423,60 @@ async def test_custom_content_without_native_hook_uses_completion(
     assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
 
 
+class FailingCompletionContentLLM(CustomLLM):
+    def completion(self, **kwargs: object) -> litellm.ModelResponse:
+        raise CustomLLMError(status_code=429, message="adapter quota exhausted")
+
+    async def acompletion(self, **kwargs: object) -> litellm.ModelResponse:
+        return self.completion(**kwargs)
+
+
+class ContentFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: tuple[str, ...] = ()
+        self.logged: Final = Event()
+
+    def log_failure_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        self.calls = (*self.calls, str(kwargs["call_type"]))
+        self.logged.set()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.log_failure_event(kwargs, response_obj, start_time, end_time)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_delivers_per_request_failure_callbacks_once(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": FailingCompletionContentLLM()}]
+    )
+    global_recorder: Final = ContentFailureRecorder()
+    request_recorder: Final = ContentFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [global_recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [global_recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
+        failure_callback=[request_recorder.log_failure_event],
+    )
+    if is_async:
+        with pytest.raises(litellm.RateLimitError, match="adapter quota exhausted"):
+            await litellm.agenerate_content(**request)
+    else:
+        with pytest.raises(litellm.RateLimitError, match="adapter quota exhausted"):
+            litellm.generate_content(**request)
+    assert await asyncio.to_thread(request_recorder.logged.wait, 5)
+    assert await asyncio.to_thread(global_recorder.logged.wait, 5)
+    expected: Final = ("acompletion" if is_async else "completion",)
+    assert request_recorder.calls == expected
+    assert global_recorder.calls == expected
+
+
 @pytest.mark.asyncio
 async def test_router_custom_native_content_leg(native_content_handler: NativeContentLLM) -> None:
     router: Final = litellm.Router(
