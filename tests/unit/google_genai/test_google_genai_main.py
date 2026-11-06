@@ -435,6 +435,7 @@ class ContentFailureRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.calls: tuple[str, ...] = ()
+        self.asynchronous_calls: tuple[str, ...] = ()
         self.logged: Final = Event()
 
     def log_failure_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
@@ -444,13 +445,16 @@ class ContentFailureRecorder(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
+        self.asynchronous_calls = (*self.asynchronous_calls, str(kwargs["call_type"]))
         self.log_failure_event(kwargs, response_obj, start_time, end_time)
 
 
 @pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("use_logging_context", [False, True])
 @pytest.mark.asyncio
 async def test_custom_content_adapter_delivers_per_request_failure_callbacks_once(
-    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, use_logging_context: bool,
 ) -> None:
     monkeypatch.setattr(
         litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": FailingCompletionContentLLM()}]
@@ -460,9 +464,18 @@ async def test_custom_content_adapter_delivers_per_request_failure_callbacks_onc
     monkeypatch.setattr(litellm, "callbacks", [global_recorder])
     monkeypatch.setattr(litellm, "failure_callback", [global_recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    callback_args: Final = (
+        {"litellm_logging_obj": Logging(
+            model="native_image_test/chat-model", messages=[], stream=False,
+            call_type="agenerate_content" if is_async else "generate_content",
+            start_time=datetime(2026, 1, 1), litellm_call_id="failure-test", function_id="failure-test",
+            dynamic_failure_callbacks=[request_recorder], dynamic_async_failure_callbacks=[request_recorder],
+        )}
+        if use_logging_context else {"failure_callback": [request_recorder.log_failure_event]}
+    )
     request: Final = dict(
         model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
-        failure_callback=[request_recorder.log_failure_event],
+        **callback_args,
     )
     if is_async:
         with pytest.raises(litellm.RateLimitError, match="adapter quota exhausted"):
@@ -475,6 +488,8 @@ async def test_custom_content_adapter_delivers_per_request_failure_callbacks_onc
     expected: Final = ("acompletion" if is_async else "completion",)
     assert request_recorder.calls == expected
     assert global_recorder.calls == expected
+    assert request_recorder.asynchronous_calls == (expected if is_async and use_logging_context else ())
+    assert global_recorder.asynchronous_calls == (expected if is_async else ())
 
 
 @pytest.mark.asyncio
