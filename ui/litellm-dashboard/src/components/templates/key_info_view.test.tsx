@@ -281,6 +281,25 @@ describe("KeyInfoView", () => {
     expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
   });
 
+  it.each(["detail_tab", "key_detail_tab"])("rejects the hidden auto-router tab from %s", async (tabQueryKey) => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Internal User" });
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+        tabQueryKey={tabQueryKey}
+      />,
+      { searchParams: `${tabQueryKey}=auto-router-usage`, onUrlUpdate, resetUrlUpdateQueueOnMount: false },
+    );
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("key-auto-router-usage")).not.toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.has(tabQueryKey)).toBe(false));
+  });
+
   it("keeps the team tab when changing a nested key tab", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
     const onUrlUpdate = vi.fn();

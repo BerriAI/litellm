@@ -1,5 +1,6 @@
 import asyncio
 import heapq
+import math
 from collections import deque
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager, nullcontext
@@ -45,6 +46,7 @@ class _Driver:
         self.stage = stage
         self.error = error
         self.cancelled = asyncio.Event()
+        self.starts: tuple[float, ...] = ()
 
     async def _stall(self) -> None:
         if self.error is not None:
@@ -56,6 +58,7 @@ class _Driver:
 
     @asynccontextmanager
     async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction, None]:
+        self.starts += (asyncio.get_running_loop().time(),)
         if self.stage == "begin":
             await self._stall()
         try:
@@ -70,6 +73,71 @@ class _Driver:
                 await self._stall()
             return ({"result": 1},)
         return ({"acquired": True},)
+
+
+def test_background_transactions_are_paced_without_delaying_foreground_work() -> None:
+    async def scenario() -> None:
+        loop: Final = asyncio.get_running_loop()
+        driver: Final = _Driver("healthy")
+        background: Final = BoundedAnalyticsDatabase(driver, background=True)
+        start: Final = loop.time()
+        for _ in range(5):
+            assert await background.query_raw("SELECT 1 AS result") == ({"result": 1},)
+        assert math.isclose(loop.time() - start, 0.5)
+        assert all(math.isclose(second - first, 0.1) for first, second in zip(driver.starts, driver.starts[1:]))
+        foreground_start: Final = loop.time()
+        assert await BoundedAnalyticsDatabase(driver).query_raw("SELECT 1 AS result") == ({"result": 1},)
+        assert loop.time() == foreground_start
+
+    loop: Final = _ClockedLoop()
+    try:
+        loop.run_until_complete(scenario())
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("budget", (0.0, 0.05))
+def test_background_pacing_does_not_start_a_transaction_past_its_deadline(budget: float) -> None:
+    async def scenario() -> None:
+        loop: Final = asyncio.get_running_loop()
+        existing: Final = asyncio.all_tasks()
+        driver: Final = _Driver("healthy")
+        database: Final = BoundedAnalyticsDatabase(driver, background=True)
+        start: Final = loop.time()
+        with analytics_deadline(start + budget), pytest.raises(AnalyticsCapacityError):
+            await database.query_raw("SELECT 1 AS result")
+        assert not driver.starts
+        assert math.isclose(loop.time() - start, budget)
+        assert await database.query_raw("SELECT 1 AS result") == ({"result": 1},)
+        assert asyncio.all_tasks() == existing
+
+    loop: Final = _ClockedLoop()
+    try:
+        loop.run_until_complete(scenario())
+    finally:
+        loop.close()
+
+
+def test_cancelling_background_pacing_retains_no_work_or_admission() -> None:
+    async def scenario() -> None:
+        existing: Final = asyncio.all_tasks()
+        driver: Final = _Driver("healthy")
+        database: Final = BoundedAnalyticsDatabase(driver, background=True)
+        task: Final = asyncio.create_task(database.query_raw("SELECT 1 AS result"))
+        await asyncio.sleep(0)
+        assert not driver.starts
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await database.query_raw("SELECT 1 AS result") == ({"result": 1},)
+        assert len(driver.starts) == 1
+        assert asyncio.all_tasks() == existing
+
+    loop: Final = _ClockedLoop()
+    try:
+        loop.run_until_complete(scenario())
+    finally:
+        loop.close()
 
 
 @pytest.mark.parametrize("stage", ("begin", "query", "commit", "rollback"))

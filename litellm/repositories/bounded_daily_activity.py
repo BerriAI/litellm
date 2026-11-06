@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast  # noqa: TID251  # genera
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.repositories.analytics_budget import AnalyticsDatabase, BoundedAnalyticsDatabase
 from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase
 from litellm.repositories.daily_activity_sql import build_bounded_daily_activity_sql
@@ -30,6 +31,12 @@ class _ActivityRow(BaseModel, frozen=True):
     model_count: int
     total_api_keys: int | None
     metrics: SpendMetrics
+
+
+def _reported_rows(rows: tuple[_ActivityRow, ...]) -> tuple[_ActivityRow, ...]:
+    if not any(row.metrics.flat_cost for row in rows) or is_ptu_cost_attribution_enabled():
+        return rows
+    return tuple(row.model_copy(update={"metrics": row.metrics.model_copy(update={"flat_cost": 0.0})}) for row in rows)
 
 
 def _metadata(row: _ActivityRow) -> DailySpendMetadata:
@@ -74,8 +81,10 @@ class BoundedDailyActivityRepository:
             raise ValueError("model_limit must be between 1 and 100")
         query: Final = build_bounded_daily_activity_sql(scope, model_limit=model_limit)
         async with db_span("daily_activity_query", sql_relation(query.sql)):
-            rows: Final = TypeAdapter(tuple[_ActivityRow, ...]).validate_python(
-                await self.database.query_raw(query.sql, *query.params)
+            rows: Final = _reported_rows(
+                TypeAdapter(tuple[_ActivityRow, ...]).validate_python(
+                    await self.database.query_raw(query.sql, *query.params)
+                )
             )
         total: Final = next(row for row in rows if row.kind == "total")
         other: Final = next((row for row in rows if row.kind == "other"), None)
