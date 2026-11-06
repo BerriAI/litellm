@@ -1,8 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
 import { Ban, Pencil, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -10,10 +8,10 @@ import { $api } from "@/lib/http/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { uiHref } from "@/utils/uiHref";
-import { customerStatus, formatUSD, useCustomerSpendByCustomer } from "../_components/customerPortalData";
-import { customerLimitsOnKey, useAllKeys, useCustomerTrafficKeys, type PortalKey } from "../_components/customerKeys";
-import KeyLimitDialog from "../_components/KeyLimitDialog";
+import { customerStatus, formatUSD, useCustomerSpendByCustomer } from "./customerPortalData";
+import { customerLimitsOnKey, useAllKeys, useCustomerTrafficKeys, type PortalKey } from "./customerKeys";
+import KeyLimitDialog from "./KeyLimitDialog";
+import EditCustomerDialog from "./EditCustomerDialog";
 
 const STATUS_BADGE = {
   blocked: { variant: "outline", label: "Blocked" },
@@ -21,15 +19,14 @@ const STATUS_BADGE = {
   active: { variant: "secondary", label: "Active" },
 } as const;
 
-export default function CustomerDetailPage() {
-  const params = useParams<{ id: string }>();
-  const customerId = decodeURIComponent(params.id);
+export default function CustomerDetail({ customerId, onBack }: { customerId: string; onBack: () => void }) {
   const { accessToken } = useAuthorized();
   const info = $api.useQuery("get", "/customer/info", { params: { query: { end_user_id: customerId } } }, { enabled: Boolean(accessToken) });
   const spendQuery = useCustomerSpendByCustomer(accessToken);
   const keysQuery = useAllKeys(accessToken);
   const trafficQuery = useCustomerTrafficKeys(accessToken, customerId);
   const [dialog, setDialog] = useState<{ open: boolean; editKey: PortalKey | null }>({ open: false, editKey: null });
+  const [editOpen, setEditOpen] = useState(false);
   const block = $api.useMutation("post", "/customer/block", { onSuccess: () => { toast.success("Customer blocked"); info.refetch(); } });
   const unblock = $api.useMutation("post", "/customer/update", { onSuccess: () => { toast.success("Customer unblocked"); info.refetch(); } });
 
@@ -63,7 +60,7 @@ export default function CustomerDetailPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" disabled><Pencil className="size-4" /> Edit</Button>
+          <Button variant="outline" disabled={!c} onClick={() => setEditOpen(true)}><Pencil className="size-4" /> Edit</Button>
           {c?.blocked ? (
             <Button variant="outline" onClick={() => unblock.mutate({ body: { user_id: customerId, blocked: false } })}><Ban className="size-4" /> Unblock</Button>
           ) : (
@@ -115,7 +112,8 @@ export default function CustomerDetailPage() {
           </Table>
         )}
       </div>
-      <p className="text-xs text-muted-foreground"><Link href={uiHref("customers")} className="hover:underline">Back to customers</Link></p>
+      <Button variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground" onClick={onBack}>Back to customers</Button>
+      {c && <EditCustomerDialog open={editOpen} onOpenChange={setEditOpen} customer={c} onSaved={() => info.refetch()} />}
       {accessToken && (
         <KeyLimitDialog
           open={dialog.open}

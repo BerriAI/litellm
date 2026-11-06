@@ -2,7 +2,7 @@
 
 import { customerLimitsOnKey, useAllKeys } from "./_components/customerKeys";
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { parseAsString, useQueryState } from "nuqs";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { uiHref } from "@/utils/uiHref";
+import CustomerDetail from "./_components/CustomerDetail";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import { customerStatus, formatUSD, useCustomerSpendByCustomer, type CustomerStatus } from "./_components/customerPortalData";
 
@@ -24,7 +24,7 @@ const STATUS_LABEL: Record<CustomerStatus, { label: string; variant: "default" |
 
 export default function CustomersPage() {
   const { accessToken } = useAuthorized();
-  const router = useRouter();
+  const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const customersQuery = useCustomers(100, search || undefined);
@@ -47,6 +47,8 @@ export default function CustomersPage() {
   }, [customers, spendQuery.data, keysQuery.data]);
   const block = $api.useMutation("post", "/customer/block", { onSuccess: () => { toast.success("Customer blocked"); customersQuery.refetch(); } });
   const unblock = $api.useMutation("post", "/customer/update", { onSuccess: () => { toast.success("Customer unblocked"); customersQuery.refetch(); } });
+
+  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => setSelectedId(null)} />;
 
   return (
     <div className="w-full space-y-4 px-6 py-5">
@@ -78,7 +80,7 @@ export default function CustomersPage() {
             {rows.map(({ c, spend, keys, status }) => {
               const max = c.litellm_budget_table?.max_budget ?? null;
               return (
-                <TableRow key={c.user_id} className="cursor-pointer" onClick={() => router.push(uiHref(`customers/${encodeURIComponent(c.user_id)}`))}>
+                <TableRow key={c.user_id} className="cursor-pointer" onClick={() => setSelectedId(c.user_id, { history: "push" })}>
                   <TableCell className="pl-4">
                     <p className="font-medium">{c.alias || c.user_id}</p>
                     <p className="font-mono text-[11px] text-muted-foreground">{c.user_id}</p>
@@ -100,7 +102,7 @@ export default function CustomersPage() {
           </TableBody>
         </Table>
       </div>
-      <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => customersQuery.refetch()} />
+      <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={(id) => { customersQuery.refetch(); setSelectedId(id, { history: "push" }); }} />
     </div>
   );
 }

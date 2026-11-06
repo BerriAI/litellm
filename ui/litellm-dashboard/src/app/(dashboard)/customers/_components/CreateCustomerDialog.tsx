@@ -1,26 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { $api } from "@/lib/http/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { uiHref } from "@/utils/uiHref";
 
-export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: () => void }) {
-  const router = useRouter();
+export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (userId: string) => void }) {
   const [userId, setUserId] = useState("");
   const [alias, setAlias] = useState("");
   const [budget, setBudget] = useState("");
   const create = $api.useMutation("post", "/customer/new", {
     onSuccess: () => {
       toast.success(`Created ${alias || userId}`);
-      onCreated();
+      onCreated(userId.trim());
       onOpenChange(false);
-      router.push(uiHref(`customers/${encodeURIComponent(userId)}`));
     },
     onError: (e: unknown) => toast.error(`Failed to create customer: ${e instanceof Error ? e.message : String(e)}`),
   });
