@@ -972,6 +972,13 @@ class OpenTelemetryV2(CustomLogger):
         if not isinstance(logging_obj, LiteLLMLoggingObj):
             return None
         details: Final = logging_obj.model_call_details
+        raw_params: Final = details.get("litellm_params")
+        if not logging_obj.should_run_callback(
+            callback=self,
+            litellm_params=raw_params if isinstance(raw_params, dict) else {},
+            event_hook="async_success_handler",
+        ):
+            return None
         call: Final = LLMCallEvent.from_dict(details)
         carrier: Final = self._open_llm_calls.get(call.call_id) if call.call_id is not None else None
         ctx_data: Final = (
