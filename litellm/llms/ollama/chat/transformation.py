@@ -16,6 +16,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -44,18 +47,22 @@ else:
     LiteLLMLoggingObj = Any
 
 _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
+_TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
 
 
 def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
     function: Final = tool_call["function"]
     name: Final = function.get("name") or ""
-    if "arguments" not in function:
-        return OllamaToolCallFunction(name=name, arguments={})
+    raw_arguments: Final[object] = function.get("arguments")
     try:
-        arguments: Final = json.loads(function["arguments"])
-    except json.JSONDecodeError as e:
+        arguments: Final = _TOOL_CALL_ARGUMENTS.validate_python(
+            parse_tool_call_arguments(raw_arguments, tool_name=name, context="Ollama chat request")
+            if isinstance(raw_arguments, str) or raw_arguments is None
+            else raw_arguments
+        )
+    except ValueError as e:
         raise litellm.BadRequestError(
-            message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not valid JSON: {e}",
+            message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not a JSON object",
             model=model,
             llm_provider="ollama_chat",
         ) from e
