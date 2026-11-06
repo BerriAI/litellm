@@ -5188,10 +5188,10 @@ class _Driver:
             )
             try:
                 slot_taken: Final = enter_deployment_slot(port, self._plan, deployment, call.kwargs)
-            except Exception as refused:  # noqa: BLE001  # a full deployment's 429, handed to the Rust call loop
+            except Exception:  # noqa: BLE001  # a full deployment's 429 raises as before, with the request handed back
                 if charge is not None:
                     await checks.usage_counter.refund_request(charge)
-                return await self._refused(step, deployment, call, refused)
+                raise
             with slot_taken as slot:
                 if checked:
                     try:
