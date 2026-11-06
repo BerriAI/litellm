@@ -233,10 +233,12 @@ class PromptCachingDeploymentCheck(CustomLogger):
         cache: DualCache,
         is_priority_group: Callable[[str], bool] | None = None,
         responses_pins_in_flight: ResponsesPinsInFlight | None = None,
+        group_has_alternatives: Callable[[str], bool] | None = None,
     ):
         super().__init__()
         self.cache = cache
         self.is_priority_group = is_priority_group
+        self.group_has_alternatives: Final = group_has_alternatives
         self.responses_pins_in_flight: Final = (
             responses_pins_in_flight if responses_pins_in_flight is not None else new_responses_pins_in_flight()
         )
@@ -268,12 +270,16 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return None
         if request_data is not None and request_data.get("_target_order") is not None:
             return None
-        if not healthy_deployments[1:]:
-            return None
-
         pin_metadata: Final = (
             request_data.get("litellm_metadata") if messages is None and request_data is not None else None
         )
+        single_healthy: Final = not healthy_deployments[1:]
+        if single_healthy and not (
+            isinstance(pin_metadata, dict)
+            and self.group_has_alternatives is not None
+            and self.group_has_alternatives(model)
+        ):
+            return None
         previous_attempt_token: Final = (as_str_mapping(pin_metadata) or {}).get(_RESPONSES_PIN_METADATA_KEY)
         previous_response_model_id: Final = (
             _previous_response_model_id(request_data)
@@ -363,6 +369,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
                     ),
                 )
                 pin_metadata[_RESPONSES_PIN_METADATA_KEY] = pin_token
+            if single_healthy:
+                return None
 
             model_id_dict: Final = await prompt_cache.async_get_model_id_at(positions)
             tried: Final = _deployment_ids_tried_in_request(request_data or {}) if model_id_dict is not None else None
@@ -381,6 +389,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         start_time: object,
         end_time: object,
     ) -> None:
+        recorded_pin: Final = self._take_responses_pin(kwargs)
         standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if standard_logging_object is None:
@@ -389,7 +398,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         call_type: Final = standard_logging_object["call_type"]
 
         if call_type in _RESPONSES_CALL_TYPES:
-            await self._pin_responses_request(kwargs, standard_logging_object)
+            await self._pin_responses_request(recorded_pin, kwargs, standard_logging_object)
             return
 
         if (
@@ -454,18 +463,23 @@ class PromptCachingDeploymentCheck(CustomLogger):
 
         return
 
-    async def _pin_responses_request(
-        self,
-        kwargs: _PromptCachingSuccessEventKwargs,
-        standard_logging_object: StandardLoggingPayload,
-    ) -> None:
+    def _take_responses_pin(self, kwargs: _PromptCachingSuccessEventKwargs) -> object:
         litellm_params: Final = kwargs.get("litellm_params") or {}
         metadata: Final = as_str_mapping(litellm_params.get("litellm_metadata")) or {}
         pin_token: Final = metadata.get(_RESPONSES_PIN_METADATA_KEY)
         if not isinstance(pin_token, str):
-            return
+            return None
         recorded_pin: Final = self.responses_pins_in_flight.get_cache(pin_token)
         self.responses_pins_in_flight.delete_cache(pin_token)
+        return recorded_pin
+
+    async def _pin_responses_request(
+        self,
+        recorded_pin: object,
+        kwargs: _PromptCachingSuccessEventKwargs,
+        standard_logging_object: StandardLoggingPayload,
+    ) -> None:
+        litellm_params: Final = kwargs.get("litellm_params") or {}
         model_id: Final = standard_logging_object["model_id"]
         if not isinstance(recorded_pin, _ResponsesPin) or model_id not in recorded_pin.cacheable_deployment_ids:
             return

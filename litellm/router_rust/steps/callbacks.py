@@ -171,6 +171,9 @@ class OptionalChecks:
         group: Final = hosted.get_routing_group(resolved)
         return group is not None and group.routing_strategy == "priority"
 
+    def _group_has_alternatives(self, model: str) -> bool:
+        return len(self._hosted._core_deployments_named(model) or ()) > 1  # pyright: ignore[reportPrivateUsage]  # the host registry's name index
+
     async def repin_session_after_success(
         self, litellm_params: Mapping[str, object], response: object, cooldowns: "CooldownCache"
     ) -> None:
@@ -298,6 +301,7 @@ class OptionalChecks:
                     cache=self.prompt_caching_pin_cache,
                     is_priority_group=self._is_priority_group,
                     responses_pins_in_flight=self.prompt_caching_pins_in_flight,
+                    group_has_alternatives=self._group_has_alternatives,
                 )
             elif name == "router_budget_limiting":
                 if self.budget_limiter() is not None:

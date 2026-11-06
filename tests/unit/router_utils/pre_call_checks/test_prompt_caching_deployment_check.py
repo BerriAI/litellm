@@ -27,6 +27,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     _get_min_token_count_for_deployments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardLoggingPayload
@@ -255,6 +256,16 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     assert filtered == [deployments[1]]
 
 
+class _ReadTrackingMessages(list[AllMessageValues]):
+    def __init__(self, messages: list[AllMessageValues]) -> None:
+        super().__init__(messages)
+        self.read = False
+
+    def __iter__(self):
+        self.read = True
+        return super().__iter__()
+
+
 class _PinLookupCounter(DualCache):
     def __init__(self) -> None:
         super().__init__()
@@ -286,17 +297,19 @@ async def test_async_filter_deployments_skips_prefix_hash_for_a_single_deploymen
     prompt that hash alone is ~30 ms of GIL-holding work per request.
     """
     cache = _PinLookupCounter()
-    check = PromptCachingDeploymentCheck(cache=cache)
+    check = PromptCachingDeploymentCheck(cache=cache, group_has_alternatives=lambda group: True)
     deployments = _deployments("anthropic/claude-opus-4-6")
     messages = _messages(word_count=5000)
     await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-1", messages=messages, tools=None)
+    tracked_messages = _ReadTrackingMessages(messages)
 
     filtered = await check.async_filter_deployments(
-        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=tracked_messages
     )
 
     assert filtered == deployments
     assert cache.pin_lookups == 0
+    assert tracked_messages.read is False
 
     two = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
     assert await check.async_filter_deployments(
@@ -1757,6 +1770,52 @@ async def test_retry_moves_off_the_pinned_deployment_that_failed():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reused_as", ["metadata", "litellm_metadata"])
+async def test_pin_holds_for_a_metadata_dict_reused_after_a_request_failed_on_the_pinned_deployment(reused_as: str):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": RESPONSES_BRIDGED_MODEL, "api_key": "sk-fake", "weight": weight},
+                "model_info": {"id": model_id},
+            }
+            for model_id, weight in (("dep-1", 1000), ("dep-2", 1))
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        num_retries=6,
+        retry_after=0,
+        allowed_fails=100,
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="dep-1",
+        original_exception=litellm.RateLimitError(
+            message="upstream 429", llm_provider="anthropic", model=RESPONSES_BRIDGED_MODEL
+        ),
+        exception_status=429,
+        cooldown_time=60,
+    )
+    reused_metadata: Final[dict[str, object]] = {}
+    with pytest.raises(litellm.InternalServerError):
+        await router.acompletion(
+            model=MODEL_GROUP_ALIAS,
+            messages=[{"role": "user", "content": "hello"}],
+            metadata=reused_metadata,
+            mock_response="litellm.InternalServerError",
+        )
+    router.cooldown_cache.cooldown_store.delete_cache(CooldownCache.get_cooldown_cache_key("dep-1"))
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=router.prompt_caching_pin_cache).async_add_model_id(
+        model_id="dep-2", messages=messages, tools=None
+    )
+
+    response: Final = await router.acompletion(
+        model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok", **{reused_as: reused_metadata}
+    )
+
+    assert response._hidden_params["model_id"] == "dep-2"
+
+
+@pytest.mark.asyncio
 async def test_responses_mark_on_the_input_item_pins_to_one_deployment():
     request_input = [
         {"role": "system", "content": LONG_PROMPT, "cache_control": {"type": "ephemeral"}},
@@ -1786,9 +1845,10 @@ async def _log_responses_success(
     metadata: dict[str, object],
     model_id: str = "dep-1",
     model_map_value: dict[str, float | None] | None = None,
+    call_type: str = "aresponses",
 ) -> None:
     event = _success_kwargs(
-        call_type="aresponses",
+        call_type=call_type,
         model=AUTO_CACHING_MODEL,
         model_id=model_id,
         request_messages=logged_messages,
@@ -1891,6 +1951,126 @@ async def test_retried_responses_request_leaves_no_pin_in_flight_once_it_succeed
     await _log_responses_success(check, _marked_responses_input(), metadata)
 
     assert not pins_in_flight.cache_dict
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompact_responses", "acreate_interaction"])
+async def test_request_sharing_the_responses_input_shape_leaves_no_pin_behind(call_type: str):
+    cache = DualCache()
+    pins_in_flight = InMemoryCache()
+    check = PromptCachingDeploymentCheck(cache=cache, responses_pins_in_flight=pins_in_flight)
+    metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {"input": _marked_responses_input(), "litellm_metadata": metadata})
+    assert pins_in_flight.cache_dict
+
+    await _log_responses_success(check, _marked_responses_input(), metadata, call_type=call_type)
+
+    assert not pins_in_flight.cache_dict
+    assert not cache.in_memory_cache.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_responses_request_served_by_the_only_healthy_deployment_pins_it():
+    cache = _PinLookupCounter()
+    check = PromptCachingDeploymentCheck(cache=cache, group_has_alternatives=lambda group: True)
+    request = {"input": _marked_responses_input(), "instructions": "Be terse."}
+    only_healthy = [_deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)[1]]
+    metadata: dict[str, object] = {}
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=only_healthy,
+        messages=None,
+        request_kwargs={**request, "litellm_metadata": metadata},
+    )
+    assert filtered == only_healthy
+    assert cache.pin_lookups == 0
+
+    await _log_responses_success(check, _marked_responses_input(), metadata, model_id="dep-2")
+
+    assert await _read_responses_pin(check, {**request, "litellm_metadata": {}}) == ("dep-2",)
+
+
+@pytest.mark.asyncio
+async def test_responses_request_to_a_single_deployment_group_skips_the_prefix_hash():
+    cache = _PinLookupCounter()
+    pins_in_flight = InMemoryCache()
+    check = PromptCachingDeploymentCheck(
+        cache=cache, responses_pins_in_flight=pins_in_flight, group_has_alternatives=lambda group: False
+    )
+    deployments = _deployments(AUTO_CACHING_MODEL)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs={"input": _marked_responses_input(), "litellm_metadata": {}},
+    )
+
+    assert filtered == deployments
+    assert cache.pin_lookups == 0
+    assert not pins_in_flight.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_responses_request_to_a_single_deployment_router_group_writes_no_pin(monkeypatch):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": RESPONSES_NATIVE_MODEL, "api_key": "sk-fake"},
+                "model_info": {"id": "dep-1"},
+            }
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    logged_after_the_check: list[str] = []
+
+    class _LoggedAfterTheCheck(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            logged_after_the_check.append(kwargs["litellm_call_id"])
+
+    monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, _LoggedAfterTheCheck()])
+
+    assert await _serve_response(router, _marked_responses_input()) == "dep-1"
+
+    assert await _eventually(lambda: logged_after_the_check)
+    assert not router.prompt_caching_pin_cache.in_memory_cache.cache_dict
+
+
+def _distinct_marked_responses_input(index: int) -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [_marked_input_text(f"prompt {index} {LONG_PROMPT}")]},
+        {"role": "user", "content": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_responses_prompts_served_while_a_peer_cools_down_stay_pinned_once_it_recovers():
+    router = _responses_router(RESPONSES_NATIVE_MODEL)
+    pins = router.prompt_caching_pin_cache.in_memory_cache.cache_dict
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="dep-1",
+        original_exception=litellm.RateLimitError(
+            message="upstream 429", llm_provider="openai", model=RESPONSES_NATIVE_MODEL
+        ),
+        exception_status=429,
+        cooldown_time=60,
+    )
+    prompts = [_distinct_marked_responses_input(index) for index in range(8)]
+    for prompt in prompts:
+        pins_before = len(pins)
+        assert await _serve_response(router, prompt) == "dep-2"
+        assert await _eventually(lambda before=pins_before: len(pins) > before)
+    router.cooldown_cache.cooldown_store.delete_cache(CooldownCache.get_cooldown_cache_key("dep-1"))
+    unpinned = {
+        (
+            await router.aresponses(model=MODEL_GROUP_ALIAS, input=f"unpinned {index}", mock_response="ok")
+        )._hidden_params["model_id"]
+        for index in range(16)
+    }
+    assert unpinned == {"dep-1", "dep-2"}
+
+    assert {await _serve_response(router, prompt) for prompt in prompts} == {"dep-2"}
 
 
 @pytest.mark.asyncio
