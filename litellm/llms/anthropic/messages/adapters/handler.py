@@ -1,5 +1,6 @@
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -15,11 +16,13 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import messages_carry_encrypted_reasoning
 from litellm.litellm_core_utils.tool_fields import (
     ROUTES_WITHOUT_MCP_SERVERS,
     drops_mcp_servers,
     tools_without_mcp_servers,
 )
+from litellm.llms.anthropic.common_utils import strip_encrypted_reasoning_blocks_from_anthropic_messages
 from litellm.llms.anthropic.messages.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -53,6 +56,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
+    from litellm.chat_completions.dispatch import ChatResult
     from litellm.router import Router
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -70,22 +74,68 @@ class _CompletionKwargs(TypedDict, total=False, extra_items=object):
     custom_llm_provider: str
 
 
+_ANTHROPIC_MESSAGES: Final = TypeAdapter(list[dict[str, object]])
+_PrepareReplay: TypeAlias = "Callable[[_AnthropicMessages], _CompletionKwargs]"
+
+
 @dataclass(frozen=True, slots=True)
 class _ChatTargetReasoning:
     effort: str
     summary: str | None = None
 
 
+def _messages_without_rejected_reasoning(
+    messages: _AnthropicMessages,
+    error: litellm.BadRequestError,
+) -> _AnthropicMessages | None:
+    error_message: Final = str(error)
+    rejected: Final = "invalid_encrypted_content" in error_message or "could not be verified" in error_message
+    if not rejected or not messages_carry_encrypted_reasoning(messages):
+        return None
+    verbose_logger.warning("Backend rejected replayed encrypted reasoning, retrying once without it: %s", error)
+    return _ANTHROPIC_MESSAGES.validate_python(strip_encrypted_reasoning_blocks_from_anthropic_messages(messages))
+
+
+async def _acompletion_without_rejected_reasoning(
+    completion_kwargs: _CompletionKwargs,
+    messages: _AnthropicMessages,
+    prepare_replay: _PrepareReplay,
+) -> tuple[_CompletionKwargs, "ChatResult"]:
+    try:
+        return completion_kwargs, await litellm.acompletion(**completion_kwargs)
+    except litellm.BadRequestError as error:
+        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error)
+        if replayed_messages is None:
+            raise
+        replay_kwargs: Final = prepare_replay(replayed_messages)
+        return replay_kwargs, await litellm.acompletion(**replay_kwargs)
+
+
+def _completion_without_rejected_reasoning(
+    completion_kwargs: _CompletionKwargs,
+    messages: _AnthropicMessages,
+    prepare_replay: _PrepareReplay,
+) -> tuple[_CompletionKwargs, "ChatResult | Coroutine[object, object, ChatResult]"]:
+    try:
+        return completion_kwargs, litellm.completion(**completion_kwargs)
+    except litellm.BadRequestError as error:
+        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error)
+        if replayed_messages is None:
+            raise
+        replay_kwargs: Final = prepare_replay(replayed_messages)
+        return replay_kwargs, litellm.completion(**replay_kwargs)
+
+
+def _is_compaction_block(block: object) -> bool:
+    mapping: Final = as_str_mapping(block)
+    return mapping is not None and mapping.get("type") == "compaction"
+
+
 def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
     """Return True when any message carries a ``compaction`` content block."""
-    for msg in messages:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "compaction":
-                return True
-    return False
+    return any(
+        any(map(_is_compaction_block, content)) for msg in messages if isinstance(content := msg.get("content"), list)
+    )
 
 
 def _proxy_router_fallback() -> "Router | None":
@@ -804,12 +854,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             parent_trace_id=sub_call_trace_id,
         )
 
-        (
-            completion_kwargs,
-            tool_name_mapping,
-        ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        prepare: Final = partial(
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs,
             max_tokens=max_tokens,
-            messages=effective_messages,
             model=model,
             metadata=metadata,
             stop_sequences=stop_sequences,
@@ -824,8 +871,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             output_format=output_format,
             extra_kwargs=kwargs,
         )
-
-        completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        initial_kwargs, tool_name_mapping = prepare(messages=effective_messages)
+        completion_kwargs, completion_response = await _acompletion_without_rejected_reasoning(
+            initial_kwargs, effective_messages, lambda replayed_messages: prepare(messages=replayed_messages)[0]
+        )
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
@@ -951,12 +1000,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
         effective_system: Final = polyfill_result.system if polyfill_result is not None else system
 
-        (
-            completion_kwargs,
-            tool_name_mapping,
-        ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        prepare: Final = partial(
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs,
             max_tokens=max_tokens,
-            messages=effective_messages,
             model=model,
             metadata=metadata,
             stop_sequences=stop_sequences,
@@ -971,8 +1017,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             output_format=output_format,
             extra_kwargs=kwargs,
         )
-
-        completion_response: Final = litellm.completion(**completion_kwargs)
+        initial_kwargs, tool_name_mapping = prepare(messages=effective_messages)
+        completion_kwargs, completion_response = _completion_without_rejected_reasoning(
+            initial_kwargs, effective_messages, lambda replayed_messages: prepare(messages=replayed_messages)[0]
+        )
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:

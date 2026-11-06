@@ -300,12 +300,17 @@ def chat_completion_ends_in_responses_api(
     model: str | None,
     custom_llm_provider: str | None,
     deployment_model_info: Mapping[str, object] | None = None,
+    *,
+    tools: Sequence[Mapping[str, object]] | None = None,
+    reasoning_effort: str | Mapping[str, object] | None = None,
+    api_base: str | None = None,
 ) -> bool:
     """Whether chat completion for this model is served by a Responses API.
 
     Encrypted reasoning can be replayed only there. A normal chat provider cannot
     verify the block, so the messages adapter strips it. ``chatgpt``, a ``responses/``
-    model, and a deployment pinned to ``mode: responses`` keep it.
+    model, a deployment pinned to ``mode: responses``, and a request whose tools or
+    reasoning effort the bridge sends to Responses keep it.
     """
     if not model:
         return False
@@ -317,6 +322,9 @@ def chat_completion_ends_in_responses_api(
     model_info, _resolved = responses_api_bridge_check(
         model=resolved_model,
         custom_llm_provider=provider,
+        tools=tools,
+        reasoning_effort=reasoning_effort,
+        api_base=api_base,
         deployment_model_info=deployment_model_info,
     )
     return model_info.get("mode") == "responses"

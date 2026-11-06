@@ -3915,6 +3915,74 @@ def test_reasoning_output_item_done_with_summary_signs_the_thinking_text():
     assert block["index"] == 2
 
 
+def test_streamed_reasoning_summary_reaches_messages_clients_once_with_its_signature():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    encrypted: Final = "gAAAA_streamed_summary"
+    events: Final = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "Oslo is "},
+        {"type": "response.reasoning_summary_text.delta", "output_index": 0, "delta": "colder."},
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "reasoning",
+                "id": "rs_streamed",
+                "encrypted_content": encrypted,
+                "summary": [{"type": "summary_text", "text": "Oslo is colder."}],
+            },
+        },
+        {"type": "response.output_text.delta", "output_index": 1, "delta": "Oslo."},
+    )
+    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = (
+        *(parser.chunk_parser(event) for event in events),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+    )
+
+    sse_events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="chatgpt/gpt-5.5"))
+    deltas: Final = [event["delta"] for event in sse_events if event.get("type") == "content_block_delta"]
+    assert "".join(d.get("thinking", "") for d in deltas if d["type"] == "thinking_delta") == "Oslo is colder."
+    assert [d["signature"] for d in deltas if d["type"] == "signature_delta"] == [
+        encrypted_reasoning_signature(encrypted)
+    ]
+
+
+def test_reasoning_item_repeated_at_stream_end_reaches_messages_clients_once():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.adapters.streaming_iterator import AnthropicStreamWrapper
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    encrypted: Final = "gAAAA_completed_repeat"
+    reasoning_item: Final = {"type": "reasoning", "id": "rs_repeat", "summary": [], "encrypted_content": encrypted}
+    events: Final = (
+        {"type": "response.output_item.done", "output_index": 0, "item": reasoning_item},
+        {"type": "response.output_text.delta", "output_index": 1, "delta": "Oslo."},
+    )
+    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = (
+        *(parser.chunk_parser(event) for event in events),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(reasoning_items=[reasoning_item]), finish_reason=None)]
+        ),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+    )
+
+    sse_events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="azure/gpt-5.4-nano"))
+    started: Final = [event["content_block"] for event in sse_events if event.get("type") == "content_block_start"]
+    assert [block["type"] for block in started] == ["redacted_thinking", "text"]
+    assert started[0]["data"] == encrypted_reasoning_signature(encrypted)
+
+
 def test_reasoning_output_item_done_without_encrypted_content_stays_empty():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -3935,10 +4003,13 @@ def test_reasoning_output_item_done_without_encrypted_content_stays_empty():
     assert getattr(result.choices[0].delta, "thinking_blocks", None) in (None, [])
 
 
-def test_transform_response_copies_encrypted_reasoning_onto_thinking_blocks():
+def test_transform_response_hands_encrypted_reasoning_to_messages_clients_only():
     from unittest.mock import Mock
 
     from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+    from litellm.llms.anthropic.messages.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse, Usage
 
@@ -3991,9 +4062,15 @@ def test_transform_response_copies_encrypted_reasoning_onto_thinking_blocks():
     )
     message: Final = result.choices[0].message
     assert message.reasoning_items[0]["encrypted_content"] == encrypted
-    assert message.thinking_blocks[0]["type"] == "redacted_thinking"
-    assert message.thinking_blocks[0]["data"] == encrypted_reasoning_signature(encrypted)
+    assert "thinking_blocks" not in result.model_dump()["choices"][0]["message"]
     assert message.tool_calls[0].function.name == "get_weather"
+
+    anthropic_response: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=result, tool_name_mapping=None
+    )
+    content: Final = anthropic_response["content"]
+    assert [block["type"] for block in content] == ["redacted_thinking", "tool_use"]
+    assert content[0]["data"] == encrypted_reasoning_signature(encrypted)
 
 
 def test_streaming_function_call_tool_id_for_degenerate_call_id():
