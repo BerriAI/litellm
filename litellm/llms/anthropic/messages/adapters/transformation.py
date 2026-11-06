@@ -237,6 +237,29 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
+def _is_azure_responses_target(
+    model: str | None,
+    custom_llm_provider: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+) -> bool:
+    if not model:
+        return False
+    if custom_llm_provider not in (None, LlmProviders.AZURE.value):
+        return False
+    if custom_llm_provider is None and not model.startswith("azure/"):
+        return False
+
+    from litellm.responses.bridge_check import responses_api_bridge_check
+
+    resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    model_info, _ = responses_api_bridge_check(
+        model=resolved_model,
+        custom_llm_provider=provider,
+        deployment_model_info=deployment_model_info,
+    )
+    return model_info.get("mode") == "responses"
+
+
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
     if eager_input_streaming is None:
@@ -272,6 +295,7 @@ class AnthropicAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         drop_params: bool = True,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
@@ -307,6 +331,7 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            deployment_model_info=deployment_model_info,
             drop_params=drop_params,
             report_reasoning_drops=True,
         )
@@ -502,10 +527,15 @@ class LiteLLMAnthropicMessagesAdapter:
         model: str | None = None,
         *,
         custom_llm_provider: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         preserve_midturn_system: bool = False,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = (
+            messages
+            if _is_azure_responses_target(model, custom_llm_provider, deployment_model_info)
+            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
@@ -1289,6 +1319,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         preserve_midturn_system: bool = False,
         drop_params: bool = True,
         report_reasoning_drops: bool = False,
@@ -1314,6 +1345,7 @@ class LiteLLMAnthropicMessagesAdapter:
             messages=messages_list,
             model=anthropic_message_request.get("model"),
             custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
             preserve_midturn_system=preserve_midturn_system,
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
