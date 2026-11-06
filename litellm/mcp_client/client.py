@@ -514,6 +514,7 @@ class MCPClient:
         protocol_version: MCPUpstreamProtocol = "auto",
         skip_tool_output_validation: bool = False,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
+        credential_header_names: tuple[str, ...] = (),
     ):
         self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
             MCPUpstreamProtocol
@@ -531,6 +532,7 @@ class MCPClient:
         # Every consumer reads this rather than re-deriving it, since each re-derivation so far
         # picked up a different bug.
         self._credential_slot: str | None = auth_header_name or getattr(resolved_auth, "header_name", None)
+        self._credential_header_names: Final = credential_header_names
         self.stdio_config: MCPStdioConfig | None = stdio_config
         self.extra_headers: dict[str, str] | None = extra_headers
         self.ssl_verify: VerifyTypes | None = ssl_verify
@@ -651,7 +653,12 @@ class MCPClient:
             if self._upstream_transport is None
             else self._create_httpx_client_factory(transport=self._upstream_transport)
         )
-        verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
+        outbound_headers: Final = cast(dict[str, str], headers)  # cast-ok: _get_auth_headers returns an untyped dict
+        secret_names: Final = {name.lower() for name in self._credential_header_names}
+        verbose_logger.debug(
+            "litellm headers for streamable_http_client: %s",
+            {name: value for name, value in outbound_headers.items() if name.lower() not in secret_names},
+        )
         http_client = httpx_client_factory(
             headers=headers,
             timeout=httpx2.Timeout(self.timeout),
@@ -1003,7 +1010,9 @@ class MCPClient:
             # SigV4 aws_auth. Both are None for the common case — no behavior change.
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
-            guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
+            guard: Final = credential_redirect_hook(
+                self.server_url, self._credential_slot, self._credential_header_names
+            )
             return _MCPHTTPClient(
                 transport=transport,
                 headers=headers,

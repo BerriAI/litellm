@@ -103,6 +103,8 @@ def to_server_spec(server: MCPServer) -> ServerSpec | None:
             if server.is_oauth_passthrough:
                 return None  # passthrough is not migrated yet -> defer to v1
             return ServerSpec(server_id=server.server_id, resource=resource, config=NoneConfig())
+        case MCPAuth.secret_headers:
+            return ServerSpec(server_id=server.server_id, resource=resource, config=NoneConfig())
         case MCPAuth.api_key:
             return _shared_key_spec(server, resource, "X-API-Key", "")
         case MCPAuth.bearer_token:

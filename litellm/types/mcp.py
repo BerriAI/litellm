@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
@@ -46,6 +46,7 @@ class MCPAuth(str, enum.Enum):
     authorization = "authorization"
     oauth2 = "oauth2"
     aws_sigv4 = "aws_sigv4"
+    secret_headers = "secret_headers"
     token = "token"
     oauth2_token_exchange = "oauth2_token_exchange"
     oauth2_id_jag = "oauth2_id_jag"
@@ -91,6 +92,7 @@ MCPAuthType = (
         MCPAuth.authorization,
         MCPAuth.oauth2,
         MCPAuth.aws_sigv4,
+        MCPAuth.secret_headers,
         MCPAuth.token,
         MCPAuth.oauth2_token_exchange,
         MCPAuth.oauth2_id_jag,
@@ -395,20 +397,26 @@ def custom_credential_slot(headers: Mapping[str, str] | None) -> str | None:
 
 
 def credential_redirect_hook(
-    configured_url: str, slot: str | None
+    configured_url: str, slot: str | None, secret_names: Iterable[str] = ()
 ) -> Callable[[httpx.Request | httpx2.Request], Awaitable[None]] | None:
-    """An httpx request hook dropping ``slot`` once a redirect leaves ``configured_url``'s origin.
+    """An httpx request hook dropping ``slot`` and ``secret_names`` once a redirect leaves ``configured_url``'s origin.
 
     None when no guard is needed, so callers do not each repeat the exemption: HTTP clients already
     strip ``Authorization`` across origins, but forward every other header, so only a credential an
     operator moved to its own slot can be replayed to whatever host the upstream redirects to.
     """
-    if not configured_url or not slot or same_header(slot, DEFAULT_CREDENTIAL_HEADER):
+    names: Final = tuple(
+        name for name in (slot, *secret_names) if name and not same_header(name, DEFAULT_CREDENTIAL_HEADER)
+    )
+    if not configured_url or not names:
         return None
 
     async def guard(request: httpx.Request | httpx2.Request) -> None:
-        if slot in request.headers and crosses_origin(configured_url, str(request.url)):
-            del request.headers[slot]
+        if not crosses_origin(configured_url, str(request.url)):
+            return
+        for name in names:
+            if name in request.headers:
+                del request.headers[name]  # rebind-ok: the guard strips the credential in place
 
     return guard
 

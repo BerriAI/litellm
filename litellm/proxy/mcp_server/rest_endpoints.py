@@ -1575,6 +1575,20 @@ if MCP_AVAILABLE:
         mcp_auth_header: str | None
         oauth2_headers: dict[str, str] | None
 
+    def _preview_credential_headers(request: NewMCPServerRequest) -> Mapping[str, str]:
+        return (request.credentials or {}).get("headers") or {} if request.auth_type == MCPAuth.secret_headers else {}
+
+    def _preview_static_headers(
+        request: NewMCPServerRequest,
+    ) -> dict[str, str] | None:  # mutable-ok: feeds MCPServer.static_headers
+        credential_headers: Final = _preview_credential_headers(request)
+        return (
+            {**(request.static_headers or {}), **credential_headers} if credential_headers else request.static_headers
+        )
+
+    def _preview_credential_header_names(request: NewMCPServerRequest) -> tuple[str, ...]:
+        return tuple(_preview_credential_headers(request))
+
     def _preview_origin(url: str | None) -> tuple[str, str, int | None] | None:
         if not url:
             return None
@@ -1608,8 +1622,25 @@ if MCP_AVAILABLE:
         may_inherit: Final = new_mcp_server_request.auth_type not in _STAGED_AUTH_VALUE_AUTH_TYPES or (
             saved_origin is not None and saved_origin == preview_origin
         )
-        request: Final = (
+        inherited: Final = (
             inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request
+        )
+        keeps_saved_headers: Final = (
+            inherited.auth_type == MCPAuth.secret_headers
+            and not (inherited.credentials or {}).get("headers")
+            and saved_server is not None
+            and saved_server.auth_type == MCPAuth.secret_headers
+            and saved_origin is not None
+            and saved_origin == preview_origin
+        )
+        request: Final = (
+            inherited.model_copy(
+                update={
+                    "credentials": {**(inherited.credentials or {}), "headers": saved_server.credential_static_headers}
+                }
+            )
+            if keeps_saved_headers and saved_server is not None
+            else inherited
         )
         mcp_auth_header: Final = (
             request.credentials.get("auth_value")
@@ -1686,7 +1717,8 @@ if MCP_AVAILABLE:
             # the saved record during client creation and discard the edited connection settings.
             preview_server_id: Final = (
                 ""
-                if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES or request.auth_type in (None, MCPAuth.none)
+                if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES
+                or request.auth_type in (None, MCPAuth.none, MCPAuth.secret_headers)
                 else request.server_id or ""
             )
             server_model: Final = MCPServer(
@@ -1700,7 +1732,8 @@ if MCP_AVAILABLE:
                 command=request.command,
                 args=request.args,
                 env=request.env,
-                static_headers=request.static_headers,
+                static_headers=_preview_static_headers(request),
+                credential_header_names=_preview_credential_header_names(request),
                 client_id=client_id,
                 client_secret=client_secret,
                 issuer=request.issuer,
@@ -1761,7 +1794,7 @@ if MCP_AVAILABLE:
 
             merged_headers: Final = merge_mcp_headers(
                 extra_headers=(None if preview_cred_provider else effective_oauth2_headers),
-                static_headers=request.static_headers,
+                static_headers=_preview_static_headers(request),
             )
 
             with anyio.fail_after(timeout_seconds):
