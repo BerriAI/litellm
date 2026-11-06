@@ -18,7 +18,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -62,6 +62,8 @@ from litellm.types.utils import (
     Function,
     ModelResponseStream,
     StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
     Usage,
 )
 from tests._support.clock_loops import AutojumpClockLoop
@@ -551,6 +553,102 @@ def test_serialize_streaming_chunk_simple_payload():
             }
         ],
     }
+
+
+@pytest.mark.parametrize(
+    ("choice_extras", "serialized_extras"),
+    [
+        ({"stop_reason": ",5", "token_ids": [20]}, {"stop_reason": ",5", "token_ids": [20]}),
+        ({"finish_reason": "stop", "stop_reason": None}, {"finish_reason": "stop", "stop_reason": None}),
+    ],
+    ids=["vllm-fields", "natural-stop"],
+)
+def test_serialize_streaming_chunk_keeps_the_vllm_choice_fields(
+    choice_extras: dict[str, object], serialized_extras: dict[str, object]
+):
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[StreamingChoices(index=0, delta=Delta(content="1,2,3,4", role="assistant"), **choice_extras)],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"] == [
+        {"index": 0, "delta": {"role": "assistant", "content": "1,2,3,4"}, **serialized_extras}
+    ]
+
+
+def _text_completion_chunk(choice_extras: Mapping[str, object]) -> TextCompletionResponse:
+    return TextCompletionResponse(
+        id="cmpl-1",
+        choices=[TextChoices(finish_reason="length", index=0, text="", **choice_extras)],
+        created=1,
+        model="Qwen/Qwen3-0.6B",
+    )
+
+
+def _chat_chunk_with_fingerprint(choice_extras: Mapping[str, object]) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-1",
+        choices=[StreamingChoices(finish_reason="length", index=0, delta=Delta(content=None), **choice_extras)],
+        created=1,
+        model="Qwen/Qwen3-0.6B",
+        object="chat.completion.chunk",
+        system_fingerprint="fp_1",
+    )
+
+
+_VLLM_SHAPED_CHUNKS: Final = pytest.mark.parametrize(
+    "build_chunk", [_text_completion_chunk, _chat_chunk_with_fingerprint], ids=["text-completion", "chat-fingerprint"]
+)
+
+
+@_VLLM_SHAPED_CHUNKS
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": None}, {"stop_reason": None, "token_ids": [21]}, {"stop_reason": None, "token_ids": None}],
+    ids=["null-stop-reason", "null-stop-reason-with-token-ids", "null-stop-reason-and-token-ids"],
+)
+def test_serialize_streaming_chunk_keeps_null_vllm_choice_fields(
+    build_chunk: Callable[[Mapping[str, object]], TextCompletionResponse | ModelResponseStream],
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    chunk: Final = build_chunk(vllm_choice_fields)
+    plain_chunk: Final = json.loads(build_chunk({}).model_dump_json(exclude_none=True, exclude_unset=True))
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == {
+        **plain_chunk,
+        "choices": [{**plain_chunk["choices"][0], **vllm_choice_fields}],
+    }
+
+
+@_VLLM_SHAPED_CHUNKS
+@pytest.mark.parametrize("choice_extras", [{}, {"stop_reason": ",5", "token_ids": [20]}], ids=["no-vllm", "set-vllm"])
+def test_serialize_streaming_chunk_without_null_vllm_fields_matches_model_dump_json(
+    build_chunk: Callable[[Mapping[str, object]], TextCompletionResponse | ModelResponseStream],
+    choice_extras: dict[str, object],
+) -> None:
+    chunk: Final = build_chunk(choice_extras)
+
+    assert _serialize_streaming_chunk(chunk) == chunk.model_dump_json(exclude_none=True, exclude_unset=True).encode()
+
+
+def test_serialize_streaming_chunk_keeps_streaming_a_null_stop_reason_chunk_with_a_value_json_cannot_encode() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-vllm",
+        choices=[StreamingChoices(index=0, delta=Delta(content="a"), stop_reason=None, token_ids=[21])],
+        created=0,
+        model="Qwen/Qwen3-0.6B",
+        object="chat.completion.chunk",
+    )
+    setattr(chunk, "trace_chunk", hashlib.sha256(b"trace").digest())
+
+    payload: Final = json.loads(_serialize_streaming_chunk(chunk))
+
+    assert payload["choices"][0]["delta"] == {"content": "a"}
+    assert payload["choices"][0]["token_ids"] == [21]
+    assert "trace_chunk" not in payload
 
 
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():

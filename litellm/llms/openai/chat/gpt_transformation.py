@@ -21,19 +21,23 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    chat_completion_prompt_cache_breakpoints_for_wire,
-    drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
-    flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
     system_messages_first,
-    tool_with_sanitized_parameters,
-    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_non_python_regex_patterns,
+    flatten_combinators_and_drop_non_python_regex_patterns,
+    tool_with_sanitized_parameters,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
+    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -556,18 +560,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
         """
         A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
-        api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
-        map) gets each Anthropic ``cache_control`` mark rewritten in place, and under
-        drop_params each content part's ``prompt_cache_breakpoint`` cut down to what chat
-        completions accepts. Any other endpoint keeps or strips the marks as before, and
-        under drop_params also loses every ``prompt_cache_breakpoint`` it cannot read.
+        api.openai.com, or one opted in through ``prompt_cache_options``, its own
+        ``model_info``, or the cost map) gets each
+        Anthropic ``cache_control`` mark rewritten in place, and under drop_params each
+        content part's ``prompt_cache_breakpoint`` cut down to what chat completions
+        accepts. Any other endpoint keeps or strips the marks as before, and under
+        drop_params also loses every ``prompt_cache_breakpoint`` it cannot read.
         """
-        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, routed_model_info
 
         custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
         api_base: Final = _litellm_params_str(litellm_params, "api_base")
         reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
-            model, custom_llm_provider, api_base, prompt_cache_options
+            model,
+            custom_llm_provider,
+            api_base,
+            prompt_cache_options,
+            routed_model_info(litellm_params.get("model_info")),
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return (

@@ -20,9 +20,6 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_image_mime_type_from_url,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
     convert_to_anthropic_image_obj,
@@ -32,6 +29,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     gemini_tool_media_needs_download,
     get_thought_signature_from_tool,
     response_schema_prompt,
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1256,6 +1256,7 @@ def sync_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1275,6 +1276,7 @@ def sync_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1390,6 +1392,7 @@ async def async_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1409,6 +1412,7 @@ async def async_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
