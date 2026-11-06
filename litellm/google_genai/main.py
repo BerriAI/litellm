@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+from collections.abc import Awaitable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
@@ -16,6 +17,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
@@ -39,6 +41,7 @@ else:
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 _GENERATE_CONTENT_RESULT: Final = TypeAdapter(object)
+_CUSTOM_GENERATE_CONTENT_BODY: Final = TypeAdapter(dict[str, object])
 #################################################
 
 
@@ -147,6 +150,8 @@ class GenerateContentHelper:
                 provider=litellm.LlmProviders(custom_llm_provider),
                 litellm_params=litellm_params.model_dump(include={"base_model", "api_base"}),
             )
+            if custom_llm_provider not in litellm._custom_providers  # pyright: ignore[reportPrivateUsage]  # established custom provider registry
+            else None
         )
 
         if generate_content_provider_config is None:
@@ -154,6 +159,13 @@ class GenerateContentHelper:
             # Signal that we should use the adapter by returning special result
             if litellm_logging_obj is None:
                 raise ValueError("litellm_logging_obj is required, but got None")
+            litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
+                kwargs=kwargs,
+                model=model,
+                optional_params=_CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {}),
+                litellm_params={"litellm_call_id": litellm_call_id},
+                custom_llm_provider=custom_llm_provider,
+            )
             return GenerateContentSetupResult(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -231,6 +243,33 @@ def _merge_native_request_fields(
     if not native_request_fields and extra_body is None:
         return None
     return {**native_request_fields, **(extra_body or {})}
+
+
+def _log_custom_generate_content_response(
+    response: object, logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
+) -> object:
+    body: Final = _CUSTOM_GENERATE_CONTENT_BODY.validate_python(
+        _GENERATE_CONTENT_RESULT.dump_python(response, mode="json", by_alias=True)
+    )
+    raw_response: Final = httpx.Response(status_code=200, json=body)
+    logging_obj.model_call_details["httpx_response"] = raw_response  # rebind-ok: success logging needs raw response
+    logging_obj.post_call(input=contents, api_key=api_key, original_response=raw_response.text)  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
+    return response
+
+
+async def _await_custom_generate_content_response(
+    response: Awaitable[object], logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
+) -> object:
+    result: Final = await response
+    return _log_custom_generate_content_response(result, logging_obj, contents, api_key)
+
+
+def _finish_custom_generate_content_response(
+    response: object, logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
+) -> object:
+    if asyncio.iscoroutine(response):
+        return _await_custom_generate_content_response(response, logging_obj, contents, api_key)
+    return _log_custom_generate_content_response(response, logging_obj, contents, api_key)
 
 
 @client
@@ -344,13 +383,59 @@ def generate_content(
             **kwargs,
         )
 
+        custom_handler: Final = (
+            ProviderConfigManager.get_custom_llm_handler(setup_result.custom_llm_provider)
+            if setup_result.custom_llm_provider in litellm._custom_providers  # pyright: ignore[reportPrivateUsage]  # established custom provider registry
+            else None
+        )
+        native_hook_overridden: Final = custom_handler is not None and (
+            type(custom_handler).agenerate_content is not CustomLLM.agenerate_content
+            if _is_async
+            else type(custom_handler).generate_content is not CustomLLM.generate_content
+        )
+        if custom_handler is not None and native_hook_overridden:
+            logging_obj: Final = setup_result.litellm_logging_obj
+            native_contents: Final = _GENERATE_CONTENT_RESULT.validate_python(contents)
+            native_tools: Final = _GENERATE_CONTENT_RESULT.validate_python(tools)
+            native_optional_params: Final[Mapping[str, object]] = _CUSTOM_GENERATE_CONTENT_BODY.validate_python(
+                {
+                    **kwargs,
+                    "extra_headers": extra_headers,
+                    "extra_query": extra_query,
+                    "extra_body": extra_body,
+                }
+            )
+            logging_obj.pre_call(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
+                input=native_contents,
+                api_key=setup_result.litellm_params.api_key,
+                additional_args={
+                    "complete_input_dict": {"contents": contents, "generationConfig": config, "tools": tools}
+                },
+            )
+            hook: Final = custom_handler.agenerate_content if _is_async else custom_handler.generate_content
+            native_response: Final = hook(
+                model=setup_result.model,
+                contents=native_contents,
+                config=setup_result.generate_content_config_dict if config is not None else None,
+                tools=native_tools,
+                litellm_params=setup_result.litellm_params,
+                logging_obj=logging_obj,
+                optional_params=native_optional_params,
+                api_key=setup_result.litellm_params.api_key,
+                api_base=setup_result.litellm_params.api_base,
+                timeout=timeout or request_timeout,
+            )
+            return _finish_custom_generate_content_response(
+                native_response, logging_obj, native_contents, setup_result.litellm_params.api_key
+            )
+
         # Extract systemInstruction from kwargs to pass to handler
         system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
-            return GenerateContentToCompletionHandler.generate_content_handler(
+            adapter_response: Final = GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
                 contents=contents,
                 config=setup_result.generate_content_config_dict,
@@ -360,6 +445,14 @@ def generate_content(
                 extra_headers=extra_headers,
                 **kwargs,
             )
+            if custom_handler is not None:
+                return _finish_custom_generate_content_response(
+                    adapter_response,
+                    setup_result.litellm_logging_obj,
+                    _GENERATE_CONTENT_RESULT.validate_python(contents),
+                    setup_result.litellm_params.api_key,
+                )
+            return adapter_response
 
         # Call the standard handler
         response: Final = _GENERATE_CONTENT_RESULT.validate_python(
