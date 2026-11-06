@@ -956,9 +956,9 @@ class TestOllamaToolCallTransformation:
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
 
-
-    def test_malformed_tool_call_arguments_in_history_answer_400(self):
-        messages = cast(
+    @staticmethod
+    def _replayed_history(arguments: object) -> list[AllMessageValues]:
+        return cast(
             list[AllMessageValues],
             [
                 {"role": "user", "content": "Read a.rs and b.rs"},
@@ -969,7 +969,7 @@ class TestOllamaToolCallTransformation:
                         {
                             "id": "call_abc123",
                             "type": "function",
-                            "function": {"name": "read_file", "arguments": '{"path": "a.rs"}{"path": "b.rs"}'},
+                            "function": {"name": "read_file", "arguments": arguments},
                         }
                     ],
                 },
@@ -977,12 +977,42 @@ class TestOllamaToolCallTransformation:
             ],
         )
 
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ("", {}),
+            (None, {}),
+            ('{"path": "a.rs"', {"path": "a.rs"}),
+            ({"path": "a.rs"}, {"path": "a.rs"}),
+        ],
+        ids=["empty", "null", "truncated", "object"],
+    )
+    def test_replayed_tool_call_arguments_are_forwarded_as_an_object(self, arguments: object, expected: object):
+        result: Final = OllamaChatConfig().transform_request(
+            model="qwen3:8b",
+            messages=self._replayed_history(arguments),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["tool_calls"] == [{"function": {"name": "read_file", "arguments": expected}}]
+
+    @pytest.mark.parametrize(
+        "arguments",
+        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]'],
+        ids=["glued", "array"],
+    )
+    def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400(self, arguments: str):
         with pytest.raises(litellm.BadRequestError) as exc_info:
-            litellm.completion(model="ollama_chat/qwen3:8b", messages=messages, api_base="http://127.0.0.1:9")
+            litellm.completion(
+                model="ollama_chat/qwen3:8b",
+                messages=self._replayed_history(arguments),
+                api_base="http://127.0.0.1:9",
+            )
 
         assert exc_info.value.status_code == 400
         assert "call_abc123" in str(exc_info.value)
-
 
 class TestOllamaStreamingParallelToolCallIndex:
     """Regression for https://github.com/BerriAI/litellm/issues/33678.
@@ -1018,13 +1048,13 @@ class TestOllamaStreamingParallelToolCallIndex:
         )
 
     def test_tool_calls_in_separate_chunks_get_distinct_sequential_indices(self):
-        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
-        chunks = [
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks: Final = [
             self._chunk(self._tool_call(index, command))
             for index, command in enumerate(("date", "uname -a", "whoami"))
         ]
 
-        tool_calls = self._parsed_tool_calls(iterator, *chunks)
+        tool_calls: Final = self._parsed_tool_calls(iterator, *chunks)
 
         assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
         assert [json.loads(tool_call.function.arguments) for tool_call in tool_calls] == [
@@ -1034,13 +1064,13 @@ class TestOllamaStreamingParallelToolCallIndex:
         ]
 
     def test_index_counter_continues_across_chunks(self):
-        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
-        chunks = [
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks: Final = [
             self._chunk(self._tool_call(0, "date"), self._tool_call(1, "uname -a")),
             self._chunk(self._tool_call(2, "whoami")),
         ]
 
-        tool_calls = self._parsed_tool_calls(iterator, *chunks)
+        tool_calls: Final = self._parsed_tool_calls(iterator, *chunks)
 
         assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
 
