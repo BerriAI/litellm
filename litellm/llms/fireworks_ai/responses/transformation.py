@@ -109,7 +109,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 ),
                 drop_params=drops_unsupported_params(litellm_params.drop_params),
             )
-            if tools_param is None or isinstance(tools_param, list)
+            if tools_param is None or isinstance(tools_param, (list, tuple))
             else HoistedAdditionalTools(input=validated_input, tools=(), hoisted=())
         )
         hoisted_params: Final = (

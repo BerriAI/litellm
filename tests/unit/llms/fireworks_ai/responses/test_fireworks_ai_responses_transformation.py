@@ -519,8 +519,9 @@ def test_transform_request_moves_codex_additional_tools_item_into_tools(instruct
         pytest.param(None, 2, id="forwarded as sent without drop_params"),
     ],
 )
+@pytest.mark.parametrize("tools_as_tuple", [False, True], ids=["tools-list", "tools-tuple"])
 def test_transform_request_merges_codex_additional_tools_into_existing_tools_only_under_drop_params(
-    drop_params: bool | None, expected_clock_copies: int
+    drop_params: bool | None, expected_clock_copies: int, tools_as_tuple: bool
 ) -> None:
     weather_tool: Final = {
         "type": "function",
@@ -531,7 +532,7 @@ def test_transform_request_merges_codex_additional_tools_into_existing_tools_onl
     request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
         model="accounts/fireworks/models/glm-5p3",
         input=cast(ResponseInputParam, [CODEX_ADDITIONAL_TOOLS_ITEM, user_item, CODEX_ADDITIONAL_TOOLS_ITEM]),
-        response_api_optional_request_params={"tools": [weather_tool]},
+        response_api_optional_request_params={"tools": (weather_tool,) if tools_as_tuple else [weather_tool]},
         litellm_params=GenericLiteLLMParams(drop_params=drop_params),
         headers={},
     )
@@ -540,7 +541,7 @@ def test_transform_request_merges_codex_additional_tools_into_existing_tools_onl
 
 
 @pytest.mark.parametrize("drop_params", [True, None], ids=["drop_params", "no-drop_params"])
-def test_transform_request_leaves_codex_additional_tools_in_input_when_tools_is_not_a_list(
+def test_transform_request_leaves_codex_additional_tools_in_input_when_tools_is_malformed(
     drop_params: bool | None,
 ) -> None:
     user_item: Final = {"role": "user", "content": "Sleep for two seconds."}
