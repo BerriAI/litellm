@@ -16755,9 +16755,14 @@
           "description": "Teams created without an explicit organization are assigned to this organization.",
           "placeholder": "Select an organization"
         },
+        "accessGroups": {
+          "label": "Access Groups",
+          "description": "Access groups attached to teams created without explicit access groups. Use this to manage model access for all new teams in one place.",
+          "placeholder": "Select access groups"
+        },
         "models": {
           "label": "Models",
-          "description": "Default list of models that new teams can access."
+          "description": "Default list of models for teams auto-created from SSO groups. Teams created from the UI or /team/new are not affected."
         },
         "permissions": {
           "label": "Team Member Permissions",
