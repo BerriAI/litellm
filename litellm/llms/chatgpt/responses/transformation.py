@@ -55,6 +55,14 @@ def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItem
     )
 
 
+def _asks_for_json_object(request: object) -> bool:
+    match request:
+        case {"text": {"format": {"type": "json_object"}}}:
+            return True
+        case _:
+            return False
+
+
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
@@ -120,7 +128,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
-        if existing_instructions:
+        asks_for_json_object: Final = _asks_for_json_object(cast(object, request))  # cast-ok: base returns untyped dict
+        if existing_instructions and asks_for_json_object:
+            request["input"] = [{"role": "developer", "content": existing_instructions}, *request["input"]]
+            request["instructions"] = base_instructions
+        elif existing_instructions:
             if base_instructions not in existing_instructions:
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:
