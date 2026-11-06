@@ -6,8 +6,9 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import pytest
 from redis.exceptions import NoScriptError
@@ -26,8 +27,10 @@ from litellm.caching.redis_cache import (
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # the chain the service hook reports
 )
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.redis.store_settings import RedisStoreSettings
 
 SCRIPT = "return redis.call('GET', KEYS[1])"
+_Answer = TypeVar("_Answer")
 SHA = hashlib.sha1(SCRIPT.encode()).hexdigest()  # noqa: S324
 
 
@@ -93,6 +96,8 @@ class FakeRedisCache(RedisCache):
     def __init__(self, client: FakeClient, namespace: str | None = None) -> None:  # super().__init__ needs a server
         self.client = client
         self.namespace = namespace
+        self.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2, "db": id(self) % 1_000_000}
+        self.store_settings = RedisStoreSettings(redis_kwargs=self.redis_kwargs, namespace=namespace, default_ttl=60)
         self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
         self.service_logger_obj = ServiceLogging()
         self.default_ttl = None
@@ -145,6 +150,63 @@ def replies(command: tuple[Any, ...]) -> Any:
         case "DEL":
             return 1
     raise AssertionError(command)
+
+
+@dataclass
+class FakeNativeRequest:
+    """Stands in for ``NativeRequestRedis``: records each flush in ``events`` next to what the test's pendings log."""
+
+    post_call_deadline: float
+    events: list[str] = field(default_factory=list)
+
+    async def flush_pre(self) -> None:
+        self.events.append("flush_pre")
+
+    async def flush_post(self) -> None:
+        self.events.append("flush_post")
+
+
+@dataclass
+class FakeNatives:
+    built: list[FakeNativeRequest] = field(default_factory=list)
+
+    def __call__(self, post_call_deadline: float) -> FakeNativeRequest:
+        self.built.append(FakeNativeRequest(post_call_deadline))
+        return self.built[-1]
+
+
+@dataclass
+class FakeNativePending(Generic[_Answer]):
+    """A read declared on a ``FakeNativeRequest``; it only answers once that request's pre-call batch was flushed."""
+
+    request: FakeNativeRequest
+    answer: Callable[[], _Answer]
+
+    async def resolve(self) -> _Answer:
+        if "flush_pre" not in self.request.events:
+            raise ConnectionError("resolved before its batch was flushed")
+        self.request.events.append("resolve")
+        return self.answer()
+
+
+@dataclass
+class ReadyPending(Generic[_Answer]):
+    """An op declared with ``NativeSend.Now()``: it answers whenever it is resolved."""
+
+    answer: Callable[[], _Answer]
+
+    async def resolve(self) -> _Answer:
+        return self.answer()
+
+
+def fake_send(_phase: object, request: FakeNativeRequest) -> FakeNativeRequest:
+    """A ``native_send_factory`` for ``FakeNatives``: the fake request stands in for its ``NativeSend``."""
+    return request
+
+
+def fake_pending(send: object, answer: Callable[[], _Answer]) -> FakeNativePending[_Answer] | ReadyPending[_Answer]:
+    """What a fake handle declares for ``send``: on the fake request's batch, or on its own for ``Now()``."""
+    return FakeNativePending(send, answer) if isinstance(send, FakeNativeRequest) else ReadyPending(answer)
 
 
 def make(fail: Exception | None = None, namespace: str | None = None) -> tuple[FakeRedisCache, FakeClient]:

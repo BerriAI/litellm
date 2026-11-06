@@ -7841,6 +7841,17 @@
         "PluginListItem": {
           "description": "Plugin item in list responses.",
           "properties": {
+            "approved_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Approved By"
+            },
             "author": {
               "anyOf": [
                 {
@@ -7873,6 +7884,17 @@
               ],
               "title": "Created At"
             },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
+            },
             "description": {
               "anyOf": [
                 {
@@ -7894,6 +7916,17 @@
                 }
               ],
               "title": "Domain"
+            },
+            "download_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Download Count"
             },
             "enabled": {
               "title": "Enabled",
@@ -7958,6 +7991,22 @@
                 }
               ],
               "title": "Namespace"
+            },
+            "published_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Published By"
+            },
+            "security_scan_passed": {
+              "default": false,
+              "title": "Security Scan Passed",
+              "type": "boolean"
             },
             "source": {
               "additionalProperties": {
@@ -59573,6 +59622,14 @@
               },
               "title": "Skills",
               "type": "array"
+            },
+            "tags": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
+              "type": "array"
             }
           },
           "required": [
@@ -59848,6 +59905,17 @@
         },
         "SkillHubSkill": {
           "properties": {
+            "approved_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Approved By"
+            },
             "content_url": {
               "anyOf": [
                 {
@@ -59858,6 +59926,29 @@
                 }
               ],
               "title": "Content Url"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
             },
             "description": {
               "anyOf": [
@@ -59890,7 +59981,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Gateway ZIP downloads, included in proxy-admin catalog listings",
+              "description": "Gateway ZIP downloads, including repeat downloads",
               "title": "Download Count"
             },
             "download_url": {
@@ -59936,6 +60027,22 @@
                 }
               ],
               "title": "Namespace"
+            },
+            "published_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Published By"
+            },
+            "security_scan_passed": {
+              "default": false,
+              "title": "Security Scan Passed",
+              "type": "boolean"
             },
             "source": {
               "additionalProperties": {
@@ -60591,6 +60698,66 @@
                 "minimum": 1,
                 "title": "Limit",
                 "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "tag",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "Tag",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "security_scan_passed",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Security Scan Passed"
+              }
+            },
+            {
+              "in": "query",
+              "name": "sort_by",
+              "required": false,
+              "schema": {
+                "default": "name",
+                "enum": [
+                  "name",
+                  "download_count",
+                  "updated_at",
+                  "created_at",
+                  "created_by",
+                  "published_by",
+                  "approved_by",
+                  "security_scan_passed"
+                ],
+                "title": "Sort By",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "sort_order",
+              "required": false,
+              "schema": {
+                "default": "asc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "title": "Sort Order",
+                "type": "string"
               }
             }
           ],

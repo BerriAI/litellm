@@ -332,6 +332,18 @@ def _cross_region_profiles(
     )
 
 
+_BEDROCK_PROFILE_ONLY_NATIVE_OUTPUT_MODELS: Final = frozenset(
+    {
+        "anthropic.claude-opus-5-5",
+        "anthropic.claude-fable-5-1",
+        "anthropic.claude-sonnet-5",
+        "anthropic.claude-haiku-5-5",
+        "anthropic.claude-opus-5",
+        "anthropic.claude-opus-4-8",
+    }
+)
+
+
 def test_get_model_info_bedrock_cross_region_capability_parity():
     """
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
@@ -361,6 +373,13 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
             if _govcloud_may_lag(k, cap):
                 assert base_value or not v[cap], f"{cap} is on {k} but not on {base_model_key}"
+                continue
+            if (
+                cap == "supports_native_structured_output"
+                and base_model_key in _BEDROCK_PROFILE_ONLY_NATIVE_OUTPUT_MODELS
+                and v[cap] is True
+            ):
+                assert base_value is False, f"{cap} is already enabled on bare model {base_model_key}"
                 continue
             assert (
                 v[cap] == base_value

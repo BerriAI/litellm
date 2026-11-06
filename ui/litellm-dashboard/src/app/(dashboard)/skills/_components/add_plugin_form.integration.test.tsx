@@ -15,7 +15,7 @@ const file = new File(["skill archive"], "personal-skill.zip", { type: "applicat
 const chooseFile = (selected = file) =>
   fireEvent.change(screen.getByLabelText("Skill ZIP file"), { target: { files: [selected] } });
 const change = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
-const submit = () => fireEvent.click(screen.getByRole("button", { name: "Add Skill" }));
+const submit = () => fireEvent.click(screen.getByRole("button", { name: "Register skill" }));
 const openImport = () => {
   renderWithProviders(<AddPluginForm {...props} />);
   fireEvent.click(screen.getByRole("radio", { name: "Import URL" }));

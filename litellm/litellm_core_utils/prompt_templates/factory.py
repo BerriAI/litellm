@@ -4291,7 +4291,7 @@ def _convert_to_bedrock_tool_call_invoke(
     - extract name 
     - extract id
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         split_concatenated_json_objects,
     )
 
