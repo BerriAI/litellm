@@ -2097,6 +2097,35 @@ async def test_responses_with_another_tool_set_are_a_different_prefix():
 
 
 @pytest.mark.asyncio
+async def test_chat_and_responses_requests_sending_the_same_tool_share_one_prefix():
+    described_tool: Final = {**_RESPONSES_TOOL, "description": "Get the time"}
+    chat_tool: Final = {
+        "type": "function",
+        "function": {key: value for key, value in described_tool.items() if key != "type"},
+    }
+    router: Final = _responses_router(RESPONSES_BRIDGED_MODEL)
+    await router.acompletion(
+        model=MODEL_GROUP_ALIAS,
+        messages=[
+            {"role": "system", "content": [{**_marked_input_text(LONG_PROMPT), "type": "text"}]},
+            {"role": "user", "content": "hello"},
+        ],
+        tools=[chat_tool],
+        mock_response="ok",
+    )
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    chat_pin_keys: Final = set(router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    router.prompt_caching_pin_cache.in_memory_cache.flush_cache()
+
+    await router.aresponses(
+        model=MODEL_GROUP_ALIAS, input=_marked_responses_input(), tools=[described_tool], mock_response="ok"
+    )
+
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    assert set(router.prompt_caching_pin_cache.in_memory_cache.cache_dict) == chat_pin_keys
+
+
+@pytest.mark.asyncio
 async def test_responses_marked_tool_set_long_enough_to_cache_pins_on_its_own():
     marked_tool = {**_RESPONSES_TOOL, "description": LONG_PROMPT, "cache_control": {"type": "ephemeral"}}
     request = {"input": "hello", "tools": [marked_tool]}
@@ -2411,6 +2440,22 @@ async def test_logger_serializing_the_request_metadata_never_sees_the_prompt_cac
     pin_keys = tuple(router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
     assert pin_keys
     assert not [pin_key for pin_key in pin_keys if pin_key.split(":")[1] in logged_metadata]
+
+
+@pytest.mark.asyncio
+async def test_responses_call_hands_back_the_callers_metadata_without_the_pin_token():
+    router: Final = _responses_router(RESPONSES_BRIDGED_MODEL)
+    caller_metadata: Final[dict[str, object]] = {"tags": ["team-a"]}
+
+    await router.aresponses(
+        model=MODEL_GROUP_ALIAS,
+        input=_marked_responses_input(),
+        litellm_metadata=caller_metadata,
+        mock_response="ok",
+    )
+
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    assert "responses_prompt_cache_pin" not in caller_metadata
 
 
 @pytest.mark.asyncio

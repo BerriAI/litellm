@@ -6,6 +6,7 @@ Route to previously cached model id, if valid
 
 import secrets
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, TypedDict, cast
 
@@ -29,6 +30,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM,
     RESPONSES_WEB_SEARCH_TOOL_TYPES,
     LiteLLMCompletionResponsesConfig,
+    ResponsesToolChatForm,
     ResponseTools,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -82,6 +84,20 @@ def new_responses_pins_in_flight() -> ResponsesPinsInFlight:
     )
 
 
+def _key_chat_tool(source: Mapping[str, object], chat_tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = as_str_mapping(chat_tool.get("function"))
+    if source.get("type") != "function" or function is None:
+        return chat_tool
+    return {**chat_tool, "function": {key: source[key] for key in function if key in source}}
+
+
+def _key_chat_tools(
+    sources: Sequence[Mapping[str, object]], forms: Sequence[ResponsesToolChatForm]
+) -> Iterator[Mapping[str, object]]:
+    for source, form in zip(sources, forms, strict=True):
+        yield from (_key_chat_tool(source, chat_tool) for chat_tool in form.chat_tools)
+
+
 def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | None:
     request_input: Final = request_data.get("input")
     request_tools: Final = request_data.get("tools")
@@ -107,13 +123,12 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
             item_cache_control=True,
             only_since_compaction=True,
         )
-        tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            convertible_tools
-        )
+        forms: Final = LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(convertible_tools)
     except Exception as error:  # noqa: BLE001  # the provider judges the input, a routing preference never does
         verbose_logger.debug("Prompt Caching: skipping an input with no chat form: %s", type(error).__name__)
         return None
-    key_tools: Final = [*tools, *tools_kept_as_sent]
+    tools: Final = list(chain.from_iterable(form.chat_tools for form in forms))
+    key_tools: Final = [*_key_chat_tools(convertible_tools or (), forms), *tools_kept_as_sent]
     return _ResponsesPrompt(
         messages=cast(list[AllMessageValues], messages),  # cast-ok: the bridge's chat messages, read as plain JSON
         tools=cast(list[AllToolParamValues], tools) or None,  # cast-ok: the bridge's chat tools, read as plain JSON
@@ -465,10 +480,12 @@ class PromptCachingDeploymentCheck(CustomLogger):
 
     def _take_responses_pin(self, kwargs: _PromptCachingSuccessEventKwargs) -> object:
         litellm_params: Final = kwargs.get("litellm_params") or {}
-        metadata: Final = as_str_mapping(litellm_params.get("litellm_metadata")) or {}
-        pin_token: Final = metadata.get(_RESPONSES_PIN_METADATA_KEY)
+        metadata: Final = litellm_params.get("litellm_metadata")
+        pin_token: Final = (as_str_mapping(metadata) or {}).get(_RESPONSES_PIN_METADATA_KEY)
         if not isinstance(pin_token, str):
             return None
+        if isinstance(metadata, dict):
+            metadata.pop(_RESPONSES_PIN_METADATA_KEY, None)  # pyright: ignore[reportUnknownMemberType]  # the caller's metadata dict
         recorded_pin: Final = self.responses_pins_in_flight.get_cache(pin_token)
         self.responses_pins_in_flight.delete_cache(pin_token)
         return recorded_pin
