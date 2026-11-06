@@ -6,6 +6,7 @@ inside ``[base, base + JITTER)`` rather than exactly.
 """
 
 from collections.abc import Callable, Mapping
+from time import monotonic
 from typing import Final
 
 import httpx
@@ -830,3 +831,54 @@ async def test_health_record_failure_cools_down_past_allowed_fails(make_core: Ma
     assert (first, second) == (False, True)
     assert set(cooled_down(core, ["a", "b"])) == {"a"}
     assert core.health().failures_this_minute("a") == 2
+
+
+# --- request_deadline enforcement ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_expired_deadline_raises_timeout_without_sleeping(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="60"))
+
+    past_deadline: Final = monotonic() - 1.0
+    error: Final = await attempt(core, request_deadline=past_deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert host.sleeps == [], f"no sleep should occur when deadline already passed: {host.sleeps}"
+
+
+@pytest.mark.asyncio
+async def test_retry_after_header_capped_to_remaining_budget(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="60"))
+
+    deadline: Final = monotonic() + 2.0
+    error: Final = await attempt(core, request_deadline=deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert all(s <= 2.5 for s in host.sleeps), f"sleep exceeded 2-second budget: {host.sleeps}"
+
+
+@pytest.mark.asyncio
+async def test_retry_proceeds_when_budget_outlasts_backoff(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=1)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="0.001"), None)
+
+    deadline: Final = monotonic() + 30.0
+    response: Final = await attempt(core, request_deadline=deadline)
+
+    assert not isinstance(response, Exception), f"expected success, got {response!r}"
+    assert len(host.calls_to("acompletion")) == 2, "expected initial attempt + one retry"
+
+
+@pytest.mark.asyncio
+async def test_no_deadline_leaves_backoff_unchanged(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=2)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="3"))
+
+    await attempt(core)
+
+    assert len(host.sleeps) >= 2
+    assert all(3 <= slept < 3 + JITTER for slept in host.sleeps[:2])
+

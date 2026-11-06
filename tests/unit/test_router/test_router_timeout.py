@@ -650,3 +650,82 @@ def test_azure_router_timeout_raises_after_httpx_read_timeout(
         )
 
     assert route.call_count == 1
+
+
+def test_request_deadline_set_when_litellm_timeout_header_present() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    before: Final = time.monotonic()
+    result: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-litellm-timeout": "10"},
+        request_data={},
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+    after: Final = time.monotonic()
+
+    assert result.get("timeout") == 10.0
+    deadline: Final = result.get("request_deadline")
+    assert isinstance(deadline, float)
+    assert before + 10.0 <= deadline <= after + 10.0
+
+
+def test_request_deadline_set_when_stainless_timeout_header_present() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    before: Final = time.monotonic()
+    result: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-stainless-timeout": "15"},
+        request_data={},
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+    after: Final = time.monotonic()
+
+    assert result.get("timeout") == 15.0
+    deadline: Final = result.get("request_deadline")
+    assert isinstance(deadline, float)
+    assert before + 15.0 <= deadline <= after + 15.0
+
+
+def test_request_deadline_not_set_when_no_timeout_header() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    result: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={},
+        request_data={},
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    assert result.get("request_deadline") is None
+
+
+def test_request_deadline_set_from_body_timeout() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    fake_now: Final[list[float]] = [0.0]
+    with patch.object(time, "monotonic", lambda: fake_now[0]):
+        result: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+            headers={},
+            request_data={"timeout": 10},
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    deadline: Final = result.get("request_deadline")
+    assert isinstance(deadline, float), "request_deadline must be set when body timeout is present"
+    assert deadline == 10.0, f"expected deadline 10.0 (now=0 + 10), got {deadline}"
+
+
+def test_litellm_timeout_takes_priority_over_stainless_timeout() -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    result: Final = LiteLLMProxyRequestSetup.add_litellm_data_for_backend_llm_call(
+        headers={"x-litellm-timeout": "5", "x-stainless-timeout": "30"},
+        request_data={},
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    assert result.get("timeout") == 5.0, "x-litellm-timeout must win when both headers present"

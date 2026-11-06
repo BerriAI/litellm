@@ -1657,7 +1657,7 @@ class LiteLLMProxyRequestSetup:
         });
         ```
         """
-        timeout_header: Final = headers.get("x-litellm-timeout", None)
+        timeout_header: Final = headers.get("x-litellm-timeout") or headers.get("x-stainless-timeout")
         if timeout_header is not None:
             return float(timeout_header)
         return None
@@ -1894,6 +1894,17 @@ class LiteLLMProxyRequestSetup:
         header_timeout: Final = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if header_timeout is not None:
             data["timeout"] = header_timeout
+
+        _body_timeout: Final = request_data.get("timeout")
+        _deadline_secs: Final = (
+            header_timeout
+            if header_timeout is not None
+            else float(_body_timeout)
+            if isinstance(_body_timeout, (int, float))
+            else None
+        )
+        if _deadline_secs is not None:
+            data["request_deadline"] = time.monotonic() + _deadline_secs
 
         header_stream_timeout: Final = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers)
         if header_stream_timeout is not None:
