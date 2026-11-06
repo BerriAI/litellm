@@ -491,16 +491,16 @@ def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_decla
 
 
 @pytest.mark.parametrize(
-    ("deployment_model_info", "native"),
+    ("deployment_model_info", "reported_native"),
     [
         ({}, True),
-        ({"supports_bedrock_native_structured_output": False}, False),
+        ({"supports_bedrock_native_structured_output": False}, True),
         ({"supports_native_structured_output": True, "supports_bedrock_native_structured_output": False}, True),
     ],
-    ids=["native-by-default", "bedrock-opt-out", "explicit-generic-flag"],
+    ids=["native-by-default", "deprecated-opt-out", "explicit-generic-flag"],
 )
-def test_model_info_reports_a_deployment_bedrock_native_output_opt_out(
-    local_model_cost_map: None, deployment_model_info: dict[str, object], native: bool
+def test_model_info_reports_the_map_default_without_reading_the_deprecated_opt_out(
+    local_model_cost_map: None, deployment_model_info: dict[str, object], reported_native: bool
 ) -> None:
     info: Final = proxy_server._enrich_model_info_with_litellm_data(
         {
@@ -510,7 +510,12 @@ def test_model_info_reports_a_deployment_bedrock_native_output_opt_out(
         }
     )["model_info"]
 
-    assert info["supports_native_structured_output"] is native
+    assert info["supports_native_structured_output"] is reported_native
+    if "supports_bedrock_native_structured_output" in deployment_model_info:
+        assert (
+            info["supports_bedrock_native_structured_output"]
+            is deployment_model_info["supports_bedrock_native_structured_output"]
+        )
 
 
 @pytest.mark.parametrize(
