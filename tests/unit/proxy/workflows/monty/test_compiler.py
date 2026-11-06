@@ -1,10 +1,11 @@
+import ast
 import hashlib
 from functools import reduce
 from typing import Final
 
 import pytest
 
-from litellm.proxy.workflows.monty.compiler import compile_program, escape_diagnostics
+from litellm.proxy.workflows.monty.compiler import _SchemaWork, _schemas_error, compile_program, escape_diagnostics
 from litellm.proxy.workflows.monty.models import (
     CompiledProgram,
     JsonSchema,
@@ -293,3 +294,106 @@ def test_registration_accepts_local_json_pointer_escaping_and_annotations_import
     source: Final = "from __future__ import annotations\ndef transform(value: Missing) -> Unknown: return value"
     result: Final = compile_program(_program(source, output=schema), MontyLimits())
     assert isinstance(result, CompiledProgram), result
+
+
+@pytest.mark.parametrize("name", ["default", "pattern", "enum", "$ref", "$ref-like"])
+def test_keyword_looking_property_names_are_data(name: str) -> None:
+    schema: Final[JsonSchema] = {"type": "object", "properties": {name: {"type": "string"}}}
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    assert isinstance(result, CompiledProgram), result
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"properties": {"default": {"$ref": "https://example.invalid/schema"}}},
+        {"$defs": {"default": {"items": {"$ref": "https://example.invalid/schema"}}}},
+        {"anyOf": [{"properties": {"enum": {"$ref": "https://example.invalid/schema"}}}]},
+        {"default": {"$ref": "https://example.invalid/schema"}, "$ref": "#/default"},
+    ],
+)
+def test_remote_references_under_keyword_looking_names_are_rejected(schema: JsonSchema) -> None:
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert "local" in result.message
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    [
+        "pattern",
+        "patternProperties",
+        "uniqueItems",
+        "$id",
+        "$anchor",
+        "$dynamicRef",
+        "$dynamicAnchor",
+        "$schema",
+        "if",
+        "then",
+        "else",
+        "dependentRequired",
+        "dependentSchemas",
+        "contains",
+        "minContains",
+        "maxContains",
+        "propertyNames",
+        "unevaluatedProperties",
+        "unevaluatedItems",
+        "discriminator",
+        "unknown",
+    ],
+)
+def test_unsafe_keywords_are_explicitly_refused(keyword: str) -> None:
+    result: Final = compile_program(_program("def transform(value): return value", output={keyword: {}}), MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert keyword in result.message
+
+
+@pytest.mark.parametrize("keyword", ["const", "enum", "default", "examples"])
+def test_annotation_and_data_values_are_not_interpreted_as_schemas(keyword: str) -> None:
+    payload: Final[JsonSchema] = {"$ref": "https://example.invalid/data", "pattern": "inert"}
+    schema: Final[JsonSchema] = {keyword: [payload] if keyword in {"enum", "examples"} else payload}
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    assert isinstance(result, CompiledProgram), result
+
+
+@pytest.mark.parametrize("depth", [8, 12, 14])
+def test_repeated_reference_analysis_has_linear_work(depth: int) -> None:
+    definitions: Final[JsonSchema] = {
+        f"N{index}": {"anyOf": [{"$ref": f"#/$defs/N{index + 1}"}, {"$ref": f"#/$defs/N{index + 1}"}]}
+        for index in range(depth)
+    }
+    schema: Final[JsonSchema] = {"$defs": {**definitions, f"N{depth}": {}}, "$ref": "#/$defs/N0"}
+    program: Final = _program("def transform(value): return value", output=schema)
+    work: Final = _SchemaWork()
+    assert _schemas_error(program, ast.parse(program.source), work) is None
+    assert work.units < 100 * (depth + 1)
+    result: Final = compile_program(program, MontyLimits())
+    assert isinstance(result, CompiledProgram), result
+
+
+def test_expanded_input_builder_fails_closed_at_shared_work_budget() -> None:
+    definitions: Final[JsonSchema] = {
+        f"N{index}": {
+            "type": "object",
+            "properties": {"left": {"$ref": f"#/$defs/N{index + 1}"}, "right": {"$ref": f"#/$defs/N{index + 1}"}},
+        }
+        for index in range(14)
+    }
+    program: Final = _program("def transform(value): return value")
+    expanded: Final = program.model_copy(
+        update={
+            "input_schema": {
+                **program.input_schema,
+                "$defs": {**definitions, "N14": {"type": "integer"}},
+                "properties": {"value": {"$ref": "#/$defs/N0"}},
+            }
+        }
+    )
+    result: Final = compile_program(expanded, MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert result.message == "schema expansion budget exceeded"
