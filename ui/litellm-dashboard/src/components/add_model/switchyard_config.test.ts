@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   emptySwitchyardConfig,
   isDecisionModelMode,
+  parseToolSemantics,
   setClassifierKind,
   stageConfidence,
   switchyardSaveError,
@@ -57,6 +58,13 @@ describe("Switchyard configuration", () => {
       classifier: { base_threshold: 0.4 },
     });
     expect(parsed.classifier).toMatchObject({ kind: "llm", base_threshold: 0.4 });
+  });
+  it("accepts tool semantics that list only some categories", () => {
+    expect(parseToolSemantics('{"observe": ["Grep"], "mutate": ["Deploy"]}')).toEqual({
+      observe: ["Grep"],
+      mutate: ["Deploy"],
+    });
+    expect(() => parseToolSemantics('{"unknown": ["Grep"]}')).toThrow();
   });
   it("switches classifier kind with fresh settings and clears a judge of the wrong kind", () => {
     const llm = {

@@ -11,7 +11,7 @@ const optionsFields = {
   picker: z.enum(["efficient_first", "capable_first"]).default("efficient_first"),
   confidence_threshold: threshold.optional(),
   recent_window: positiveInteger.optional(),
-  tool_semantics: z.record(z.enum(["observe", "mutate", "plan", "new"]), z.array(z.string())).optional(),
+  tool_semantics: z.partialRecord(z.enum(["observe", "mutate", "plan", "new"]), z.array(z.string())).optional(),
   only_on_wrong_signal_escalation: z.boolean().optional(),
 };
 const llmClassifierFields = {
