@@ -111,6 +111,7 @@ class TestVertexAITextToSpeechConfig:
             ("europe-west3", "eu-texttospeech.googleapis.com"),
             ("europe-west8", "eu-texttospeech.googleapis.com"),
             ("europe-west9", "eu-texttospeech.googleapis.com"),
+            ("europe-west12", "eu-texttospeech.googleapis.com"),
             ("us", "us-texttospeech.googleapis.com"),
             ("us-central1", "us-texttospeech.googleapis.com"),
             ("us-west5", "us-texttospeech.googleapis.com"),
@@ -119,7 +120,6 @@ class TestVertexAITextToSpeechConfig:
     def test_get_complete_url_uses_regional_endpoint_for_vertex_location(
         self, vertex_location: str, expected_host: str
     ) -> None:
-        """A us or eu vertex_location selects the matching regional Cloud TTS endpoint"""
         config: Final = VertexAITextToSpeechConfig()
 
         url: Final = config.get_complete_url(
@@ -134,7 +134,6 @@ class TestVertexAITextToSpeechConfig:
         "vertex_location", ["global", "europe-west2", "asia-northeast1", "northamerica-northeast1", None]
     )
     def test_get_complete_url_keeps_global_endpoint_without_a_regional_match(self, vertex_location: str | None) -> None:
-        """A global, unknown or missing location keeps the previous global endpoint"""
         config: Final = VertexAITextToSpeechConfig()
 
         url: Final = config.get_complete_url(
@@ -146,7 +145,6 @@ class TestVertexAITextToSpeechConfig:
         assert url == "https://texttospeech.googleapis.com/v1/text:synthesize"
 
     def test_get_complete_url_api_base_wins_over_vertex_location(self) -> None:
-        """An explicit api_base takes precedence over the regional endpoint"""
         config: Final = VertexAITextToSpeechConfig()
 
         custom_url: Final = "https://custom-tts-endpoint.example.com/v1/synthesize"
@@ -1923,6 +1921,7 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_with_a_numeric_speaking_rate_ret
         ("europe-west4", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("europe-north1", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("europe-west9", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("europe-west10", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("northamerica-northeast1", "https://northamerica-northeast1-texttospeech.googleapis.com/v1/text:synthesize"),
         ("global", _SYNTHESIZE_URL),
@@ -1972,12 +1971,12 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_rejects_a_region_cloud_tts_does_
 
 
 @pytest.mark.asyncio
-async def test_aspeech_vertex_ai_chirp_follows_the_vertexai_location_env(
+async def test_aspeech_vertex_ai_chirp_keeps_the_global_host_when_only_vertexai_location_is_set(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VERTEXAI_LOCATION", "europe-west4")
-    route: Final = respx_mock.post("https://eu-texttospeech.googleapis.com/v1/text:synthesize").mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"eu-audio").decode()})
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"global-audio").decode()})
     )
 
     response: Final = await litellm.aspeech(
@@ -1988,7 +1987,7 @@ async def test_aspeech_vertex_ai_chirp_follows_the_vertexai_location_env(
     )
 
     assert route.call_count == 1
-    assert response.content == b"eu-audio"
+    assert response.content == b"global-audio"
 
 
 @pytest.mark.asyncio

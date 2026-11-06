@@ -76,12 +76,15 @@ _CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
                 "eu",
                 "europe-central2",
                 "europe-north1",
+                "europe-north2",
                 "europe-southwest1",
                 "europe-west1",
                 "europe-west3",
                 "europe-west4",
                 "europe-west8",
                 "europe-west9",
+                "europe-west10",
+                "europe-west12",
             ),
             "eu",
         ),
@@ -586,7 +589,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # Resolve Vertex AI credentials using VertexBase helpers
         vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params_dict)
         vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
-        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
+        vertex_location: Final = (
+            self.safe_get_vertex_ai_location(litellm_params_dict)
+            if self._is_gemini_tts_model(model)
+            else self.explicit_vertex_ai_location(litellm_params_dict)
+        )
 
         mapped_voice, mapped_params = (
             self.map_openai_params(
@@ -746,9 +753,6 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Get the complete URL for Vertex AI TTS request
 
         Google Cloud TTS endpoint: https://texttospeech.googleapis.com/v1/text:synthesize
-
-        An explicit api_base wins. Otherwise a us or eu vertex_location selects the matching regional endpoint
-        (for example eu-texttospeech.googleapis.com), and any other or missing location keeps the global one.
         """
         if self._is_gemini_tts_model(model):
             return self._get_gemini_tts_url(
