@@ -822,6 +822,7 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
     detail: str
     format: str
     video_metadata: ReadOnly[Mapping[str, object]]
+    bucket_owner: ReadOnly[str]
 
 
 class ChatCompletionImageObject(TypedDict):
@@ -875,6 +876,7 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     format: str
     detail: str  # For video/image resolution control (low, medium, high, ultra_high)
     video_metadata: dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
+    bucket_owner: ReadOnly[str]
 
 
 class ChatCompletionFileObject(TypedDict):

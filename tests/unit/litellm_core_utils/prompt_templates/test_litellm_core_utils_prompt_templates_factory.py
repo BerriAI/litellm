@@ -74,6 +74,7 @@ from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages
 from litellm.llms.vllm.completion import handler as vllm_handler
 from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
 from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage, ChatCompletionToolMessage
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, TextCompletionResponse
 from litellm.utils import (
@@ -2870,10 +2871,10 @@ def test_bedrock_create_bedrock_block_deterministic_document_hash():
 
     # Create two blocks with same content
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Both should have the same document name
@@ -2898,10 +2899,10 @@ def test_bedrock_create_bedrock_block_different_content_different_hash():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different document names
@@ -2924,15 +2925,15 @@ def test_bedrock_create_bedrock_block_normalized_base64():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_newlines,
+        source={"bytes": base64_with_newlines},
         mime_type="application/pdf",
         image_format="pdf",
     )
     block3 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_spaces,
+        source={"bytes": base64_with_spaces},
         mime_type="application/pdf",
         image_format="pdf",
     )
@@ -2959,10 +2960,10 @@ def test_bedrock_create_bedrock_block_large_file_sampling():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different names because total length is different
@@ -2981,7 +2982,7 @@ def test_bedrock_create_bedrock_block_very_large_file():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have a valid document name
@@ -3003,7 +3004,7 @@ def test_bedrock_create_bedrock_block_image_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="image/png", image_format="png"
+        source={"bytes": base64_content}, mime_type="image/png", image_format="png"
     )
 
     # Should be an image block, not a document block
@@ -3024,7 +3025,7 @@ def test_bedrock_create_bedrock_block_video_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="video/mp4", image_format="mp4"
+        source={"bytes": base64_content}, mime_type="video/mp4", image_format="mp4"
     )
 
     # Should be a video block, not a document block
@@ -3045,7 +3046,7 @@ def test_bedrock_create_bedrock_block_document_name_format():
     base64_content = base64.b64encode(pdf_content).decode("utf-8")
 
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     document_name = block["document"]["name"]
@@ -3074,13 +3075,191 @@ def test_bedrock_create_bedrock_block_different_document_formats():
     for content, mime_type, format_type in test_cases:
         base64_content = base64.b64encode(content + b"\x00" * 100).decode("utf-8")
         block = BedrockImageProcessor._create_bedrock_block(
-            image_bytes=base64_content, mime_type=mime_type, image_format=format_type
+            source={"bytes": base64_content}, mime_type=mime_type, image_format=format_type
         )
 
         assert block.get("document") is not None
         assert f"DocumentPDFmessages_" in block["document"]["name"]
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
+
+
+_S3_MEDIA_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
+_S3_BUCKET_OWNER: Final = "111122223333"
+
+
+async def _converse_user_content(part: Mapping[str, object], run_async: bool) -> Sequence[BedrockContentBlock]:
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Describe this."}, part]}]
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+    return converted[0]["content"][1:]
+
+
+def _s3_source(uri: str, bucket_owner: str | None = None) -> Mapping[str, object]:
+    return {"s3Location": {"uri": uri} if bucket_owner is None else {"uri": uri, "bucketOwner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("part", "expected"),
+    [
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="image-format-from-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": "s3://media-bucket/dir/CAT.JPG"},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/CAT.JPG")}},
+            id="string-url-uppercase-extension",
+        ),
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="bucket-owner",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png", "format": "image/webp"}},
+            {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="explicit-format-wins",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/base64/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/base64/cat.png")}},
+            id="base64-in-key",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mp4"}},
+            {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+            id="video",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mov"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/demo.mov")}},
+            id="video-extension-is-the-bedrock-format",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="file-id",
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_is_sent_as_an_s3_location_without_a_download(
+    part: Mapping[str, object], expected: Mapping[str, object], run_async: bool
+):
+    assert await _converse_user_content(part, run_async) == [expected]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_pdf_is_a_document_named_after_its_uri(run_async: bool):
+    report: Final = "s3://media-bucket/docs/report.pdf"
+    invoice: Final = "s3://media-bucket/docs/invoice.pdf"
+
+    report_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    report_again: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    invoice_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": invoice}}, run_async)
+
+    report_name: Final = report_content[0]["document"]["name"]
+    assert report_content == [{"document": {"format": "pdf", "name": report_name, "source": _s3_source(report)}}]
+    assert re.fullmatch(r"DocumentPDFmessages_[0-9a-f]{16}_pdf", report_name)
+    assert report_again == report_content
+    assert invoice_content[0]["document"]["name"] != report_name
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/uploads/7f3a9c", "s3://media-bucket/uploads/blob.unknownext"])
+async def test_bedrock_converse_s3_media_without_a_known_extension_or_format_is_a_bad_request(
+    uri: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert uri in excinfo.value.message
+    assert "`format`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("image_url", "named_format"),
+    [
+        pytest.param({"url": "s3://media-bucket/scans/page.tiff"}, "page.tiff", id="tiff-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/scans/page.png", "format": "image/tiff"}, "image/tiff", id="tiff-format"
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_in_a_format_bedrock_does_not_take_is_a_bad_request(
+    image_url: Mapping[str, str], named_format: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": image_url}, run_async)
+
+    assert image_url["url"] in excinfo.value.message
+    assert named_format in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            id="image-url",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            id="file",
+        ),
+    ],
+)
+def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapping[str, object]):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {"tool_call_id": "tooluse_s3_1", "role": "tool", "name": "fetch_screenshot", "content": [part]},
+    ]
+
+    with respx.mock:
+        converted: Final = _bedrock_converse_messages_pt(
+            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+        )
+
+    assert converted[-1]["content"][-1]["toolResult"]["content"] == [
+        {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_assistant_s3_image_is_sent_as_an_s3_location(run_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "Draw a cat."},
+        {"role": "assistant", "content": [{"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png"}}]},
+        {"role": "user", "content": "Make it bigger."},
+    ]
+
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+
+    assert converted[1]["content"] == [
+        {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png")}}
+    ]
 
 
 def test_bedrock_nova_web_search_options_mapping():

@@ -22,8 +22,14 @@ class SystemContentBlock(TypedDict, total=False):
     cachePoint: CachePointBlock
 
 
-class SourceBlock(TypedDict):
-    bytes: str | None  # base 64 encoded string
+class S3Location(TypedDict):
+    uri: ReadOnly[str]
+    bucketOwner: NotRequired[ReadOnly[str]]
+
+
+class SourceBlock(TypedDict, total=False):
+    bytes: ReadOnly[str | None]  # base 64 encoded string
+    s3Location: ReadOnly[S3Location]
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]

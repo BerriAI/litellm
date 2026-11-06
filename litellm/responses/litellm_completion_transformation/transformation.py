@@ -307,6 +307,7 @@ def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
     )
     detail: Final = fields.get("detail") or item.get("detail")
     video_metadata: Final = fields.get("video_metadata") or item.get("video_metadata")
+    bucket_owner: Final = fields.get("bucket_owner") or item.get("bucket_owner")
     image_url: Final = _validate_responses_media(
         _IMAGE_URL_ADAPTER,
         {
@@ -314,6 +315,7 @@ def _responses_image_part(item: Mapping[str, object]) -> _ResponsesImagePart:
             "detail": detail if isinstance(detail, str) else "auto",
             **({"format": media_format} if media_format is not None else {}),
             **({"video_metadata": video_metadata} if video_metadata is not None else {}),
+            **({"bucket_owner": bucket_owner} if bucket_owner is not None else {}),
         },
     )
     return (
@@ -329,7 +331,11 @@ def _responses_file_part(item: Mapping[str, object]) -> _ResponsesFilePart:
     file_id: Final = fields.get("file_id") or fields.get("file_url")
     media_format: Final = fields.get("format") or fields.get("mime_type") or fields.get("content_type")
     file: Final = {
-        **{key: fields[key] for key in ("file_data", "filename", "detail", "video_metadata") if fields.get(key)},
+        **{
+            key: fields[key]
+            for key in ("file_data", "filename", "detail", "video_metadata", "bucket_owner")
+            if fields.get(key)
+        },
         **({"file_id": file_id} if file_id else {}),
         **({"format": media_format} if media_format is not None else {}),
     }
