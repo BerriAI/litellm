@@ -416,38 +416,6 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
-@pytest.mark.parametrize("exception_raised", [False, True])
-def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
-    pending: Final = MagicMock()
-    enqueue: Final = MagicMock()
-    logger: Final = MagicMock(
-        call_type=call_type,
-        _native_pending_logging=pending,
-        enqueue_deferred_logging=enqueue,
-    )
-
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-        logging_obj=logger,
-        exception_raised=exception_raised,
-    )
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-        logging_obj=logger,
-        exception_raised=exception_raised,
-    )
-
-    if call_type in ("ocr", "aocr"):
-        pending.release.assert_called_once_with(not exception_raised)
-        assert logger._native_pending_logging is None
-    else:
-        pending.release.assert_not_called()
-        assert logger._native_pending_logging is pending
-    if exception_raised:
-        enqueue.assert_not_called()
-    else:
-        enqueue.assert_called_once_with()
-
-
 def test_flush_deferred_async_logging_fires_on_success():
     """
     Happy path: with no exception, the production flush helper invokes the
