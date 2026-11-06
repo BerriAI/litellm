@@ -6,8 +6,6 @@ from datetime import timedelta
 from threading import BoundedSemaphore
 from typing import Final, Protocol
 
-from prisma.engine.errors import EngineRequestError
-from prisma.errors import RawQueryError, TransactionExpiredError, TransactionNotStartedError
 from pydantic import BaseModel
 
 from litellm.litellm_core_utils.pending_operations import defer_until_operations_finish
@@ -102,6 +100,9 @@ class BoundedAnalyticsDatabase:
         self._admission = _BACKGROUND if background else _FOREGROUND
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        from prisma.engine.errors import EngineRequestError
+        from prisma.errors import RawQueryError, TransactionExpiredError, TransactionNotStartedError
+
         if self._background:
             remaining: Final = _remaining_seconds()
             await asyncio.sleep(0.1 if remaining is None else min(0.1, remaining))
