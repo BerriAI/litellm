@@ -1,0 +1,62 @@
+from collections.abc import Mapping
+from dataclasses import replace
+from types import MappingProxyType
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import finite_reported_cost
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.openai.decisions.transformation import ir_to_openai_request, openai_response_to_ir
+from litellm.types.decisions import (
+    DecisionsIRRequest,
+    DecisionsIRResponse,
+    OpenAIDecisionResponse,
+    UnsupportedDecisionsRequest,
+)
+
+
+class _ButlerUsage(BaseModel):
+    cost: float | None = None
+
+    model_config = ConfigDict(frozen=True)
+
+
+class _ButlerResponse(BaseModel):
+    usage: _ButlerUsage
+
+    model_config = ConfigDict(frozen=True)
+
+
+_RESPONSE_ADAPTER: Final[TypeAdapter[OpenAIDecisionResponse]] = TypeAdapter(OpenAIDecisionResponse)
+_COST_ADAPTER: Final[TypeAdapter[_ButlerResponse]] = TypeAdapter(_ButlerResponse)
+
+
+class ButlerDecisionsConfig(BaseDecisionsConfig):
+    """Butler's /v1/decisions takes the OpenAI Decisions body and reports what it charged in usage.cost"""
+
+    path = "/v1/decisions"
+    api_key_env = ("BUTLER_API_KEY",)
+    api_base_env = ("BUTLER_API_BASE",)
+    supports_safety_identifier = True
+    supports_images = True
+    inlines_remote_images = True
+    max_images = 4
+
+    def get_default_api_base(self) -> str | None:
+        return "https://api.butlercompute.com"
+
+    def transform_decisions_request(
+        self, model: str, request: DecisionsIRRequest, custom_llm_provider: str
+    ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        return ir_to_openai_request(self.request_model(model), request)
+
+    def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+        response: Final = openai_response_to_ir(_RESPONSE_ADAPTER.validate_python(payload), request)
+        cost: Final = _COST_ADAPTER.validate_python(payload).usage.cost
+        if response.usage is None or cost is None:
+            return response
+        return replace(response, usage=replace(response.usage, extra=MappingProxyType({"cost": cost})))
+
+    def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
+        return finite_reported_cost(response.usage.extra.get("cost")) if response.usage is not None else None

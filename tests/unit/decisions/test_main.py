@@ -3631,6 +3631,261 @@ def test_empiriolabs_upstream_errors_keep_their_status_and_message(
     assert route.call_count == 1
 
 
+_BUTLER_MODEL: Final = "butler/cicero"
+_BUTLER_URL: Final = "https://api.butlercompute.com/v1/decisions"
+_BUTLER_COST: Final = 1.24e-06
+_BUTLER_PREDICATE: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "predicate", "name": "is_refund", "instructions": "Is the customer asking for a refund?"},
+)
+_BUTLER_USAGE: Final[Mapping[str, object]] = {
+    "input_tokens": 188,
+    "input_tokens_details": {"cached_tokens": 128, "cache_write_tokens": 0},
+    "output_tokens": 1,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 189,
+}
+_BUTLER_RESPONSE: Final[Mapping[str, object]] = {
+    "id": "req_01",
+    "model": "cicero",
+    "answers": [{"type": "predicate", "name": "is_refund", "probability": 0.98}],
+    "usage": {**_BUTLER_USAGE, "cost": _BUTLER_COST},
+}
+
+
+@pytest.mark.asyncio
+async def test_butler_decisions_send_the_openai_body_and_bill_the_reported_cost(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+    route: Final = respx_mock.post(_BUTLER_URL).respond(json=_BUTLER_RESPONSE)
+    recording_logger: Final = _RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    response: Final = await litellm.adecisions(
+        model=_BUTLER_MODEL,
+        input="I was charged twice for order 4411.",
+        questions=_BUTLER_PREDICATE,
+        api_key="caller-key",
+        safety_identifier="user-4411",
+    )
+    await _drain_logging_worker()
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "cicero",
+        "input": "I was charged twice for order 4411.",
+        "questions": list(_BUTLER_PREDICATE),
+        "safety_identifier": "user-4411",
+    }
+
+    assert response.usage.input_tokens_details.cached_tokens == 128
+    assert get_response_cost_from_hidden_params(response.hidden_params) == _BUTLER_COST
+    assert recording_logger.standard_logging_object is not None
+    assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(_BUTLER_COST)
+
+
+def test_butler_without_reported_cost_bills_uncached_and_cached_tokens_at_the_cost_map_rates(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+    respx_mock.post(_BUTLER_URL).respond(json={**_BUTLER_RESPONSE, "usage": _BUTLER_USAGE})
+    row: Final = litellm.model_cost[_BUTLER_MODEL]
+
+    response: Final = litellm.decisions(
+        model=_BUTLER_MODEL,
+        input="I was charged twice for order 4411.",
+        questions=_BUTLER_PREDICATE,
+        api_key="caller-key",
+    )
+
+    expected: Final = (188 - 128) * row["input_cost_per_token"] + 128 * row["cache_read_input_token_cost"]
+    assert expected > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+def test_butler_takes_systemone_calls_in_the_openai_format_and_answers_in_system_one(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+    route: Final = respx_mock.post(_BUTLER_URL).respond(
+        json={
+            **_BUTLER_RESPONSE,
+            "answers": [
+                {"type": "predicate", "name": "is_refund", "probability": 0.98},
+                {
+                    "type": "choice",
+                    "name": "topic",
+                    "choice": "billing",
+                    "probabilities": [
+                        {"value": "billing", "probability": 0.9},
+                        {"value": "shipping", "probability": 0.1},
+                    ],
+                    "confidence": 0.8,
+                },
+            ],
+        }
+    )
+
+    response: Final = litellm.systemone(
+        model=_BUTLER_MODEL,
+        state="I was charged twice for order 4411.",
+        questions={
+            "is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+            "topic": {"type": "choice", "instructions": "Topic?", "criteria": {"billing": None, "shipping": "parcel"}},
+        },
+        api_key="caller-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "cicero",
+        "input": "I was charged twice for order 4411.",
+        "questions": [
+            {"type": "predicate", "name": "is_refund", "instructions": "Is the customer asking for a refund?"},
+            {
+                "type": "choice",
+                "name": "topic",
+                "instructions": "Topic?",
+                "choices": [{"value": "billing"}, {"value": "shipping", "description": "parcel"}],
+            },
+        ],
+    }
+    assert response.answers == {
+        "is_refund": NoulAnswer(type="noul", noul=0.98),
+        "topic": ChoiceAnswer(
+            type="choice", choice="billing", confidence=0.8, probabilities={"billing": 0.9, "shipping": 0.1}
+        ),
+    }
+    assert get_response_cost_from_hidden_params(response.hidden_params) == _BUTLER_COST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_image", (False, True), ids=("inline", "remote"))
+async def test_butler_receives_images_inline(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    remote_image: bool,
+    async_only_image_fetch: AsyncOnlyImageFetch,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+    image: Final = "https://images.example/receipt.png" if remote_image else async_only_image_fetch.data_url
+    route: Final = respx_mock.post(_BUTLER_URL).respond(json=_BUTLER_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model=_BUTLER_MODEL,
+        input=[
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "receipt"}, {"type": "input_image", "image_url": image}],
+            }
+        ],
+        questions=_BUTLER_PREDICATE,
+        api_key="caller-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "receipt"},
+                {"type": "input_image", "image_url": async_only_image_fetch.data_url},
+            ],
+        }
+    ]
+    assert response.answers[0].probability == 0.98
+
+
+def test_more_images_than_butler_takes_are_refused_before_http(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="at most 4 images per request, got 5") as caught:
+        litellm.systemone(
+            model=_BUTLER_MODEL,
+            state="receipts",
+            images=[_PNG_DATA_URL] * 5,
+            questions={"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+            api_key="caller-key",
+        )
+
+    assert caught.value.status_code == 400
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_key", "authorization"),
+    ((None, "Bearer environment-key"), ("caller-key", "Bearer caller-key")),
+    ids=("environment_key", "caller_key_over_environment"),
+)
+async def test_butler_sends_the_caller_key_or_else_the_environment_key(
+    api_key: str | None,
+    authorization: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+    monkeypatch.setenv("BUTLER_API_KEY", "environment-key")
+    route: Final = respx_mock.post(_BUTLER_URL).respond(json=_BUTLER_RESPONSE)
+
+    await litellm.adecisions(model=_BUTLER_MODEL, input="receipt", questions=_BUTLER_PREDICATE, api_key=api_key)
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == authorization
+
+
+def test_butler_without_a_key_is_refused_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_KEY", raising=False)
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'butler'"):
+        litellm.decisions(model=_BUTLER_MODEL, input="receipt", questions=_BUTLER_PREDICATE)
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type", "code", "exception"),
+    (
+        (400, "invalid_request_error", "invalid_request", litellm.BadRequestError),
+        (401, "authentication_error", "invalid_api_key", litellm.AuthenticationError),
+        (404, "invalid_request_error", "model_not_found", litellm.NotFoundError),
+        (429, "rate_limit_error", "rate_limit_exceeded", litellm.RateLimitError),
+        (429, "rate_limit_error", "insufficient_quota", litellm.RateLimitError),
+        (503, "server_error", "no_healthy_workers", litellm.ServiceUnavailableError),
+    ),
+)
+def test_butler_upstream_errors_keep_their_status_and_message(
+    status: int,
+    error_type: str,
+    code: str,
+    exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("BUTLER_API_BASE", raising=False)
+    message: Final = f"upstream refused the decision with {code}"
+    route: Final = respx_mock.post(_BUTLER_URL).respond(
+        status,
+        json={"error": {"message": message, "type": error_type, "code": code, "param": None}},
+        headers={"retry-after": "1"},
+    )
+
+    with pytest.raises(exception, match=message) as caught:
+        litellm.decisions(
+            model=_BUTLER_MODEL,
+            input="receipt",
+            questions=_BUTLER_PREDICATE,
+            api_key="caller-key",
+            num_retries=0,
+        )
+
+    assert getattr(caught.value, "status_code") == status
+    assert route.call_count == 1
+
+
 _BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
     (
         "decisions",
