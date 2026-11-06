@@ -126,6 +126,36 @@ async def test_evaluate_maps_classifier_verdicts_onto_each_tool_use_id():
     }
 
 
+class _CacheControlInjectingClassifier(_RecordingClassifier):
+    """Mirror the hook that writes message-level cache control breakpoints in place.
+
+    ``AnthropicCacheControlHook`` assigns ``messages[target_index] = ...`` for
+    ``cache_control_injection_points`` with ``location: message``. A read-only
+    ``Sequence`` (a tuple) reaches that assignment unchanged, raises
+    ``TypeError``, and the evaluator turns it into unavailable verdicts.
+    """
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.served_messages: Sequence[Mapping[str, object]] | None = None
+
+    async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
+        # Writes in place exactly like the hook; the tuple this used to receive made it raise.
+        messages[0] = {**messages[0], "cache_control": {"type": "ephemeral"}}  # pyright: ignore[reportIndexIssue]
+        self.served_messages = messages
+        return _classifier_response(
+            json.dumps({"verdicts": {"call_ls": {"flagged": False, "explanation": "lists files"}}})
+        )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_gives_the_classifier_a_message_list_a_cache_control_point_can_write_to():
+    classifier: Final = _CacheControlInjectingClassifier()
+    verdicts: Final = _verdicts(await _evaluator(classifier).evaluate((LS,)))
+    assert verdicts == {"call_ls": {"type": "evaluated", "outcome": "not_flagged"}}
+    assert isinstance(classifier.served_messages, list)
+
+
 class _TextPartsClassifier:
     def __init__(self, parts: Sequence[str]) -> None:
         self._parts = parts
