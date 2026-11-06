@@ -5318,3 +5318,98 @@ async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 1
+
+
+def _streamed_text(content: str) -> litellm.ModelResponseStream:
+    return litellm.ModelResponseStream(
+        choices=[litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content=content))]
+    )
+
+
+def _clean_scan_response() -> dict[str, object]:
+    return {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "filterResults": {}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", [0, 1, 2])
+async def test_streaming_hook_scans_the_parsed_chunks_beside_a_raw_frame(position: int):
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=_clean_scan_response())
+    guardrail.should_run_guardrail = Mock(return_value=True)
+    parsed = [_streamed_text("Hello"), _streamed_text(" world")]
+    stream = [*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]]
+
+    delivered = await _drain_surface_hook(guardrail, stream)
+
+    scanned = [call.kwargs["content"] for call in guardrail.make_model_armor_request.call_args_list]
+    assert scanned == ["Hello world"]
+    assert delivered == stream
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_a_flagged_response_that_carries_a_raw_frame():
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+    guardrail.make_model_armor_request = AsyncMock(
+        return_value={
+            "sanitizationResult": {
+                "filterMatchState": "MATCH_FOUND",
+                "filterResults": {
+                    "sdp": {
+                        "sdpFilterResult": {
+                            "inspectResult": {
+                                "matchState": "MATCH_FOUND",
+                                "findings": [{"infoType": "PASSWORD", "likelihood": "VERY_LIKELY"}],
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    )
+    guardrail.should_run_guardrail = Mock(return_value=True)
+    parsed = [_streamed_text("My password is "), _streamed_text("hunter2")]
+
+    delivered = await _drain_surface_hook(guardrail, [parsed[0], b"data: [DONE]\n\n", parsed[1]])
+
+    assert guardrail.make_model_armor_request.call_count == 1
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], str)
+    assert int(json.loads(delivered[0].removeprefix("data: "))["error"]["code"]) == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(b"data: [DONE]\n\n", id="done_bytes"),
+        pytest.param(b'data: {"type":"response.output_text.delta","delta":"LEAKED-SECRET"}\n\n', id="delta_bytes"),
+        pytest.param('data: {"type":"response.output_text.delta","delta":"LEAKED-SECRET"}\n\n', id="delta_str"),
+    ],
+)
+@pytest.mark.parametrize("frame_first", [False, True], ids=["frame_last", "frame_first"])
+async def test_streaming_hook_fails_closed_on_a_raw_frame_beside_responses_events(
+    frame: bytes | str, frame_first: bool
+):
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    events = _responses_api_events()
+    stream = (frame, *events) if frame_first else (*events, frame)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, stream)
+
+    post.assert_not_called()
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], str)
+    assert "could not be assembled for scanning" in delivered[0]
+    assert "LEAKED-SECRET" not in delivered[0]

@@ -1446,26 +1446,27 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         verbose_proxy_logger.info("PANW Prisma AIRS: Running post-call streaming scan")
 
-        all_chunks: Final = []
         content_was_modified = False
 
         try:
             start_time: Final = datetime.now()
 
-            # Collect all chunks
-            async for chunk in response:
-                all_chunks.append(chunk)
+            all_chunks: Final = [chunk async for chunk in response]
+            byte_frames: Final = tuple(chunk for chunk in all_chunks if isinstance(chunk, bytes))
+            has_parsed_chunks: Final = any(
+                isinstance(chunk, (ModelResponse, ModelResponseStream)) for chunk in all_chunks
+            )
 
             # Handle /v1/messages streaming: chunks are raw bytes (Anthropic SSE)
-            if all_chunks and isinstance(all_chunks[0], bytes):
-                text = self._extract_text_from_sse_bytes(all_chunks)
+            if byte_frames and len(byte_frames) == len(all_chunks):
+                text = self._extract_text_from_sse_bytes(byte_frames)
                 await self._scan_raw_streaming_text(text, request_data, start_time)
                 for chunk in all_chunks:
                     yield chunk
                 return
 
             # Handle /v1/responses streaming: chunks are Pydantic events (not ModelResponse/ModelResponseStream)
-            if all_chunks and not isinstance(all_chunks[0], (ModelResponse, ModelResponseStream)):
+            if all_chunks and not has_parsed_chunks and not byte_frames:
                 text = self._extract_text_from_streaming_events(all_chunks)
                 await self._scan_raw_streaming_text(text, request_data, start_time)
                 for chunk in all_chunks:

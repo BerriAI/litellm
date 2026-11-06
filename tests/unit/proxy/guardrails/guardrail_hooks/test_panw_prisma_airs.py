@@ -15,6 +15,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6596,6 +6597,102 @@ class TestPanwAirsServerToolCalls:
             ]
         }
         assert message.tool_calls is None
+
+
+class TestRawFramesInAStreamedResponse:
+    @staticmethod
+    def _streamed_text(content: str) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="test_id",
+            created=1234567890,
+            model="gpt-4",
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=content))],
+        )
+
+    async def _scan(self, stream: list[object], scan_result: dict[str, object]) -> tuple[list[object], AsyncMock]:
+        handler = make_handler()
+
+        async def upstream():
+            for item in stream:
+                yield item
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock, return_value=scan_result) as scan:
+            delivered = [
+                chunk
+                async for chunk in handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    response=upstream(),
+                    request_data={"model": "gpt-4", "messages": [], "litellm_call_id": "call-1"},
+                )
+            ]
+        return delivered, scan
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    async def test_the_parsed_chunks_are_scanned_and_delivered_beside_a_raw_frame(self, position: int):
+        parsed = [self._streamed_text("Hello"), self._streamed_text(" world")]
+
+        delivered, scan = await self._scan(
+            [*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]], {"action": "allow", "category": "safe"}
+        )
+
+        assert [call.kwargs["content"] for call in scan.call_args_list] == ["Hello world"]
+        assert delivered == [*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]]
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_response_is_not_delivered_when_a_raw_frame_sits_beside_it(self):
+        parsed = [self._streamed_text("Hello"), self._streamed_text(" world")]
+
+        delivered, scan = await self._scan(
+            [parsed[0], b"data: [DONE]\n\n", parsed[1]], {"action": "block", "category": "malicious"}
+        )
+
+        assert scan.call_count == 1
+        assert all(not isinstance(chunk, (ModelResponseStream, bytes)) for chunk in delivered)
+        assert any("error" in str(chunk) for chunk in delivered)
+
+    @pytest.mark.asyncio
+    async def test_a_stream_of_raw_frames_stays_blocked_when_a_str_frame_sits_beside_bytes(self):
+        frames = [
+            b'event: content_block_delta\ndata: {"type": "content_block_delta"}\n\n',
+            "data: [DONE]\n\n",
+        ]
+
+        delivered, scan = await self._scan(frames, {"action": "allow", "category": "safe"})
+
+        assert scan.call_count == 0
+        assert all(isinstance(chunk, str) and '"error"' in chunk for chunk in delivered)
+
+    @pytest.mark.asyncio
+    async def test_a_data_line_split_across_two_frames_is_blocked_not_delivered_unscanned(self):
+        carried = json.dumps(
+            {
+                "id": "c1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4",
+                "choices": [{"index": 0, "delta": {"content": "LEAKED-SECRET"}}],
+            }
+        )
+        stream = [self._streamed_text("Hello"), b"data", f": {carried}\n\n".encode(), self._streamed_text(" world")]
+
+        delivered, scan = await self._scan(stream, {"action": "allow", "category": "safe"})
+
+        assert scan.call_count == 0
+        assert all(isinstance(chunk, str) and '"error"' in chunk for chunk in delivered)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("frame_first", [False, True])
+    async def test_a_bytes_frame_beside_responses_events_is_blocked_not_scanned_in_part(self, frame_first: bool):
+        events = [SimpleNamespace(type="response.output_text.delta", delta="test content")]
+        frame = b"data: [DONE]\n\n"
+
+        delivered, scan = await self._scan(
+            [frame, *events] if frame_first else [*events, frame], {"action": "allow", "category": "safe"}
+        )
+
+        assert scan.call_count == 0
+        assert all(isinstance(chunk, str) and '"error"' in chunk for chunk in delivered)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,8 @@ from litellm.constants import VLLM_CHOICE_FIELDS
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     UPSTREAM_USAGE_COST,
+    as_object_list,
+    as_str_mapping,
     chunk_usage,
     finite_cost,
     provider_reported_usage_cost,
@@ -1800,6 +1802,53 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
         yield "provider_specific_fields", combined_provider_fields
 
 
+_RAW_FRAME_TYPES: Final = (str, bytes)
+_FRAME_LINE_STARTS: Final = (":", "data:", "event:", "id:", "retry:")
+_FRAME_PAYLOAD: Final = TypeAdapter(dict[str, object])
+
+
+def _is_chat_chunk(payload: Mapping[str, object]) -> bool:
+    choices: Final = as_object_list(payload.get("choices"))
+    return (
+        "error" not in payload
+        and choices is not None
+        and all(
+            (choice := as_str_mapping(raw_choice)) is not None
+            and (delta := as_str_mapping(choice.get("delta"))) is not None
+            and isinstance(delta.get("content"), (str, type(None)))
+            for raw_choice in choices
+        )
+    )
+
+
+def _frame_chunks(frame: str | bytes) -> tuple[Mapping[str, object], ...]:
+    text: Final = frame if isinstance(frame, str) else frame.decode("utf-8")
+    lines: Final = tuple(filter(None, (line.strip() for line in text.splitlines())))
+    if not all(line.startswith(_FRAME_LINE_STARTS) for line in lines):
+        raise ValueError("a raw frame beside parsed chunks carries a line that is not an SSE comment or field")
+    payloads: Final = (
+        payload
+        for line in lines
+        if line.startswith("data:") and (payload := line.removeprefix("data:").strip()) not in ("", "[DONE]")
+    )
+    chunks: Final = tuple(map(_FRAME_PAYLOAD.validate_json, payloads))
+    if not all(map(_is_chat_chunk, chunks)):
+        raise ValueError("a raw frame beside parsed chunks carries data that is not a chat completion chunk")
+    return chunks
+
+
+def _with_raw_frames_unpacked(chunks: Sequence[object]) -> Sequence[object]:
+    frames: Final = sum(isinstance(chunk, _RAW_FRAME_TYPES) for chunk in chunks)
+    if frames in (0, len(chunks)):
+        return chunks
+    verbose_logger.warning("stream_chunk_builder: unpacking %d raw SSE frame(s) found among parsed chunks", frames)
+    return tuple(
+        chain.from_iterable(
+            _frame_chunks(chunk) if isinstance(chunk, _RAW_FRAME_TYPES) else (chunk,) for chunk in chunks
+        )
+    )
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
@@ -1832,7 +1881,7 @@ def _assembled_stream_response(
         if not chunks:
             return None
 
-        processor: Final = ChunkProcessor(list(chunks), messages)
+        processor: Final = ChunkProcessor(list(_with_raw_frames_unpacked(chunks)), messages)
         chunks = processor.chunks
 
         ### BASE-CASE ###

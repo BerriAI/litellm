@@ -1087,6 +1087,15 @@ class TestRepelloAIStreaming:
 
         return _gen()
 
+    @staticmethod
+    def _stream_items(*contents):
+        from litellm.types.utils import Delta, StreamingChoices
+
+        return tuple(
+            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=content))])
+            for content in contents
+        )
+
     @pytest.mark.asyncio
     async def test_streaming_passed_reemits_chunks(self, monkeypatch):
         guardrail = _guardrail(event_hook="post_call")
@@ -1105,6 +1114,58 @@ class TestRepelloAIStreaming:
             )
         ]
         assert len(out) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    async def test_streaming_scans_the_parsed_chunks_beside_a_raw_frame(self, monkeypatch, position):
+        guardrail = _guardrail(event_hook="post_call")
+        captured = {}
+
+        async def capture(url, headers, json, **_kwargs):
+            captured["json"] = json
+            return _verdict_response("passed", url)
+
+        monkeypatch.setattr(guardrail.async_handler, "post", capture)
+        stream = list(self._stream_items("unsafe ", "answer"))
+        items = [*stream[:position], b"data: [DONE]\n\n", *stream[position:]]
+
+        async def upstream():
+            for item in items:
+                yield item
+
+        out = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=upstream(),
+                request_data={"messages": [{"role": "user", "content": "q"}]},
+            )
+        ]
+
+        assert captured["json"]["scan_data"]["response"] == "unsafe answer"
+        assert out == items
+
+    @pytest.mark.asyncio
+    async def test_streaming_blocks_a_flagged_response_that_carries_a_raw_frame(self, monkeypatch):
+        from litellm.proxy.proxy_server import StreamingCallbackError
+
+        guardrail = _guardrail(event_hook="post_call")
+        monkeypatch.setattr(
+            guardrail.async_handler, "post", _async_return(_verdict_response("blocked", ANALYZE_RESPONSE_URL))
+        )
+        stream = list(self._stream_items("unsafe ", "answer"))
+
+        async def upstream():
+            for item in (stream[0], b"data: [DONE]\n\n", stream[1]):
+                yield item
+
+        with pytest.raises(StreamingCallbackError):
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=upstream(),
+                request_data={"messages": [{"role": "user", "content": "q"}]},
+            ):
+                pass
 
     @pytest.mark.asyncio
     async def test_streaming_blocked_raises(self, monkeypatch):

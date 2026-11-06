@@ -8,8 +8,9 @@ import pytest
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
 )
-from litellm.types.utils import Choices, ModelResponse
+from litellm.types.utils import Choices, Delta, ModelResponse, ModelResponseStream, StreamingChoices
 
 
 def _frame(event: str, data: dict[str, object]) -> bytes:
@@ -429,3 +430,19 @@ def test_healthy_stream_with_a_tool_input_that_is_not_json_still_raises():
 
     with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
         anthropic_sse_chunks_from_response(assembled, upstream)
+
+
+_PARSED_CHUNK: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Hi"))])
+
+
+@pytest.mark.parametrize(
+    ("chunks", "is_raw"),
+    [
+        pytest.param([b"event: message_start\ndata: {}\n\n", "data: [DONE]\n\n"], True, id="frames_only"),
+        pytest.param([_PARSED_CHUNK, _PARSED_CHUNK], False, id="parsed_chunks_only"),
+        pytest.param([_PARSED_CHUNK, b"data: [DONE]\n\n", _PARSED_CHUNK], False, id="parsed_chunks_and_a_frame"),
+        pytest.param([], False, id="empty"),
+    ],
+)
+def test_a_stream_is_raw_sse_only_when_every_chunk_is_a_frame(chunks: list[object], is_raw: bool):
+    assert is_raw_sse_stream(chunks) is is_raw

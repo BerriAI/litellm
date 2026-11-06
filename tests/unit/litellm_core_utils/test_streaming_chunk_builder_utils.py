@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock
@@ -2880,3 +2881,165 @@ def test_stream_chunk_builder_counts_a_custom_named_deployments_missing_usage_wi
         model="my-gpt-6", messages=messages
     )
     assert built.usage.prompt_tokens == litellm.token_counter(model=counted_as, messages=messages)
+
+
+def _streamed_text(content: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-raw-frames",
+        created=1,
+        model="gpt-5.4-mini",
+        choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=content))],
+    )
+
+
+_RAW_FRAMES_CARRYING_NO_CHUNK: Final = (
+    pytest.param(b"data: [DONE]\n\n", id="done_bytes"),
+    pytest.param("data: [DONE]\n\n", id="done_str"),
+    pytest.param(b": keepalive\n\n", id="comment"),
+    pytest.param(b"event: ping\n\n", id="event_only"),
+)
+
+
+@pytest.mark.parametrize("position", [0, 1, 2])
+@pytest.mark.parametrize("frame", _RAW_FRAMES_CARRYING_NO_CHUNK)
+def test_stream_chunk_builder_assembles_the_parsed_chunks_beside_a_raw_frame(frame: str | bytes, position: int) -> None:
+    parsed: Final = [_streamed_text("Hello"), _streamed_text(" world")]
+
+    built: Final = stream_chunk_builder(chunks=[*parsed[:position], frame, *parsed[position:]])
+
+    assert built is not None
+    assert built.choices[0].message.content == "Hello world"
+
+
+def test_stream_chunk_builder_reads_the_chunk_a_raw_frame_carries() -> None:
+    carried: Final = _openai_sse(
+        {"model": "gpt-5.4-mini", "choices": [{"index": 0, "delta": {"content": " there"}, "finish_reason": None}]}
+    )
+
+    built: Final = stream_chunk_builder(chunks=[_streamed_text("Hello"), carried.encode(), _streamed_text(" world")])
+
+    assert built is not None
+    assert built.choices[0].message.content == "Hello there world"
+
+
+_SECRET_CHUNK: Final[dict[str, object]] = {
+    "id": "chatcmpl-raw-frames",
+    "object": "chat.completion.chunk",
+    "created": 1,
+    "model": "gpt-5.4-mini",
+    "choices": [{"index": 0, "delta": {"content": "LEAKED-SECRET"}}],
+}
+
+
+def _data_line(payload: Mapping[str, object]) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+@pytest.mark.parametrize("line_break", ["\r", "\r\n", "\x0c", "\u2028"])
+def test_stream_chunk_builder_reads_a_data_line_after_any_line_break_an_sse_reader_honours(line_break: str) -> None:
+    frame: Final = f"event: message{line_break}{_data_line(_SECRET_CHUNK)}".encode()
+
+    built: Final = stream_chunk_builder(chunks=[_streamed_text("Hello"), frame, _streamed_text(" world")])
+
+    assert built is not None
+    assert built.choices[0].message.content == "HelloLEAKED-SECRET world"
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(b'data: {"error": {"message": "blocked", "code": 400}}\n\n', id="error_payload"),
+        pytest.param(b'data: {"type": "content_block_delta"}\n\n', id="payload_that_is_not_a_chat_chunk"),
+        pytest.param(b"data: not json\n\n", id="payload_that_is_not_json"),
+        pytest.param(_data_line({**_SECRET_CHUNK, "error": {"message": "blocked"}}), id="chunk_and_error"),
+        pytest.param(
+            _data_line({**_SECRET_CHUNK, "choices": [{"text": "LEAKED-SECRET"}]}), id="choice_without_a_delta"
+        ),
+        pytest.param(
+            _data_line({**_SECRET_CHUNK, "choices": [{"message": {"content": "LEAKED-SECRET"}}]}),
+            id="choice_with_a_message",
+        ),
+        *(
+            pytest.param(
+                _data_line({**_SECRET_CHUNK, "choices": [{"index": 0, "delta": {"content": content}}]}),
+                id=f"delta_content_{name}",
+            )
+            for name, content in (
+                ("list", [{"type": "text", "text": "LEAKED-SECRET"}]),
+                ("int", 7),
+                ("dict", {"text": "LEAKED-SECRET"}),
+            )
+        ),
+        pytest.param(_data_line(_SECRET_CHUNK).replace("LEAKED", "LEAK\u2028ED"), id="line_break_inside_the_json"),
+        pytest.param(json.dumps(_SECRET_CHUNK), id="chunk_without_a_data_field"),
+        pytest.param("a plain text frame", id="plain_text_str"),
+        pytest.param(b"a plain text frame", id="plain_text_bytes"),
+        pytest.param("[DONE]", id="bare_done"),
+        pytest.param(b"data\n\n", id="bare_data_field"),
+        pytest.param(b"\xef\xbb\xbfdata: [DONE]\n\n", id="byte_order_mark"),
+        pytest.param(bytearray(b"data: [DONE]\n\n"), id="bytearray"),
+    ],
+)
+def test_stream_chunk_builder_still_fails_on_a_raw_frame_it_cannot_account_for(frame: bytes | str) -> None:
+    with pytest.raises(litellm.APIError):
+        stream_chunk_builder(chunks=[_streamed_text("Hello"), frame])
+
+
+def _built_content(chunks: list[object]) -> str | None:
+    try:
+        built: Final = stream_chunk_builder(chunks=chunks)
+    except litellm.APIError:
+        return None
+    return None if built is None else built.choices[0].message.content
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r\n", "\r"])
+def test_stream_chunk_builder_never_skips_a_data_line_when_its_frame_is_split_in_two(line_break: str) -> None:
+    frame: Final = f"event: message{line_break}data: {json.dumps(_SECRET_CHUNK)}{line_break}{line_break}".encode()
+
+    skipped: Final = [
+        at
+        for at in range(1, len(frame))
+        if (
+            content := _built_content([_streamed_text("Hello"), frame[:at], frame[at:], _streamed_text("!")])
+        )
+        is not None
+        and "LEAKED-SECRET" not in content
+    ]
+
+    assert skipped == []
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [
+        pytest.param([b"data: [DONE]\n\n"], id="done_only"),
+        pytest.param([_openai_sse({"choices": [{"index": 0, "delta": {"content": "Hi"}}]}).encode()], id="chunk_frame"),
+    ],
+)
+def test_stream_chunk_builder_still_fails_on_a_stream_of_raw_frames_only(frames: list[bytes]) -> None:
+    with pytest.raises(litellm.APIError):
+        stream_chunk_builder(chunks=frames)
+
+
+@pytest.mark.parametrize("frames", [1, 3])
+def test_stream_chunk_builder_warns_with_the_number_of_raw_frames_it_unpacks(
+    frames: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    stream: Final = [_streamed_text("Hello"), *[b"data: [DONE]\n\n"] * frames, _streamed_text(" world")]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        built: Final = stream_chunk_builder(chunks=stream)
+
+    assert built is not None
+    assert [record.getMessage() for record in caplog.records if "raw SSE frame" in record.getMessage()] == [
+        f"stream_chunk_builder: unpacking {frames} raw SSE frame(s) found among parsed chunks"
+    ]
+
+
+def test_stream_chunk_builder_does_not_warn_when_no_raw_frame_is_present(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        built: Final = stream_chunk_builder(chunks=[_streamed_text("Hello"), _streamed_text(" world")])
+
+    assert built is not None
+    assert not [record for record in caplog.records if "raw SSE frame" in record.getMessage()]

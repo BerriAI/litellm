@@ -436,7 +436,7 @@ def _is_anthropic_event_type(event_type: object) -> bool:
 
 
 def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
-    return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
+    return len(all_chunks) > 0 and all(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
 
 
 def _joined_sse_bytes(all_chunks: Sequence[object]) -> bytes:
