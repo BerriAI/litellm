@@ -2886,6 +2886,16 @@ class RustCore(
                 await await_all(driver.outcomes.take_pending())
             match step["kind"]:
                 case "attempt":
+                    _raw_dl_at: Final = driver._request.get("request_deadline")  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                    _dl_at: Final[float | None] = float(_raw_dl_at) if isinstance(_raw_dl_at, (int, float)) else None
+                    if _dl_at is not None and monotonic() >= _dl_at:
+                        from litellm.exceptions import Timeout
+
+                        raise Timeout(
+                            message="request deadline exceeded before retry attempt",
+                            model=str(driver._request.get("model", "")),  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                            llm_provider="",
+                        )
                     outcome = await driver.attempt(step)
                 case "sleep":
                     _secs: Final = _sleep_seconds(step)
@@ -2952,6 +2962,16 @@ class RustCore(
                 driver.log_outcomes_sync()
             match step["kind"]:
                 case "attempt":
+                    _raw_dl_ats: Final = driver._request.get("request_deadline")  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                    _dl_ats: Final[float | None] = float(_raw_dl_ats) if isinstance(_raw_dl_ats, (int, float)) else None
+                    if _dl_ats is not None and monotonic() >= _dl_ats:
+                        from litellm.exceptions import Timeout
+
+                        raise Timeout(
+                            message="request deadline exceeded before retry attempt",
+                            model=str(driver._request.get("model", "")),  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                            llm_provider="",
+                        )
                     outcome = driver.attempt_sync(step)
                 case "sleep":
                     _secs_s: Final = _sleep_seconds(step)
