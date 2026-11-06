@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { keepTerminology, type Term } from "@/lib/terminology";
 import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
@@ -19,6 +20,7 @@ export interface ComplianceCategory {
   name: string;
   icon: string;
   description: string;
+  descriptionKey?: ParseKeys;
   prompts: CompliancePrompt[];
 }
 
@@ -28,6 +30,46 @@ export interface ComplianceFramework {
   description: string;
   categories: ComplianceCategory[];
 }
+
+export const COMPLIANCE_FRAMEWORK_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "EU AI Act": "compliancePrompts.frameworks.euAiAct",
+  GDPR: "compliancePrompts.frameworks.gdpr",
+  "Airline Brand Protection": "compliancePrompts.frameworks.airlineBrandProtection",
+};
+
+export const COMPLIANCE_CATEGORY_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "Subliminal or Manipulative Techniques": "compliancePrompts.categories.subliminalTechniques.name",
+  "Exploiting Vulnerabilities": "compliancePrompts.categories.exploitingVulnerabilities.name",
+  "Social Scoring & Classification": "compliancePrompts.categories.socialScoring.name",
+  "Risk Assessment for Predicting Criminality": "compliancePrompts.categories.criminalityRiskAssessment.name",
+  "Facial Image Scraping for Databases": "compliancePrompts.categories.facialImageScraping.name",
+  "Emotion Recognition in Workplace & Education": "compliancePrompts.categories.emotionRecognition.name",
+  "Biometric Categorisation of Sensitive Traits": "compliancePrompts.categories.biometricCategorisation.name",
+  "Right to Erasure": "compliancePrompts.categories.rightToErasure.name",
+  "Consent & Lawful Basis": "compliancePrompts.categories.consentLawfulBasis.name",
+  "Data Minimisation": "compliancePrompts.categories.dataMinimisation.name",
+  "Automated Decision-Making": "compliancePrompts.categories.automatedDecisionMaking.name",
+  "Destination Intent": "compliancePrompts.categories.destinationIntent.name",
+  "Competitor Comparison": "compliancePrompts.categories.competitorComparison.name",
+  "Ambiguous Entity": "compliancePrompts.categories.ambiguousEntity.name",
+};
+
+const CATEGORY_DESCRIPTION_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "Subliminal or Manipulative Techniques": "compliancePrompts.categories.subliminalTechniques.description",
+  "Exploiting Vulnerabilities": "compliancePrompts.categories.exploitingVulnerabilities.description",
+  "Social Scoring & Classification": "compliancePrompts.categories.socialScoring.description",
+  "Risk Assessment for Predicting Criminality": "compliancePrompts.categories.criminalityRiskAssessment.description",
+  "Facial Image Scraping for Databases": "compliancePrompts.categories.facialImageScraping.description",
+  "Emotion Recognition in Workplace & Education": "compliancePrompts.categories.emotionRecognition.description",
+  "Biometric Categorisation of Sensitive Traits": "compliancePrompts.categories.biometricCategorisation.description",
+  "Right to Erasure": "compliancePrompts.categories.rightToErasure.description",
+  "Consent & Lawful Basis": "compliancePrompts.categories.consentLawfulBasis.description",
+  "Data Minimisation": "compliancePrompts.categories.dataMinimisation.description",
+  "Automated Decision-Making": "compliancePrompts.categories.automatedDecisionMaking.description",
+  "Destination Intent": "compliancePrompts.categories.destinationIntent.description",
+  "Competitor Comparison": "compliancePrompts.categories.competitorComparison.description",
+  "Ambiguous Entity": "compliancePrompts.categories.ambiguousEntity.description",
+};
 
 const createPrompt = (
   id: string,
@@ -585,6 +627,9 @@ export function getFrameworks(term: Term = keepTerminology): ComplianceFramework
         name: prompt.category,
         icon: prompt.categoryIcon,
         description: prompt.categoryDescription,
+        descriptionKey: Object.hasOwn(CATEGORY_DESCRIPTION_KEYS, prompt.category)
+          ? CATEGORY_DESCRIPTION_KEYS[prompt.category]
+          : undefined,
         prompts: [],
       });
     }

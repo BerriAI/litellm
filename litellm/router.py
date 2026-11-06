@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 # ``Router(...)``'s parameters, their defaults and its docstring: ``router_arguments`` binds a call
 # against them and ``Router.__init__`` reports them. The body is never run.
 def _router_init(
-    self,
+    self: object,
     model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
     ## ASSISTANTS API ##
     assistants_config: AssistantsTypedDict | None = None,
@@ -228,18 +228,16 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
 
-    _InitParams: Final = ParamSpec("_InitParams")
+    _P: Final = ParamSpec("_P")
 
-    def _signature_of(
-        source: Callable[_InitParams, None],
-    ) -> Callable[[Callable[..., None]], Callable[_InitParams, None]]: ...
+    def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
 
     class Router(RustCore, DeprecatedRouterMembers):
         """What type checkers see: the constructor's parameters and the endpoints' return types. The
         endpoints are served by the core at run time (litellm/router_rust/invoke/endpoints.py)."""
 
-        @_signature_of(_router_init)  # pyright: ignore[reportUnknownArgumentType]  # _router_init's untyped dict params
-        def __init__(self) -> None: ...
+        @_takes_parameters_of(_router_init)
+        def __init__(self) -> None: ...  # pyright: ignore[reportMissingSuperCall]  # a type-checking stub
 
         @classmethod
         def from_config(cls, config: RouterConfig, host: PythonHost = python_host) -> "Router": ...

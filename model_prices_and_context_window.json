@@ -4046,6 +4046,8 @@
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
+        "deprecation_date": "2027-09-01",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -4068,7 +4070,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
         "prompt_cache_min_tokens": 512,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
     },
     "azure_ai/claude-opus-5": {
         "deprecation_date": "2027-07-08",
@@ -13458,13 +13460,16 @@
         "supports_reasoning": true
     },
     "azure_ai/mistral-document-ai-2512": {
+        "deprecation_date": "2027-02-15",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "litellm_provider": "azure_ai",
         "ocr_cost_per_page": 0.003,
         "mode": "ocr",
         "supported_endpoints": [
             "/v1/ocr"
         ],
-        "source": "https://ai.azure.com/catalog/models/mistral-document-ai-2512"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "successor_model": "azure_ai/mistral-ocr-4-0"
     },
     "azure_ai/mistral-ocr-4-0": {
         "litellm_provider": "azure_ai",
@@ -40893,6 +40898,22 @@
         "output_cost_per_token": 4e-07,
         "supports_tool_choice": true
     },
+    "jina-reranker-v3.5": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "jina_ai",
+        "max_input_tokens": 131072,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.jina.ai/v1/models"
+    },
+    "jina-reranker-m0": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "jina_ai",
+        "max_input_tokens": 10240,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.jina.ai/v1/models"
+    },
     "jina-reranker-v2-base-multilingual": {
         "input_cost_per_token": 5e-08,
         "litellm_provider": "jina_ai",
@@ -43771,7 +43792,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/zai-glm-5-3": {
         "cache_read_input_token_cost": 1.4e-07,
@@ -45269,6 +45291,18 @@
         "supports_vision": true,
         "source": "https://tokenfactory.nebius.com/api/public/models_info",
         "cache_read_input_token_cost": 1.5e-07
+    },
+    "nebius/moonshotai/Kimi-K3.1-Pro": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 2e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "source": "https://tokenfactory.nebius.com/api/public/models_info"
     },
     "nebius/moonshotai/Kimi-K3": {
         "max_input_tokens": 1048576,
@@ -71189,6 +71223,8 @@
     },
     "gpt-5.5-cyber-preview": {
         "cache_read_input_token_cost": 1.25e-06,
+        "deprecation_date": "2027-02-01",
+        "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "input_cost_per_token": 1.25e-05,
         "litellm_provider": "openai",
         "mode": "chat",
@@ -72148,6 +72184,7 @@
         "output_cost_per_token": 4.5e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supports_audio_input": true,
+        "supports_audio_output": true,
         "tpm": 250000,
         "rpm": 10,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
@@ -72170,6 +72207,7 @@
         "output_cost_per_token": 4.5e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supports_audio_input": true,
+        "supports_audio_output": true,
         "tpm": 250000,
         "rpm": 10,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
@@ -76469,6 +76507,33 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "us-gov.xai.grok-4.7": {
+        "supports_regex_lookaround": false,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "cache_read_input_token_cost": 6.6e-07,
+        "cache_read_input_token_cost_flex": 3.3e-07,
+        "cache_read_input_token_cost_priority": 1.155e-06,
+        "input_cost_per_token": 2.64e-06,
+        "input_cost_per_token_batches": 1.32e-06,
+        "input_cost_per_token_flex": 1.32e-06,
+        "input_cost_per_token_priority": 4.62e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 7.92e-06,
+        "output_cost_per_token_batches": 3.96e-06,
+        "output_cost_per_token_flex": 3.96e-06,
+        "output_cost_per_token_priority": 1.386e-05,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-gov-east-1/index.json",
+        "supports_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "baseten/deepseek-ai/DeepSeek-V4.1-Flash-Fast": {
         "cache_read_input_token_cost": 1.4e-08,
         "input_cost_per_token": 6e-07,
@@ -78437,7 +78502,7 @@
         "cache_creation_input_token_cost": 1e-05,
         "cache_creation_input_token_cost_above_1hr": 1.6e-05,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-10-01",
+        "deprecation_date": "2027-01-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "input_cost_per_token": 8e-06,
         "litellm_provider": "azure_ai",
@@ -78447,7 +78512,7 @@
         "output_cost_per_token": 4e-05,
         "prompt_cache_min_tokens": 512.0,
         "search_context_cost_per_query": {"search_context_size_high":0.02,"search_context_size_low":0.02,"search_context_size_medium":0.02},
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -82782,6 +82847,39 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "gpt-6-cyber": {
+        "cache_creation_input_token_cost": 2.5e-05,
+        "cache_creation_input_token_cost_above_12hr": 5e-05,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_token": 2e-05,
+        "litellm_provider": "openai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0001,
+        "source": "https://developers.openai.com/api/docs/models/gpt-6-cyber",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_search": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
     "gpt-6-astra-law": {
         "cache_read_input_token_cost": 1e-06,
         "input_cost_per_token": 1e-05,
@@ -83379,6 +83477,28 @@
         },
         "supports_response_schema": true,
         "source": "https://empiriolabs.ai/models/kimi-k3"
+    },
+    "empiriolabs/kimi-k3-1-pro": {
+        "litellm_provider": "empiriolabs",
+        "mode": "chat",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 1.8e-06,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_web_search": true,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.015,
+            "search_context_size_medium": 0.015,
+            "search_context_size_high": 0.015
+        },
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_function_calling": true,
+        "source": "https://empiriolabs.ai/models/kimi-k3-1-pro"
     },
     "empiriolabs/mimo-v2-6-flash": {
         "litellm_provider": "empiriolabs",
@@ -86383,5 +86503,32 @@
         "supports_system_messages": false,
         "supports_video_input": true,
         "supports_vision": true
+    },
+    "databricks/databricks-kimi-k3-1-pro": {
+        "cache_creation_input_token_cost": 1.99997e-06,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 1.99997e-06,
+        "input_dbu_cost_per_token": 2.8571e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Input/output cost per token is dbu cost * $0.070. Billing reads the per-token dollar fields; the '*_dbu_cost_per_token' fields are the published Databricks rates, kept for reference."},
+        "mode": "chat",
+        "output_cost_per_token": 9.99999e-06,
+        "output_dbu_cost_per_token": 0.000142857,
+        "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "token_count_framing": 100.0
     }
 }

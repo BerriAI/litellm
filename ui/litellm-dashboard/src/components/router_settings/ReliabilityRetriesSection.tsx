@@ -56,7 +56,7 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                   }
                   placeholder="—"
                   disabled={isOwnedByConfig(routerSettingsSource, param)}
-                  title={isOwnedByConfig(routerSettingsSource, param) ? CONFIG_OWNED_HINT : undefined}
+                  title={isOwnedByConfig(routerSettingsSource, param) ? t(CONFIG_OWNED_HINT) : undefined}
                   className="font-mono text-sm w-full"
                 />
               </label>

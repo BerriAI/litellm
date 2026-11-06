@@ -184,7 +184,7 @@ export function LogDetailContent({
               )}
               {typeof logEntry.metadata?.used_client_oauth_token === "boolean" && (
                 <DescriptionItem label={t("logs.detail.content.credential")}>
-                  {CREDENTIAL_LABELS[String(logEntry.metadata.used_client_oauth_token)]}
+                  {t(CREDENTIAL_LABELS[String(logEntry.metadata.used_client_oauth_token)])}
                 </DescriptionItem>
               )}
               {hasGuardrailData && (
@@ -592,7 +592,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 label={
                   <MetricLabel
                     label={t("logs.detail.metrics.promptCacheReadTokens")}
-                    tooltip={PROMPT_CACHE_READ_TOOLTIP}
+                    tooltip={t(PROMPT_CACHE_READ_TOOLTIP)}
                     docsUrl={PROMPT_CACHE_DOCS_URL}
                   />
                 }
@@ -605,7 +605,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 label={
                   <MetricLabel
                     label={t("logs.detail.metrics.promptCacheCreationTokens")}
-                    tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+                    tooltip={t(PROMPT_CACHE_CREATION_TOOLTIP)}
                     docsUrl={PROMPT_CACHE_DOCS_URL}
                   />
                 }

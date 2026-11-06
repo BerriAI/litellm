@@ -1,5 +1,6 @@
 "use client";
 
+import { DateCell } from "@/components/shared/table_cells";
 import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -32,8 +33,6 @@ function sourceValue(source: Plugin["source"]) {
 export function SkillInspector({ skill }: { skill: Plugin }) {
   const { t } = useTranslation();
   const keywords = skill.keywords ?? [];
-  const addedAt = skill.created_at ? new Date(skill.created_at) : null;
-  const added = addedAt && !Number.isNaN(addedAt.getTime()) ? addedAt.toLocaleDateString() : null;
   return (
     <div className="flex flex-col gap-6 p-6">
       <InspectorHeader
@@ -52,7 +51,22 @@ export function SkillInspector({ skill }: { skill: Plugin }) {
           [
             { label: t("publicModelHub.skillInspector.facts.source"), wide: true, value: sourceValue(skill.source) },
             { label: t("publicModelHub.skillInspector.facts.author"), value: skill.author?.name },
-            { label: t("publicModelHub.skillInspector.facts.added"), value: added },
+            { label: t("skills.table.columns.createdAt"), value: <DateCell value={skill.created_at} /> },
+            { label: t("skills.table.columns.updatedAt"), value: <DateCell value={skill.updated_at} /> },
+            { label: t("skills.table.columns.createdBy"), value: skill.created_by || t("skills.table.notRecorded") },
+            {
+              label: t("skills.table.columns.publishedBy"),
+              value: skill.published_by || t("skills.table.notRecorded"),
+            },
+            { label: t("skills.table.columns.approvedBy"), value: skill.approved_by || t("skills.table.notRecorded") },
+            {
+              label: t("skills.table.columns.securityScan"),
+              value: (
+                <span title={t("skills.table.scanHelp")}>
+                  {t(skill.security_scan_passed ? "skills.table.publicYes" : "skills.table.publicNo")}
+                </span>
+              ),
+            },
           ],
           [
             {

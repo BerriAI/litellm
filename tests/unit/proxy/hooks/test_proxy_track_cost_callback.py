@@ -1939,6 +1939,7 @@ async def test_callback_handles_every_status_the_interactions_api_can_return():
     assert released == {
         "completed",
         "requires_action",
+        "requires_continuation",
         "failed",
         "cancelled",
         "incomplete",
