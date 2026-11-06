@@ -1703,7 +1703,11 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
             )
 
-        def hosted_fetch(tool_input: dict, result: dict, status: Optional[str]) -> dict:
+        def hosted_fetch(
+            tool_input: Mapping[str, str],
+            result: Mapping[str, object],
+            status: Literal["in_progress", "completed"] | None,
+        ) -> dict[str, ResponseFunctionWebSearch]:
             return {
                 "srvtoolu_01Fetch": build_web_search_call(
                     "srvtoolu_01Fetch", tool_input, result, status=status, tool_name="web_fetch"

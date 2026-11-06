@@ -11,7 +11,7 @@ import importlib
 import json
 import os
 import threading
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
@@ -248,7 +248,9 @@ def _claude_fetch_call() -> ResponseFunctionWebSearch:
     )
 
 
-def _web_call_summaries(calls: object) -> list[tuple[str, str | None, dict[str, object]]]:
+def _web_call_summaries(
+    calls: Mapping[str, object] | Iterable[object],
+) -> list[tuple[str, str | None, dict[str, object]]]:
     items: Final = calls.values() if isinstance(calls, dict) else calls
     return [
         (call.id, call.status, call.action.model_dump(exclude_none=True))

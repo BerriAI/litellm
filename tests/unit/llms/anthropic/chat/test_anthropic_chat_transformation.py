@@ -49,7 +49,11 @@ from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePla
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    AllAnthropicPassThroughMessageValues,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
@@ -3987,7 +3991,7 @@ def test_server_tool_use_is_not_returned_as_a_client_tool_call(
         assert choice.message.content == _PARIS_TEXT
 
 
-def _replayed(*messages: object):
+def _replayed(*messages: Mapping[str, object]) -> list[AllAnthropicPassThroughMessageValues]:
     return anthropic_messages_pt(
         messages=cast(list[AllMessageValues], list(messages)),  # cast-ok: replays history the way clients send it back
         model="claude-opus-5-5",
