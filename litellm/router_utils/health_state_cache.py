@@ -106,6 +106,16 @@ class DeploymentHealthCache:
         }
 
     @with_service_target(HEALTH_CHECKS_TARGET)
+    async def async_get_states(self) -> object:
+        """Every deployment's raw state, as the router core's health filter reads it; a failed read is None."""
+        return await self.cache.async_get_cache(key=self.CACHE_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
+
+    @with_service_target(HEALTH_CHECKS_TARGET)
+    def get_states(self) -> object:
+        """``async_get_states`` for a sync call."""
+        return self.cache.get_cache(key=self.CACHE_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
+
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def async_get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Return set of deployment IDs currently marked unhealthy and not stale."""
         try:

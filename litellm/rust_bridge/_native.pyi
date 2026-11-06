@@ -764,20 +764,43 @@ class _PreRouteStep(_Step):
     fallback_depth: int
     retry: int
 
-# One RouterCache op against the router's DualCache. `key` is set for every op but `batch_get`,
-# and `increment_usage`, which set `keys`; `value` is the JSON to store (`set`), the amount
-# (`increment`) or one amount per key (`increment_usage`); `ttl` is in seconds; `local` reads or
-# writes this worker's in-memory tier only. Outcomes: get -> the JSON value or None; batch_get ->
-# one JSON value or None per key, in order; increment -> the new int or float; set, delete and
-# increment_usage -> None.
+# One deployment's per-minute usage counters: `model` is the model its usage is counted under,
+# `minute` is `HH-MM` in UTC.
+class _UsageWindow(TypedDict):
+    deployment_id: str
+    model: str
+    minute: str
+
+# One RouterCache op, answered from the router's stores. It names the state it touches, never a
+# Redis key. Fields by op: cooldowns (`ids`) -> one stored cooldown or None per id; put_cooldown
+# (`id`, `cooldown`, `ttl`) -> None; increment_allowed_fails (`id`, `suffix`, `ttl`) -> the new
+# count; add_usage (`window`, `tokens`, `requests`) -> None; add_request (`window`, `ttl`) -> None;
+# usage (`window`) -> [tokens, requests], each a number or None; health_states -> the health
+# checks' states or None; get_local (`key`) -> this worker's in-memory value or None;
+# increment_local (`key`, `amount`, `ttl`) -> the new in-memory count. `ttl` is in seconds.
 class _CacheStep(_Step):
     kind: Literal["cache"]
-    op: Literal["get", "set", "increment", "increment_usage", "batch_get", "delete"]
-    key: str | None
-    keys: list[str] | None
-    value: JsonValue
-    ttl: float | None
-    local: bool
+    op: Literal[
+        "cooldowns",
+        "put_cooldown",
+        "increment_allowed_fails",
+        "add_usage",
+        "add_request",
+        "usage",
+        "health_states",
+        "get_local",
+        "increment_local",
+    ]
+    ids: NotRequired[list[str]]
+    id: NotRequired[str]
+    cooldown: NotRequired[JsonValue]
+    suffix: NotRequired[str | None]
+    ttl: NotRequired[float | None]
+    window: NotRequired[_UsageWindow]
+    tokens: NotRequired[int | float]
+    requests: NotRequired[int | float]
+    key: NotRequired[str]
+    amount: NotRequired[int | float]
 
 # One lookup of a model-info query (router-core `ModelInfoLookup`): its `lookup` name and that
 # lookup's arguments, answered as the lookup documents.
@@ -1057,8 +1080,6 @@ class RouterCoreHandle:
     ) -> RouterCall[_SuccessReportSteps]: ...
     # Count a success against any id, driven like `report_failure`; `done` carries `key`.
     def count_success(self, id: str, callbacks: Mapping[str, bool] | None = None) -> RouterCall[_SuccessReportSteps]: ...
-    # [(id, tpm_key, rpm_key)] for this minute, or None for a group with no deployment.
-    def usage_keys(self, model_group: str) -> list[tuple[str, str, str]] | None: ...
     # Every deployment as a `model_list` entry, in config order.
     def deployments(self) -> list[dict[str, JsonValue]]: ...
     def deployments_from(self, start: int) -> list[dict[str, JsonValue]]: ...

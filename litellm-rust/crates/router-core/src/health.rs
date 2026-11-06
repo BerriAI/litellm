@@ -1,17 +1,10 @@
-//! [`Health`]: cooldowns, allowed-fails counters and per-minute usage, kept in the shared
-//! [`RouterCache`] under the Python router's keys, encodings and TTLs:
-//!
-//! | state | key | value | TTL |
-//! |---|---|---|---|
-//! | cooldown | `deployment:{id}:cooldown` | `{exception_received, status_code, timestamp, cooldown_time}` | cooldown time |
-//! | allowed fails | `deployment:{id}:allowed_fails[:{suffix}]` | int counter | cooldown time |
-//! | usage | `global_router:{id}:{model}:tpm:{HH-MM}` and `:rpm:` | int counter | 60s |
-//! | outcomes (local only) | `{id}:successes`, `{id}:fails` | int counter | 60s |
+//! [`Health`]: cooldowns, allowed-fails counters and per-minute usage, kept in the host's
+//! [`RouterCache`] with the Python router's encodings and TTLs, and this worker's per-minute
+//! outcomes (`{id}:successes`, `{id}:fails`, kept `local_only`).
 //!
 //! From `router_utils/cooldown_cache.py`, `router_utils/cooldown_handlers.py`,
-//! `router_utils/router_callbacks/track_deployment_metrics.py`, `RouterCacheEnum` in
-//! `types/router.py` and `Router._increment_usage` / `deployment_callback_on_failure` in
-//! `router.py`.
+//! `router_utils/router_callbacks/track_deployment_metrics.py` and `Router._increment_usage` /
+//! `deployment_callback_on_failure` in `router.py`.
 
 use std::{
     sync::Arc,
@@ -22,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::{
-    cache::RouterCache,
+    cache::{RouterCache, UsageWindow},
     error::{AttemptError, Error, FailureKind},
     outcome::{OutcomeCallbacks, OutcomeWrite},
     registry::{Deployment, Registry},
@@ -66,37 +59,6 @@ pub fn current_minute(time: SystemTime) -> String {
         .unwrap_or_default()
         % 86_400;
     format!("{:02}-{:02}", seconds / 3600, (seconds % 3600) / 60)
-}
-
-pub fn cooldown_key(id: &str) -> String {
-    format!("deployment:{id}:cooldown")
-}
-
-pub fn allowed_fails_key(id: &str, suffix: Option<&str>) -> String {
-    match suffix {
-        Some(suffix) => format!("deployment:{id}:allowed_fails:{suffix}"),
-        None => format!("deployment:{id}:allowed_fails"),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::Display, strum::EnumString)]
-pub enum UsageMetric {
-    #[strum(serialize = "tpm")]
-    Tpm,
-    #[strum(serialize = "rpm")]
-    Rpm,
-    /// Input tokens per minute, which the io-token rate limit check counts.
-    #[strum(serialize = "itpm")]
-    Itpm,
-    /// Output tokens per minute.
-    #[strum(serialize = "otpm")]
-    Otpm,
-}
-
-/// `RouterCacheEnum.TPM` / `RPM` / `ITPM` / `OTPM`: `model` is the deployment's
-/// `litellm_params.model`.
-pub fn usage_key(id: &str, model: &str, metric: UsageMetric, minute: &str) -> String {
-    format!("global_router:{id}:{model}:{metric}:{minute}")
 }
 
 /// `CooldownCacheValue`.
@@ -260,8 +222,7 @@ impl Health {
         &self,
         ids: &[String],
     ) -> Result<Vec<(String, CooldownValue)>, Error> {
-        let keys: Vec<String> = ids.iter().map(|id| cooldown_key(id)).collect();
-        let values = self.cache.async_batch_get_cache(&keys).await?;
+        let values = self.cache.cooldowns(ids).await?;
         let now = self.now();
         Ok(ids
             .iter()
@@ -287,16 +248,14 @@ impl Health {
             cooldown_time: cooldown.as_secs_f64(),
         };
         let value = serde_json::to_value(value).unwrap_or_default();
-        self.cache
-            .async_set_cache(&cooldown_key(id), value, Some(cooldown))
-            .await?;
+        self.cache.put_cooldown(id, value, cooldown).await?;
         Ok(())
     }
 
     async fn local_count(&self, key: &str) -> Result<u64, Error> {
         Ok(self
             .cache
-            .async_get_local(key)
+            .get_local(key)
             .await?
             .and_then(|value| value.as_f64())
             .map_or(0, |count| count as u64))
@@ -315,7 +274,7 @@ impl Health {
     pub async fn count_success(&self, id: &str) -> Result<String, Error> {
         let key = format!("{id}:successes");
         self.cache
-            .async_increment_local(&key, 1.0, Some(USAGE_TTL))
+            .increment_local(&key, 1.0, Some(USAGE_TTL))
             .await?;
         Ok(key)
     }
@@ -323,7 +282,7 @@ impl Health {
     /// `increment_deployment_failures_for_current_minute`.
     pub async fn count_failure(&self, id: &str) -> Result<(), Error> {
         self.cache
-            .async_increment_local(&format!("{id}:fails"), 1.0, Some(USAGE_TTL))
+            .increment_local(&format!("{id}:fails"), 1.0, Some(USAGE_TTL))
             .await?;
         Ok(())
     }
@@ -534,10 +493,7 @@ impl Health {
         allowed: f64,
         ttl: Duration,
     ) -> Result<bool, Error> {
-        let fails = self
-            .cache
-            .async_increment(&allowed_fails_key(id, suffix), 1.0, Some(ttl))
-            .await?;
+        let fails = self.cache.increment_allowed_fails(id, suffix, ttl).await?;
         Ok(fails > allowed)
     }
 
@@ -568,34 +524,22 @@ impl Health {
 
     /// `_increment_deployment_usage`, for a deployment that tracks usage: tokens and requests
     /// under `model` (metadata's `deployment`, which a wildcard route fills; else the
-    /// deployment's own), unless there is nothing to add. Returns the tokens counter's key when
-    /// it added to it.
+    /// deployment's own), unless there is nothing to add. Returns the window it added to.
     pub async fn add_usage(
         &self,
         deployment: &Deployment,
         model: Option<&str>,
         total_tokens: f64,
         requests: f64,
-    ) -> Result<Option<String>, Error> {
+    ) -> Result<Option<UsageWindow>, Error> {
         if total_tokens <= 0.0 && requests <= 0.0 {
             return Ok(None);
         }
-        let minute = current_minute(self.clock.now());
-        let model = model.unwrap_or(&deployment.params.model);
-        let tpm_key = usage_key(&deployment.id, model, UsageMetric::Tpm, &minute);
+        let window = self.usage_window(deployment, model);
         self.cache
-            .async_increment_usage(
-                &[
-                    (tpm_key.clone(), total_tokens),
-                    (
-                        usage_key(&deployment.id, model, UsageMetric::Rpm, &minute),
-                        requests,
-                    ),
-                ],
-                Some(USAGE_TTL),
-            )
+            .add_usage(&window, total_tokens, requests)
             .await?;
-        Ok(Some(tpm_key))
+        Ok(Some(window))
     }
 
     /// `async_deployment_callback_on_failure`: a failed request counts against the deployment's
@@ -605,38 +549,28 @@ impl Health {
         deployment: &Deployment,
         model: Option<&str>,
     ) -> Result<(), Error> {
-        let minute = current_minute(self.clock.now());
-        self.cache
-            .async_increment(
-                &usage_key(
-                    &deployment.id,
-                    model.unwrap_or(&deployment.params.model),
-                    UsageMetric::Rpm,
-                    &minute,
-                ),
-                1.0,
-                Some(USAGE_TTL),
-            )
-            .await?;
+        let window = self.usage_window(deployment, model);
+        self.cache.add_request(&window, USAGE_TTL).await?;
         Ok(())
     }
 
     /// This minute's (tpm, rpm) for a deployment.
     pub async fn usage(&self, deployment: &Deployment) -> Result<(u64, u64), Error> {
-        let minute = current_minute(self.clock.now());
-        let model = &deployment.params.model;
-        let keys = [UsageMetric::Tpm, UsageMetric::Rpm]
-            .map(|metric| usage_key(&deployment.id, model, metric, &minute));
-        let values = self.cache.async_batch_get_cache(&keys).await?;
-        let count = |index: usize| {
-            values
-                .get(index)
-                .cloned()
-                .flatten()
-                .and_then(|value| value.as_f64())
-                .map_or(0, |count| count as u64)
-        };
-        Ok((count(0), count(1)))
+        let counts = self
+            .cache
+            .usage(&self.usage_window(deployment, None))
+            .await?;
+        let count = |value: Option<f64>| value.map_or(0, |count| count as u64);
+        Ok((count(counts.tokens), count(counts.requests)))
+    }
+
+    /// This minute's window for `deployment`, counted under `model` or the deployment's own.
+    fn usage_window(&self, deployment: &Deployment, model: Option<&str>) -> UsageWindow {
+        UsageWindow {
+            deployment_id: deployment.id.clone(),
+            model: model.unwrap_or(&deployment.params.model).to_owned(),
+            minute: current_minute(self.clock.now()),
+        }
     }
 }
 
@@ -648,7 +582,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        cache::InMemoryRouterCache,
+        cache::{InMemoryRouterCache, UsageCounts},
         config::{RouterConfig, RouterDynamicConfig},
         registry::{DeploymentSpec, RoutingGroupSpec},
     };
@@ -936,29 +870,17 @@ mod tests {
             .await
             .unwrap();
 
-        let minute = current_minute(clock.now());
+        let window = UsageWindow {
+            deployment_id: "a".to_owned(),
+            model: keyed.to_owned(),
+            minute: current_minute(clock.now()),
+        };
         assert_eq!(
-            (
-                cache.get(&usage_key("a", keyed, UsageMetric::Tpm, &minute)),
-                cache.get(&usage_key("a", keyed, UsageMetric::Rpm, &minute)),
-            ),
-            (Some(serde_json::json!(15)), Some(serde_json::json!(1))),
-        );
-    }
-
-    #[rstest]
-    fn keys_match_python() {
-        assert_eq!(
-            (
-                cooldown_key("abc"),
-                allowed_fails_key("abc", Some("generic")),
-                usage_key("abc", "openai/gpt-4o", UsageMetric::Tpm, "09-05"),
-            ),
-            (
-                "deployment:abc:cooldown".to_owned(),
-                "deployment:abc:allowed_fails:generic".to_owned(),
-                "global_router:abc:openai/gpt-4o:tpm:09-05".to_owned(),
-            )
+            cache.counted(&window),
+            UsageCounts {
+                tokens: Some(15.0),
+                requests: Some(1.0),
+            },
         );
     }
 }

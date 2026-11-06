@@ -6,8 +6,9 @@
 //! current thread, so a host future finds its exchange without the router passing it through.
 //!
 //! The routing cache is a host operation too: [`StepCache`] parks every [`RouterCache`] op as a
-//! `cache` step, and Python runs it against the router's own `DualCache` (memory plus Redis), so
-//! Python and Rust read and write the same cooldowns, fail counters and usage.
+//! `cache` step, and Python answers it from the router's stores, so Python and Rust read and write
+//! the same cooldowns, fail counters and usage. A step names the state it touches, never a Redis
+//! key: the keys are the stores'.
 
 use std::{
     cell::RefCell,
@@ -22,8 +23,8 @@ use async_trait::async_trait;
 use litellm_router_core::{
     Attempt, AttemptError, Blocked, BuildAsk, BuildPath, Built, Deployment, Error, Host, Output,
     Payload, PreRoute, PreRouted, Provided, Randomness, RouterCache, RouterEvent, RouterRequest,
-    RouterResponse, RoutingContext, SecretRef, SelectStage, ThreadRandomness,
-    build::BuiltDeployment, host::ModelInfoLookup, model_info::MergedModelInfo,
+    RouterResponse, RoutingContext, SecretRef, SelectStage, ThreadRandomness, UsageCounts,
+    UsageWindow, build::BuiltDeployment, host::ModelInfoLookup, model_info::MergedModelInfo,
     precall::PreCallFacts,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
@@ -102,55 +103,115 @@ pub(crate) enum Stage {
     ProviderRequest,
 }
 
-/// The `op` of a `cache` step: one per [`RouterCache`] method.
+/// One [`RouterCache`] op, as a `cache` step carries it to Python.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CacheCall {
+    /// Answered with one stored cooldown or `None` per id.
+    Cooldowns { ids: Vec<String> },
+    /// Answered with `None`.
+    PutCooldown {
+        id: String,
+        cooldown: Value,
+        ttl: f64,
+    },
+    /// Answered with the count after this failure.
+    IncrementAllowedFails {
+        id: String,
+        suffix: Option<String>,
+        ttl: f64,
+    },
+    /// Answered with `None`.
+    AddUsage {
+        window: UsageWindow,
+        tokens: f64,
+        requests: f64,
+    },
+    /// Answered with `None`.
+    AddRequest { window: UsageWindow, ttl: f64 },
+    /// Answered with `[tokens, requests]`, each a number or `None`.
+    Usage { window: UsageWindow },
+    /// Answered with the health checks' states, or `None`.
+    HealthStates,
+    /// Answered with the local value, or `None`.
+    GetLocal { key: String },
+    /// Answered with the local counter after the increment.
+    IncrementLocal {
+        key: String,
+        amount: f64,
+        ttl: Option<f64>,
+    },
+}
+
+/// The `op` of a `cache` step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::Display, strum::IntoStaticStr)]
 pub(crate) enum CacheOp {
-    /// `async_get_cache(key)`: answered with the stored JSON value, or `None`.
-    #[strum(serialize = "get")]
-    Get,
-    /// `async_set_cache(key, value, ttl)`: answered with `None`.
-    #[strum(serialize = "set")]
-    Set,
-    /// `async_increment(key, value, ttl)`: answered with the new number. The TTL applies when
-    /// the key is created.
-    #[strum(serialize = "increment")]
-    Increment,
-    /// `async_increment_usage(keys, value, ttl)`: `value` is one amount per key, added as
-    /// `_increment_deployment_usage` adds them. Answered with `None`.
-    #[strum(serialize = "increment_usage")]
-    IncrementUsage,
-    /// `async_batch_get_cache(keys)`: answered with one JSON value or `None` per key, in order.
-    #[strum(serialize = "batch_get")]
-    BatchGet,
-    /// `async_delete_cache(key)`: answered with `None`.
-    #[strum(serialize = "delete")]
-    Delete,
+    #[strum(serialize = "cooldowns")]
+    Cooldowns,
+    #[strum(serialize = "put_cooldown")]
+    PutCooldown,
+    #[strum(serialize = "increment_allowed_fails")]
+    IncrementAllowedFails,
+    #[strum(serialize = "add_usage")]
+    AddUsage,
+    #[strum(serialize = "add_request")]
+    AddRequest,
+    #[strum(serialize = "usage")]
+    Usage,
+    #[strum(serialize = "health_states")]
+    HealthStates,
+    #[strum(serialize = "get_local")]
+    GetLocal,
+    #[strum(serialize = "increment_local")]
+    IncrementLocal,
+}
+
+impl CacheCall {
+    pub(crate) fn op(&self) -> CacheOp {
+        match self {
+            Self::Cooldowns { .. } => CacheOp::Cooldowns,
+            Self::PutCooldown { .. } => CacheOp::PutCooldown,
+            Self::IncrementAllowedFails { .. } => CacheOp::IncrementAllowedFails,
+            Self::AddUsage { .. } => CacheOp::AddUsage,
+            Self::AddRequest { .. } => CacheOp::AddRequest,
+            Self::Usage { .. } => CacheOp::Usage,
+            Self::HealthStates => CacheOp::HealthStates,
+            Self::GetLocal { .. } => CacheOp::GetLocal,
+            Self::IncrementLocal { .. } => CacheOp::IncrementLocal,
+        }
+    }
+
+    /// How many entries a `Values` answer holds.
+    fn values_len(&self) -> Option<usize> {
+        match self {
+            Self::Cooldowns { ids } => Some(ids.len()),
+            Self::Usage { .. } => Some(2),
+            _ => None,
+        }
+    }
 }
 
 /// Python's outcome of a `cache` step.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CacheOutcome {
-    /// `get`: the stored value (`None` when missing).
     Value(Option<Value>),
-    /// `batch_get`: one entry per key.
     Values(Vec<Option<Value>>),
-    /// `increment`: the counter after the increment.
     Number(f64),
-    /// `set`, `delete` and `increment_usage`.
     Stored,
 }
 
 impl CacheOutcome {
-    /// The op this outcome answers (`Stored` answers both `set` and `delete`).
     fn answers(&self, op: CacheOp) -> bool {
         matches!(
             (self, op),
-            (Self::Value(_), CacheOp::Get)
-                | (Self::Values(_), CacheOp::BatchGet)
-                | (Self::Number(_), CacheOp::Increment)
+            (Self::Value(_), CacheOp::HealthStates | CacheOp::GetLocal)
+                | (Self::Values(_), CacheOp::Cooldowns | CacheOp::Usage)
+                | (
+                    Self::Number(_),
+                    CacheOp::IncrementAllowedFails | CacheOp::IncrementLocal
+                )
                 | (
                     Self::Stored,
-                    CacheOp::Set | CacheOp::Delete | CacheOp::IncrementUsage
+                    CacheOp::PutCooldown | CacheOp::AddUsage | CacheOp::AddRequest
                 )
         )
     }
@@ -219,18 +280,7 @@ pub(crate) enum HostCall {
         fallback_depth: u32,
         retry: u32,
     },
-    /// One [`RouterCache`] op against the host's cache. `key` is set for every op but
-    /// `batch_get`, which sets `keys`; `value` is set for `set` (the JSON to store) and
-    /// `increment` (the amount); `ttl` is in seconds.
-    Cache {
-        op: CacheOp,
-        key: Option<String>,
-        keys: Option<Vec<String>>,
-        value: Option<Value>,
-        ttl: Option<f64>,
-        /// The op reads or writes this worker's in-memory tier only (`local_only=True`).
-        local: bool,
-    },
+    Cache(CacheCall),
     /// The deployment build's `os.environ/` references: answered with one value per ref.
     Secrets {
         index: usize,
@@ -263,7 +313,7 @@ impl HostCall {
             Self::RefuseFallbacks { .. } => StepKind::RefuseFallbacks,
             Self::Select { .. } => StepKind::Select,
             Self::PreRoute { .. } => StepKind::PreRoute,
-            Self::Cache { .. } => StepKind::Cache,
+            Self::Cache(_) => StepKind::Cache,
             Self::Secrets { .. } => StepKind::Secrets,
             Self::Build { kind, .. } => *kind,
             Self::ModelInfo { .. } => StepKind::ModelInfo,
@@ -373,15 +423,17 @@ impl HostCallResponse {
                 got: values.len(),
             });
         }
-        if let (Self::Cache(outcome), HostCall::Cache { op, keys, .. }) = (self, call) {
-            if !outcome.answers(*op) {
-                return Err(DriveError::WrongCacheOutcome { op: *op });
+        if let (Self::Cache(outcome), HostCall::Cache(cache)) = (self, call) {
+            let op = cache.op();
+            if !outcome.answers(op) {
+                return Err(DriveError::WrongCacheOutcome { op });
             }
-            if let (CacheOutcome::Values(values), Some(keys)) = (outcome, keys)
-                && values.len() != keys.len()
+            if let (CacheOutcome::Values(values), Some(expected)) = (outcome, cache.values_len())
+                && values.len() != expected
             {
                 return Err(DriveError::BatchLength {
-                    expected: keys.len(),
+                    op,
+                    expected,
                     got: values.len(),
                 });
             }
@@ -447,8 +499,12 @@ pub(crate) enum DriveError {
     UnknownCandidate { id: String },
     #[error("the outcome does not answer a `{op}` cache step")]
     WrongCacheOutcome { op: CacheOp },
-    #[error("a `batch_get` cache step for {expected} keys was answered with {got} values")]
-    BatchLength { expected: usize, got: usize },
+    #[error("a `{op}` cache step for {expected} entries was answered with {got} values")]
+    BatchLength {
+        op: CacheOp,
+        expected: usize,
+        got: usize,
+    },
     #[error("a `secrets` step for {expected} references was answered with {got} values")]
     SecretsLength { expected: usize, got: usize },
     #[error("the router call is pending on something other than a step")]
@@ -539,7 +595,7 @@ fn ttl_seconds(ttl: Option<Duration>) -> Option<f64> {
 }
 
 /// An increment amount as Python's counters store it: an int when it is whole.
-fn amount_value(amount: f64) -> Value {
+pub(crate) fn amount_value(amount: f64) -> Value {
     if amount.fract() == 0.0 && amount.abs() < i64::MAX as f64 {
         Value::from(amount as i64)
     } else {
@@ -547,131 +603,139 @@ fn amount_value(amount: f64) -> Value {
     }
 }
 
-/// The host's cache: every op is a `cache` step Python runs against the router's `DualCache`.
+/// The host's cache: every op is a `cache` step Python answers from the router's stores.
 pub(crate) struct StepCache;
 
-async fn cache_step(
-    op: CacheOp,
-    key: Option<&str>,
-    keys: Option<&[String]>,
-    value: Option<Value>,
-    ttl: Option<Duration>,
-) -> CacheOutcome {
-    call_cache(op, key, keys, value, ttl, false).await
-}
-
-async fn call_cache(
-    op: CacheOp,
-    key: Option<&str>,
-    keys: Option<&[String]>,
-    value: Option<Value>,
-    ttl: Option<Duration>,
-    local: bool,
-) -> CacheOutcome {
-    let call = HostCall::Cache {
-        op,
-        key: key.map(str::to_owned),
-        keys: keys.map(<[String]>::to_vec),
-        value,
-        ttl: ttl_seconds(ttl),
-        local,
-    };
-    let HostCallResponse::Cache(outcome) = call_host(call).await else {
+async fn cache_step(call: CacheCall) -> CacheOutcome {
+    let HostCallResponse::Cache(outcome) = call_host(HostCall::Cache(call)).await else {
         unreachable!("{CHECKED}");
     };
     outcome
 }
 
+async fn stored(call: CacheCall) -> Result<(), litellm_cache::Error> {
+    let CacheOutcome::Stored = cache_step(call).await else {
+        unreachable!("{CHECKED}");
+    };
+    Ok(())
+}
+
+async fn counted(call: CacheCall) -> Result<f64, litellm_cache::Error> {
+    let CacheOutcome::Number(next) = cache_step(call).await else {
+        unreachable!("{CHECKED}");
+    };
+    Ok(next)
+}
+
+async fn value(call: CacheCall) -> Result<Option<Value>, litellm_cache::Error> {
+    let CacheOutcome::Value(value) = cache_step(call).await else {
+        unreachable!("{CHECKED}");
+    };
+    Ok(value)
+}
+
+async fn values(call: CacheCall) -> Result<Vec<Option<Value>>, litellm_cache::Error> {
+    let CacheOutcome::Values(values) = cache_step(call).await else {
+        unreachable!("{CHECKED}");
+    };
+    Ok(values)
+}
+
 #[async_trait]
 impl RouterCache for StepCache {
-    async fn async_get_cache(&self, key: &str) -> Result<Option<Value>, litellm_cache::Error> {
-        let CacheOutcome::Value(value) =
-            cache_step(CacheOp::Get, Some(key), None, None, None).await
-        else {
-            unreachable!("{CHECKED}");
-        };
-        Ok(value)
+    async fn cooldowns(&self, ids: &[String]) -> Result<Vec<Option<Value>>, litellm_cache::Error> {
+        values(CacheCall::Cooldowns { ids: ids.to_vec() }).await
     }
 
-    async fn async_set_cache(
+    async fn put_cooldown(
         &self,
-        key: &str,
-        value: Value,
-        ttl: Option<Duration>,
+        id: &str,
+        cooldown: Value,
+        ttl: Duration,
     ) -> Result<(), litellm_cache::Error> {
-        cache_step(CacheOp::Set, Some(key), None, Some(value), ttl).await;
-        Ok(())
+        stored(CacheCall::PutCooldown {
+            id: id.to_owned(),
+            cooldown,
+            ttl: ttl.as_secs_f64(),
+        })
+        .await
     }
 
-    async fn async_increment(
+    async fn increment_allowed_fails(
+        &self,
+        id: &str,
+        suffix: Option<&str>,
+        ttl: Duration,
+    ) -> Result<f64, litellm_cache::Error> {
+        counted(CacheCall::IncrementAllowedFails {
+            id: id.to_owned(),
+            suffix: suffix.map(str::to_owned),
+            ttl: ttl.as_secs_f64(),
+        })
+        .await
+    }
+
+    async fn add_usage(
+        &self,
+        window: &UsageWindow,
+        tokens: f64,
+        requests: f64,
+    ) -> Result<(), litellm_cache::Error> {
+        stored(CacheCall::AddUsage {
+            window: window.clone(),
+            tokens,
+            requests,
+        })
+        .await
+    }
+
+    async fn add_request(
+        &self,
+        window: &UsageWindow,
+        ttl: Duration,
+    ) -> Result<(), litellm_cache::Error> {
+        stored(CacheCall::AddRequest {
+            window: window.clone(),
+            ttl: ttl.as_secs_f64(),
+        })
+        .await
+    }
+
+    async fn usage(&self, window: &UsageWindow) -> Result<UsageCounts, litellm_cache::Error> {
+        let read = values(CacheCall::Usage {
+            window: window.clone(),
+        })
+        .await?;
+        let count = |index: usize| read.get(index).cloned().flatten().and_then(|v| v.as_f64());
+        Ok(UsageCounts {
+            tokens: count(0),
+            requests: count(1),
+        })
+    }
+
+    async fn health_states(&self) -> Result<Option<Value>, litellm_cache::Error> {
+        value(CacheCall::HealthStates).await
+    }
+
+    async fn get_local(&self, key: &str) -> Result<Option<Value>, litellm_cache::Error> {
+        value(CacheCall::GetLocal {
+            key: key.to_owned(),
+        })
+        .await
+    }
+
+    async fn increment_local(
         &self,
         key: &str,
         amount: f64,
         ttl: Option<Duration>,
     ) -> Result<f64, litellm_cache::Error> {
-        let value = Some(amount_value(amount));
-        let CacheOutcome::Number(next) =
-            cache_step(CacheOp::Increment, Some(key), None, value, ttl).await
-        else {
-            unreachable!("{CHECKED}");
-        };
-        Ok(next)
-    }
-
-    async fn async_batch_get_cache(
-        &self,
-        keys: &[String],
-    ) -> Result<Vec<Option<Value>>, litellm_cache::Error> {
-        let CacheOutcome::Values(values) =
-            cache_step(CacheOp::BatchGet, None, Some(keys), None, None).await
-        else {
-            unreachable!("{CHECKED}");
-        };
-        Ok(values)
-    }
-
-    async fn async_delete_cache(&self, key: &str) -> Result<(), litellm_cache::Error> {
-        cache_step(CacheOp::Delete, Some(key), None, None, None).await;
-        Ok(())
-    }
-
-    async fn async_increment_usage(
-        &self,
-        increments: &[(String, f64)],
-        ttl: Option<Duration>,
-    ) -> Result<(), litellm_cache::Error> {
-        let keys: Vec<String> = increments.iter().map(|(key, _)| key.clone()).collect();
-        let amounts = increments
-            .iter()
-            .map(|(_, amount)| amount_value(*amount))
-            .collect();
-        let value = Some(Value::Array(amounts));
-        cache_step(CacheOp::IncrementUsage, None, Some(&keys), value, ttl).await;
-        Ok(())
-    }
-
-    async fn async_get_local(&self, key: &str) -> Result<Option<Value>, litellm_cache::Error> {
-        let CacheOutcome::Value(value) =
-            call_cache(CacheOp::Get, Some(key), None, None, None, true).await
-        else {
-            unreachable!("{CHECKED}");
-        };
-        Ok(value)
-    }
-
-    async fn async_increment_local(
-        &self,
-        key: &str,
-        amount: f64,
-        ttl: Option<Duration>,
-    ) -> Result<f64, litellm_cache::Error> {
-        let value = Some(amount_value(amount));
-        let CacheOutcome::Number(next) =
-            call_cache(CacheOp::Increment, Some(key), None, value, ttl, true).await
-        else {
-            unreachable!("{CHECKED}");
-        };
-        Ok(next)
+        counted(CacheCall::IncrementLocal {
+            key: key.to_owned(),
+            amount,
+            ttl: ttl_seconds(ttl),
+        })
+        .await
     }
 }
 
@@ -1129,13 +1193,12 @@ impl Driver {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    use futures_util::FutureExt;
     use litellm_router_core::{
-        FailureKind, Op, Router, RouterConfig, RouterDynamicConfig, SeededRandomness,
+        FailureKind, InMemoryRouterCache, Op, Router, RouterConfig, RouterDynamicConfig,
+        SeededRandomness,
     };
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -1173,61 +1236,68 @@ mod tests {
         HostCallResponse::Attempt(Err(AttemptError::new(FailureKind::RateLimit, Some(429))))
     }
 
-    /// A dict-backed stand-in for Python's `DualCache` that answers `cache` steps and keeps
-    /// every one it answered.
+    /// Router-core's in-memory cache standing in for Python's stores: it answers `cache` steps
+    /// and keeps every one it answered.
     #[derive(Default)]
     struct Store {
-        entries: HashMap<String, Value>,
+        cache: InMemoryRouterCache,
         calls: Vec<HostCall>,
     }
 
     impl Store {
         fn respond(&mut self, call: &HostCall) -> HostCallResponse {
-            let HostCall::Cache {
-                op,
-                key,
-                keys,
-                value,
-                ..
-            } = call
-            else {
+            let HostCall::Cache(cache_call) = call else {
                 panic!("not a cache step: {call:?}");
             };
             self.calls.push(call.clone());
-            let key = key.clone().unwrap_or_default();
-            HostCallResponse::Cache(match op {
-                CacheOp::Get => CacheOutcome::Value(self.entries.get(&key).cloned()),
-                CacheOp::Set => {
-                    self.entries.insert(key, value.clone().unwrap());
-                    CacheOutcome::Stored
-                }
-                CacheOp::Increment => {
-                    let current = self.entries.get(&key).and_then(Value::as_f64);
-                    let next =
-                        current.unwrap_or(0.0) + value.as_ref().and_then(Value::as_f64).unwrap();
-                    self.entries.insert(key, amount_value(next));
-                    CacheOutcome::Number(next)
-                }
-                CacheOp::IncrementUsage => {
-                    let amounts = value.as_ref().and_then(Value::as_array).unwrap();
-                    for (key, amount) in keys.iter().flatten().zip(amounts) {
-                        let current = self.entries.get(key).and_then(Value::as_f64);
-                        let next = current.unwrap_or(0.0) + amount.as_f64().unwrap();
-                        self.entries.insert(key.clone(), amount_value(next));
+            let cache = &self.cache;
+            let seconds = Duration::from_secs_f64;
+            let outcome = async {
+                Ok::<_, litellm_cache::Error>(match cache_call {
+                    CacheCall::Cooldowns { ids } => {
+                        CacheOutcome::Values(cache.cooldowns(ids).await?)
                     }
-                    CacheOutcome::Stored
-                }
-                CacheOp::BatchGet => CacheOutcome::Values(
-                    keys.iter()
-                        .flatten()
-                        .map(|key| self.entries.get(key).cloned())
-                        .collect(),
-                ),
-                CacheOp::Delete => {
-                    self.entries.remove(&key);
-                    CacheOutcome::Stored
-                }
-            })
+                    CacheCall::PutCooldown { id, cooldown, ttl } => {
+                        cache
+                            .put_cooldown(id, cooldown.clone(), seconds(*ttl))
+                            .await?;
+                        CacheOutcome::Stored
+                    }
+                    CacheCall::IncrementAllowedFails { id, suffix, ttl } => CacheOutcome::Number(
+                        cache
+                            .increment_allowed_fails(id, suffix.as_deref(), seconds(*ttl))
+                            .await?,
+                    ),
+                    CacheCall::AddUsage {
+                        window,
+                        tokens,
+                        requests,
+                    } => {
+                        cache.add_usage(window, *tokens, *requests).await?;
+                        CacheOutcome::Stored
+                    }
+                    CacheCall::AddRequest { window, ttl } => {
+                        cache.add_request(window, seconds(*ttl)).await?;
+                        CacheOutcome::Stored
+                    }
+                    CacheCall::Usage { window } => {
+                        let counts = cache.usage(window).await?;
+                        CacheOutcome::Values(
+                            [counts.tokens, counts.requests]
+                                .map(|count| count.map(Value::from))
+                                .to_vec(),
+                        )
+                    }
+                    CacheCall::HealthStates => CacheOutcome::Value(cache.health_states().await?),
+                    CacheCall::GetLocal { key } => CacheOutcome::Value(cache.get_local(key).await?),
+                    CacheCall::IncrementLocal { key, amount, ttl } => CacheOutcome::Number(
+                        cache
+                            .increment_local(key, *amount, ttl.map(seconds))
+                            .await?,
+                    ),
+                })
+            };
+            HostCallResponse::Cache(outcome.now_or_never().unwrap().unwrap())
         }
 
         /// Resume with `response`, answering every cache step on the way, up to the next other
@@ -1283,18 +1353,10 @@ mod tests {
     fn cooldown_reads_are_cache_steps(pair: Router) {
         let mut driver = start(&pair, "primary");
         let step = driver.resume(None).unwrap();
-        let Step::HostCall(HostCall::Cache {
-            op: CacheOp::BatchGet,
-            key: None,
-            keys: Some(keys),
-            value: None,
-            ttl: None,
-            local: false,
-        }) = step
-        else {
+        let Step::HostCall(HostCall::Cache(CacheCall::Cooldowns { ids })) = step else {
             panic!("the call should read cooldowns first, got {step:?}");
         };
-        assert_eq!(keys, ["deployment:a1:cooldown", "deployment:a2:cooldown"]);
+        assert_eq!(ids, ["a1", "a2"]);
     }
 
     #[rstest]
@@ -1343,10 +1405,16 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs_f64();
-        store.entries.insert(
-            "deployment:a1:cooldown".into(),
-            json!({"exception_received": "slow down", "status_code": "429", "timestamp": now, "cooldown_time": 60}),
-        );
+        store
+            .cache
+            .put_cooldown(
+                "a1",
+                json!({"exception_received": "slow down", "status_code": "429", "timestamp": now, "cooldown_time": 60}),
+                Duration::from_secs(60),
+            )
+            .now_or_never()
+            .unwrap()
+            .unwrap();
         for _ in 0..8 {
             let mut call = start(&pair_without_retries, "primary");
             let Step::HostCall(HostCall::Attempt { deployment_id, .. }) =
@@ -1387,7 +1455,7 @@ mod tests {
             .calls
             .iter()
             .filter(|call| {
-                matches!(call, HostCall::Cache { op, .. } if !matches!(op, CacheOp::Get | CacheOp::BatchGet))
+                matches!(call, HostCall::Cache(cache) if !matches!(cache, CacheCall::Cooldowns { .. } | CacheCall::Usage { .. } | CacheCall::HealthStates | CacheCall::GetLocal { .. }))
             })
             .collect();
         assert!(!writes.is_empty(), "the core wrote no outcome");
@@ -1482,13 +1550,7 @@ mod tests {
         let mut store = Store::default();
         let mut driver = start(&pair, "primary");
         let step = driver.resume(None).unwrap();
-        let Step::HostCall(
-            call @ HostCall::Cache {
-                op: CacheOp::BatchGet,
-                ..
-            },
-        ) = &step
-        else {
+        let Step::HostCall(call @ HostCall::Cache(CacheCall::Cooldowns { .. })) = &step else {
             panic!("expected the cooldown read, got {step:?}");
         };
         let error = driver.resume(Some(response)).unwrap_err();
@@ -1596,10 +1658,7 @@ mod tests {
         assert_eq!(model_group, "primary");
         assert!(matches!(
             store.calls.as_slice(),
-            [HostCall::Cache {
-                op: CacheOp::BatchGet,
-                ..
-            }]
+            [HostCall::Cache(CacheCall::Cooldowns { .. })]
         ));
     }
 

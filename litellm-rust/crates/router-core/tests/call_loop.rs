@@ -8,12 +8,8 @@ use litellm_router_core::{
     Attempt, AttemptError, Deployment, Error, FailureKind, FailureReport, Host,
     InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
     RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
-    SuccessReport,
-    call::StreamOrigin,
-    fallback::Fallbacks,
-    health::{UsageMetric, current_minute, usage_key},
-    host::UncountedRetries,
-    select::PassThrough,
+    SuccessReport, UsageWindow, call::StreamOrigin, fallback::Fallbacks, health::current_minute,
+    host::UncountedRetries, select::PassThrough,
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
@@ -303,7 +299,7 @@ async fn a_deferred_attempt_counts_its_request_and_tokens_but_no_success(
     let deployment = router.registry().deployment("a1").unwrap();
     let successes = host
         .cache
-        .get("a1:successes")
+        .local("a1:successes")
         .and_then(|count| count.as_f64());
     let usage = router.health().usage(&deployment).await.unwrap();
     assert_eq!((successes, usage), expected);
@@ -375,13 +371,18 @@ async fn a_reported_success_keeps_the_filled_wildcard_model() {
     };
     router.report_success("w1", 7.0, 0.0, report).await.unwrap();
     let minute = current_minute(std::time::SystemTime::now());
-    let key = |model: &str| usage_key("w1", model, UsageMetric::Tpm, &minute);
+    let tokens = |model: &str| {
+        host.cache
+            .counted(&UsageWindow {
+                deployment_id: "w1".to_owned(),
+                model: model.to_owned(),
+                minute: minute.clone(),
+            })
+            .tokens
+    };
     assert_eq!(
-        (
-            host.cache.get(&key("openai/gpt-4o")),
-            host.cache.get(&key("openai/*")),
-        ),
-        (Some(json!(7)), None),
+        (tokens("openai/gpt-4o"), tokens("openai/*")),
+        (Some(7.0), None),
     );
 }
 
@@ -412,7 +413,10 @@ async fn a_failed_attempt_counts_its_request_only_when_its_callback_ran(
     let _ = router.call(Op::from("acompletion"), request()).await;
     let deployment = router.registry().deployment("a1").unwrap();
     let usage = router.health().usage(&deployment).await.unwrap();
-    let counted = host.cache.get("a1:fails").and_then(|count| count.as_f64());
+    let counted = host
+        .cache
+        .local("a1:fails")
+        .and_then(|count| count.as_f64());
     assert_eq!((usage.1, counted), (requests, fails));
 }
 
@@ -452,7 +456,10 @@ async fn a_reported_failure_counts_its_request_when_asked(
         .await
         .unwrap();
     let deployment = router.registry().deployment("a1").unwrap();
-    let fails = host.cache.get("a1:fails").and_then(|count| count.as_f64());
+    let fails = host
+        .cache
+        .local("a1:fails")
+        .and_then(|count| count.as_f64());
     let usage = router.health().usage(&deployment).await.unwrap();
     assert_eq!((fails, usage.1), (Some(1.0), requests));
 }

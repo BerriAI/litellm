@@ -8,7 +8,12 @@ import pytest
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCooldownStore
 from litellm.redis.stores.router_usage import RouterUsageStore
-from litellm.router_rust.routing_stores import Handled, RoutingStores
+from litellm.router_rust.routing_stores import (
+    CACHE_STEP,
+    IncrementAllowedFailsStep,
+    PutCooldownStep,
+    RoutingStores,
+)
 from litellm.router_utils.cooldown_cache import CooldownCache
 from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
@@ -49,33 +54,43 @@ class SlowRedis(FakeCooldowns):
         return self.increment_allowed_fails(model_id, suffix, ttl_seconds)
 
 
+class NoHealthStates:
+    async def async_get_states(self) -> object:
+        return None
+
+    def get_states(self) -> object:
+        return None
+
+
 async def _another_request(ran: asyncio.Event) -> None:
     ran.set()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("op", "key", "value", "answer"),
+    ("raw", "answer"),
     [
-        ("set", "deployment:dep:cooldown", _ENTRY, None),
-        ("increment", "deployment:dep:allowed_fails:timeout", 1, 1),
+        ({"op": "put_cooldown", "id": "dep", "cooldown": _ENTRY, "ttl": 60.0}, None),
+        ({"op": "increment_allowed_fails", "id": "dep", "suffix": "timeout", "ttl": 60.0}, 1),
     ],
 )
 async def test_an_async_cooldown_step_waiting_on_redis_lets_other_requests_run(
-    op: str, key: str, value: object, answer: object
+    raw: Mapping[str, object], answer: object
 ) -> None:
     """router-core's failure path writes cooldowns and allowed-fails counts; on an async call that Redis round trip
     must not hold the event loop, or every request on the worker stalls behind it."""
     other_request: Final = asyncio.Event()
     handle: Final = SlowRedis(has_redis=True, other_request=other_request)
     cooldowns: Final = CooldownCache(store=RouterCooldownStore(handle), default_cooldown_time=60)
-    stores: Final = RoutingStores(cooldowns, RouterUsageStore(connect(None).router_usage()))
+    stores: Final = RoutingStores(cooldowns, RouterUsageStore(connect(None).router_usage()), NoHealthStates())
+    step: Final = CACHE_STEP.validate_python(raw)
+    assert isinstance(step, PutCooldownStep | IncrementAllowedFailsStep)
 
-    step: Final = asyncio.create_task(stores.answer(op, key, value, 60.0))
+    answering: Final = asyncio.create_task(stores.answer(step))
     other: Final = asyncio.create_task(_another_request(other_request))
-    handled: Final = await step
+    handled: Final = await answering
     await other
 
-    assert handled == Handled(answer)
+    assert handled == answer
     assert handle.overlapped is True
     assert handle.targets == ["router_cooldowns"]
