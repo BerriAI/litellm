@@ -1309,6 +1309,55 @@ class TestDerivedTraceFields:
 
         assert json.loads(str(attributes["langfuse.observation.output"])) == {"content": "hi"}
 
+    def test_server_tool_calls_lead_the_observation_output(self) -> None:
+        response_obj: Final = ModelResponse(
+            id="chatcmpl-server",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=litellm.Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                            }
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ],
+        )
+        attributes: Final = _emitted({"call_type": "acompletion", "litellm_params": {"metadata": {}}}, response_obj)
+
+        assert json.loads(str(attributes["langfuse.observation.output"])) == [
+            {
+                "id": "chatcmpl-server",
+                "name": "web_search",
+                "call_id": "srvtoolu_01",
+                "type": "function_call",
+                "arguments": {"query": "persimmon"},
+            },
+            {
+                "id": "chatcmpl-server",
+                "name": "get_weather",
+                "call_id": "call_1",
+                "type": "function_call",
+                "arguments": {"city": "SF"},
+            },
+        ]
+
     def test_no_messages_leaves_trace_input_unset_but_emits_output(self) -> None:
         attributes: Final = _emitted(
             {"call_type": "acompletion", "litellm_params": {"metadata": {}}}, _chat_response("hi")

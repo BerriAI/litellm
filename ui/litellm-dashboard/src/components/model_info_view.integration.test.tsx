@@ -205,6 +205,22 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("should display the model metadata logo in the provider details", async () => {
+    const logoUrl = "https://cdn.example.com/gateway.svg";
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [{ ...defaultModelData, model_info: { ...defaultModelData.model_info, logo_url: logoUrl } }],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("img", { name: "openai logo" })).toHaveAttribute("src", logoUrl);
+    expect(screen.getByRole("heading", { name: "openai" })).toBeInTheDocument();
+  });
+
   it("shows Kubernetes pods for discovery-enabled models", async () => {
     mockUseModelsInfo.mockReturnValue({
       data: {

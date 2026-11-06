@@ -196,7 +196,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
         </div>
       </div>
 
-      <p className="mb-2 text-sm font-medium text-foreground">Manage Existing Aliases</p>
+      <p className="mb-2 text-sm font-medium text-foreground">{t("modelAliasManager.manageExistingTitle")}</p>
       <div className="relative mb-6 rounded-lg border">
         <div className="overflow-x-auto">
           <Table className="[&_td]:py-0.5 [&_th]:py-1">
