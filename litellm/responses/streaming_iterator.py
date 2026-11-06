@@ -373,6 +373,16 @@ def _error_event_error_object(event: object) -> object:
     return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
 
 
+def _with_event_type(chunk: dict[str, object]) -> dict[str, object]:
+    if chunk.get("type") is not None or "error" not in chunk:
+        return chunk
+    return {
+        "sequence_number": SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+        **chunk,
+        "type": ResponsesAPIStreamEvents.ERROR.value,
+    }
+
+
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
     if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
         return True
@@ -488,7 +498,7 @@ class BaseResponsesAPIStreamingIterator:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
                 openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=parsed_chunk,
+                    parsed_chunk=_with_event_type(parsed_chunk),
                     logging_obj=self.logging_obj,
                 )
 
