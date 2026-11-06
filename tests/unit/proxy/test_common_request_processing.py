@@ -22,7 +22,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
+from litellm.exceptions import (
+    APIError,
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    InternalServerError,
+    MidStreamFallbackError,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
@@ -430,6 +436,62 @@ class TestProxyBaseLLMRequestProcessing:
         proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
         _, kwargs = proxy_logging_obj.post_call_response_headers_hook.call_args
         assert kwargs["request_headers"] == {"authorization": "Bearer sk-test"}
+
+    @staticmethod
+    async def _fail_pre_call_hook_with(error: Exception, request_data: dict[str, object]) -> None:
+        async def add_data(*args: object, **kwargs: object) -> dict[str, object]:
+            return request_data
+
+        proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=error)
+
+        with patch.object(litellm.proxy.common_request_processing, "add_litellm_data_to_request", add_data):
+            with pytest.raises(type(error)):
+                await ProxyBaseLLMRequestProcessing(data=request_data).common_processing_pre_call_logic(
+                    request=MagicMock(spec=Request, headers={}),
+                    general_settings={},
+                    user_api_key_dict=ProxyUserAPIKeyAuth(),
+                    proxy_logging_obj=proxy_logging_obj,
+                    proxy_config=MagicMock(spec=ProxyConfig),
+                    route_type="acompletion",
+                )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "block",
+        [
+            GuardrailRaisedException(guardrail_name="content-filter", message="blocked"),
+            BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio"),
+            HTTPException(status_code=400, detail={"error": "Violated content filter guardrail policy"}),
+        ],
+        ids=["guardrail_raised", "blocked_pii", "http_400"],
+    )
+    async def test_guardrail_block_in_pre_call_hook_drops_the_prompt_from_the_stored_request_body(
+        self, block: Exception
+    ) -> None:
+        messages: Final = [{"role": "user", "content": "my secret is sk-live-1234"}]
+        request_data: Final[dict[str, object]] = {
+            "model": "gpt-4o",
+            "messages": messages,
+            "proxy_server_request": {
+                "body": {"model": "gpt-4o", "messages": messages},
+                "headers": {"x-trace": "1"},
+            },
+        }
+
+        await self._fail_pre_call_hook_with(block, request_data)
+
+        assert request_data["proxy_server_request"] == {"body": {"model": "gpt-4o"}, "headers": {"x-trace": "1"}}
+
+    @pytest.mark.asyncio
+    async def test_non_guardrail_pre_call_failure_keeps_the_stored_request_body(self) -> None:
+        messages: Final = [{"role": "user", "content": "hello"}]
+        stored_body: Final = {"model": "gpt-4o", "messages": messages}
+        request_data: Final[dict[str, object]] = {**stored_body, "proxy_server_request": {"body": stored_body}}
+
+        await self._fail_pre_call_hook_with(HTTPException(status_code=429, detail="slow down"), request_data)
+
+        assert request_data["proxy_server_request"] == {"body": stored_body}
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(self, monkeypatch):
@@ -5202,9 +5264,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
