@@ -18,6 +18,7 @@ import { cn } from "@/lib/cva.config";
 import i18n from "@/i18n/i18n";
 
 const GATEWAY = "ai-gateway";
+const CUSTOMER_PORTAL = "customer-portal";
 const CHAT = "chat";
 const MOYAI = "moyai";
 
@@ -70,7 +71,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const activeLabel = activeWorkspaceLabel(
     isChatRoute,
     isMoyaiRoute,
-    plugins.find((p) => p.name === mode)?.display_name,
+    mode === CUSTOMER_PORTAL ? "Customer Portal" : plugins.find((p) => p.name === mode)?.display_name,
     gatewayLabel,
   );
 
@@ -81,6 +82,14 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
 
   const selectMode = (key: string) => {
     setMode(key);
+    if (key === CUSTOMER_PORTAL) {
+      window.location.assign(uiHref("customers"));
+      return;
+    }
+    if (mode === CUSTOMER_PORTAL && key === GATEWAY) {
+      window.location.assign(uiHref("api-keys"));
+      return;
+    }
     if (isStandaloneRoute) {
       window.location.assign(uiHref(""));
     }
@@ -106,6 +115,19 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     onClick: chatEnabled ? () => window.location.assign(uiHref(CHAT)) : undefined,
   };
 
+  const customerPortalItem: ViewSwitcherItem = {
+    key: CUSTOMER_PORTAL,
+    label: (
+      <div className="flex w-full items-center justify-between gap-6 py-0.5">
+        <span className="flex flex-col">
+          <span className="font-medium">Customer Portal</span>{" "}
+          <span className="text-xs leading-snug text-muted-foreground">End customers, limits and chargebacks</span>
+        </span>
+        {!isStandaloneRoute && mode === CUSTOMER_PORTAL && <Check className="size-4 text-info" />}
+      </div>
+    ),
+    onClick: () => selectMode(CUSTOMER_PORTAL),
+  };
   const items: ViewSwitcherItem[] = [
     ...modeEntries.map((e) => ({
       key: e.key,
@@ -117,6 +139,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       ),
       onClick: () => selectMode(e.key),
     })),
+    customerPortalItem,
     chatItem,
     {
       key: MOYAI,

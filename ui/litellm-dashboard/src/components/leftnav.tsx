@@ -55,12 +55,14 @@ import {
   Trophy,
   User,
   Users,
+  Receipt,
   Wallet,
   Wrench,
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -197,6 +199,16 @@ export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVis
 // Menu groups organized by category - defined outside component for export.
 // Shape (key/page/label/roles/children) is consumed by page_utils.ts; only the
 // icons changed to lucide as part of the sidebar redesign.
+const customerPortalGroups: MenuGroup[] = [
+  {
+    groupLabel: "CUSTOMER PORTAL",
+    items: [
+      { key: "customers", page: "customers", label: "Customers", icon: <Users {...ICON} />, roles: all_admin_roles },
+      { key: "chargebacks", page: "chargebacks", label: "Chargebacks", icon: <Receipt {...ICON} />, roles: all_admin_roles },
+    ],
+  },
+];
+
 const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
@@ -575,7 +587,7 @@ export const labelText = (item: MenuItem): string =>
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
   if (route === "aria") return { section: null, title: "Aria Agent" };
-  for (const group of menuGroups) {
+  for (const group of [...menuGroups, ...customerPortalGroups]) {
     for (const item of group.items) {
       const section = sectionText(group.groupLabel);
       if (routeOf(item) === route) return { section, title: labelText(item) };
@@ -597,6 +609,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowVectorStoresForTeamAdmins,
 }) => {
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const { mode: pluginMode } = usePluginMode();
   const { t } = useTranslation();
   const term = useTerminology();
   const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(labelText(item)) : item.label);
@@ -639,8 +652,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
       disableVectorStoresForInternalUsers,
       allowVectorStoresForTeamAdmins,
     };
-    return visibleMenuGroups(menuGroups, context);
+    return visibleMenuGroups(pluginMode === "customer-portal" ? customerPortalGroups : menuGroups, context);
   }, [
+    pluginMode,
     allowAgentsForTeamAdmins,
     allowVectorStoresForTeamAdmins,
     disableAgentsForInternalUsers,
