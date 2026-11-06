@@ -1113,11 +1113,21 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+            # A 1.0 upstream expects native 1.0 params. Lowering them to 0.3 would
+            # rewrite native enum states (e.g. TASK_STATE_COMPLETED -> completed)
+            # and envelope fields, so only down-convert for 0.3 upstreams.
             normalized_params: Final[dict[str, object] | None] = (
-                normalize_request_params(params, served_version, method=method) if isinstance(params, dict) else None
+                (
+                    params
+                    if upstream_version == "1.0"
+                    else normalize_request_params(params, served_version, method=method)
+                )
+                if isinstance(params, dict)
+                else None
             )
             conversion_failed: Final = (
                 normalized_params is not None
+                and upstream_version != "1.0"
                 and served_version == "1.0"
                 and method == "tasks/pushNotificationConfig/set"
                 and normalized_params is params

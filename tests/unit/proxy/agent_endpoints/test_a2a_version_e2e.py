@@ -108,6 +108,15 @@ async def _upstream_jsonrpc(request: Any) -> JSONResponse | StreamingResponse:
             }
         )
 
+    if method in ("ListTasks", "tasks/list"):
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"tasks": []},
+            }
+        )
+
     return JSONResponse(_message_result(request_id))
 
 
@@ -402,6 +411,46 @@ async def test_proxy_forwards_pascal_method_and_a2a_version_to_1_0_agent():
     assert _UPSTREAM_CALLS, "expected upstream to receive a JSON-RPC call"
     assert _UPSTREAM_CALLS[0]["method"] == "GetTask"
     assert _UPSTREAM_HEADERS[0].get("a2a-version") == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_proxy_preserves_native_1_0_task_state_when_forwarding_list_tasks():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    agent = _make_agent(protocol_version="1.0")
+    request = _make_request(
+        "ListTasks",
+        {"status": "TASK_STATE_COMPLETED"},
+        headers={"a2a-version": "1.0"},
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test", user_id="test-user", team_id="test-team"
+    )
+
+    with ExitStack() as stack:
+        for item in _proxy_patches(agent):
+            stack.enter_context(item)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                side_effect=_fake_forward_httpx_client,
+            )
+        )
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "error" not in body, body
+    assert _UPSTREAM_CALLS, "expected upstream to receive a JSON-RPC call"
+    forwarded = _UPSTREAM_CALLS[0]
+    assert forwarded["method"] == "ListTasks", forwarded
+    assert forwarded["params"]["status"] == "TASK_STATE_COMPLETED", forwarded
+    assert forwarded["params"]["status"] != "completed", forwarded
 
 
 @pytest.mark.asyncio
