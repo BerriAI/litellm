@@ -1,6 +1,7 @@
 "use client";
 
 import { useQueryStates } from "nuqs";
+import { useTranslation } from "react-i18next";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { deprecationProvider } from "./DeprecationModel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -9,10 +10,12 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { hasCapability } from "@/utils/capabilities";
 import { migrationUrlParsers, migrationHref } from "./migrationRoute";
+import DeprecationEmailSetup from "./DeprecationEmailSetup";
 import AlertsInbox from "./AlertsInbox";
 import MigrationDetail from "./MigrationDetail";
 
 export default function ModelDeprecationsPanel() {
+  const { t } = useTranslation();
   const { accessToken, userRole, isViewOnly } = useAuthorized();
   const allowed = hasCapability(userRole, "viewGlobalSpend");
   const [params, setParams] = useQueryStates(migrationUrlParsers);
@@ -24,8 +27,8 @@ export default function ModelDeprecationsPanel() {
   if (!allowed)
     return (
       <Page className="h-full gap-3 overflow-y-auto p-0 sm:p-0">
-        <h1 className="text-xl font-semibold">Model deprecations</h1>
-        <p>Gateway admin access is required to view affected keys and teams.</p>
+        <h1 className="text-xl font-semibold">{t("alerts.panel.title")}</h1>
+        <p>{t("alerts.panel.adminRequired")}</p>
       </Page>
     );
   return (
@@ -41,14 +44,15 @@ export default function ModelDeprecationsPanel() {
             </h1>
           </div>
           <a className={buttonVariants({ variant: "outline" })} href={migrationHref()}>
-            ← Model deprecations
+            {t("alerts.panel.back")}
           </a>
         </header>
       )}
+      <DeprecationEmailSetup />
       {alerts.isError ? (
         <div role="alert">
-          <p>Could not load alerts. No alert status has been changed.</p>
-          <Button onClick={() => void alerts.refetch()}>Retry</Button>
+          <p>{t("alerts.panel.loadError")}</p>
+          <Button onClick={() => void alerts.refetch()}>{t("alerts.panel.retry")}</Button>
         </div>
       ) : null}
       {!alerts.isError && !params.model && (
@@ -61,8 +65,8 @@ export default function ModelDeprecationsPanel() {
           onStatusChange={(state) => void setParams({ state })}
         />
       )}
-      {loadingDetail && <p role="status">Loading alert…</p>}
-      {missingDetail && <p>No matching model alert was found in the last 30 days.</p>}
+      {loadingDetail && <p role="status">{t("alerts.panel.loadingAlert")}</p>}
+      {missingDetail && <p>{t("alerts.panel.missingAlert")}</p>}
       {!alerts.isError && selected && (
         <MigrationDetail
           selected={selected}

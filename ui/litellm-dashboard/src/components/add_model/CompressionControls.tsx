@@ -3,6 +3,7 @@ import { SearchSelect, SearchSelectOption } from "@/components/shared/SearchSele
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Info } from "lucide-react";
+import type { ParseKeys } from "i18next";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
@@ -17,7 +18,7 @@ interface CompressionControlsProps {
   onChange: (state: AutoRouterCompressionState) => void;
 }
 
-const NONE_OPTION: SearchSelectOption = { label: "None (no compression)", value: NO_COMPRESSION };
+const NONE_OPTION_LABEL: ParseKeys = "addModel.compressionControls.noneOption";
 
 const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChange }) => {
   const { t } = useTranslation();
@@ -30,7 +31,7 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
   const compressionOptions: SearchSelectOption[] = (data?.guardrails ?? [])
     .filter((g) => isCompressionGuardrailProvider(g.litellm_params?.guardrail))
     .map((g) => ({ label: g.guardrail_name, value: g.guardrail_name }));
-  const options: SearchSelectOption[] = [NONE_OPTION, ...compressionOptions];
+  const options: SearchSelectOption[] = [{ label: t(NONE_OPTION_LABEL), value: NO_COMPRESSION }, ...compressionOptions];
 
   return (
     <div className="space-y-4">

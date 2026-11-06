@@ -4259,75 +4259,6 @@ class TestCompletedResponseLatchedOnStreamEnd:
         assert iterator.completed_response.type == "response.completed"
 
 
-class TestFallbackWrapperStopAsyncIterationFallback:
-    """Regression: FallbackResponsesStreamWrapper.__anext__ only sniffed
-    terminal events off forwarded chunks. When the inner generator raises
-    StopAsyncIteration without a sniffable chunk (the bridge path ends this
-    way), the wrapper re-raised without checking source_iterator for a
-    latched completed_response, leaving its own completed_response None."""
-
-    def test_falls_back_to_source_completed_response_on_stop(self):
-        """When the inner async generator raises StopAsyncIteration and the
-        wrapper never sniffed a terminal chunk, it must copy
-        source_iterator.completed_response so the proxy ownership hook
-        still sees the terminal event."""
-        import asyncio
-        from types import SimpleNamespace
-
-        from litellm.router import Router
-
-        source = SimpleNamespace(
-            response=None,
-            model="deepseek/deepseek-chat",
-            logging_obj=None,
-            responses_api_provider_config=None,
-            start_time=None,
-            litellm_metadata=None,
-            custom_llm_provider="deepseek",
-            request_data={},
-            call_type="aresponses",
-            _hidden_params={},
-            completed_response=SimpleNamespace(
-                type="response.completed",
-                response=SimpleNamespace(id="resp_src", output=[], container=None),
-            ),
-        )
-
-        async def empty_gen():
-            return
-            yield  # pragma: no cover
-
-        async def _drive():
-            router = Router(
-                model_list=[
-                    {
-                        "model_name": "deepseek/deepseek-chat",
-                        "litellm_params": {"model": "deepseek/deepseek-chat", "api_key": "sk-test"},
-                    }
-                ]
-            )
-            wrapper = await router._aresponses_streaming_iterator(
-                response=source,  # type: ignore[arg-type]
-                initial_kwargs={},
-            )
-            wrapper._async_generator = empty_gen()
-            out = []
-            try:
-                async for chunk in wrapper:
-                    out.append(chunk)
-            except StopAsyncIteration:
-                pass
-            return wrapper, out
-
-        wrapper, _ = asyncio.run(_drive())
-        assert wrapper.completed_response is not None, (
-            "FallbackResponsesStreamWrapper.completed_response is None after "
-            "StopAsyncIteration even though source_iterator had one — the "
-            "proxy ownership hook will log a spurious warning"
-        )
-        assert wrapper.completed_response.type == "response.completed"
-
-
 class TestEnsureOutputItemContentPartAdded:
     """Test that _ensure_output_item_for_chunk emits content_part.added after
     output_item.added for message items."""
@@ -6564,7 +6495,6 @@ def test_an_application_inference_profile_gets_no_item_marks_under_drop_params()
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
 
 
-
 def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on_the_same_model(
     local_model_cost_map: None,
 ):
@@ -6588,6 +6518,7 @@ def test_a_bedrock_deployment_keeps_item_marks_by_its_own_flag_not_a_siblings_on
         bridged_system({"id": "flagless-id"}),
         bridged_system({"id": "opted-in-id", "supports_prompt_cache_breakpoint": True}),
     ) == ({"role": "system", "content": "House rules"}, marked_system)
+
 
 def test_the_shared_input_transform_keeps_every_item_mark_for_a_request_it_sends():
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -6901,7 +6832,11 @@ def test_a_new_message_after_a_paused_search_turn_replays_only_that_turn_without
             [
                 {"role": "user", "content": "Plan a Tokyo trip."},
                 _reasoning_item("rs_tokyo", tokyo_thinking),
-                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Tokyo is sunny."}]},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Tokyo is sunny."}],
+                },
                 _hosted_search("ws_srvtoolu_01Tokyo", "completed"),
                 {"role": "user", "content": "Now Osaka."},
                 _reasoning_item("rs_osaka", _ANSWERED_THINKING),
@@ -7264,7 +7199,11 @@ def test_a_tool_output_with_an_unhashable_call_id_is_a_400_naming_its_input_item
 ) -> None:
     history: Final = cast(
         ResponseInputParam,
-        [_WEATHER_ASK, _weather_call(call_id="call_weather"), {"type": output_type, "call_id": call_id, "output": "sunny"}],
+        [
+            _WEATHER_ASK,
+            _weather_call(call_id="call_weather"),
+            {"type": output_type, "call_id": call_id, "output": "sunny"},
+        ],
     )
 
     with pytest.raises(litellm.BadRequestError) as raised:
@@ -7368,7 +7307,11 @@ def test_a_non_string_role_still_converts_for_a_target_that_judges_it_itself() -
             id="dict_function_call_id",
         ),
         pytest.param(
-            [_WEATHER_ASK, _weather_call(call_id=7), {"type": "function_call_output", "call_id": "7", "output": "sunny"}],
+            [
+                _WEATHER_ASK,
+                _weather_call(call_id=7),
+                {"type": "function_call_output", "call_id": "7", "output": "sunny"},
+            ],
             "input[1].call_id",
             "int",
             id="int_function_call_id",

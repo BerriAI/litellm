@@ -1745,7 +1745,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
         """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -1766,7 +1766,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
         """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
