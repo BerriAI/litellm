@@ -66,6 +66,14 @@ _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
+def _reported_int_token_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _unreported_provider_usage() -> UnreportedUsage:
+    return UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
 def _usage_from_provider_payload(raw_usage: object) -> Usage:
     if isinstance(raw_usage, Usage):
         return raw_usage
@@ -74,14 +82,22 @@ def _usage_from_provider_payload(raw_usage: object) -> Usage:
             "Provider returned malformed usage (%s). This reply will be priced from locally counted tokens.",
             type(raw_usage).__name__,
         )
-        return UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        return _unreported_provider_usage()
+    if not (
+        _reported_int_token_count(raw_usage.get("prompt_tokens"))
+        and _reported_int_token_count(raw_usage.get("completion_tokens"))
+    ):
+        verbose_logger.warning(
+            "Provider returned malformed usage. This reply will be priced from locally counted tokens."
+        )
+        return _unreported_provider_usage()
     try:
         return litellm.Usage(**raw_usage)
     except (ValidationError, TypeError, ValueError):
         verbose_logger.warning(
             "Provider returned malformed usage. This reply will be priced from locally counted tokens."
         )
-        return UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        return _unreported_provider_usage()
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
@@ -934,7 +950,7 @@ def convert_to_model_response_object(
             if "usage" in response_object and response_object["usage"] is not None:
                 model_response_object.usage = _usage_from_provider_payload(response_object["usage"])
             else:
-                model_response_object.usage = UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+                model_response_object.usage = _unreported_provider_usage()
             if "created" in response_object:
                 model_response_object.created = safe_convert_created_field(response_object["created"])
 

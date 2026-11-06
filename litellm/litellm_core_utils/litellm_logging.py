@@ -192,6 +192,7 @@ from litellm.types.utils import (
     AgenticLoopParams,
     CachingDetails,
     CallTypes,
+    Choices,
     CostBreakdown,
     CostPerToken,
     CustomPricingLiteLLMParams,
@@ -2318,19 +2319,41 @@ class Logging(LiteLLMLoggingBaseClass):
             token_counter,  # pyright: ignore[reportUnknownVariableType]  # messages param accepts an untyped sequence
         )
 
+        def counted_or_zero(count: Callable[[], int]) -> int:
+            try:
+                return count()
+            except Exception as e:  # noqa: BLE001  # a failed count must not break cost tracking
+                verbose_logger.debug("Could not count tokens for a reply without usage: %s", e)
+                return 0
+
+        def reasoning_texts() -> Iterator[str]:
+            for choice in result.choices:
+                if not isinstance(choice, Choices):
+                    continue
+                reasoning: Final = getattr(choice.message, "reasoning_content", None)
+                if isinstance(reasoning, str) and reasoning:
+                    yield reasoning
+
         model: Final = usage_tokenizer_model(self.model, base_model)
-        try:
-            prompt_tokens: Final = token_counter(
+        optional_params: Final[Mapping[str, object]] = getattr(self, "optional_params", None) or {}
+        raw_tools: Final = optional_params.get("tools")
+        raw_tool_choice: Final = optional_params.get("tool_choice")
+        prompt_tokens: Final = counted_or_zero(
+            lambda: token_counter(
                 model=model,
                 messages=self.messages or [],  # pyright: ignore[reportUnknownMemberType]  # untyped on Logging
+                tools=raw_tools if isinstance(raw_tools, list) else None,
+                tool_choice=raw_tool_choice if isinstance(raw_tool_choice, (str, Mapping)) else None,
                 use_default_image_token_count=True,
             )
-            completion_tokens: Final = token_counter(
+        )
+        completion_tokens: Final = counted_or_zero(
+            lambda: token_counter(
                 model=model, text=get_content_from_model_response(result), count_response_tokens=True
             )
-        except Exception as e:  # noqa: BLE001  # a failed count must not break cost tracking, as in the stream builder
-            verbose_logger.debug("Could not count tokens for a reply without usage: %s", e)
-            return result
+        ) + counted_or_zero(
+            lambda: sum(token_counter(model=model, text=text, count_response_tokens=True) for text in reasoning_texts())
+        )
         verbose_logger.warning(
             "%s returned no token usage, so it is priced from locally counted tokens (%d prompt, %d completion)",
             single_log_line(self.model),

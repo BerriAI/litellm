@@ -3314,3 +3314,21 @@ def test_reported_usage_is_kept() -> None:
     assert model_response.usage.prompt_tokens == 10
     assert model_response.usage.completion_tokens == 20
     assert model_response.usage.total_tokens == 30
+
+
+def test_empty_usage_object_still_returns_a_response() -> None:
+    model_response: Final = convert_to_model_response_object(
+        response_object=_chat_completion_dict({}),
+        model_response_object=ModelResponse(),
+    )
+    assert model_response.usage.prompt_tokens == 0
+    assert model_response.usage.completion_tokens == 0
+
+
+def test_null_prompt_and_completion_counts_still_return_a_response() -> None:
+    model_response: Final = convert_to_model_response_object(
+        response_object=_chat_completion_dict({"prompt_tokens": None, "completion_tokens": None}),
+        model_response_object=ModelResponse(),
+    )
+    assert model_response.usage.prompt_tokens == 0
+    assert model_response.usage.completion_tokens == 0
