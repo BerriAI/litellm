@@ -6,7 +6,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Container, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain
@@ -16,7 +16,6 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictBool, TypeAdapter, ValidationError
-from pydantic_core import to_jsonable_python
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -2374,7 +2373,11 @@ def message_dict_with_server_tool_calls_split_out(message: object) -> object:
             **fields,
             "server_tool_calls": list(server_tool_calls),
             **(
-                {"web_search_calls": _rewritten_web_search_calls(fields["web_search_calls"], changed)}
+                {
+                    "web_search_calls": _rewritten_web_search_calls(
+                        fields["web_search_calls"], changed, _with_hosted_web_call_arguments
+                    )
+                }
                 if changed and fields.get("web_search_calls") is not None
                 else {}
             ),
@@ -2427,8 +2430,8 @@ def write_request_hosted_web_call_arguments(message: object, arguments_by_tool_i
         return
     message["provider_specific_fields"] = {  # rebind-ok: a rewritten call's hosted copy must not keep its old input
         **fields,
-        "web_search_calls": to_jsonable_python(
-            _rewritten_web_search_calls(fields["web_search_calls"], arguments_by_tool_id), exclude_none=True
+        "web_search_calls": _rewritten_web_search_calls(
+            fields["web_search_calls"], arguments_by_tool_id, _jsonable_hosted_web_call
         ),
     }
 
@@ -2462,17 +2465,30 @@ def write_anthropic_hosted_web_call_arguments(holder: Message | Delta, arguments
         return
     holder.provider_specific_fields = {  # rebind-ok: the hosted copy of a rewritten call must not keep its old input
         **fields,
-        "web_search_calls": _rewritten_web_search_calls(fields["web_search_calls"], arguments_by_tool_id),
+        "web_search_calls": _rewritten_web_search_calls(
+            fields["web_search_calls"], arguments_by_tool_id, _with_hosted_web_call_arguments
+        ),
     }
 
 
-def _rewritten_web_search_calls(calls: object, arguments_by_tool_id: Mapping[str, str]) -> object:
+def _rewritten_web_search_calls(
+    calls: object,
+    arguments_by_tool_id: Mapping[str, str],
+    rewrite: Callable[[object, Mapping[str, str]], object],
+) -> object:
     mapping: Final = validated_object_mapping(calls)
     if mapping is not None:
-        return {key: _with_hosted_web_call_arguments(call, arguments_by_tool_id) for key, call in mapping.items()}
+        return {key: rewrite(call, arguments_by_tool_id) for key, call in mapping.items()}
     if not isinstance(calls, list):
         return calls
-    return [_with_hosted_web_call_arguments(call, arguments_by_tool_id) for call in parts_of(calls)]
+    return [rewrite(call, arguments_by_tool_id) for call in parts_of(calls)]
+
+
+def _jsonable_hosted_web_call(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
+    call: Final = _with_hosted_web_call_arguments(item, arguments_by_tool_id)
+    if not isinstance(call, ResponseFunctionWebSearch):
+        return call
+    return _WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True)
 
 
 def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
