@@ -95,6 +95,14 @@ async def _settle_task(task: asyncio.Task[object]) -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
+def _terminal_state(result: JsonValue | ExecutionError) -> RunState:
+    if not isinstance(result, ExecutionError):
+        return RunState.COMPLETED
+    if result.code == "cancelled":
+        return RunState.CANCELLED
+    return RunState.FAILED
+
+
 class WorkflowRunner:
     def __init__(
         self,
@@ -145,16 +153,22 @@ class WorkflowRunner:
     async def _heartbeat(self, run: EngineRun, token: str) -> ExecutionError:
         while True:
             await asyncio.sleep(1)
-            current: EngineRun | None = await self.runs.get(run.run_id)
-            if current is None or current.lease_token != token:
-                return ExecutionError("lease_lost", "Execution ownership changed")
-            if current.cancel_requested:
-                return ExecutionError("cancelled", "Cancellation requested")
-            if self._clock() >= run.input.deadline:
-                return ExecutionError("deadline_exceeded", "Workflow deadline expired")
+            interrupted: ExecutionError | None = await self._interruption(run, token)
+            if interrupted is not None:
+                return interrupted
             renewed: bool = await self.runs.renew(run.run_id, token, self._clock() + timedelta(seconds=15))
             if not renewed:
                 return ExecutionError("lease_lost", "Execution ownership expired")
+
+    async def _interruption(self, run: EngineRun, token: str) -> ExecutionError | None:
+        current: Final = await self.runs.get(run.run_id)
+        if current is None or current.lease_token != token:
+            return ExecutionError("lease_lost", "Execution ownership changed")
+        if current.cancel_requested:
+            return ExecutionError("cancelled", "Cancellation requested")
+        if self._clock() >= run.input.deadline:
+            return ExecutionError("deadline_exceeded", "Workflow deadline expired")
+        return None
 
     async def _run(self, run_id: str) -> None:
         token: Final = str(uuid4())
@@ -173,7 +187,7 @@ class WorkflowRunner:
                 await self.runs.finish(
                     run_id,
                     token,
-                    RunState.FAILED if isinstance(result, ExecutionError) else RunState.COMPLETED,
+                    _terminal_state(result),
                     None if isinstance(result, ExecutionError) else result,
                     result.message if isinstance(result, ExecutionError) else None,
                 )
@@ -183,7 +197,7 @@ class WorkflowRunner:
                 await self.runs.finish(
                     run_id,
                     token,
-                    RunState.CANCELLED if reason.code == "cancelled" else RunState.FAILED,
+                    _terminal_state(reason),
                     None,
                     reason.message,
                 )
@@ -216,8 +230,9 @@ class WorkflowRunner:
     async def _sequence(
         self, run: EngineRun, token: str, bundle: WorkflowBundle, steps: tuple[StepTrace, ...], index: int
     ) -> JsonValue | ExecutionError:
-        if self._clock() >= run.input.deadline:
-            return ExecutionError("deadline_exceeded", "Workflow deadline expired")
+        interrupted: Final = await self._interruption(run, token)
+        if interrupted is not None:
+            return interrupted
         if index == len(bundle.nodes):
             return resolve_binding(bundle.output, run, steps)
         node: Final = bundle.nodes[index]
@@ -252,7 +267,9 @@ class WorkflowRunner:
         self, run: EngineRun, token: str, node: WorkflowNode, step: StepTrace
     ) -> StepTrace | ExecutionError:
         if not await self.runs.checkpoint(run.run_id, token, step):
-            return ExecutionError("lease_lost", "Execution ownership expired before dispatch")
+            return await self._interruption(run, token) or ExecutionError(
+                "lease_lost", "Execution ownership expired before dispatch"
+            )
         result: Final = await self._recorded_node_result(run, token, node, step)
         receipt: Final = result.receipt if isinstance(result, ExecutionError) else result
         finished: Final = step.model_copy(

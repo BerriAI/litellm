@@ -2,16 +2,14 @@ import asyncio
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Final, cast  # noqa: TID251  # the test database implements the delegates exercised by these routes
+from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict
 
 from litellm.models.workflow_definition import WorkflowBundle
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.repositories.workflow_definition_repository import DefinitionDatabase
 
 NOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
-_COMPARISON: Final = TypeAdapter(Mapping[str, str])
 
 
 def bundle(name: str = "example", model: str = "gateway-model") -> WorkflowBundle:
@@ -41,17 +39,34 @@ def caller(user_id: str | None = "author", team_id: str = "team") -> UserAPIKeyA
 
 
 def _matches(row: Mapping[str, object], where: Mapping[str, object]) -> bool:
-    return all(
-        str(row.get(key)) > _COMPARISON.validate_python(value)["gt"]
-        if isinstance(value, Mapping) and "gt" in value
-        else row.get(key) == value
-        for key, value in where.items()
-    )
+    for key, value in where.items():
+        if key == "OR":
+            if not any(_matches(row, condition) for condition in value):
+                return False
+        elif key == "AND":
+            if not all(_matches(row, condition) for condition in value):
+                return False
+        elif isinstance(value, Mapping):
+            actual = row.get(key)
+            for operation, expected in value.items():
+                if operation == "in" and actual not in expected:
+                    return False
+                if operation == "gt" and (actual is None or actual <= expected):
+                    return False
+                if operation == "lt" and (actual is None or actual >= expected):
+                    return False
+        elif row.get(key) != value:
+            return False
+    return True
+
+
+class _Row(BaseModel):
+    model_config = ConfigDict(extra="allow")
 
 
 class Rows:
     def __init__(self, rows: tuple[Mapping[str, object], ...] = ()) -> None:
-        self.rows = rows
+        self.rows = tuple({"updated_at": NOW, **row} for row in rows)
 
     async def find_first(
         self,
@@ -62,7 +77,8 @@ class Rows:
         order: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         distinct: Sequence[str] | None = None,
     ) -> object | None:
-        return next((row for row in self.rows if _matches(row, where or {})), None)
+        rows = await self.find_many(take=1, where=where, order=order)
+        return rows[0] if rows else None
 
     async def find_unique(
         self, where: Mapping[str, object], include: Mapping[str, object] | None = None
@@ -79,8 +95,12 @@ class Rows:
         order: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
         distinct: Sequence[str] | None = None,
     ) -> Sequence[object]:
-        matches: Final = tuple(row for row in self.rows if _matches(row, where or {}))
-        return sorted(matches, key=lambda row: str(row.get("workflow_id")))[:take]
+        matches = [row for row in self.rows if _matches(row, where or {})]
+        orders = [order] if isinstance(order, Mapping) else list(order or [])
+        for clause in reversed(orders):
+            for key, direction in clause.items():
+                matches.sort(key=lambda row: row[key], reverse=direction == "desc")
+        return [_Row.model_validate(row) for row in matches[:take]]
 
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> object:
         if "etag" in data and any(
@@ -91,12 +111,21 @@ class Rows:
             raise UniqueViolationError({"is_panic": False, "message": "duplicate", "error_code": "P2002"})
         row: Final = {
             "created_at": NOW,
+            "updated_at": NOW,
             "published_etag": None,
             "published_snapshot_id": None,
             **data,
         }
         self.rows = (*self.rows, row)
-        return row
+        return _Row.model_validate(row)
+
+    async def count(self, where: Mapping[str, object] | None = None, take: int | None = None) -> int:
+        return len(await self.find_many(where=where, take=take))
+
+    async def update_many(self, data: Mapping[str, object], where: Mapping[str, object]) -> int:
+        count = sum(_matches(row, where) for row in self.rows)
+        self.rows = tuple({**row, **data} if _matches(row, where) else row for row in self.rows)
+        return count
 
     async def update(
         self, data: Mapping[str, object], where: Mapping[str, object], include: Mapping[str, object] | None = None
@@ -123,15 +152,21 @@ class DefinitionRows:
             )
         )
         self.lock = asyncio.Lock()
-
-    async def query_raw(self, query: str, *args: object) -> object:
-        return ()
+        self.db = self
+        self.writer_db = self
 
     @property
-    def database(self) -> DefinitionDatabase:
-        return cast(DefinitionDatabase, self)  # cast-ok: isolated Prisma boundary implements the used table operations
+    def database(self) -> "DefinitionRows":
+        return self
 
     @asynccontextmanager
     async def tx(self) -> AsyncGenerator["DefinitionRows"]:
         async with self.lock:
-            yield self
+            definitions = self.litellm_workflowdefinition.rows
+            snapshots = self.litellm_workflowsnapshot.rows
+            try:
+                yield self
+            except BaseException:
+                self.litellm_workflowdefinition.rows = definitions
+                self.litellm_workflowsnapshot.rows = snapshots
+                raise

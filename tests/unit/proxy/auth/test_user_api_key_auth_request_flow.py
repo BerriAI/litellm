@@ -38,6 +38,7 @@ from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
+    end_user_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -186,6 +187,45 @@ async def test_internal_execution_route_keeps_proxy_network_policy(monkeypatch: 
             route="/v1/chat/completions", expected_team_id="original-team",
         )
     assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_internal_execution_keeps_end_user_rate_limits_region_and_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = await _internal_key_cache(monkeypatch)
+    permissions: Final = LiteLLM_ObjectPermissionTable(object_permission_id="end-user-permissions")
+    await cache.async_set_cache(
+        key=end_user_cache_key("restricted-user"),
+        value=LiteLLM_EndUserTable(
+            user_id="restricted-user",
+            blocked=False,
+            allowed_model_region="eu",
+            object_permission=permissions,
+            litellm_budget_table=LiteLLM_BudgetTable(
+                budget_id="end-user-budget",
+                rpm_limit=1,
+                tpm_limit=100,
+                tpd_limit=1000,
+                max_budget=100,
+            ),
+        ),
+    )
+    auth: Final = await authorize_internal_virtual_key(
+        "b" * 64,
+        _internal_management_request(),
+        {"model": "workflow-model", "user": "restricted-user"},
+        route="/v1/chat/completions",
+        expected_team_id="original-team",
+    )
+    assert auth.end_user_id == "restricted-user"
+    assert (
+        auth.end_user_rpm_limit,
+        auth.end_user_tpm_limit,
+        auth.end_user_tpd_limit,
+    ) == (1, 100, 1000)
+    assert auth.allowed_model_region == "eu"
+    assert auth.end_user_object_permission == permissions
 
 
 @pytest.mark.asyncio

@@ -239,7 +239,7 @@ def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, 
     frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
     while frontier:
         yield frontier
-        frontier = tuple(child for node in frontier for child in _subschemas(node))
+        frontier = tuple(child for node in frontier for child in schema_children(node))
 
 
 def schema_fragment_ref(ref: str) -> str:
@@ -359,7 +359,8 @@ def _is_open_object(node: Mapping[str, object]) -> bool:
     return is_object_schema(node) and "properties" not in node and additional_properties is not False
 
 
-def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+def schema_children(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    """Yield schema-bearing children, excluding annotations and literal JSON values."""
     for key, value in node.items():
         if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
             yield from (sub for sub in value.values() if isinstance(sub, dict))

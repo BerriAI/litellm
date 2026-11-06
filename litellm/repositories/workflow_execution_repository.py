@@ -1,13 +1,12 @@
 import base64
-import json
-from contextlib import AbstractAsyncContextManager
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from itertools import chain
-from typing import Final, Protocol
-from uuid import uuid4
+from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
+from litellm.models.workflow_definition import WorkflowSnapshot
 from litellm.models.workflow_execution import (
     EngineRun,
     ExecutionError,
@@ -18,14 +17,18 @@ from litellm.models.workflow_execution import (
     RunView,
     StepTrace,
 )
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import (
+    SpendLogsRepository,
+    TeamRepository,
+    WorkflowEventRepository,
+    WorkflowRunRepository,
+)
+from litellm.repositories.workflow_definition_repository import persist_snapshot
 
-
-class ExecutionQueries(Protocol):
-    async def query_raw(self, query: str, *args: object) -> object: ...
-
-
-class ExecutionDatabase(ExecutionQueries, Protocol):
-    def tx(self) -> AbstractAsyncContextManager[ExecutionQueries]: ...
+if TYPE_CHECKING:
+    from prisma import Prisma
+    from prisma import models as prisma_models
 
 
 class _Cursor(BaseModel):
@@ -41,12 +44,6 @@ class _TraceRow(BaseModel):
     trace: StepTrace
 
 
-_RUNS: Final = TypeAdapter(tuple[EngineRun, ...])
-_VIEWS: Final = TypeAdapter(tuple[RunView, ...])
-_TRACES: Final = TypeAdapter(tuple[_TraceRow, ...])
-_ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
-
-
 def _cursor(value: str | None) -> _Cursor | ExecutionError | None:
     if value is None:
         return None
@@ -60,11 +57,6 @@ def _encoded_cursor(run: RunView) -> str:
     return base64.urlsafe_b64encode(
         _Cursor(created_at=run.created_at, run_id=run.run_id).model_dump_json().encode()
     ).decode("ascii")
-
-
-async def _first_run(database: ExecutionQueries, query: str, *args: object) -> EngineRun | None:
-    rows: Final = _RUNS.validate_python(await database.query_raw(query, *args))
-    return rows[0] if rows else None
 
 
 def _aggregate_attempts(attempts: tuple[StepTrace, ...]) -> StepTrace:
@@ -83,22 +75,44 @@ def _aggregate_attempts(attempts: tuple[StepTrace, ...]) -> StepTrace:
     )
 
 
-class WorkflowExecutionRepository:
-    def __init__(self, database: ExecutionDatabase) -> None:
-        self._database: Final = database
+def _owned(run_id: str, token: str) -> Mapping[str, object]:
+    return {
+        "run_id": run_id,
+        "engine_owned": True,
+        "lease_token": token,
+        "status": RunState.RUNNING.value,
+        "lease_expires_at": {"gt": datetime.now(timezone.utc)},
+    }
 
+
+async def _lock_team(table: TableActions["prisma_models.LiteLLM_TeamTable"], team_id: str) -> bool:
+    # A no-op model update serializes team admission until commit. Compare the
+    # observed timestamp so a concurrent team edit never has its audit time reset.
+    for _ in range(3):
+        team = await table.find_unique(where={"team_id": team_id})
+        if team is None:
+            return False
+        if await table.update_many(
+            where={"team_id": team_id, "updated_at": team.updated_at}, data={"updated_at": team.updated_at}
+        ):
+            return True
+    return False
+
+
+class WorkflowExecutionRepository(WorkflowRunRepository):
     async def find_idempotent(
         self, workflow_id: str, team_id: str, key_hash: str, idempotency_key: str
     ) -> EngineRun | None:
-        return await _first_run(
-            self._database,
-            'SELECT * FROM "LiteLLM_WorkflowRun" WHERE engine_owned = true AND workflow_id = $1 '
-            "AND team_id = $2 AND created_by = $3 AND idempotency_key = $4",
-            workflow_id,
-            team_id,
-            key_hash,
-            idempotency_key,
+        row: Final = await self.table.find_first(
+            where={
+                "engine_owned": True,
+                "workflow_id": workflow_id,
+                "team_id": team_id,
+                "created_by": key_hash,
+                "idempotency_key": idempotency_key,
+            }
         )
+        return None if row is None else EngineRun.model_validate(row, from_attributes=True)
 
     async def admit(
         self,
@@ -110,172 +124,185 @@ class WorkflowExecutionRepository:
         input: RunInput,
         digest: str,
         idempotency_key: str | None,
+        draft_snapshot: WorkflowSnapshot | None = None,
     ) -> RunAdmission | ExecutionError:
-        async with self._database.tx() as transaction:
-            await transaction.query_raw(
-                "SELECT true AS acquired FROM pg_advisory_xact_lock(hashtextextended($1, 0))", team_id
-            )
-            existing: Final = await _first_run(
-                transaction,
-                'SELECT * FROM "LiteLLM_WorkflowRun" WHERE engine_owned = true AND created_by = $1 '
-                "AND team_id = $2 AND workflow_id = $3 AND idempotency_key = $4::text",
-                key_hash,
-                team_id,
-                workflow_id,
-                idempotency_key,
-            )
-            if existing is not None:
-                return (
-                    RunAdmission(existing, False)
-                    if existing.request_digest == digest
-                    else ExecutionError("idempotency_conflict", "Idempotency key was used with different input")
+        from prisma import Json
+
+        database: Final[Prisma] = self.writer_db
+        async with database.tx() as transaction:
+            if not await _lock_team(TeamRepository.transaction_table(transaction), team_id):
+                return ExecutionError("storage_error", "Workflow team is unavailable. Retry the request")
+            if idempotency_key is not None:
+                existing: Final = await self.transaction_table(transaction).find_first(
+                    where={
+                        "engine_owned": True,
+                        "created_by": key_hash,
+                        "team_id": team_id,
+                        "workflow_id": workflow_id,
+                        "idempotency_key": idempotency_key,
+                    }
                 )
-            capacity: Final = _ROWS.validate_python(
-                await transaction.query_raw(
-                    'SELECT run_id FROM "LiteLLM_WorkflowRun" WHERE engine_owned = true AND team_id = $1 '
-                    "AND status IN ('pending', 'running') LIMIT 64",
-                    team_id,
-                )
+                if existing is not None:
+                    return (
+                        RunAdmission(EngineRun.model_validate(existing, from_attributes=True), False)
+                        if existing.request_digest == digest
+                        else ExecutionError("idempotency_conflict", "Idempotency key was used with different input")
+                    )
+            capacity: Final = await self.transaction_table(transaction).count(
+                where={"engine_owned": True, "team_id": team_id, "status": {"in": ["pending", "running"]}},
+                take=64,
             )
-            if len(capacity) >= 64:
+            if capacity >= 64:
                 return ExecutionError("capacity_exceeded", "The team's workflow execution queue is full")
-            created: Final = await _first_run(
-                transaction,
-                'INSERT INTO "LiteLLM_WorkflowRun" '
-                "(run_id, session_id, workflow_type, status, created_by, created_at, updated_at, "
-                "workflow_id, snapshot_id, team_id, engine_owned, input, request_digest, idempotency_key) "
-                "VALUES ($1, $2, 'liteflow', 'pending', $3, timezone('UTC', NOW()), timezone('UTC', NOW()), $4, $5, $6, true, $7::jsonb, $8, $9) "
-                "RETURNING *",
-                str(uuid4()),
-                str(uuid4()),
-                key_hash,
-                workflow_id,
-                snapshot_id,
-                team_id,
-                input.model_dump_json(),
-                digest,
-                idempotency_key,
-            )
-            if created is None:
-                return ExecutionError("storage_error", "Workflow admission did not create a run")
-            return RunAdmission(created, True)
+            if draft_snapshot is not None:
+                await persist_snapshot(transaction, draft_snapshot)
+            now: Final = datetime.now(timezone.utc)
+            data: Final = {
+                "created_at": now,
+                "updated_at": now,
+                "workflow_type": "liteflow",
+                "workflow_id": workflow_id,
+                "snapshot_id": snapshot_id,
+                "team_id": team_id,
+                "created_by": key_hash,
+                "engine_owned": True,
+                "input": Json(input.model_dump(mode="json")),
+                "request_digest": digest,
+                "idempotency_key": idempotency_key,
+            }
+            created: Final = await self.transaction_table(transaction).create(data=data)
+            return RunAdmission(EngineRun.model_validate(created, from_attributes=True), True)
 
     async def get(self, run_id: str) -> EngineRun | None:
-        return await _first_run(
-            self._database,
-            'SELECT * FROM "LiteLLM_WorkflowRun" WHERE run_id = $1 AND engine_owned = true',
-            run_id,
-        )
+        row: Final = await self.table.find_first(where={"run_id": run_id, "engine_owned": True})
+        return None if row is None else EngineRun.model_validate(row, from_attributes=True)
 
     async def recover(self, limit: int) -> tuple[EngineRun, ...]:
-        return _RUNS.validate_python(
-            await self._database.query_raw(
-                'SELECT * FROM "LiteLLM_WorkflowRun" WHERE engine_owned = true AND '
-                "(status = 'pending' OR (status = 'running' AND lease_expires_at < timezone('UTC', NOW()))) "
-                "ORDER BY created_at, run_id LIMIT $1",
-                limit,
-            )
+        rows: Final = await self.table.find_many(
+            where={
+                "engine_owned": True,
+                "OR": [
+                    {"status": RunState.PENDING.value},
+                    {"status": RunState.RUNNING.value, "lease_expires_at": {"lt": datetime.now(timezone.utc)}},
+                ],
+            },
+            order=[{"created_at": "asc"}, {"run_id": "asc"}],
+            take=limit,
         )
+        return tuple(EngineRun.model_validate(row, from_attributes=True) for row in rows)
 
     async def claim(self, run_id: str, token: str, lease_expires_at: datetime) -> EngineRun | None:
-        return await _first_run(
-            self._database,
-            "UPDATE \"LiteLLM_WorkflowRun\" SET status = 'running', lease_token = $2, "
-            "lease_expires_at = timezone('UTC', $3::text::timestamptz), updated_at = timezone('UTC', NOW()) "
-            "WHERE run_id = $1 AND engine_owned = true AND "
-            "(status = 'pending' OR (status = 'running' AND lease_expires_at < timezone('UTC', NOW()))) RETURNING *",
-            run_id,
-            token,
-            lease_expires_at.isoformat(),
-        )
+        database: Final[Prisma] = self.writer_db
+        async with database.tx() as transaction:
+            claimed: Final = await self.transaction_table(transaction).update_many(
+                where={
+                    "run_id": run_id,
+                    "engine_owned": True,
+                    "OR": [
+                        {"status": RunState.PENDING.value},
+                        {"status": RunState.RUNNING.value, "lease_expires_at": {"lt": datetime.now(timezone.utc)}},
+                    ],
+                },
+                data={"status": RunState.RUNNING.value, "lease_token": token, "lease_expires_at": lease_expires_at},
+            )
+            if not claimed:
+                return None
+            row: Final = await self.transaction_table(transaction).find_unique(where={"run_id": run_id})
+            return None if row is None else EngineRun.model_validate(row, from_attributes=True)
 
     async def renew(self, run_id: str, token: str, lease_expires_at: datetime) -> bool:
-        rows: Final = _ROWS.validate_python(
-            await self._database.query_raw(
-                "UPDATE \"LiteLLM_WorkflowRun\" SET lease_expires_at = timezone('UTC', $3::text::timestamptz) "
-                "WHERE run_id = $1 AND lease_token = $2 AND status = 'running' "
-                "AND lease_expires_at > timezone('UTC', NOW()) RETURNING run_id",
-                run_id,
-                token,
-                lease_expires_at.isoformat(),
-            )
+        return bool(
+            await self.table.update_many(where=_owned(run_id, token), data={"lease_expires_at": lease_expires_at})
         )
-        return bool(rows)
 
     async def checkpoint(self, run_id: str, token: str, step: StepTrace) -> bool:
-        async with self._database.tx() as transaction:
-            owned: Final = _ROWS.validate_python(
-                await transaction.query_raw(
-                    'SELECT run_id FROM "LiteLLM_WorkflowRun" WHERE run_id = $1 AND lease_token = $2 '
-                    "AND status = 'running' AND lease_expires_at > timezone('UTC', NOW()) FOR UPDATE",
-                    run_id,
-                    token,
-                )
-            )
-            if not owned:
+        from prisma import Json
+
+        database: Final[Prisma] = self.writer_db
+        async with database.tx() as transaction:
+            where: Final = dict(_owned(run_id, token))
+            if step.state is RunState.RUNNING:
+                where["cancel_requested"] = False
+            # The conditional update locks the run while allocating its event
+            # sequence. Cancellation fences dispatch but still accepts receipts.
+            if not await self.transaction_table(transaction).update_many(where=where, data={"lease_token": token}):
                 return False
-            await transaction.query_raw(
-                'INSERT INTO "LiteLLM_WorkflowEvent" '
-                "(event_id, run_id, event_type, step_name, sequence_number, data, created_at) "
-                "SELECT $1, $2, 'liteflow.step', $3, COALESCE(MAX(sequence_number) + 1, 0), $4::jsonb, timezone('UTC', NOW()) "
-                'FROM "LiteLLM_WorkflowEvent" WHERE run_id = $2 RETURNING event_id',
-                str(uuid4()),
-                run_id,
-                step.node_id,
-                json.dumps({"trace": step.model_dump(mode="json")}, allow_nan=False),
+            last: Final = await WorkflowEventRepository.transaction_table(transaction).find_first(
+                where={"run_id": run_id}, order={"sequence_number": "desc"}
             )
+            data: Final = {
+                "created_at": datetime.now(timezone.utc),
+                "run_id": run_id,
+                "event_type": "liteflow.step",
+                "step_name": step.node_id,
+                "sequence_number": 0 if last is None else last.sequence_number + 1,
+                "data": Json({"trace": step.model_dump(mode="json")}),
+            }
+            await WorkflowEventRepository.transaction_table(transaction).create(data=data)
             return True
 
     async def steps(self, run_id: str) -> tuple[StepTrace, ...]:
-        rows: Final = _TRACES.validate_python(
-            await self._database.query_raw(
-                "SELECT trace FROM ("
-                "SELECT CASE WHEN receipts.ids IS NULL THEN latest.trace ELSE latest.trace || "
-                "jsonb_build_object('request_id', CASE WHEN cardinality(receipts.ids) = 1 THEN receipts.ids[1] END, "
-                "'request_ids', to_jsonb(receipts.ids), 'response_cost', receipts.cost, "
-                "'prompt_tokens', receipts.prompt_tokens, 'completion_tokens', receipts.completion_tokens) END AS trace, "
-                "latest.step_name FROM ("
-                "SELECT DISTINCT ON (step_name, data->'trace'->>'attempts') data->'trace' AS trace, step_name "
-                "FROM \"LiteLLM_WorkflowEvent\" WHERE run_id = $1 AND event_type = 'liteflow.step' "
-                "ORDER BY step_name, data->'trace'->>'attempts', sequence_number DESC"
-                ') latest JOIN "LiteLLM_WorkflowRun" run ON run.run_id = $1 AND run.engine_owned = true '
-                "LEFT JOIN LATERAL ("
-                "SELECT array_agg(log.request_id ORDER BY log.request_id) AS ids, SUM(log.spend) AS cost, "
-                "SUM(log.prompt_tokens) AS prompt_tokens, SUM(log.completion_tokens) AS completion_tokens "
-                "FROM \"LiteLLM_SpendLogs\" log WHERE log.litellm_call_id = latest.trace->>'call_id' "
-                "AND log.api_key = run.created_by AND log.team_id = run.team_id AND log.session_id = run.session_id"
-                ") receipts ON true"
-                ") latest ORDER BY (trace->>'started_at')::timestamptz, step_name",
-                run_id,
+        run: Final = await self.get(run_id)
+        if run is None:
+            return ()
+        events: Final = await WorkflowEventRepository(self._prisma_client, use_writer=True).table.find_many(
+            where={"run_id": run_id, "event_type": "liteflow.step"}, order={"sequence_number": "asc"}
+        )
+        latest: Final[dict[tuple[str, int], StepTrace]] = {}  # mutable-ok: local attempt index
+        for event in events:
+            step = _TraceRow.model_validate(event.data).trace
+            latest[(step.node_id, step.attempts)] = step
+        call_ids: Final = [step.call_id for step in latest.values() if step.call_id is not None]
+        receipts: Final[dict[str, list[prisma_models.LiteLLM_SpendLogs]]] = {}  # mutable-ok: local receipt grouping
+        if call_ids:
+            logs: Final = await SpendLogsRepository(self._prisma_client, use_writer=True).table.find_many(
+                where={
+                    "litellm_call_id": {"in": call_ids},
+                    "api_key": run.created_by,
+                    "team_id": run.team_id,
+                    "session_id": run.session_id,
+                },
+                order={"request_id": "asc"},
             )
-        )
-        node_ids: Final = dict.fromkeys(row.trace.node_id for row in rows)
-        return tuple(
-            _aggregate_attempts(tuple(row.trace for row in rows if row.trace.node_id == node_id))
-            for node_id in node_ids
-        )
+            for log in logs:
+                if log.litellm_call_id is not None:
+                    receipts.setdefault(log.litellm_call_id, []).append(log)
+        attempts: Final[dict[str, list[StepTrace]]] = {}  # mutable-ok: local attempt grouping before immutable result
+        for step in sorted(latest.values(), key=lambda trace: (trace.started_at, trace.node_id)):
+            billed = receipts.get(step.call_id) if step.call_id is not None else None
+            if billed:
+                step = step.model_copy(
+                    update={
+                        "request_id": billed[0].request_id if len(billed) == 1 else None,
+                        "request_ids": tuple(log.request_id for log in billed),
+                        "response_cost": sum(log.spend for log in billed),
+                        "prompt_tokens": sum(log.prompt_tokens for log in billed),
+                        "completion_tokens": sum(log.completion_tokens for log in billed),
+                    }
+                )
+            attempts.setdefault(step.node_id, []).append(step)
+        return tuple(_aggregate_attempts(tuple(node_attempts)) for node_attempts in attempts.values())
 
     async def finish(self, run_id: str, token: str, state: RunState, output: JsonValue, error: str | None) -> bool:
-        rows: Final = _ROWS.validate_python(
-            await self._database.query_raw(
-                'UPDATE "LiteLLM_WorkflowRun" SET status = $3, output = $4::jsonb, '
-                "metadata = jsonb_build_object('error', $5::text), lease_token = NULL, lease_expires_at = NULL, "
-                "updated_at = timezone('UTC', NOW()) WHERE run_id = $1 AND lease_token = $2 AND status = 'running' "
-                "AND lease_expires_at > timezone('UTC', NOW()) RETURNING run_id",
-                run_id,
-                token,
-                state.value,
-                json.dumps(output, allow_nan=False),
-                error,
+        from prisma import Json
+
+        return bool(
+            await self.table.update_many(
+                where=_owned(run_id, token),
+                data={
+                    "status": state.value,
+                    "output": Json(output),
+                    "metadata": Json({"error": error}),
+                    "lease_token": None,
+                    "lease_expires_at": None,
+                },
             )
         )
-        return bool(rows)
 
     async def cancel(self, run_id: str) -> None:
-        await self._database.query_raw(
-            "UPDATE \"LiteLLM_WorkflowRun\" SET cancel_requested = true, updated_at = timezone('UTC', NOW()) "
-            "WHERE run_id = $1 AND engine_owned = true AND status IN ('pending', 'running') RETURNING run_id",
-            run_id,
+        await self.table.update_many(
+            where={"run_id": run_id, "engine_owned": True, "status": {"in": ["pending", "running"]}},
+            data={"cancel_requested": True},
         )
 
     async def list_runs(
@@ -290,25 +317,22 @@ class WorkflowExecutionRepository:
         position: Final = _cursor(cursor)
         if isinstance(position, ExecutionError):
             return position
-        rows: Final = _VIEWS.validate_python(
-            await self._database.query_raw(
-                'SELECT * FROM "LiteLLM_WorkflowRun" WHERE engine_owned = true '
-                "AND workflow_id = $1 AND team_id = $2 "
-                "AND ($3::text IS NULL OR created_by = $3::text) AND ($4::text IS NULL OR status = $4::text) "
-                "AND ($5::text IS NULL OR (created_at, run_id) < (timezone('UTC', $5::text::timestamptz), $6::text)) "
-                "ORDER BY created_at DESC, run_id DESC LIMIT $7",
-                workflow_id,
-                team_id,
-                key_hash,
-                state.value if state is not None else None,
-                position.created_at.isoformat() if position is not None else None,
-                position.run_id if position is not None else None,
-                limit + 1,
-            )
+        where: Final[dict[str, object]] = {  # mutable-ok: build a local Prisma filter from optional fields
+            "engine_owned": True,
+            "workflow_id": workflow_id,
+            "team_id": team_id,
+        }
+        if key_hash is not None:
+            where["created_by"] = key_hash
+        if state is not None:
+            where["status"] = state.value
+        if position is not None:
+            where["OR"] = [
+                {"created_at": {"lt": position.created_at}},
+                {"created_at": position.created_at, "run_id": {"lt": position.run_id}},
+            ]
+        rows: Final = await self.table.find_many(
+            where=where, order=[{"created_at": "desc"}, {"run_id": "desc"}], take=limit + 1
         )
-        page: Final = rows[:limit]
-        return RunPage(
-            runs=page,
-            count=len(page),
-            next_cursor=_encoded_cursor(page[-1]) if len(rows) > limit else None,
-        )
+        page: Final = tuple(RunView.model_validate(row, from_attributes=True) for row in rows[:limit])
+        return RunPage(runs=page, count=len(page), next_cursor=_encoded_cursor(page[-1]) if len(rows) > limit else None)

@@ -6,6 +6,7 @@ from jsonschema.exceptions import SchemaError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import schema_children
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.workflow_definition import (
     Binding,
@@ -112,7 +113,7 @@ def check_etag(draft: WorkflowDraft, etag: str | None) -> DefinitionError | None
     return None
 
 
-async def freeze_draft(
+async def prepare_draft(
     store: WorkflowDefinitionStore,
     caller: UserAPIKeyAuth,
     workflow_id: str,
@@ -129,22 +130,18 @@ async def freeze_draft(
         return failure
     if (invalid := validate_bundle(draft.bundle)) is not None:
         return invalid
-    return await store.freeze_draft(workflow_id, draft.team_id, draft.etag)
+    return await store.prepare_draft(workflow_id, draft.team_id, draft.etag)
 
 
-def _local_references(value: JsonValue | Mapping[str, JsonValue], depth: int = 0) -> bool:
+def _local_references(schema: Mapping[str, object], depth: int = 0) -> bool:
     if depth > 64:
         return False
-    if isinstance(value, Mapping):
-        if any(keyword in value for keyword in ("$id", "$dynamicRef", "$recursiveRef", "$dynamicAnchor")):
-            return False
-        reference: Final = value.get("$ref")
-        if reference is not None and (not isinstance(reference, str) or not reference.startswith("#/")):
-            return False
-        return all(_local_references(child, depth + 1) for child in value.values())
-    if isinstance(value, list):
-        return all(_local_references(child, depth + 1) for child in value)
-    return True
+    if any(keyword in schema for keyword in ("$id", "$dynamicRef", "$recursiveRef", "$dynamicAnchor")):
+        return False
+    reference: Final = schema.get("$ref")
+    if reference is not None and (not isinstance(reference, str) or not reference.startswith("#/")):
+        return False
+    return all(_local_references(child, depth + 1) for child in schema_children(schema))
 
 
 def _schema_error(schema: Mapping[str, JsonValue], param: str) -> DefinitionError | None:

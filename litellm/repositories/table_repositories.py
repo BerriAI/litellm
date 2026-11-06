@@ -10,7 +10,7 @@ methods; richer repositories live in their own modules.
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final, Generic
+from typing import TYPE_CHECKING, Any, Final, Generic, cast  # noqa: TID251  # generated Prisma writer boundary
 
 from pydantic import TypeAdapter
 
@@ -19,7 +19,10 @@ from litellm.repositories.accounting_delivery_repository import LedgerDatabase, 
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
+
+    from litellm.proxy.utils import PrismaClient
 
 
 class PrismaTableRepository(Generic[RowT_co]):
@@ -36,6 +39,17 @@ class PrismaTableRepository(Generic[RowT_co]):
         if self._prisma_client is None:
             raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
+
+    @property
+    def writer_db(self) -> "Prisma":
+        client: Final = cast("PrismaClient", self._prisma_client)  # cast-ok: legacy client boundary
+        return cast("Prisma", client.writer_db)  # cast-ok: PrismaWrapper forwards generated client methods
+
+    @classmethod
+    def transaction_table(cls, transaction: "Prisma") -> TableActions[RowT_co]:
+        return cast(  # cast-ok: owner binds delegate row type
+            "TableActions[RowT_co]", getattr(transaction, cls.table_name)
+        )
 
     @property
     def table(self) -> TableActions[RowT_co]:
@@ -283,6 +297,10 @@ class ToolRepository(PrismaTableRepository["prisma_models.LiteLLM_ToolTable"]):
 
 class DeletedVerificationTokenRepository(PrismaTableRepository["prisma_models.LiteLLM_DeletedVerificationToken"]):
     table_name = "litellm_deletedverificationtoken"
+
+
+class WorkflowSnapshotRepository(PrismaTableRepository["prisma_models.LiteLLM_WorkflowSnapshot"]):
+    table_name = "litellm_workflowsnapshot"
 
 
 class WorkflowRunRepository(PrismaTableRepository["prisma_models.LiteLLM_WorkflowRun"]):

@@ -2,6 +2,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Final
 
+from fastapi import HTTPException
+
 from litellm.proxy.deps.repositories import (
     get_workflow_definition_repository,
     get_workflow_execution_repository,
@@ -11,9 +13,20 @@ from litellm.proxy.workflows.runner import WorkflowRunner
 from litellm.repositories.database import Database
 
 
+def workflows_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return general_settings_view().get("enable_workflows") is True
+
+
+def require_workflows_enabled() -> None:
+    if not workflows_enabled():
+        raise HTTPException(status_code=404, detail="Workflows are not enabled")
+
+
 @asynccontextmanager
 async def workflow_lifespan(database: Database | None) -> AsyncGenerator[None]:
-    if database is None:
+    if database is None or not workflows_enabled():
         yield
         return
     definitions: Final = await get_workflow_definition_repository(database)

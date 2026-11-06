@@ -15,6 +15,13 @@ from litellm.repositories.workflow_definition_repository import WorkflowDefiniti
 from tests.unit.proxy.workflow_definition_rows import DefinitionRows, bundle, caller
 
 
+@pytest.fixture(autouse=True)
+def enable_workflows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True})
+
+
 def _client(database: DefinitionRows | None, identity: UserAPIKeyAuth) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
@@ -53,6 +60,15 @@ def test_sdk_draft_contract_round_trip_has_exact_fields_and_etag() -> None:
     fetched: Final = client.get(f"/v1/workflows/{draft.workflow_id}")
     assert fetched.json() == response.json()
     assert fetched.headers["etag"] == draft.etag
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_definition_routes_require_explicit_opt_in(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True} if enabled else {})
+    response: Final = _client(DefinitionRows(), caller()).post("/v1/workflows", json=_body())
+    assert response.status_code == (201 if enabled else 404), response.text
 
 
 def test_stale_put_and_publish_cannot_replace_or_approve_new_revision() -> None:

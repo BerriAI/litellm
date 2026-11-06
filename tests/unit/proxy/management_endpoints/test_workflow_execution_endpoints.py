@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -10,7 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.models.workflow_definition import WorkflowDraft, WorkflowSnapshot
 from litellm.models.workflow_execution import RunPage, RunState, StepTrace
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.repositories import get_workflow_definition_repository, get_workflow_execution_repository
 from litellm.proxy.management_endpoints.workflow_definition_endpoints import router as definitions_router
@@ -26,11 +26,19 @@ _MESSAGES: Final = ({"role": "user", "content": "plan"},)
 _ACCEPTED: Final = TypeAdapter(dict[str, str])
 
 
-def virtual_key(user: str = "author", team: str = "team", key: str = "owner-key") -> UserAPIKeyAuth:
+@pytest.fixture(autouse=True)
+def enable_workflows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True})
+
+
+def virtual_key(user: str | None = "author", team: str = "team", key: str = "owner-key") -> UserAPIKeyAuth:
     return caller(user, team).model_copy(update={"token": key, "via_virtual_key": True})
 
 
 def client_for(definitions: DefinitionRows, executions: ExecutionRows, identity: UserAPIKeyAuth) -> TestClient:
+    executions.litellm_workflowsnapshot = definitions.litellm_workflowsnapshot
     app: Final = FastAPI()
     app.include_router(tracking_router)
     app.include_router(definitions_router)
@@ -74,7 +82,6 @@ def test_paid_test_returns_202_and_persists_pending_admission_without_executing_
     assert admitted.input.messages == _MESSAGES and admitted.input.draft
     assert (admitted.created_by, admitted.team_id) == ("owner-key", "team")
     assert executions.events == ()
-    assert not any(query.sql.startswith("UPDATE") for query in executions.queries)
     trace: Final = client.get(f"/v1/workflows/runs/{admitted.run_id}/steps")
     assert trace.status_code == 200, trace.text
     assert trace.json() == {
@@ -85,6 +92,26 @@ def test_paid_test_returns_202_and_persists_pending_admission_without_executing_
         "steps": [],
         "error": None,
     }
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_execution_routes_require_explicit_opt_in(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    from litellm.proxy import proxy_server
+
+    definitions: Final = DefinitionRows()
+    executions: Final = ExecutionRows()
+    client: Final = client_for(definitions, executions, virtual_key())
+    draft: Final = register(client)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True} if enabled else {})
+    response: Final = client.post(
+        f"/v1/workflows/{draft.workflow_id}/test",
+        json={"messages": _MESSAGES, "authorize_billing": True},
+        headers={"If-Match": draft.etag},
+    )
+    assert response.status_code == (202 if enabled else 404), response.text
+    assert len(executions.runs) == int(enabled)
+    history: Final = client.get("/v1/workflows/runs", params={"workflow_id": draft.workflow_id})
+    assert history.status_code == (200 if enabled else 404), history.text
 
 
 def test_idempotent_test_after_draft_edit_returns_original_snapshot_and_conflict_for_changed_input() -> None:
@@ -137,6 +164,47 @@ def test_billing_consent_and_virtual_key_are_required_before_creating_snapshot_o
     assert executions.runs == () and definitions.litellm_workflowsnapshot.rows == ()
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "invalid", "content": "plan"}],
+        [{"role": "user", "content": "x" * (1024 * 1024)}],
+    ],
+)
+def test_invalid_test_input_does_not_create_snapshot_or_run(messages: list[dict[str, str]]) -> None:
+    definitions: Final = DefinitionRows()
+    executions: Final = ExecutionRows()
+    client: Final = client_for(definitions, executions, virtual_key())
+    draft: Final = register(client)
+    response: Final = client.post(
+        f"/v1/workflows/{draft.workflow_id}/test",
+        json={"messages": messages, "authorize_billing": True},
+        headers={"If-Match": draft.etag},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["error"]["code"] == "invalid_input"
+    assert definitions.litellm_workflowsnapshot.rows == ()
+    assert executions.runs == ()
+
+
+def test_full_team_queue_does_not_create_draft_test_snapshots() -> None:
+    definitions: Final = DefinitionRows()
+    existing: Final = tuple(pending_run(f"run-{index}") for index in range(64))
+    executions: Final = ExecutionRows(existing)
+    client: Final = client_for(definitions, executions, virtual_key())
+    draft: Final = register(client)
+    for _ in range(2):
+        response: Final = client.post(
+            f"/v1/workflows/{draft.workflow_id}/test",
+            json={"messages": _MESSAGES, "authorize_billing": True},
+            headers={"If-Match": draft.etag},
+        )
+        assert response.status_code == 429, response.text
+        assert response.json()["detail"]["error"]["code"] == "capacity_exceeded"
+    assert definitions.litellm_workflowsnapshot.rows == ()
+    assert executions.runs == existing
+
+
 @pytest.mark.parametrize("identity", [virtual_key("other", key="other-key"), virtual_key("outsider", "other-team")])
 def test_foreign_run_denies_trace_definition_and_cancellation_without_side_effects(identity: UserAPIKeyAuth) -> None:
     definitions: Final = DefinitionRows()
@@ -156,10 +224,41 @@ def test_foreign_run_denies_trace_definition_and_cancellation_without_side_effec
     denied: Final = foreign.post(f"{path}/cancel")
     assert denied.status_code == 404, denied.text
     assert not executions.runs[0].cancel_requested
-    assert not any(query.sql.startswith("UPDATE") for query in executions.queries)
     assert owner.get(f"{path}/steps").status_code == 200
     assert owner.post(f"{path}/cancel").status_code == 202
     assert executions.runs[0].cancel_requested
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected_status"),
+    [
+        (virtual_key("reviewer", "other-team", "other-team-admin-key"), 404),
+        (virtual_key("reviewer", "team", "team-admin-key"), 200),
+        (virtual_key("reviewer", "other-team").model_copy(update={"is_session_token": True}), 200),
+        (
+            virtual_key("proxy-viewer", "other-team").model_copy(
+                update={"user_role": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY}
+            ),
+            200,
+        ),
+    ],
+)
+def test_run_admin_reads_honor_virtual_key_team_scope(identity: UserAPIKeyAuth, expected_status: int) -> None:
+    definitions: Final = DefinitionRows()
+    executions: Final = ExecutionRows()
+    owner: Final = client_for(definitions, executions, virtual_key())
+    draft: Final = register(owner)
+    accepted: Final = owner.post(
+        f"/v1/workflows/{draft.workflow_id}/test",
+        json={"messages": _MESSAGES, "authorize_billing": True},
+        headers={"If-Match": draft.etag},
+    )
+    assert accepted.status_code == 202, accepted.text
+    path: Final = f"/v1/workflows/runs/{accepted.json()['run_id']}"
+    reader: Final = client_for(definitions, executions, identity)
+    for suffix in ("steps", "definition"):
+        response: Final = reader.get(f"{path}/{suffix}")
+        assert response.status_code == expected_status, response.text
 
 
 def test_history_caps_page_size_and_scopes_ordinary_key_but_allows_team_admin() -> None:
@@ -177,7 +276,6 @@ def test_history_caps_page_size_and_scopes_ordinary_key_but_allows_team_admin() 
     page: Final = RunPage.model_validate(response.json())
     assert page.count == 100 and len(page.runs) == 100 and page.next_cursor is not None
     assert tuple(run.run_id for run in page.runs) == tuple(f"run-{index:03}" for index in range(100, 0, -1))
-    assert executions.queries[-1].args == (draft.workflow_id, "team", "owner-key", None, None, None, 101)
     tail_response: Final = owner.get(
         f"/v1/workflows/{draft.workflow_id}/runs", params={"limit": 100, "after": page.next_cursor}
     )
@@ -187,11 +285,53 @@ def test_history_caps_page_size_and_scopes_ordinary_key_but_allows_team_admin() 
     admin: Final = client_for(definitions, executions, virtual_key("reviewer", key="admin-key"))
     team_response: Final = admin.get("/v1/workflows/runs", params={"workflow_id": draft.workflow_id, "limit": 250})
     assert team_response.status_code == 200, team_response.text
-    assert executions.queries[-1].args == (draft.workflow_id, "team", None, None, None, None, 101)
+    team_page: Final = RunPage.model_validate(team_response.json())
+    team_tail_response: Final = admin.get(
+        f"/v1/workflows/{draft.workflow_id}/runs", params={"limit": 100, "after": team_page.next_cursor}
+    )
+    assert team_tail_response.status_code == 200, team_tail_response.text
+    team_tail: Final = RunPage.model_validate(team_tail_response.json())
+    assert tuple(run.run_id for run in team_tail.runs) == ("run-000", "foreign-key")
+    assert team_tail.next_cursor is None
     outsider: Final = client_for(definitions, executions, virtual_key("outsider", "other-team"))
     denied: Final = outsider.get("/v1/workflows/runs", params={"workflow_id": draft.workflow_id, "team_id": "team"})
     assert denied.status_code == 404, denied.text
     assert owner.get(f"/v1/workflows/{draft.workflow_id}/runs", params={"limit": 101}).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_application_key_can_cancel_its_own_published_run() -> None:
+    rows: Final = DefinitionRows()
+    definitions: Final = WorkflowDefinitionRepository(rows.database)
+    draft: Final = await definitions.create(bundle(), "team", "author")
+    assert isinstance(draft, WorkflowDraft)
+    snapshot: Final = await definitions.publish(draft.workflow_id, "team", draft.etag, draft.digest, "reviewer")
+    assert isinstance(snapshot, WorkflowSnapshot)
+    executions: Final = ExecutionRows()
+    application: Final = virtual_key(None, key="application-key")
+    accepted: Final = await invoke_workflow(
+        Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "headers": [(b"prefer", b"respond-async")],
+            }
+        ),
+        Response(),
+        application,
+        {"model": "workflow/example", "messages": _MESSAGES},
+        definitions,
+        WorkflowExecutionRepository(executions),
+    )
+    assert isinstance(accepted, JSONResponse) and accepted.status_code == 202
+    run_id: Final = executions.runs[0].run_id
+    foreign: Final = client_for(rows, executions, virtual_key(None, key="different-application-key"))
+    assert foreign.post(f"/v1/workflows/runs/{run_id}/cancel").status_code == 404
+    client: Final = client_for(rows, executions, application)
+    response: Final = client.post(f"/v1/workflows/runs/{run_id}/cancel")
+    assert response.status_code == 202, response.text
+    assert executions.runs[0].cancel_requested
 
 
 @pytest.mark.asyncio
@@ -224,7 +364,6 @@ async def test_prefer_respond_async_returns_published_run_id_without_waiting_for
     assert response.headers["x-litellm-workflow-run-id"] == run.run_id
     assert run.status is RunState.PENDING and not run.input.draft and run.output is None
     assert database.events == ()
-    assert not any(query.sql.startswith("UPDATE") for query in database.queries)
 
 
 @pytest.mark.asyncio
@@ -250,7 +389,7 @@ async def test_sdk_retry_after_republish_reuses_pinned_run_and_sums_node_usage()
     )
     assert isinstance(accepted, JSONResponse) and accepted.status_code == 202
     run: Final = database.runs[0]
-    assert await executions.claim(run.run_id, "worker", NOW + timedelta(seconds=15)) is not None
+    assert await executions.claim(run.run_id, "worker", datetime.now(timezone.utc) + timedelta(seconds=15)) is not None
     for node_id, prompt, completion, cost in (("node_1", 7, 2, 0.1), ("node_2", 11, 3, 0.2)):
         assert await executions.checkpoint(
             run.run_id,
@@ -295,7 +434,7 @@ async def test_sdk_retry_after_republish_reuses_pinned_run_and_sums_node_usage()
     assert result == {
         "id": f"chatcmpl-workflow-{run.run_id}",
         "object": "chat.completion",
-        "created": int(NOW.timestamp()),
+        "created": int(run.created_at.timestamp()),
         "model": "workflow/example",
         "choices": [
             {"index": 0, "message": {"role": "assistant", "content": '{"answer": "approved"}'}, "finish_reason": "stop"}

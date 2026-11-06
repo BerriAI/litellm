@@ -267,7 +267,11 @@ async def reserve_budget_for_request(
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
-    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
+    model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
+    if model is None:
+        return None
+    if isinstance(model, str) and model.startswith("workflow/"):
+        # Workflow wrappers do not bill; each child reserves its own provider call.
         return None
 
     counters: Final = await _get_budget_counters(

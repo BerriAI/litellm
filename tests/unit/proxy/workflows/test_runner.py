@@ -1,7 +1,8 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import JsonValue
@@ -24,10 +25,20 @@ from litellm.models.workflow_execution import (
     workflow_call_id,
 )
 from litellm.proxy.workflows.runner import SchemaValidator, WorkflowRunner
-from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository
+from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository, persist_snapshot
 from litellm.repositories.workflow_execution_repository import WorkflowExecutionRepository
 from tests.unit.proxy.workflow_definition_rows import DefinitionRows, bundle
 from tests.unit.repositories.test_workflow_execution_repository import NOW, ExecutionRows, pending_run
+
+
+@pytest.fixture(autouse=True)
+def fixed_repository_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RepositoryClock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return NOW
+
+    monkeypatch.setattr("litellm.repositories.workflow_execution_repository.datetime", RepositoryClock)
 
 
 class FixedClock:
@@ -127,8 +138,9 @@ async def runner_inputs(
     definitions: Final = WorkflowDefinitionRepository(DefinitionRows().database)
     draft: Final = await definitions.create(definition, "team", "author")
     assert isinstance(draft, WorkflowDraft)
-    snapshot: Final = await definitions.freeze_draft(draft.workflow_id, "team", draft.etag)
+    snapshot: Final = await definitions.prepare_draft(draft.workflow_id, "team", draft.etag)
     assert isinstance(snapshot, WorkflowSnapshot)
+    await persist_snapshot(definitions.prisma_client.writer_db, snapshot)
     run: Final = pending_run(snapshot_id=snapshot.snapshot_id, workflow_id=snapshot.workflow_id, deadline=deadline)
     return definitions, ExecutionRows((run,)), run
 
@@ -219,6 +231,48 @@ async def test_first_nonretryable_error_stops_downstream_and_keeps_failure_trace
     assert tuple((step.node_id, step.state, step.attempts, step.error) for step in steps) == (
         ("node_1", RunState.FAILED, 1, "Expected messages"),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry", [False, True])
+async def test_cancellation_stops_downstream_nodes_and_retries_before_the_heartbeat(
+    retry: bool,
+) -> None:
+    definitions, database, run = await runner_inputs(two_nodes(attempts=2))
+    repository: Final = WorkflowExecutionRepository(database)
+    receipt: Final = ChildCallResult([{"role": "user", "content": "next"}], 7, 3, "billed-request", 0.125)
+
+    async def cancel_after_first_call(
+        **_kwargs: object,
+    ) -> ChildCallResult | ExecutionError:
+        await repository.cancel(run.run_id)
+        return ExecutionError("provider_error", "Retry later", receipt=receipt) if retry else receipt
+
+    chat: Final = AsyncMock(side_effect=cancel_after_first_call)
+    runner: Final = WorkflowRunner(
+        repository,
+        definitions,
+        chat,
+        clock=FixedClock(),
+        validate_input=ValidationReply(),
+    )
+    try:
+        await runner._run(run.run_id)  # pyright: ignore[reportPrivateUsage]  # control dispatch before the heartbeat
+    finally:
+        await runner.close()
+
+    assert chat.await_count == 1
+    finished: Final = await repository.get(run.run_id)
+    assert finished is not None and finished.status is RunState.CANCELLED
+    assert finished.output is None and finished.cancel_requested
+    steps: Final = await repository.steps(run.run_id)
+    assert len(steps) == 1
+    assert (
+        steps[0].node_id,
+        steps[0].attempts,
+        steps[0].request_id,
+        steps[0].response_cost,
+    ) == ("node_1", 1, "billed-request", 0.125)
 
 
 @pytest.mark.asyncio

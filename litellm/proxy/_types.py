@@ -2601,6 +2601,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="opt-in to copy the x-litellm-call-id response header's value into JSON error bodies, as error.litellm_call_id on the OpenAI-shaped and /v1/messages routes and as a top-level litellm_call_id on pass-through routes, so an error a client prints names the request to look up. Off by default",
     )
+    enable_workflows: bool = Field(
+        default=False,
+        description="Enable LiteFlow workflow authoring and execution. Off by default; restart the proxy after changing this setting.",
+    )
     enable_claude_code_gateway: bool | None = Field(
         None,
         description="serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default",

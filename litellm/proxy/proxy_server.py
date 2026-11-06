@@ -13107,7 +13107,9 @@ async def chat_completion(
             get_workflow_execution_repository,
         )
         from litellm.proxy.management_endpoints.workflow_execution_endpoints import invoke_workflow
+        from litellm.proxy.workflows.lifespan import require_workflows_enabled
 
+        require_workflows_enabled()
         workflow_database: Final = await get_database(request)
         try:
             return await invoke_workflow(

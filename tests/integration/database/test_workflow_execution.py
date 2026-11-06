@@ -4,7 +4,8 @@ import sys
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Final, cast
+from types import SimpleNamespace
+from typing import Final
 
 import psycopg
 import pytest
@@ -14,8 +15,8 @@ from prisma.types import DatasourceOverride
 from psycopg import sql
 from pydantic import TypeAdapter
 
-from litellm.models.workflow_execution import RunAdmission, RunInput, RunPage, RunState, StepTrace
-from litellm.repositories.workflow_execution_repository import ExecutionDatabase, WorkflowExecutionRepository
+from litellm.models.workflow_execution import ExecutionError, RunAdmission, RunInput, RunPage, RunState, StepTrace
+from litellm.repositories.workflow_execution_repository import WorkflowExecutionRepository
 from tests.integration._support.database import scratch_database
 
 _ROOT: Final = Path(__file__).resolve().parents[3]
@@ -24,9 +25,21 @@ _ROOT: Final = Path(__file__).resolve().parents[3]
 @pytest.fixture(scope="module")
 def schema_sql() -> bytes:
     return subprocess.run(
-        [sys.executable, "-I", "-m", "prisma", "migrate", "diff", "--from-empty", "--to-schema-datamodel",
-         str(_ROOT / "schema.prisma"), "--script"],
-        check=True, capture_output=True, cwd=_ROOT,
+        [
+            sys.executable,
+            "-I",
+            "-m",
+            "prisma",
+            "migrate",
+            "diff",
+            "--from-empty",
+            "--to-schema-datamodel",
+            str(_ROOT / "schema.prisma"),
+            "--script",
+        ],
+        check=True,
+        capture_output=True,
+        cwd=_ROOT,
     ).stdout
 
 
@@ -48,15 +61,14 @@ async def ledger(database: str) -> AsyncIterator[Prisma]:
         assert TypeAdapter(tuple[dict[str, str], ...]).validate_python(await client.query_raw("SHOW TIME ZONE")) == (
             {"TimeZone": "Asia/Singapore"},
         )
+        await client.litellm_teamtable.create(data={"team_id": "team", "admins": [], "members": [], "models": []})
         yield client
     finally:
         await client.disconnect()
 
 
 def _repository(ledger: Prisma) -> WorkflowExecutionRepository:
-    return WorkflowExecutionRepository(
-        cast(ExecutionDatabase, ledger)  # cast-ok: generated Prisma transaction delegates satisfy the protocol
-    )
+    return WorkflowExecutionRepository(SimpleNamespace(writer_db=ledger, db=ledger), use_writer=True)
 
 
 def _input(now: datetime) -> RunInput:
@@ -64,12 +76,21 @@ def _input(now: datetime) -> RunInput:
 
 
 async def _admit(
-    repository: WorkflowExecutionRepository, data: RunInput, key: str | None,
-    *, snapshot: str = "snapshot", owner: str = "owner",
+    repository: WorkflowExecutionRepository,
+    data: RunInput,
+    key: str | None,
+    *,
+    snapshot: str = "snapshot",
+    owner: str = "owner",
 ) -> RunAdmission:
     result: Final = await repository.admit(
-        workflow_id="workflow", snapshot_id=snapshot, team_id="team", key_hash=owner,
-        input=data, digest="same-input", idempotency_key=key,
+        workflow_id="workflow",
+        snapshot_id=snapshot,
+        team_id="team",
+        key_hash=owner,
+        input=data,
+        digest="same-input",
+        idempotency_key=key,
     )
     assert isinstance(result, RunAdmission)
     return result
@@ -97,8 +118,16 @@ async def test_concurrent_admission_pins_snapshot_and_execution_timestamps_are_u
     renewed: Final = await repository.get(run_id)
     assert renewed is not None and renewed.lease_expires_at == extended
     step: Final = StepTrace(
-        step_id="step", run_id=run_id, node_id="node", state=RunState.COMPLETED, input={"n": 1}, output={"n": 2},
-        attempts=1, deadline=data.deadline, started_at=before, finished_at=before,
+        step_id="step",
+        run_id=run_id,
+        node_id="node",
+        state=RunState.COMPLETED,
+        input={"n": 1},
+        output={"n": 2},
+        attempts=1,
+        deadline=data.deadline,
+        started_at=before,
+        finished_at=before,
     )
     assert await repository.checkpoint(run_id, "other-worker", step) is False
     assert await repository.checkpoint(run_id, "worker", step) is True
@@ -107,7 +136,10 @@ async def test_concurrent_admission_pins_snapshot_and_execution_timestamps_are_u
     finished: Final = await repository.get(run_id)
     assert finished is not None and finished.status is RunState.COMPLETED
     assert (finished.output, finished.metadata, finished.lease_token, finished.lease_expires_at) == (
-        {"n": 2}, {"error": None}, None, None,
+        {"n": 2},
+        {"error": None},
+        None,
+        None,
     )
     stored: Final = await ledger.litellm_workflowrun.find_unique(where={"run_id": run_id})
     events: Final = await ledger.litellm_workflowevent.find_many(where={"run_id": run_id})
@@ -137,7 +169,9 @@ async def test_nullable_admission_and_history_filters_round_trip_through_prisma(
     scoped: Final = await repository.list_runs("workflow", "team", "owner", RunState.PENDING, 1, None)
     assert isinstance(scoped, RunPage) and scoped.next_cursor is not None
     assert tuple(run.run_id for run in scoped.runs) == owned[:1]
-    continuation: Final = await repository.list_runs("workflow", "team", "owner", RunState.PENDING, 1, scoped.next_cursor)
+    continuation: Final = await repository.list_runs(
+        "workflow", "team", "owner", RunState.PENDING, 1, scoped.next_cursor
+    )
     assert isinstance(continuation, RunPage) and continuation.count == 1 and continuation.next_cursor is None
     assert tuple(run.run_id for run in continuation.runs) == owned[1:]
     assert await repository.claim(second.run.run_id, "worker", data.deadline) is not None
@@ -147,3 +181,128 @@ async def test_nullable_admission_and_history_filters_round_trip_through_prisma(
     filtered: Final = await repository.list_runs("workflow", "team", "owner", RunState.FAILED, 2, None)
     assert isinstance(filtered, RunPage) and filtered.count == 1 and filtered.next_cursor is None
     assert tuple(run.run_id for run in filtered.runs) == (second.run.run_id,)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_concurrent_admission_cannot_overfill_team_queue(ledger: Prisma) -> None:
+    repository: Final = _repository(ledger)
+    data: Final = _input(datetime.now(timezone.utc))
+    for index in range(63):
+        await _admit(repository, data, f"seed-{index}")
+    outcomes: Final = await asyncio.gather(
+        *(
+            repository.admit(
+                workflow_id=workflow,
+                snapshot_id="snapshot",
+                team_id="team",
+                key_hash="owner",
+                input=data,
+                digest="same-input",
+                idempotency_key=f"last-{workflow}",
+            )
+            for workflow in ("workflow", "other-workflow")
+        )
+    )
+    assert sum(isinstance(result, RunAdmission) for result in outcomes) == 1
+    assert sum(isinstance(result, ExecutionError) and result.code == "capacity_exceeded" for result in outcomes) == 1
+    assert await ledger.litellm_workflowrun.count() == 64
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_draft_admission_persists_one_snapshot_and_rolls_back_when_run_insert_fails(ledger: Prisma) -> None:
+    from prisma.errors import UniqueViolationError
+
+    from litellm.models.workflow_definition import WorkflowDraft, WorkflowSnapshot
+    from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository
+    from tests.unit.proxy.workflow_definition_rows import bundle
+
+    client: Final = SimpleNamespace(writer_db=ledger, db=ledger)
+    definitions: Final = WorkflowDefinitionRepository(client, use_writer=True)
+    executions: Final = WorkflowExecutionRepository(client, use_writer=True)
+    draft: Final = await definitions.create(bundle(), "team", "author")
+    assert isinstance(draft, WorkflowDraft)
+    prepared: Final = await definitions.prepare_draft(draft.workflow_id, "team", draft.etag)
+    assert isinstance(prepared, WorkflowSnapshot)
+    assert await ledger.litellm_workflowsnapshot.count() == 0
+    data: Final = _input(datetime.now(timezone.utc))
+    # A legacy row with the same unique key forces the run insert (after snapshot
+    # creation) to fail, exercising actual database rollback rather than a fake.
+    await ledger.litellm_workflowrun.create(
+        data={
+            "workflow_type": "tracking",
+            "workflow_id": draft.workflow_id,
+            "team_id": "team",
+            "created_by": "owner",
+            "idempotency_key": "collision",
+        }
+    )
+    with pytest.raises(UniqueViolationError):
+        await executions.admit(
+            workflow_id=draft.workflow_id,
+            snapshot_id=prepared.snapshot_id,
+            team_id="team",
+            key_hash="owner",
+            input=data,
+            digest="same-input",
+            idempotency_key="collision",
+            draft_snapshot=prepared,
+        )
+    assert await ledger.litellm_workflowsnapshot.count() == 0
+    first: Final = await executions.admit(
+        workflow_id=draft.workflow_id,
+        snapshot_id=prepared.snapshot_id,
+        team_id="team",
+        key_hash="owner",
+        input=data,
+        digest="same-input",
+        idempotency_key="accepted",
+        draft_snapshot=prepared,
+    )
+    assert isinstance(first, RunAdmission) and first.created
+    again: Final = await definitions.prepare_draft(draft.workflow_id, "team", draft.etag)
+    assert isinstance(again, WorkflowSnapshot)
+    replay: Final = await executions.admit(
+        workflow_id=draft.workflow_id,
+        snapshot_id=again.snapshot_id,
+        team_id="team",
+        key_hash="owner",
+        input=data,
+        digest="same-input",
+        idempotency_key="accepted",
+        draft_snapshot=again,
+    )
+    assert replay == RunAdmission(first.run, False)
+    assert await ledger.litellm_workflowsnapshot.count() == 1
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_cancelled_run_rejects_dispatch_and_accepts_terminal_receipt(ledger: Prisma) -> None:
+    repository: Final = _repository(ledger)
+    data: Final = _input(datetime.now(timezone.utc))
+    admitted: Final = await _admit(repository, data, "cancel")
+    run_id: Final = admitted.run.run_id
+    assert await repository.claim(run_id, "worker", data.deadline) is not None
+    step: Final = StepTrace(
+        step_id="paid-step",
+        run_id=run_id,
+        node_id="node",
+        state=RunState.RUNNING,
+        input=None,
+        attempts=1,
+        deadline=data.deadline,
+        started_at=datetime.now(timezone.utc),
+    )
+    assert await repository.checkpoint(run_id, "worker", step)
+    await repository.cancel(run_id)
+    assert not await repository.checkpoint(run_id, "worker", step.model_copy(update={"attempts": 2}))
+    receipt: Final = step.model_copy(
+        update={
+            "state": RunState.COMPLETED,
+            "output": "paid-result",
+            "response_cost": 0.25,
+            "finished_at": datetime.now(timezone.utc),
+        }
+    )
+    assert await repository.checkpoint(run_id, "worker", receipt)
+    (stored,) = await repository.steps(run_id)
+    assert stored.state is RunState.COMPLETED and stored.output == "paid-result" and stored.response_cost == 0.25

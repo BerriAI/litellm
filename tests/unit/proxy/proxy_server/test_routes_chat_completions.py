@@ -126,3 +126,29 @@ def test_chat_completion_pipeline_error(client, auth_as, patched_chat_error, pat
         response = client.post(path, json=payload)
     assert response.status_code == 400
     assert "error" in response.json() or response.text != ""
+
+
+@pytest.mark.parametrize("path", _CHAT_PATHS)
+@pytest.mark.parametrize("enabled", [False, True])
+def test_workflow_invocations_require_explicit_opt_in(client, auth_as, monkeypatch, path, enabled):
+    from litellm.proxy.deps import database
+    from litellm.proxy.management_endpoints import workflow_execution_endpoints
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_workflows": True} if enabled else {})
+    invocation = AsyncMock(return_value=dict(HAPPY_RESPONSE))
+    connection = AsyncMock(return_value=None)
+    monkeypatch.setattr(workflow_execution_endpoints, "invoke_workflow", invocation)
+    monkeypatch.setattr(database, "get_database", connection)
+    with auth_as():
+        response = client.post(
+            path,
+            json={"model": "workflow/email-processing", "messages": [{"role": "user", "content": "Hello"}]},
+        )
+    if enabled:
+        assert response.status_code == 200
+        invocation.assert_awaited_once()
+        connection.assert_awaited_once()
+    else:
+        assert response.status_code == 404
+        invocation.assert_not_awaited()
+        connection.assert_not_awaited()

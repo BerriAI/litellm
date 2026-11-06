@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 
 from litellm.models.workflow_definition import DefinitionError, WorkflowBundle, WorkflowDraft, WorkflowSnapshot
-from litellm.proxy.workflows.definitions import freeze_draft, published_workflow, validate_bundle
+from litellm.proxy.workflows.definitions import prepare_draft, published_workflow, validate_bundle
 from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository
 from tests.unit.proxy.workflow_definition_rows import DefinitionRows, bundle, caller
 
@@ -85,14 +85,28 @@ def test_validation_rejects_schema_reference_scope_changes(keyword: str) -> None
     )
 
 
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object", "properties": {"$ref": {"type": "string"}, "$id": {"type": "string"}}},
+        {"const": {"$ref": "https://example.com/literal", "$id": "literal"}},
+        {"examples": [{"$dynamicRef": "literal"}], "default": {"$ref": "literal"}},
+    ],
+)
+def test_validation_preserves_reference_named_properties_and_literal_values(schema: dict[str, object]) -> None:
+    original: Final = bundle().model_dump(mode="json", by_alias=True, exclude_unset=True)
+    with_literal: Final = WorkflowBundle.model_validate({**original, "input_schema": schema})
+    assert validate_bundle(with_literal) is None
+
+
 @pytest.mark.asyncio
-async def test_application_identity_can_resolve_published_workflow_but_cannot_freeze_draft() -> None:
+async def test_application_identity_can_resolve_published_workflow_but_cannot_prepare_draft() -> None:
     store: Final = WorkflowDefinitionRepository(DefinitionRows().database)
     draft: Final = await store.create(bundle(), "team", "author")
     assert isinstance(draft, WorkflowDraft)
     snapshot: Final = await store.publish(draft.workflow_id, "team", draft.etag, draft.digest, "reviewer")
     assert isinstance(snapshot, WorkflowSnapshot)
     assert await published_workflow(store, caller(None), "example") == snapshot
-    denied: Final = await freeze_draft(store, caller(None), draft.workflow_id, draft.etag)
+    denied: Final = await prepare_draft(store, caller(None), draft.workflow_id, draft.etag)
     assert isinstance(denied, DefinitionError)
     assert denied.code == "not_found"

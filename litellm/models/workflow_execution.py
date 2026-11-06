@@ -7,6 +7,8 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from litellm.models.workflow_definition import WorkflowSnapshot
+
 
 class RunState(str, Enum):
     PENDING = "pending"
@@ -142,6 +144,7 @@ class WorkflowExecutionStore(Protocol):
         input: RunInput,
         digest: str,
         idempotency_key: str | None,
+        draft_snapshot: WorkflowSnapshot | None = None,
     ) -> RunAdmission | ExecutionError: ...
 
     async def get(self, run_id: str) -> EngineRun | None: ...

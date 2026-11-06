@@ -1,4 +1,4 @@
-from typing import Annotated, TypeAlias, cast  # noqa: TID251  # Prisma writer delegates are generated dynamically
+from typing import Annotated, TypeAlias
 
 from fastapi import Depends
 
@@ -15,8 +15,8 @@ from litellm.repositories.gateway_activity_repository import GatewayActivityRepo
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
-from litellm.repositories.workflow_definition_repository import DefinitionDatabase, WorkflowDefinitionRepository
-from litellm.repositories.workflow_execution_repository import ExecutionDatabase, WorkflowExecutionRepository
+from litellm.repositories.workflow_definition_repository import WorkflowDefinitionRepository
+from litellm.repositories.workflow_execution_repository import WorkflowExecutionRepository
 
 
 async def get_user_banner_repository(database: DatabaseDep) -> UserBannerStore | None:
@@ -61,13 +61,7 @@ SkillSubmissionRepositoryDep: TypeAlias = Annotated[
 
 
 async def get_workflow_definition_repository(database: DatabaseDep) -> WorkflowDefinitionStore | None:
-    return (
-        None
-        if database is None
-        else WorkflowDefinitionRepository(
-            cast(DefinitionDatabase, database.prisma.writer_db)  # cast-ok: Prisma delegates implement the protocol
-        )
-    )
+    return None if database is None else WorkflowDefinitionRepository(database.prisma, use_writer=True)
 
 
 WorkflowDefinitionRepositoryDep: TypeAlias = Annotated[
@@ -76,13 +70,7 @@ WorkflowDefinitionRepositoryDep: TypeAlias = Annotated[
 
 
 async def get_workflow_execution_repository(database: DatabaseDep) -> WorkflowExecutionStore | None:
-    return (
-        None
-        if database is None
-        else WorkflowExecutionRepository(
-            cast(ExecutionDatabase, database.prisma.writer_db)  # cast-ok: generated Prisma transaction delegates
-        )
-    )
+    return None if database is None else WorkflowExecutionRepository(database.prisma, use_writer=True)
 
 
 WorkflowExecutionRepositoryDep: TypeAlias = Annotated[

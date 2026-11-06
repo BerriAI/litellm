@@ -28,14 +28,15 @@ from litellm.proxy.management_endpoints.workflow_definition_endpoints import rai
 from litellm.proxy.workflows.definitions import (
     authorize_team,
     authorized_draft,
-    freeze_draft,
+    prepare_draft,
     published_workflow,
 )
+from litellm.proxy.workflows.lifespan import require_workflows_enabled
 from litellm.proxy.workflows.monty.models import MontyFailure
 from litellm.proxy.workflows.monty.runtime import validate_json
 from litellm.proxy.workflows.runner import utc_now
 
-router: Final = APIRouter(tags=["workflow management"])
+router: Final = APIRouter(tags=["workflow management"], dependencies=[Depends(require_workflows_enabled)])
 _Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 _Idempotency: TypeAlias = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=256)]
 _MESSAGES: Final = TypeAdapter(list[ChatCompletionMessageParam])
@@ -153,7 +154,6 @@ async def _admit(
     *,
     draft: bool,
 ) -> EngineRun:
-    _validate_messages(messages)
     admitted: Final = await runs.admit(
         workflow_id=snapshot.workflow_id,
         snapshot_id=snapshot.snapshot_id,
@@ -167,6 +167,7 @@ async def _admit(
         ),
         digest=digest,
         idempotency_key=key,
+        draft_snapshot=snapshot if draft else None,
     )
     if isinstance(admitted, ExecutionError):
         _error(admitted)
@@ -206,12 +207,13 @@ async def test_workflow(
     if isinstance(permission, DefinitionError):
         raise_public(permission)
     key_hash: Final = _execution_key(caller, draft.team_id)
+    _validate_messages(data.messages)
     digest: Final = _digest(data.messages, caller.end_user_id, if_match)
     key: Final = _idempotency_key("test", idempotency_key)
     previous: Final = await _recover_admission(runs, workflow_id, draft.team_id, key_hash, key, digest)
     if previous is not None:
         return _accepted(previous)
-    snapshot: Final = await freeze_draft(store, caller, workflow_id, if_match)
+    snapshot: Final = await prepare_draft(store, caller, workflow_id, if_match)
     if isinstance(snapshot, DefinitionError):
         raise_public(snapshot)
     return _accepted(await _admit(runs, snapshot, caller, data.messages, caller.end_user_id, key, digest, draft=True))
@@ -223,8 +225,8 @@ async def _read_run(
     run: Final = await runs.get(run_id)
     if run is None:
         _error(ExecutionError("not_found", "Run not found"))
-    team: Final = await store.get_team(run.team_id)
-    if team is None or team.blocked:
+    team: Final = await authorize_team(store, caller, run.team_id, "invoke")
+    if isinstance(team, DefinitionError):
         _error(ExecutionError("not_found", "Run not found"))
     owns_run: Final = bool(caller.token) and caller.token == run.created_by and caller.team_id == run.team_id
     if not owns_run and not user_api_key_has_admin_view(caller) and not is_team_admin(caller, team):
@@ -280,9 +282,10 @@ async def cancel_workflow_run(
     """Request cancellation and return the run ID to poll until execution stops."""
     store, runs = _stores(definitions, executions)
     run: Final = await _read_run(store, runs, caller, run_id)
-    permission: Final = await authorize_team(store, caller, run.team_id, "write")
-    if isinstance(permission, DefinitionError):
-        raise_public(permission)
+    if caller.token != run.created_by:
+        permission: Final = await authorize_team(store, caller, run.team_id, "write")
+        if isinstance(permission, DefinitionError):
+            raise_public(permission)
     await runs.cancel(run_id)
     return _accepted(run)
 
@@ -298,6 +301,7 @@ async def list_engine_runs(
     definitions: WorkflowDefinitionStore | None,
     executions: WorkflowExecutionStore | None,
 ) -> RunPage:
+    require_workflows_enabled()
     store, runs = _stores(definitions, executions)
     definition: Final = await store.get_draft(workflow_id, team_id)
     if definition is None:
@@ -377,6 +381,7 @@ async def invoke_workflow(
     key: Final = request.headers.get("Idempotency-Key")
     if key is not None and not 1 <= len(key) <= 256:
         _error(ExecutionError("invalid_idempotency_key", "Idempotency-Key must contain 1 to 256 characters"))
+    _validate_messages(data.messages)
     admitted: Final = await _admit(
         runs,
         snapshot,
