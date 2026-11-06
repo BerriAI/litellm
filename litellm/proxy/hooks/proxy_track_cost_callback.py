@@ -1294,7 +1294,7 @@ async def _update_database_and_spend_counters(
     """The reservation is reconciled before the spend is persisted, from its own read. One spend counter batch then
     spans the database write and the counter update, so the post-call counters are read with a single MGET after the
     write and their increments leave in a single pipeline."""
-    from litellm.proxy.proxy_server import spend_counter_cache
+    from litellm.proxy.proxy_server import spend_counter_store
     from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
 
     if budget_reservation is not None:
@@ -1313,7 +1313,7 @@ async def _update_database_and_spend_counters(
         model_access_groups=model_access_groups,
         project_id=project_id,
     )
-    with spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys):
+    with spend_counter_batch_scope(spend_counter_store, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
             proxy_logging_obj=proxy_logging_obj,
             spend_writer=spend_writer,

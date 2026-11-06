@@ -37,6 +37,14 @@ def _minute() -> str:
     return get_utc_datetime().strftime("%H-%M")
 
 
+async def _serve(core: RouterCore, deployment_id: str, model: str, total_tokens: int) -> None:
+    """One call ``deployment_id`` of group ``gpt`` answered with ``total_tokens``, counted as the router counts it."""
+    metadata = {"model_info": {"id": deployment_id}, "deployment": model, "model_group": "gpt"}
+    await core.increment_deployment_usage_for_response(  # pyright: ignore[reportAttributeAccessIssue]  # public on the core
+        completion_response(total_tokens=total_tokens), {"model": "gpt", "metadata": metadata}
+    )
+
+
 async def _count(core: RouterCore, kind: RouterCacheEnum, deployment_id: str, model: str, value: int) -> None:
     key = kind.value.format(id=deployment_id, model=model, current_minute=_minute())
     await core.health().store.async_set_cache(key, value)
@@ -465,12 +473,12 @@ async def test_group_usage_is_none_until_something_is_counted(make_core: MakeCor
 @pytest.mark.asyncio
 async def test_group_usage_sums_each_deployments_counters_for_this_minute(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
-    await _count(core, RouterCacheEnum.TPM, "a", "openai/gpt-4o", 30)
-    await _count(core, RouterCacheEnum.TPM, "b", "anthropic/claude-3-haiku-20240307", 4)
-    await _count(core, RouterCacheEnum.RPM, "b", "anthropic/claude-3-haiku-20240307", 2)
+    await _serve(core, "a", "openai/gpt-4o", 30)
+    await _serve(core, "b", "anthropic/claude-3-haiku-20240307", 2)
+    await _serve(core, "b", "anthropic/claude-3-haiku-20240307", 2)
 
-    assert await core.health().usage("gpt") == (34, 2)
-    assert await core.health().usage("al") == (34, 2)
+    assert await core.health().usage("gpt") == (34, 3)
+    assert await core.health().usage("al") == (34, 3)
 
 
 @pytest.mark.asyncio
@@ -485,13 +493,14 @@ async def test_io_token_usage_sums_input_and_output_counters(make_core: MakeCore
 @pytest.mark.asyncio
 async def test_remaining_usage_is_each_limit_minus_this_minutes_usage(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
-    await _count(core, RouterCacheEnum.TPM, "a", "openai/gpt-4o", 30)
-    await _count(core, RouterCacheEnum.RPM, "b", "anthropic/claude-3-haiku-20240307", 2)
+    await _serve(core, "a", "openai/gpt-4o", 30)
+    await _serve(core, "b", "anthropic/claude-3-haiku-20240307", 0)
+    await _serve(core, "b", "anthropic/claude-3-haiku-20240307", 0)
 
     assert await core.health().usage("gpt", kind="remaining") == {
         "x-ratelimit-remaining-tokens": 1070,
         "x-ratelimit-limit-tokens": 1100,
-        "x-ratelimit-remaining-requests": 13,
+        "x-ratelimit-remaining-requests": 12,
         "x-ratelimit-limit-requests": 15,
     }
 
@@ -530,7 +539,7 @@ async def test_an_unknown_usage_kind_raises(make_core: MakeCore) -> None:
 @pytest.mark.asyncio
 async def test_response_headers_name_the_group_and_its_remaining_limits(make_core: MakeCore) -> None:
     core = _usage_core(make_core)
-    await _count(core, RouterCacheEnum.TPM, "a", "openai/gpt-4o", 30)
+    await _serve(core, "a", "openai/gpt-4o", 30)
     response = completion_response()
 
     returned = await core.set_response_headers(response, model_group="gpt")  # pyright: ignore[reportAttributeAccessIssue]  # public on the core
@@ -540,7 +549,7 @@ async def test_response_headers_name_the_group_and_its_remaining_limits(make_cor
         "x-litellm-model-group": "gpt",
         "x-ratelimit-remaining-tokens": 1070,
         "x-ratelimit-limit-tokens": 1100,
-        "x-ratelimit-remaining-requests": 15,
+        "x-ratelimit-remaining-requests": 14,
         "x-ratelimit-limit-requests": 15,
     }
 
