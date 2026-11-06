@@ -1,11 +1,13 @@
 import json
 import os
-from typing import Final, Literal, Protocol, get_args
+from collections.abc import Iterator
+from typing import Final, Literal, Protocol, get_args, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items, json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -36,6 +38,28 @@ class _SupportsTokenEncode(Protocol):
     """Token encoder handle. Only ``encode`` is ever called on it here."""
 
     def encode(self, text: str) -> list[int]: ...
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str | int, /) -> object: ...
+
+
+def _subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _unpack_pair(value: object) -> tuple[object, object]:
+    if not hasattr(value, "__iter__") and not hasattr(value, "__getitem__"):
+        raise TypeError(f"cannot unpack non-iterable {type(value).__name__} object")
+    first, second = iter_items(value)
+    return first, second
+
+
+def _pairs(value: object) -> Iterator[tuple[object, object]]:
+    return (_unpack_pair(item) for item in iter_items(value))
 
 
 def get_hf_task_embedding_for_model(
@@ -183,15 +207,15 @@ class HuggingFaceEmbedding(BaseLLM):
 
     def _process_embedding_response(
         self,
-        embeddings: dict,
+        embeddings: object,
         model_response: EmbeddingResponse,
         model: str,
         input: list,
         encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
         output_data: Final = []
-        if "similarities" in embeddings:
-            for idx, embedding in embeddings["similarities"]:
+        if json_contains(embeddings, "similarities"):
+            for idx, embedding in _pairs(_subscript(embeddings, "similarities")):
                 output_data.append(
                     {
                         "object": "embedding",
@@ -200,8 +224,9 @@ class HuggingFaceEmbedding(BaseLLM):
                     }
                 )
         else:
-            for idx, embedding in enumerate(embeddings):
-                if isinstance(embedding, float) or isinstance(embedding, list) and isinstance(embedding[0], float):
+            for idx, embedding in enumerate(iter_items(embeddings)):
+                embedding_list = as_object_list(embedding)
+                if isinstance(embedding, float) or embedding_list is not None and isinstance(embedding_list[0], float):
                     output_data.append(
                         {
                             "object": "embedding",
@@ -214,7 +239,7 @@ class HuggingFaceEmbedding(BaseLLM):
                         {
                             "object": "embedding",
                             "index": idx,
-                            "embedding": embedding[0][0],  # flatten list returned from hf
+                            "embedding": _subscript(_subscript(embedding, 0), 0),  # flatten list returned from hf
                         }
                     )
         model_response.object = "list"
@@ -288,10 +313,10 @@ class HuggingFaceEmbedding(BaseLLM):
             original_response=response,
         )
 
-        embeddings: Final = response.json()
+        embeddings: Final = _DECODED_JSON.validate_python(response.json())
 
-        if "error" in embeddings:
-            raise HuggingFaceError(status_code=500, message=embeddings["error"])
+        if json_contains(embeddings, "error"):
+            raise HuggingFaceError(status_code=500, message=_subscript(embeddings, "error"))
 
         ## PROCESS RESPONSE ##
         return self._process_embedding_response(
@@ -394,10 +419,10 @@ class HuggingFaceEmbedding(BaseLLM):
             original_response=response,
         )
 
-        embeddings: Final = response.json()
+        embeddings: Final = _DECODED_JSON.validate_python(response.json())
 
-        if "error" in embeddings:
-            raise HuggingFaceError(status_code=500, message=embeddings["error"])
+        if json_contains(embeddings, "error"):
+            raise HuggingFaceError(status_code=500, message=_subscript(embeddings, "error"))
 
         ## PROCESS RESPONSE ##
         return self._process_embedding_response(

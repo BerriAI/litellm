@@ -162,6 +162,7 @@ from litellm.proxy._types import (
     ProxyException,
     ProxyLifespanState,
     SpecialModelNames,
+    SSOUserDefinedValues,
     SupportedDBObjectType,
     TeamDefaultSettings,
     TokenCountRequest,
@@ -1136,7 +1137,6 @@ from litellm.types.utils import (
     SelectTokenizerResponse,
     StandardLoggingPayload,
 )
-from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import add_custom_logger_callback_to_specific_event
 
 try:
@@ -3200,16 +3200,23 @@ def _apply_background_response_settings(value: SettingsJsonValue) -> None:
     )
 
 
-user_custom_auth = None
-user_custom_key_generate = None
+_CustomKeyHook: TypeAlias = Callable[..., Awaitable[Mapping[str, object]]]
+
+
+class _CustomSsoHandler(Protocol):
+    async def __call__(self, sso_response: object) -> SSOUserDefinedValues | None: ...
+
+
+user_custom_auth: Callable[..., Awaitable[object]] | None = None
+user_custom_key_generate: _CustomKeyHook | None = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
-user_custom_key_update = None
-user_custom_key_policy = None
-user_custom_sso = None
-user_custom_ui_sso_sign_in_handler = None
+user_custom_key_update: _CustomKeyHook | None = None
+user_custom_key_policy: _CustomKeyHook | None = None
+user_custom_sso: _CustomSsoHandler | None = None
+user_custom_ui_sso_sign_in_handler: object | None = None
 use_background_health_checks = None
 use_shared_health_check = None
 use_queue = False
@@ -4546,9 +4553,13 @@ async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, respon
 
 
 async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
-    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    local_before: Final = _UNTYPED_VALUE.validate_python(
+        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    )
     shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
-    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    local_total: Final = _UNTYPED_VALUE.validate_python(
+        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    )
     if not isinstance(local_total, (int, float)):
         return
     if shared_total is not None and local_total != local_before and shared_total < local_total:
@@ -5879,8 +5890,16 @@ class _DbCallbackRegistration:
     displaced: tuple[tuple[str, object], ...] = ()
 
 
+class _CallbackList(Protocol):
+    def __contains__(self, value: object, /) -> bool: ...
+
+    def append(self, value: object, /) -> None: ...
+
+
 def _restore_displaced_callback(list_name: str, entry: object) -> None:
-    callback_list: Final = getattr(litellm, list_name)
+    callback_list: Final = require_attributes(
+        _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), _CallbackList, "append"
+    )
     if entry not in callback_list:
         callback_list.append(entry)
 
@@ -7375,9 +7394,11 @@ class ProxyConfig:
 
             custom_ui_sso_sign_in_handler: Final = general_settings.get("custom_ui_sso_sign_in_handler", None)
             if custom_ui_sso_sign_in_handler is not None:
-                user_custom_ui_sso_sign_in_handler = get_instance_fn(
-                    value=custom_ui_sso_sign_in_handler,
-                    config_file_path=config_file_path,
+                user_custom_ui_sso_sign_in_handler = _UNTYPED_VALUE.validate_python(
+                    get_instance_fn(
+                        value=custom_ui_sso_sign_in_handler,
+                        config_file_path=config_file_path,
+                    )
                 )
 
             if enterprise_proxy_config is not None:
@@ -8679,7 +8700,7 @@ class ProxyConfig:
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
-        general_settings_response: Final = responses[sections.index("general_settings")]
+        general_settings_response: Final[_ConfigParamValueRow | None] = responses[sections.index("general_settings")]
         general_settings_value: Final[Mapping[str, SettingsJsonValue]] = (
             self._prepared_db_settings_values("general_settings", general_settings_response.param_value)
             if general_settings_response is not None and general_settings_response.param_value is not None
@@ -11036,7 +11057,7 @@ async def async_data_generator(
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
-            response=response,
+            response=_UNTYPED_VALUE.validate_python(response),
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
@@ -16020,10 +16041,9 @@ async def _count_request_tokens(
 
     deployment: dict[str, Any] | None = None if routed is None else dict(routed)
     litellm_model_name = None
-    model_info: ModelMapInfo | None = None
+    model_info: Final = None if routed is None else routed.get("model_info", {})
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
-        model_info = deployment.get("model_info", {})
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
             "litellm_params": with_named_credential(
@@ -16201,7 +16221,7 @@ async def _count_request_tokens(
     if model_info is not None:
         custom_tokenizer = cast(
             CustomHuggingfaceTokenizer | None,
-            model_info.get("custom_tokenizer", None),
+            _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
@@ -20722,7 +20742,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
-    requested_value: Final[object] = data.field_value
+    requested_value: Final = _UNTYPED_VALUE.validate_python(data.field_value)
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)
 

@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
 
 import httpx
 from pydantic import TypeAdapter
@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
+    require_attributes,
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
@@ -167,18 +168,22 @@ def _strict_guardrail_modes_enabled() -> bool:
     return True if parsed is None else parsed
 
 
-def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None:
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def get_session_id_from_request_data(request_data: Mapping[str, object]) -> str | None:
     """Extract session_id from request data (litellm_session_id or metadata)."""
     session_id = request_data.get("litellm_session_id")
     if session_id:
         return str(session_id)
 
-    metadata: Final = request_data.get("metadata") or {}
+    metadata: Final = require_attributes(request_data.get("metadata") or {}, _SupportsGet, "get")
     session_id = metadata.get("session_id")
     if session_id:
         return str(session_id)
 
-    litellm_metadata: Final = request_data.get("litellm_metadata") or {}
+    litellm_metadata: Final = require_attributes(request_data.get("litellm_metadata") or {}, _SupportsGet, "get")
     session_id = litellm_metadata.get("session_id")
     if session_id:
         return str(session_id)
