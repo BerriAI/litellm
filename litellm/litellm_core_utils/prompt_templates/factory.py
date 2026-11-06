@@ -23,6 +23,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
@@ -4260,7 +4261,7 @@ class BedrockImageProcessor:
     ) -> BedrockContentBlock:
         """Synchronous image processing."""
 
-        if image_url.startswith("s3://"):
+        if is_s3_uri(image_url):
             return cls._create_s3_block(image_url, format, bucket_owner)
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
@@ -4283,7 +4284,7 @@ class BedrockImageProcessor:
     ) -> BedrockContentBlock:
         """Asynchronous image processing."""
 
-        if image_url.startswith("s3://"):
+        if is_s3_uri(image_url):
             return cls._create_s3_block(image_url, format, bucket_owner)
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
@@ -4452,7 +4453,7 @@ def _s3_bucket_owner(media: object, url: str) -> str | None:
     owner: Final = fields.get("bucket_owner") if fields is not None else None
     if owner is None or (isinstance(owner, str) and owner):
         return owner
-    if not url.startswith("s3://"):
+    if not is_s3_uri(url):
         return None
     raise litellm.BadRequestError(
         message=f"`bucket_owner` for {url} must be the AWS account id as a non-empty string, not {owner!r}.",

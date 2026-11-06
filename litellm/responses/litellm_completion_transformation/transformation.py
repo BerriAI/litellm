@@ -56,6 +56,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
+from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -295,7 +296,7 @@ def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _
 
 
 def _s3_bucket_owner_field(url: object, bucket_owner: object) -> Mapping[str, object]:
-    is_s3_url: Final = isinstance(url, str) and url.startswith("s3://")
+    is_s3_url: Final = isinstance(url, str) and is_s3_uri(url)
     return {"bucket_owner": bucket_owner} if is_s3_url and bucket_owner is not None else {}
 
 

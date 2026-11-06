@@ -357,6 +357,14 @@ def _batch_line_error(line_number: int, problem: str) -> BedrockError:
     return _client_error(f"Batch input file line {line_number} {problem}")
 
 
+class _S3MediaInBatchRecord(ValueError):
+    def __init__(self, s3_uris: tuple[str, ...]) -> None:
+        super().__init__(
+            f"has s3:// media URLs ({', '.join(s3_uris)}). "
+            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+        )
+
+
 def _decode_batch_input(content: str | bytes) -> str:
     if isinstance(content, str):
         return content.removeprefix("\ufeff")
@@ -392,12 +400,6 @@ def _batch_body_problem(record: Mapping[str, object]) -> str | None:
         return "has a body that is missing or not a JSON object"
     if "model" in body and not isinstance(body["model"], str):
         return "has a body.model that is not a string"
-    s3_uris: Final = s3_media_uris(body)
-    if s3_uris:
-        return (
-            f"has s3:// media URLs ({', '.join(s3_uris)}). "
-            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
-        )
     return None
 
 
@@ -1094,6 +1096,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
+            s3_uris: Final = s3_media_uris(openai_request_body)
+            if s3_uris:
+                raise _S3MediaInBatchRecord(s3_uris)
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
                 non_default_params={k: v for k, v in optional_params.items() if k != "requestMetadata"},
@@ -1169,6 +1174,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> _BedrockBatchRecord:
         try:
             return self._transform_openai_batch_record(idx, batch_input_line.record, target_model)
+        except _S3MediaInBatchRecord as e:
+            raise _batch_line_error(batch_input_line.line_number, str(e)) from e
         except _BATCH_RECORD_CONVERSION_ERRORS as e:
             raise _batch_line_error(
                 batch_input_line.line_number, f"could not be converted to a Bedrock batch record: {e}"
