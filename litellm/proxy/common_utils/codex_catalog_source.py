@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar
 
 import httpx
 
@@ -38,8 +38,9 @@ CODEX_RELEASE_FILE_URL: Final = (
 CODEX_FETCH_TIMEOUT_SECONDS: Final = 2.0
 CODEX_FETCH_FAILURE_TTL_SECONDS: Final = 3600.0
 CODEX_CACHED_VERSIONS: Final = 8
+CODEX_FETCHES_PER_MINUTE: Final = 6
 
-_RELEASE_VERSION: Final = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?")
+_RELEASE_VERSION: Final = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,10 +49,7 @@ class CodexStock:
     instructions: str
 
 
-@dataclass(frozen=True, slots=True)
-class _Remembered:
-    stock: CodexStock | None
-    expires_at: float
+_Value = TypeVar("_Value")
 
 
 class CodexReleaseClient(Protocol):
@@ -86,8 +84,11 @@ class CodexCatalogSource:
     """Codex's catalog per release: the one fetched from GitHub, else the bundled one.
 
     A fetched catalog is kept for good, a failed fetch is remembered for `failure_ttl` seconds so a blocked egress
-    costs one timeout per worker per version per hour, and only the `max_versions` most recently stored releases
-    are kept."""
+    costs one timeout per worker per version per hour. Fetched and failed versions are each capped at the
+    `max_versions` most recently stored, apart, so versions that fail never push out ones that were fetched.
+    Requests for a version already being fetched wait on that fetch, and a worker starts at most
+    `fetches_per_minute` fetches, serving the bundled catalog past that, so a caller cycling made-up versions
+    cannot turn every request into GitHub requests."""
 
     def __init__(
         self,
@@ -98,6 +99,7 @@ class CodexCatalogSource:
         timeout: float = CODEX_FETCH_TIMEOUT_SECONDS,
         failure_ttl: float = CODEX_FETCH_FAILURE_TTL_SECONDS,
         max_versions: int = CODEX_CACHED_VERSIONS,
+        fetches_per_minute: int = CODEX_FETCHES_PER_MINUTE,
     ) -> None:
         self._client: Final = client
         self._offline: Final = offline
@@ -105,17 +107,48 @@ class CodexCatalogSource:
         self._timeout: Final = timeout
         self._failure_ttl: Final = failure_ttl
         self._max_versions: Final = max_versions
-        self._remembered: Mapping[str, _Remembered] = MappingProxyType({})
+        self._fetches_per_minute: Final = fetches_per_minute
+        self._fetched: Mapping[str, CodexStock] = MappingProxyType({})
+        self._failed_until: Mapping[str, float] = MappingProxyType({})
+        self._in_flight: Mapping[str, asyncio.Future[CodexStock]] = MappingProxyType({})
+        self._fetch_starts: tuple[float, ...] = ()
 
     async def stock(self, client_version: str) -> CodexStock:
         if self._offline() or _RELEASE_VERSION.fullmatch(client_version) is None:
             return bundled_codex_stock()
-        remembered: Final = self._remembered.get(client_version)
-        if remembered is not None and self._clock() < remembered.expires_at:
-            return bundled_codex_stock() if remembered.stock is None else remembered.stock
-        fetched: Final = await self._fetch(client_version)
-        self._remember(client_version, fetched)
-        return bundled_codex_stock() if fetched is None else fetched
+        known: Final = self._fetched.get(client_version)
+        if known is not None:
+            return known
+        if self._clock() < self._failed_until.get(client_version, float("-inf")):
+            return bundled_codex_stock()
+        pending: Final = self._in_flight.get(client_version)
+        if pending is not None:
+            return await asyncio.shield(pending)
+        if not self._take_fetch_slot():
+            return bundled_codex_stock()
+        started: Final = asyncio.ensure_future(self._fetch_and_store(client_version))
+        self._in_flight = MappingProxyType({**self._in_flight, client_version: started})
+        return await asyncio.shield(started)
+
+    def _take_fetch_slot(self) -> bool:
+        now: Final = self._clock()
+        recent: Final = tuple(start for start in self._fetch_starts if now - start < 60)
+        allowed: Final = len(recent) < self._fetches_per_minute
+        self._fetch_starts = (*recent, now) if allowed else recent
+        return allowed
+
+    async def _fetch_and_store(self, version: str) -> CodexStock:
+        try:
+            fetched: Final = await self._fetch(version)
+        finally:
+            self._in_flight = MappingProxyType({key: task for key, task in self._in_flight.items() if key != version})
+        if fetched is None:
+            self._failed_until = _latest(
+                self._failed_until, version, self._clock() + self._failure_ttl, self._max_versions
+            )
+            return bundled_codex_stock()
+        self._fetched = _latest(self._fetched, version, fetched, self._max_versions)
+        return fetched
 
     async def _fetch(self, version: str) -> CodexStock | None:
         try:
@@ -131,11 +164,10 @@ class CodexCatalogSource:
             )
             return None
 
-    def _remember(self, version: str, stock: CodexStock | None) -> None:
-        expires_at: Final = float("inf") if stock is not None else self._clock() + self._failure_ttl
-        others: Final = tuple((key, value) for key, value in self._remembered.items() if key != version)
-        kept: Final = others[max(0, len(others) - self._max_versions + 1) :]
-        self._remembered = MappingProxyType(dict((*kept, (version, _Remembered(stock, expires_at)))))
+
+def _latest(stored: Mapping[str, _Value], version: str, value: _Value, limit: int) -> Mapping[str, _Value]:
+    others: Final = tuple((key, kept) for key, kept in stored.items() if key != version)
+    return MappingProxyType(dict((*others[max(0, len(others) - limit + 1) :], (version, value))))
 
 
 def _default_client() -> CodexReleaseClient:

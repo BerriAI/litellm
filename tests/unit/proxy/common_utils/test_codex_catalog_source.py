@@ -52,7 +52,12 @@ class _Clock:
 
 
 def _source(
-    github: _GitHub, clock: _Clock | None = None, *, failure_ttl: float = _TTL, max_versions: int = 8
+    github: _GitHub,
+    clock: _Clock | None = None,
+    *,
+    failure_ttl: float = _TTL,
+    max_versions: int = 8,
+    fetches_per_minute: int = 100,
 ) -> CodexCatalogSource:
     client: Final = httpx.AsyncClient(transport=httpx.MockTransport(github.handle))
     return CodexCatalogSource(
@@ -61,6 +66,7 @@ def _source(
         clock=clock or _Clock(),
         failure_ttl=failure_ttl,
         max_versions=max_versions,
+        fetches_per_minute=fetches_per_minute,
     )
 
 
@@ -175,6 +181,52 @@ async def test_only_the_most_recent_versions_are_kept() -> None:
     assert (kept_was_cached, len(github.requested) > fetches) == (True, True)
 
 
+async def test_versions_that_fail_never_push_out_a_fetched_one() -> None:
+    github: Final = _GitHub({"0.170.0": _release_files("gpt-from-0.170.0", "p")})
+    source: Final = _source(github, max_versions=2)
+    fetched: Final = await source.stock("0.170.0")
+    for made_up in ("9.9.1", "9.9.2", "9.9.3"):
+        await source.stock(made_up)
+    fetches: Final = len(github.requested)
+
+    assert await source.stock("0.170.0") is fetched
+    assert len(github.requested) == fetches
+
+
+async def test_a_worker_starts_at_most_its_fetch_budget_each_minute() -> None:
+    github: Final = _GitHub({})
+    clock: Final = _Clock()
+    source: Final = _source(github, clock, fetches_per_minute=2)
+    for made_up in ("9.9.1", "9.9.2", "9.9.3"):
+        await source.stock(made_up)
+    within_minute: Final = len(github.requested)
+    clock.now = 61
+    await source.stock("9.9.3")
+
+    assert (within_minute, len(github.requested)) == (4, 6), github.requested
+
+
+async def test_requests_for_a_version_being_fetched_share_that_fetch() -> None:
+    answer: Final = asyncio.Event()
+    files: Final = _release_files("gpt-from-0.170.0", "p")
+    requested: Final[list[str]] = []
+
+    async def slow_github(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        await answer.wait()
+        return httpx.Response(200, content=files[str(request.url).rsplit("/", 1)[1]])
+
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(slow_github))
+    source: Final = CodexCatalogSource(lambda: client, offline=lambda: False, clock=_Clock())
+    waiting: Final = [asyncio.ensure_future(source.stock("0.170.0")) for _ in range(5)]
+    await asyncio.sleep(0)
+    answer.set()
+    served: Final = await asyncio.gather(*waiting)
+
+    assert [list(stock.models) for stock in served] == [["gpt-from-0.170.0"]] * 5
+    assert len(requested) == 2, requested
+
+
 async def test_offline_mode_never_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
     github: Final = _GitHub({"0.170.0": _release_files("gpt-from-0.170.0", "p")})
@@ -185,7 +237,7 @@ async def test_offline_mode_never_fetches(monkeypatch: pytest.MonkeyPatch) -> No
     assert (stock, github.requested) == (bundled_codex_stock(), [])
 
 
-@pytest.mark.parametrize("client_version", ["../../main", "0.170.0/../../x", "latest", ""])
+@pytest.mark.parametrize("client_version", ["../../main", "0.170.0/../../x", "latest", "", "\u0660.\u0661.\u0662"])
 async def test_a_version_that_is_no_release_tag_is_never_fetched(client_version: str) -> None:
     github: Final = _GitHub({})
 
