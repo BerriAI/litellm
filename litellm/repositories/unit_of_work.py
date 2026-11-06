@@ -32,7 +32,8 @@ def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) 
 
 _ZERO_SPEND_RESET_SET: Final = (
     " SET spend = CASE WHEN ABS(spend - $3::text::double precision) <= $5::text::double precision"
-    " THEN 0 ELSE spend - $3::text::double precision END, budget_reset_at = $2::timestamp"
+    " THEN 0 ELSE spend - $3::text::double precision END, budget_reset_at = $2::timestamp,"
+    " updated_at = (NOW() AT TIME ZONE 'UTC')"
 )
 _ZERO_SPEND_RESET_WHERE: Final = " AND budget_reset_at IS NOT DISTINCT FROM $4::timestamp"
 _KEY_ZERO_SPEND_RESET_SQL: Final = (

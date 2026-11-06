@@ -178,9 +178,10 @@ def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
         }[entity]
         with psycopg.connect(os.environ["DATABASE_URL"]) as gate:
             gate.execute(
-                sql.SQL("UPDATE {} SET spend = %s, budget_reset_at = now() - interval '1 day' WHERE {} = %s").format(
-                    sql.Identifier(table), sql.Identifier(column)
-                ),
+                sql.SQL(
+                    "UPDATE {} SET spend = %s, budget_reset_at = now() - interval '1 day',"
+                    " updated_at = now() - interval '1 day' WHERE {} = %s"
+                ).format(sql.Identifier(table), sql.Identifier(column)),
                 (spend, identity),
             )
             gate.commit()
@@ -214,9 +215,10 @@ def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
                     eventually(lambda: _blocked_reset_updates(table), lambda count: count == 0, seconds=30)
                     with psycopg.connect(os.environ["DATABASE_URL"]) as observer:
                         result: Final = observer.execute(
-                            sql.SQL("SELECT spend, budget_reset_at > now() FROM {} WHERE {} = %s").format(
-                                sql.Identifier(table), sql.Identifier(column)
-                            ),
+                            sql.SQL(
+                                "SELECT spend, budget_reset_at > now(), updated_at > now() - interval '1 hour'"
+                                " FROM {} WHERE {} = %s"
+                            ).format(sql.Identifier(table), sql.Identifier(column)),
                             (identity,),
                         ).fetchall()
                     parameter, info = {
@@ -227,7 +229,7 @@ def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
                     response: Final = replica.request("GET", f"/{entity}/info?{parameter}={identity}")
                     assert response.status_code == 200, response.text
                     assert response.json()[info]["spend"] == pytest.approx(expected_spend, rel=1e-14, abs=0.0)
-                    assert result == [(expected_spend, True)], result
+                    assert result == [(expected_spend, True, True)], result
                     assert peer.get(RESET_LEASE_KEY) == PEER_POD_LEASE.encode()
                 finally:
                     gate.rollback()
@@ -281,3 +283,38 @@ def test_stale_zero_reset_cannot_erase_another_workers_rollover(gateway: Gateway
         response: Final = gateway.request("GET", f"/{entity}/info?{parameter}={identity}")
         assert response.status_code == 200, response.text
         assert response.json()[info]["spend"] == pytest.approx(carry, rel=1e-14, abs=0.0)
+
+
+@pytest.mark.parametrize("entity", ("user", "team"))
+def test_reset_starts_the_window_of_a_row_that_never_had_a_reset_time(gateway: Gateway, entity: str) -> None:
+    next_reset: Final = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=1)
+    with gateway.scenario() as scenario:
+        identity: Final = (
+            scenario.user(max_budget=100.0, budget_duration="1d")
+            if entity == "user"
+            else scenario.team(max_budget=100.0, budget_duration="1d")
+        )
+        table, column, info = {
+            "user": ("LiteLLM_UserTable", "user_id", "user_info"),
+            "team": ("LiteLLM_TeamTable", "team_id", "team_info"),
+        }[entity]
+        with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+            connection.execute(
+                sql.SQL("UPDATE {} SET spend = 40, budget_reset_at = NULL WHERE {} = %s").format(
+                    sql.Identifier(table), sql.Identifier(column)
+                ),
+                (identity,),
+            )
+
+        async def reset() -> None:
+            async with Prisma() as client:
+                async with spend_reset_unit_of_work(client.batch_) as writes:
+                    (writes.users if entity == "user" else writes.teams).queue_spend_reset(
+                        identity, next_reset, 40.0, None
+                    )
+
+        asyncio.run(reset())
+        response: Final = gateway.request("GET", f"/{entity}/info?{column}={identity}")
+        assert response.status_code == 200, response.text
+        assert response.json()[info]["spend"] == 0.0
+        assert response.json()[info]["budget_reset_at"] is not None
