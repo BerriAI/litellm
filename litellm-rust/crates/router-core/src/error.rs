@@ -330,7 +330,6 @@ pub enum FailureKind {
     Other,
 }
 
-/// A failure kind serializes as litellm's exception class name (`RateLimitError`).
 /// An opaque value the host hands through the router unchanged, such as the original Python
 /// exception or response object.
 #[derive(Clone)]

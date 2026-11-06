@@ -17,7 +17,7 @@ use litellm_router_core::{
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Default)]
 struct ScriptedHost {
@@ -1828,20 +1828,36 @@ async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_
         .call(Op::from("acompletion"), request())
         .await
         .unwrap();
-    let events = host.events.lock();
-    let tagged: Vec<(String, String)> = events
+    let tags: Value = host
+        .events
+        .lock()
         .iter()
-        .map(|event| {
-            let name = format!("{event:?}")
-                .split([' ', '{', '('])
-                .next()
-                .unwrap()
-                .to_owned();
-            let json = serde_json::to_value(event).unwrap();
-            (name, json["event"].as_str().unwrap().to_owned())
-        })
+        .map(|event| serde_json::to_value(event).unwrap()["event"].clone())
         .collect();
-    let (names, tags): (Vec<String>, Vec<String>) = tagged.into_iter().unzip();
-    assert_eq!(tags, names);
-    assert!(tags.contains(&"Fallback".to_owned()) && tags.contains(&"Retry".to_owned()));
+    assert_eq!(
+        tags,
+        json!([
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryBudget",
+            "RetryLogged",
+            "Retry",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryLogged",
+            "FallingBack",
+            "RetryLogged",
+            "Fallback",
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "Succeeded",
+            "FallbackDone",
+        ])
+    );
 }
