@@ -7,7 +7,12 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
+from litellm.llms.cohere.embed.transformation import (
+    CohereEmbeddingConfig,
+    CohereEmbeddingRowShape,
+    CohereImageTokenBilling,
+    cohere_embedding_response,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CallTypes, EmbeddingResponse
 
@@ -108,16 +113,48 @@ def test_cohere_embedding_response_counts_tokens_when_provider_usage_is_missing(
     assert response.usage.total_tokens == response.usage.prompt_tokens
 
 
-def test_cohere_embedding_usage_includes_text_and_image_token_details():
-    config: Final = CohereEmbeddingConfig()
-    usage: Final = config._calculate_usage(
-        input=["hello"],
-        encoding=litellm.encoding,
-        meta={"billed_units": {"input_tokens": 5, "images": 2}},
+def test_cohere_embedding_fallback_counts_special_token_text_as_plain_text() -> None:
+    text: Final = "before <|endoftext|> after"
+    response: Final = CohereEmbeddingConfig().transform_embedding_response(
+        model="embed-english-v3.0",
+        raw_response=httpx.Response(200, json={"embeddings": {"float": [[0.1]]}}),
+        model_response=EmbeddingResponse(),
+        logging_obj=_logging_obj([text]),
+        api_key="test-key",
+        request_data={"texts": [text]},
+        optional_params={},
+        litellm_params={},
     )
+
+    assert response.usage.prompt_tokens == len(litellm.encoding.encode(text, disallowed_special=()))
+
+
+@pytest.mark.parametrize("image_key", ["images", "image_tokens"])
+def test_cohere_embedding_usage_includes_text_and_image_token_details(image_key: str) -> None:
+    usage: Final = cohere_embedding_response(
+        {"embeddings": {"float": [[0.1]]}, "meta": {"billed_units": {"input_tokens": 5, image_key: 2}}},
+        "embed-english-v3.0",
+        litellm.encoding,
+        ["hello"],
+        CohereImageTokenBilling.SEPARATE_FROM_INPUT_TOKENS,
+        CohereEmbeddingRowShape.OPENAI,
+    ).usage
 
     assert usage.prompt_tokens == 7
     assert (usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens) == (5, 2)
+
+
+def test_cohere_embedding_usage_folded_image_tokens_count_input_tokens_only() -> None:
+    usage: Final = cohere_embedding_response(
+        {"embeddings": {"float": [[0.1]]}, "meta": {"billed_units": {"input_tokens": 24, "image_tokens": 6}}},
+        "embed-v-4-0",
+        litellm.encoding,
+        [],
+        CohereImageTokenBilling.FOLDED_INTO_INPUT_TOKENS,
+        CohereEmbeddingRowShape.OPENAI,
+    ).usage
+
+    assert (usage.prompt_tokens, usage.total_tokens, usage.prompt_tokens_details) == (24, 24, None)
 
 
 def test_cohere_embedding_error_class_preserves_status_and_message():

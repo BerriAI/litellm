@@ -5,7 +5,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 
 class ElevenLabsSTTWord(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     text: str
     type: Literal["word", "spacing", "audio_event"]
@@ -16,7 +16,7 @@ class ElevenLabsSTTWord(BaseModel):
 
 
 class ElevenLabsSTTChunk(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     text: str = ""
     language_code: str | None = None
@@ -27,7 +27,7 @@ class ElevenLabsSTTChunk(BaseModel):
 
 
 class ElevenLabsSTTMultichannelResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
     transcripts: tuple[ElevenLabsSTTChunk, ...]
     audio_duration_secs: float | None = None

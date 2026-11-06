@@ -39,7 +39,6 @@ _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=Config
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 _CHANNELS: Final = TypeAdapter(int)
 _DIARIZATION_KEYS: Final = frozenset(("diarize", "use_multi_channel", "multichannel_output_style"))
-# OpenAI parameter names that ElevenLabs spells differently
 _ELEVENLABS_PARAM_NAMES: Final = MappingProxyType({"language": "language_code"})
 
 
@@ -153,7 +152,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return response
 
         except Exception as e:
-            raise ValueError(f"Error transforming ElevenLabs response: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming ElevenLabs response: {e}") from None
 
     def get_complete_url(
         self,

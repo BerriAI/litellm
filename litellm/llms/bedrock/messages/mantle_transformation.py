@@ -14,12 +14,12 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (

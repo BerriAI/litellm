@@ -15,26 +15,37 @@ Redis.
 """
 
 import asyncio
+import base64
+import copy
+import io
 import json
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Any, Dict, Final
 
 import pytest
+import soundfile as sf
+from fastapi import HTTPException
+from PIL import Image
 
+from litellm import get_model_info, token_counter
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, estimate_image_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _AUDIO_BYTES_PER_TOKEN,
+    DEFAULT_AUDIO_TOKEN_ESTIMATE,
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
     RateLimitedModel,
-    _AUDIO_BYTES_PER_TOKEN,
-    PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
-)
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _call_id_from_callback_kwargs,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.llms.openai import (
@@ -3050,7 +3061,7 @@ def test_retry_success_charges_released_project_io_reservations(
     stash.itpm_reserved_scopes = frozenset({itpm_scope})
     stash.otpm_reserved_tokens = 60
     stash.otpm_reserved_scopes = frozenset({otpm_scope})
-    stash.reservation_released = True
+    stash.mark_reservation_released()
 
     operations = handler._build_io_token_reservation_ops(
         {},
@@ -3775,3 +3786,612 @@ def test_reservation_counts_a_compaction_item_by_its_summary(rate_limiter):
     ) == handler._estimate_input_and_output_tokens(
         data={"model": "gpt-4o", "input": _COMPACTED_INPUT[2:], "max_output_tokens": 1}, call_type="aresponses"
     )
+
+
+_QUOTA_TEXT: Final = "a" * 400
+_QUOTA_JSON_TEXT: Final = '{"type":"input_image","image_url":"data:image/png;base64,AAAA"}'
+
+
+@pytest.mark.parametrize(
+    ("call_type", "request_data", "expected"),
+    [
+        ("acompletion", {"messages": [{"role": "user", "content": _QUOTA_TEXT}], "max_tokens": 16}, (100, 16)),
+        ("acompletion", {"messages": [{"role": "user", "content": _QUOTA_JSON_TEXT}], "max_tokens": 16}, (15, 16)),
+        (
+            "anthropic_messages",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "t",
+                                "content": [{"type": "text", "text": _QUOTA_TEXT}],
+                            }
+                        ],
+                    }
+                ],
+                "max_tokens": 16,
+            },
+            (0, 16),
+        ),
+        (
+            "acompletion",
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {"id": "t", "type": "function", "function": {"name": "f", "arguments": _QUOTA_TEXT}}
+                        ],
+                    }
+                ],
+                "max_tokens": 16,
+            },
+            (0, 16),
+        ),
+        ("aresponses", {"input": _QUOTA_TEXT, "max_output_tokens": 16}, (100, 16)),
+        ("aresponses", {"input": _QUOTA_TEXT, "instructions": "b" * 400, "max_output_tokens": 16}, (100, 16)),
+        (
+            "aresponses",
+            {"input": [{"role": "user", "content": _QUOTA_TEXT}], "instructions": "b" * 400, "max_output_tokens": 16},
+            (107, 16),
+        ),
+        (
+            "aresponses",
+            {
+                "input": [
+                    {
+                        "type": "file_search_call",
+                        "id": "f",
+                        "status": "completed",
+                        "queries": ["q"],
+                        "results": [
+                            {
+                                "file_id": "file_1",
+                                "filename": "result.txt",
+                                "attributes": {},
+                                "score": 1,
+                                "text": _QUOTA_TEXT,
+                            }
+                        ],
+                    }
+                ],
+                "max_output_tokens": 16,
+            },
+            (146, 16),
+        ),
+        (
+            "aresponses",
+            {
+                "input": [{"type": "custom_tool_call_output", "call_id": "t", "output": _QUOTA_JSON_TEXT}],
+                "max_output_tokens": 16,
+            },
+            (32, 16),
+        ),
+        ("aresponses", {"input": "", "instructions": "b" * 400}, (0, 0)),
+        ("aembedding", {"input": [_QUOTA_TEXT]}, (100, 0)),
+        ("atext_completion", {"prompt": [_QUOTA_TEXT], "max_tokens": 16}, (100, 16)),
+    ],
+)
+def test_media_correction_preserves_exact_non_media_reservations(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+    call_type: str,
+    request_data: dict[str, object],
+    expected: tuple[int, int],
+) -> None:
+    handler, _ = rate_limiter
+    assert handler._estimate_input_and_output_tokens(request_data, call_type=call_type) == expected
+
+
+def _quota_media_payload(kind: str, compressed: bool) -> str:
+    output: Final = io.BytesIO()
+    if kind == "image":
+        Image.new("RGB", (1024, 1024)).save(output, format="PNG", compress_level=9 if compressed else 0)
+    else:
+        sample_rate: Final = 8000 if compressed else 48000
+        with sf.SoundFile(output, "w", samplerate=sample_rate, channels=1, format="WAV") as audio:
+            audio.buffer_write(b"\0" * (sample_rate * 2), dtype="int16")
+    return base64.b64encode(output.getvalue()).decode()
+
+
+def _quota_media_request(kind: str, payload: str, call_type: str) -> dict[str, object]:
+    block: Final = (
+        {"type": "input_audio", "input_audio": {"data": payload, "format": "wav"}}
+        if kind == "audio"
+        else {"type": "input_image", "image_url": "data:image/png;base64," + payload}
+        if call_type == "aresponses"
+        else {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": payload}}
+        if call_type == "anthropic_messages"
+        else {"type": "image_url", "image_url": {"url": "data:image/png;base64," + payload}}
+    )
+    content: Final = (
+        [{"type": "tool_result", "tool_use_id": "t", "content": [block]}]
+        if call_type == "anthropic_messages"
+        else [block]
+    )
+    field: Final = "input" if call_type == "aresponses" else "messages"
+    return {
+        "model": "gpt-6-astra",
+        field: [{"role": "user", "content": content}],
+        "max_tokens": 16,
+        "max_output_tokens": 16,
+    }
+
+
+@pytest.mark.parametrize(
+    ("kind", "call_type"),
+    [
+        ("image", "acompletion"),
+        ("image", "aresponses"),
+        ("image", "anthropic_messages"),
+        ("audio", "acompletion"),
+        ("audio", "aresponses"),
+    ],
+)
+def test_media_reservation_is_independent_of_encoding_and_preserves_request(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str, call_type: str
+) -> None:
+    handler, _ = rate_limiter
+    compressed: Final = _quota_media_request(kind, _quota_media_payload(kind, True), call_type)
+    uncompressed: Final = _quota_media_request(kind, _quota_media_payload(kind, False), call_type)
+    original: Final = copy.deepcopy(uncompressed)
+    estimate: Final = handler._estimate_input_and_output_tokens(uncompressed, call_type=call_type)
+    assert estimate == handler._estimate_input_and_output_tokens(compressed, call_type=call_type)
+    assert estimate[0] > 0 and estimate[1] == 16
+    assert uncompressed == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+@pytest.mark.parametrize("limit", [1000, 20000])
+async def test_media_pre_call_rejects_tight_quota_and_reserves_sufficient_quota(
+    rate_limiter: tuple[RateLimitHandler, DualCache], call_type: str, limit: int
+) -> None:
+    handler, cache = rate_limiter
+    request: Final = {
+        key: value
+        for key, value in _quota_media_request("image", _quota_media_payload("image", True), call_type).items()
+        if key not in ("max_tokens", "max_output_tokens")
+    }
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-media-quota"), tpm_limit=limit)
+    if limit == 1000:
+        with pytest.raises(HTTPException) as error:
+            await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type=call_type)
+        assert error.value.status_code == 429
+        return
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type=call_type)
+    stash: Final = get_request_stash()
+    assert stash is not None
+    expected: Final = handler._estimate_input_and_output_tokens(
+        request, call_type=call_type, min_configured_tpm_limit=limit
+    )
+    assert stash.reserved_tokens == sum(expected)
+    assert expected[0] > 1000 and expected[1] >= expected[0]
+
+
+_EMBEDDING_MODEL: Final = "gemini-embedding-2"
+_EMBEDDING_CAPTION: Final = "a red bicycle leaning on a wall"
+
+
+def _embedding_media_uri(kind: str, compressed: bool) -> str:
+    mime: Final = "image/png" if kind == "image" else "audio/wav"
+    return f"data:{mime};base64,{_quota_media_payload(kind, compressed)}"
+
+
+@pytest.mark.parametrize("kind", ["image", "audio"])
+@pytest.mark.parametrize(
+    "shape",
+    ["string", "list", "file_block", "with_caption", "combined"],
+)
+def test_embedding_media_input_is_estimated_independently_of_encoding(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str, shape: str
+) -> None:
+    handler, _ = rate_limiter
+
+    def embedding_request(uri: str) -> dict[str, object]:
+        shapes: Final[dict[str, object]] = {
+            "string": uri,
+            "list": [uri],
+            "file_block": [{"type": "file", "file": {"file_data": uri}}],
+            "with_caption": [_EMBEDDING_CAPTION, uri],
+            "combined": [[_EMBEDDING_CAPTION, uri]],
+        }
+        return {"model": _EMBEDDING_MODEL, "input": shapes[shape]}
+
+    uncompressed: Final = embedding_request(_embedding_media_uri(kind, False))
+    original: Final = copy.deepcopy(uncompressed)
+    estimate: Final = handler._estimate_input_and_output_tokens(uncompressed, call_type="aembedding")
+    assert estimate == handler._estimate_input_and_output_tokens(
+        embedding_request(_embedding_media_uri(kind, True)), call_type="aembedding"
+    )
+    assert 0 < estimate[0] < 2_000 and estimate[1] == 0
+    assert uncompressed == original
+
+
+@pytest.mark.parametrize("kind", ["image", "audio"])
+def test_embedding_media_input_costs_the_same_as_chat_media(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str
+) -> None:
+    handler, _ = rate_limiter
+    uri: Final = _embedding_media_uri(kind, False)
+    chat_block: Final = (
+        {"type": "image_url", "image_url": {"url": uri}}
+        if kind == "image"
+        else {"type": "input_audio", "input_audio": {"data": _quota_media_payload(kind, False), "format": "wav"}}
+    )
+    chat_input_tokens, _ = handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "messages": [{"role": "user", "content": [chat_block]}]},
+        call_type="acompletion",
+    )
+    caption_tokens, _ = handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION]}, call_type="aembedding"
+    )
+
+    assert handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": uri}, call_type="aembedding"
+    ) == (chat_input_tokens, 0)
+    assert handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, uri]}, call_type="aembedding"
+    ) == (caption_tokens + chat_input_tokens, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+async def test_project_token_limit_admits_image_embedding_and_still_rejects_long_text(
+    rate_limiter: tuple[RateLimitHandler, DualCache], limit_field: str
+) -> None:
+    handler, cache = rate_limiter
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-embedding-image-{limit_field}"),
+        project_id=f"proj-embedding-image-{limit_field}",
+        project_metadata={limit_field: {_EMBEDDING_MODEL: 75_000}},
+    )
+    image_uri: Final = _embedding_media_uri("image", False)
+    long_text: Final = "word " * 80_000
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": _EMBEDDING_MODEL, "input": image_uri},
+        call_type="aembedding",
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": _EMBEDDING_MODEL, "input": long_text},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+    assert len(image_uri) > len(long_text)
+
+
+_EMBEDDING_FILE_MIMES: Final = MappingProxyType({"pdf": "application/pdf", "video": "video/mp4"})
+
+
+def _embedding_file_uri(kind: str) -> str:
+    return f"data:{_EMBEDDING_FILE_MIMES[kind]};base64,{base64.b64encode(bytes(range(256)) * 1200).decode()}"
+
+
+def _embedding_uri(kind: str) -> str:
+    return _embedding_file_uri(kind) if kind in _EMBEDDING_FILE_MIMES else _embedding_media_uri(kind, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize("kind", ["pdf", "video"])
+@pytest.mark.parametrize("shape", ["data_uri", "file_block"])
+async def test_project_token_limit_admits_document_embedding_up_to_the_model_input_limit(
+    rate_limiter: tuple[RateLimitHandler, DualCache], limit_field: str, kind: str, shape: str
+) -> None:
+    handler, cache = rate_limiter
+    uri: Final = _embedding_file_uri(kind)
+    model_input_limit: Final = get_model_info(_EMBEDDING_MODEL)["max_input_tokens"]
+    assert isinstance(model_input_limit, int) and len(uri) // 4 > 75_000 > model_input_limit
+
+    def project_auth(limit: int) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(f"sk-embedding-{kind}-{shape}-{limit_field}-{limit}"),
+            project_id=f"proj-embedding-{kind}-{shape}-{limit_field}-{limit}",
+            project_metadata={limit_field: {_EMBEDDING_MODEL: limit}},
+        )
+
+    item: Final = uri if shape == "data_uri" else {"type": "file", "file": {"file_data": uri}}
+    request: Final = {"model": _EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, item]}
+    await handler.async_pre_call_hook(
+        user_api_key_dict=project_auth(75_000), cache=cache, data=dict(request), call_type="aembedding"
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=project_auth(model_input_limit // 2),
+            cache=cache,
+            data=dict(request),
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+_TEXT_ONLY_EMBEDDING_MODEL: Final = "text-embedding-3-small"
+
+
+@pytest.mark.parametrize("kind", ["image", "audio", "pdf", "video"])
+def test_text_only_embedding_model_counts_data_uri_as_text(
+    rate_limiter: tuple[RateLimitHandler, DualCache], kind: str
+) -> None:
+    handler, _ = rate_limiter
+    uri: Final = _embedding_uri(kind)
+
+    assert handler._estimate_input_and_output_tokens(
+        {"model": _TEXT_ONLY_EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, uri]}, call_type="aembedding"
+    ) == handler._estimate_input_and_output_tokens(
+        {"model": _TEXT_ONLY_EMBEDDING_MODEL, "input": [_EMBEDDING_CAPTION, "x" * len(uri)]},
+        call_type="aembedding",
+    )
+
+
+def _project_limited_embedding_call(
+    limit_field: str, backends: tuple[str, ...], kind: str = "image"
+) -> tuple[RateLimitHandler, DualCache, UserAPIKeyAuth, dict[str, object]]:
+    cache: Final = DualCache()
+    handler: Final = RateLimitHandler(
+        internal_usage_cache=InternalUsageCache(cache), media_model_resolver=lambda _model, _team_id: backends
+    )
+    scope: Final = f"{limit_field}-{kind}-{'-'.join(backends)}"
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-embedding-backends-{scope}"),
+        project_id=f"proj-embedding-backends-{scope}",
+        project_metadata={limit_field: {"team-embedder": 75_000}},
+    )
+    return handler, cache, auth, {"model": "team-embedder", "input": _embedding_uri(kind)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize(
+    ("backends", "kind"),
+    [
+        ((_TEXT_ONLY_EMBEDDING_MODEL,), "image"),
+        ((_EMBEDDING_MODEL, _TEXT_ONLY_EMBEDDING_MODEL), "image"),
+        (("voyage/voyage-multimodal-3.5",), "image"),
+        (("oci/cohere.embed-v4.0",), "image"),
+        (("bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",), "image"),
+        (("bedrock/twelvelabs.marengo-embed-3-0-v1:0",), "image"),
+        (("bedrock/amazon.nova-2-multimodal-embeddings-v1:0",), "pdf"),
+    ],
+    ids=["text", "mixed", "voyage", "oci", "marengo_2_7", "marengo_3", "nova_pdf"],
+)
+async def test_project_token_limit_rejects_embedding_media_a_backend_reads_as_text(
+    limit_field: str, backends: tuple[str, ...], kind: str
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, backends, kind)
+
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="aembedding")
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        _EMBEDDING_MODEL,
+        "bedrock/amazon.titan-embed-image-v1",
+        "bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+    ],
+    ids=["gemini", "titan", "nova_async_invoke"],
+)
+async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an_image_backend(
+    limit_field: str, backend: str
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, (backend,))
+
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="aembedding")
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**request, "input": "word " * 100_000},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+def _malformed_embedding_uri(shape: str) -> str:
+    payload: Final = _quota_media_payload("image", False)
+    whole_quanta: Final = payload.rstrip("=")[: len(payload.rstrip("=")) // 4 * 4]
+    words: Final = "word " * 100_000
+    return {
+        "no_comma": f"data:audio/wav;base64{words}",
+        "text_payload": f"data:image/png;base64,{words}",
+        "no_base64_marker": f"data:image/png,{payload}",
+        "header_past_256_chars": f"data:image/png;{'x' * 300};base64,{payload}",
+        "noncanonical_padding": f"data:image/png;base64,{whole_quanta}AB==",
+        "padding_mid_payload": f"data:image/png;base64,{whole_quanta}AA==AAAA",
+        "length_not_multiple_of_4": f"data:image/png;base64,{whole_quanta}A",
+    }[shape]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "no_comma",
+        "text_payload",
+        "no_base64_marker",
+        "header_past_256_chars",
+        "noncanonical_padding",
+        "padding_mid_payload",
+        "length_not_multiple_of_4",
+    ],
+)
+async def test_project_token_limit_counts_a_malformed_data_uri_as_text(
+    rate_limiter: tuple[RateLimitHandler, DualCache], shape: str
+) -> None:
+    handler, cache = rate_limiter
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-embedding-malformed-{shape}"),
+        project_id=f"proj-embedding-malformed-{shape}",
+        project_metadata={"model_tpm_limit": {_EMBEDDING_MODEL: 75_000}},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": _EMBEDDING_MODEL, "input": _malformed_embedding_uri(shape)},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["cohere/embed-v4.0", "cohere.embed-v4:0"], ids=["cohere", "bedrock_cohere"])
+async def test_project_token_limit_counts_a_mixed_batch_as_text_when_the_backend_types_the_whole_batch(
+    backend: str,
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call("model_tpm_limit", (backend,))
+    image_uri: Final = request["input"]
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth, cache=cache, data={**request, "input": [image_uri, image_uri]}, call_type="aembedding"
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**request, "input": [image_uri, _EMBEDDING_CAPTION]},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_project_itpm_limit_reserves_media_tokens_for_an_image_embedding(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+) -> None:
+    handler, cache = rate_limiter
+    image_uri: Final = _embedding_media_uri("image", False)
+    image_tokens, _ = handler._estimate_input_and_output_tokens(
+        {"model": _EMBEDDING_MODEL, "input": image_uri}, call_type="aembedding"
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-embedding-image-itpm-media"),
+        project_id="proj-embedding-image-itpm-media",
+        project_metadata={"model_itpm_limit": {_EMBEDDING_MODEL: image_tokens // 2}},
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": _EMBEDDING_MODEL, "input": _EMBEDDING_CAPTION},
+        call_type="aembedding",
+    )
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": _EMBEDDING_MODEL, "input": image_uri},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_ptu_pre_call_weights_media_input_and_output() -> None:
+    cache: Final = DualCache()
+    ceiling: Final = PTUTeamCeiling(
+        model_group="gpt-6-astra", tpm_limit=10000, output_to_input_ratio=4, cached_input_ratio=0
+    )
+
+    def resolve_ceiling(team: str, model: str) -> PTUTeamCeiling | None:
+        return ceiling if (team, model) == ("test-team", "gpt-6-astra") else None
+
+    handler: Final = RateLimitHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve_ceiling
+    )
+    request: Final = _quota_media_request("image", _quota_media_payload("image", True), "acompletion")
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-media-ptu"), team_id="test-team"),
+        cache=cache,
+        data=request,
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert (
+        stash.ptu_reserved_tokens
+        == estimate_image_tokens("gpt-6-astra", "data:image/png;base64," + _quota_media_payload("image", True)) + 4 * 16
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_fallback_keeps_legacy_audio_estimate_and_output_policy(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+) -> None:
+    handler, cache = rate_limiter
+    unsupported: Final = {"type": "unsupported_content"}
+    with pytest.raises(UnsupportedContentTypeError):
+        token_counter(model="gpt-6-astra", messages=[{"role": "user", "content": [unsupported]}])
+    request: Final = {
+        "model": "gpt-6-astra",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    unsupported,
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": _quota_media_payload("audio", True), "format": "wav"},
+                    },
+                ],
+            }
+        ],
+    }
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-media-project"),
+        project_id="media-project",
+        project_metadata={"model_itpm_limit": {"gpt-6-astra": 1000}, "model_otpm_limit": {"gpt-6-astra": 1000}},
+    )
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=request, call_type="acompletion")
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.itpm_reserved_tokens == DEFAULT_AUDIO_TOKEN_ESTIMATE
+    assert stash.otpm_reserved_tokens == 1
+
+
+@pytest.mark.asyncio
+async def test_single_anthropic_image_exceeds_tight_quota_with_explicit_output_cap(
+    rate_limiter: tuple[RateLimitHandler, DualCache],
+) -> None:
+    handler, cache = rate_limiter
+    request: Final = {
+        "model": "anthropic/claude-haiku-5-5",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": _quota_media_payload("image", True),
+                        },
+                    }
+                ],
+            }
+        ],
+        "max_tokens": 64,
+    }
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-claude-media-quota"), tpm_limit=500),
+            cache=cache,
+            data=request,
+            call_type="anthropic_messages",
+        )
+    assert error.value.status_code == 429

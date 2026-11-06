@@ -1,0 +1,6 @@
+- Dev-only crate that starts real Redis for tests. Never a dependency outside `[dev-dependencies]`
+- Same shape as `db-testing`: one container per test, a handle that removes it on drop
+- The host port is fixed at start so `restart` keeps the same URL and a client can reconnect to it
+- `RedisCluster` runs 3 masters in one container. Each node listens on the same port inside and outside and announces 127.0.0.1, so MOVED redirects work from the test process
+- Outages come from the container (`restart`, `freeze` / `thaw`), never `DEBUG`, which the official image disables
+- No env gate that makes a test pass without Redis. A test that can't start its container fails

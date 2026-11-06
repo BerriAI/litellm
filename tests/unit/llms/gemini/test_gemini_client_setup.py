@@ -12,7 +12,7 @@ def mock_gemini_api_key(monkeypatch):
 
 def test_gemini_completion():
     response = completion(
-        model="gemini/gemini-2.0-flash-exp-image-generation",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": "Test message"}],
         mock_response="Test Message",
     )

@@ -67,7 +67,7 @@ impl BaseCache for TestCache {
     }
 
     fn set_cache(&self, _: &str, _: Self::Value, _: &ExactCacheContext) -> Result<(), Error> {
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(None))
     }
 
     async fn async_set_cache(
@@ -77,7 +77,7 @@ impl BaseCache for TestCache {
         context: ExactCacheContext,
     ) -> Result<(), Error> {
         if key == "unavailable" {
-            return Err(Error::Unavailable);
+            return Err(Error::Unavailable(None));
         }
         self.writes
             .lock()
@@ -118,7 +118,7 @@ impl BaseCache for RecordingCounter {
 impl CounterCache for RecordingCounter {
     fn increment_cache(&self, key: &str, amount: f64, _: ExactCacheContext) -> Result<f64, Error> {
         if key == "unavailable" {
-            return Err(Error::Unavailable);
+            return Err(Error::Unavailable(None));
         }
         let mut total = self.total.lock().unwrap();
         *total += amount;
@@ -226,7 +226,7 @@ async fn default_batch_operations_use_async_writes_and_stop_on_failure(cache: Te
                 context.clone(),
             )
             .await,
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(None))
     );
     assert_eq!(
         *cache.writes.lock().unwrap(),
@@ -323,7 +323,7 @@ async fn default_increment_pipeline_stops_at_the_first_failure() {
                 operation("skipped", 1.0, None),
             ])
             .await,
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(None))
     );
     let keys = cache
         .increments
