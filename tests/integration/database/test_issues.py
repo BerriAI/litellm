@@ -37,7 +37,7 @@ from litellm.types.proxy.issues import (
     IssueSignalList,
 )
 from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
-from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertObservation, UsageAlertRuleInput
 
 
 def _issue(cohort: IssueCohort) -> IssueInput:
@@ -621,6 +621,91 @@ async def _family_database(db: ManagementDatabase) -> AsyncGenerator[Prisma]:
                 await database.disconnect()
         finally:
             setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_late_default_override_stops_queued_delivery_and_recovers_on_fresh_evidence(
+    db: ManagementDatabase,
+) -> None:
+    async with _family_database(db) as database:
+        borrowed: Final = cast(AlertDatabase, database)  # cast-ok: real generated Prisma query delegate
+        for table in (
+            "LiteLLM_UsageAlertIncident",
+            "LiteLLM_Issue",
+            "LiteLLM_IssueSignal",
+            "LiteLLM_IssueDelivery",
+            "LiteLLM_IssueDeliveryRule",
+            "LiteLLM_VerificationToken",
+            "LiteLLM_TeamTable",
+            "LiteLLM_UserTable",
+        ):
+            await borrowed.query_raw(f'CREATE TABLE "{table}" (LIKE public."{table}" INCLUDING ALL)')
+        alerts: Final = UsageAlertsRepository(borrowed)
+        store: Final = IssuesRepository(borrowed)
+        await alerts.ensure_default_rules(default_usage_rules(("slack",)))
+        rule: Final = await alerts.get_rule(default_usage_rule_id("key", "requests", "increase"))
+        assert rule is not None
+        issues: Final = tuple(_issue(IssueCohort(scope_type="key", scope_id=key)) for key in ("key-a", "key-b"))
+        observations: Final = tuple(
+            UsageAlertObservation(
+                entity_id=issue.cohort.scope_id,
+                day=issue.observed_on,
+                observed=420,
+                baseline=120,
+                threshold=360,
+                breached=True,
+            )
+            for issue in issues
+        )
+        sources: Final = await alerts.record_observations(rule, observations)
+        await store.upsert_issues(issues)
+        for issue in issues:
+            source: UsageAlert = next(source for source in sources if source.scope_id == issue.cohort.scope_id)
+            await store.add_signals(
+                issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),)
+            )
+            await store.queue_delivery(
+                IssueDeliveryInput(id=issue.id, issue_id=issue.id, channel="slack"),
+                rule.id,
+                rule.updated_at.isoformat(),
+                source.id,
+            )
+            assert await store.pending_delivery(issue.id) is not None
+        definition: Final = UsageAlertRuleInput(
+            name="Project A threshold",
+            scope_type="key",
+            scope_id="key-a",
+            metric="requests",
+            direction="increase",
+            multiplier=100,
+        )
+        ordinary: Final = await alerts.save_rule(definition, "example-user")
+        assert ordinary is not None and await store.pending_delivery(issues[0].id) is not None
+        assert await alerts.save_rule(definition, "qa-admin", ordinary, overrides_defaults=True) is not None
+        pending: Final = await store.pending_delivery(issues[0].id)
+        unaffected: Final = await store.pending_delivery(issues[1].id)
+        await store.recover_issues(issues[0].observed_on + timedelta(days=1), (issues[0].id,))
+        awaiting_evidence: Final = await store.get_issue(issues[0].id)
+        assert awaiting_evidence is not None and awaiting_evidence.active
+        await alerts.record_observations(
+            rule,
+            (
+                observations[0].model_copy(
+                    update={"day": observations[0].day + timedelta(days=1), "observed": 120, "breached": False}
+                ),
+            ),
+        )
+        await store.recover_issues(issues[0].observed_on + timedelta(days=2), (issues[0].id,))
+        recovered: Final = await store.get_issue(issues[0].id)
+        other: Final = await store.get_issue(issues[1].id)
+        assert recovered is not None and other is not None
+        assert (pending is None, unaffected is not None, recovered.active, recovered.status, other.active) == (
+            True,
+            True,
+            False,
+            "resolved",
+            True,
+        ), f"overridden delivery eligible={pending is not None}; recovered issue active={recovered.active}"
 
 
 @pytest.mark.asyncio(loop_scope="session")

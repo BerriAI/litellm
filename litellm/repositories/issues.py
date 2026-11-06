@@ -381,14 +381,14 @@ class IssuesRepository:
                     COALESCE(r.enabled AND NOT r.deleted
                         AND r.scope_type=a.scope_type AND r.record->>'metric'=a.metric
                         AND r.record->>'direction'=a.record->>'direction'
-                        AND (r.scope_id IS NULL OR r.scope_id=a.scope_id)
-                        AND (NOT(r.id=ANY($2::text[])) OR NOT EXISTS (
+                        AND (r.scope_id IS NULL OR r.scope_id=a.scope_id),false) AS eligible,
+                    COALESCE(r.id=ANY($2::text[]) AND EXISTS (
                             SELECT 1 FROM "LiteLLM_UsageAlertRule" custom WHERE custom.enabled AND NOT custom.deleted
                             AND COALESCE((custom.record->>'overrides_defaults')::boolean,false)
                             AND NOT(custom.id=ANY($2::text[])) AND custom.scope_type=r.scope_type
                             AND custom.record->>'metric'=r.record->>'metric'
                             AND custom.record->>'direction'=r.record->>'direction'
-                            AND (custom.scope_id IS NULL OR custom.scope_id=a.scope_id))),false) AS eligible
+                            AND (custom.scope_id IS NULL OR custom.scope_id=a.scope_id)),false) AS suppressed
                 FROM "LiteLLM_Issue" i JOIN "LiteLLM_IssueSignal" s ON s.issue_id=i.id
                 LEFT JOIN "LiteLLM_UsageAlertIncident" a ON a.id=s.source_id
                 LEFT JOIN "LiteLLM_UsageAlertRule" r ON r.id=a.rule_id
@@ -407,7 +407,7 @@ class IssuesRepository:
                 FROM primary_signals
             ), healthy AS (
                 SELECT id FROM observations GROUP BY id
-                HAVING bool_or(eligible AND healthy) AND bool_and(NOT eligible OR healthy)
+                HAVING bool_or(eligible AND healthy) AND bool_and(NOT eligible OR suppressed OR healthy)
             ), changed AS (
                 UPDATE "LiteLLM_Issue" i SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
@@ -560,6 +560,13 @@ class IssuesRepository:
                     AND a.scope_type=r.scope_type AND a.metric=r.record->>'metric'
                     AND a.record->>'direction'=r.record->>'direction'
                     AND (r.scope_id IS NULL OR a.scope_id=r.scope_id)
+                    AND (NOT(r.id=ANY($3::text[])) OR NOT EXISTS (
+                        SELECT 1 FROM "LiteLLM_UsageAlertRule" custom WHERE custom.enabled AND NOT custom.deleted
+                        AND COALESCE((custom.record->>'overrides_defaults')::boolean,false)
+                        AND NOT(custom.id=ANY($3::text[])) AND custom.scope_type=r.scope_type
+                        AND custom.record->>'metric'=r.record->>'metric'
+                        AND custom.record->>'direction'=r.record->>'direction'
+                        AND (custom.scope_id IS NULL OR custom.scope_id=a.scope_id)))
                     AND EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" s WHERE s.issue_id=i.id
                         AND s.source='usage_alert' AND s.source_id=a.id)
                 ORDER BY b.rule_id,b.source_id LIMIT 1
@@ -569,6 +576,7 @@ class IssuesRepository:
             ORDER BY d.next_attempt,d.id LIMIT $1""",
                 limit,
                 delivery_id,
+                tuple(DEFAULT_USAGE_RULE_IDS),
             )
         )
 
