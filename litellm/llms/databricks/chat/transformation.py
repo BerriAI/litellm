@@ -19,11 +19,13 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    extract_reasoning_content,
     merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
     strip_prefill_prefix_field,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    extract_reasoning_content,
 )
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
