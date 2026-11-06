@@ -1,6 +1,7 @@
 import copy
 import importlib
 import json
+import warnings
 from collections.abc import Mapping
 from typing import Final, cast
 from unittest import mock
@@ -22,6 +23,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     merge_consecutive_system_messages,
     strip_litellm_response_only_fields,
     system_messages_first,
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_combinators_and_drop_non_python_regex_patterns,
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
 from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
@@ -1116,6 +1120,27 @@ def test_patching_a_moved_helper_at_its_old_path_reaches_the_callers_in_its_new_
         "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=patched_result
     ):
         assert parse_tool_call_arguments('{"a": 1') == patched_result
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_patching_a_re_exported_helper_at_its_old_path_reaches_the_callers_in_its_new_home() -> None:
+    schema: Final = {"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}}]}
+    unpatched: Final = flatten_combinators_and_drop_non_python_regex_patterns(schema)
+    patched_result: Final = {"patched": True}
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils.flatten_top_level_schema_combinators",
+        return_value=patched_result,
+    ):
+        assert flatten_combinators_and_drop_non_python_regex_patterns(schema) == patched_result
+    assert flatten_combinators_and_drop_non_python_regex_patterns(schema) == unpatched
+
+
+def test_old_path_patch_restores_the_moved_helper_when_warnings_become_errors_inside_it() -> None:
+    with warnings.catch_warnings():
+        with mock.patch(
+            "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
     assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
 
 

@@ -1685,28 +1685,52 @@ def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
 
 
+_UNBOUND: Final = object()
+
+
+def _module(module_name: str) -> ModuleType:
+    return importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+
+
+def _namespace(module: ModuleType) -> Mapping[str, object]:
+    return vars(module)
+
+
 def _moved_name_home(name: str) -> ModuleType:
     module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    return importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+    return _module(module_name)
+
+
+def _split_modules_sharing(name: str, value: object) -> tuple[ModuleType, ...]:
+    if value is _UNBOUND:
+        return ()
+    split_modules: Final = (_module(module_name) for module_name in frozenset(_MOVED_PRIVATE_NAME_MODULES.values()))
+    return tuple(module for module in split_modules if _namespace(module).get(name, _UNBOUND) is value)
 
 
 class _CommonUtilsModule(ModuleType):
     def __getattr__(self, name: str) -> object:
         home: Final = _moved_name_home(name)
+        value: Final = _namespace(home).get(name, _UNBOUND)
+        if value is _UNBOUND:
+            raise AttributeError(f"module {home.__name__!r} has no attribute {name!r}")
         warnings.warn(
-            f"{self.__name__}.{name} moved to {home.__name__}, import or patch it there",
+            f"{self.__name__}.{name} moved to {home.__name__}, import or patch it there. "
+            "The old path will be removed in a future release",
             DeprecationWarning,
             stacklevel=2,
         )
-        return getattr(home, name)
+        return value
 
     def __setattr__(self, name: str, value: object) -> None:
-        if name not in _MOVED_PRIVATE_NAME_MODULES:
-            super().__setattr__(name, value)
+        if name in _MOVED_PRIVATE_NAME_MODULES:
+            setattr(_moved_name_home(name), name, value)
             return
-        setattr(_moved_name_home(name), name, value)
+        for module in _split_modules_sharing(name, _namespace(self).get(name, _UNBOUND)):
+            setattr(module, name, value)
+        super().__setattr__(name, value)
 
     def __delattr__(self, name: str) -> None:
         if name not in _MOVED_PRIVATE_NAME_MODULES:
