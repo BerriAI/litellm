@@ -1407,6 +1407,34 @@ def test_model_info_that_does_not_validate_declares_no_capability_but_keeps_its_
     assert capabilities == CodexDeploymentCapabilities(priced_service_tier_keys=frozenset({priced}))
 
 
+def test_model_list_body_takes_the_asking_releases_catalog_and_prompt() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-release-only", "litellm_params": {"model": "openai/gpt-release-only"}},
+            {"model_name": "in-house", "litellm_params": {"model": "openai/in-house-coder"}},
+        ]
+    )
+    release_entry: Final = bundled_codex_models()["gpt-5.5"].model_copy(
+        update={"slug": "gpt-release-only", "display_name": "Release Only"}
+    )
+    names: Final = ("gpt-release-only", "in-house")
+
+    body: Final = codex_model_list_body(
+        _listing(*names),
+        tuple((name, name) for name in names),
+        router,
+        client_version="0.170.0",
+        stock={"gpt-release-only": release_entry},
+        instructions="release prompt",
+    )
+
+    served: Final = {entry["slug"]: entry for entry in json.loads(body)["models"]}
+    assert (served["gpt-release-only"]["display_name"], served["in-house"]["base_instructions"]) == (
+        "Release Only",
+        "release prompt",
+    ), served
+
+
 class _CollidingName(str):
     def __hash__(self) -> int:
         return 1

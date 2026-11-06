@@ -522,6 +522,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
 from litellm.proxy.common_utils.codex_model_catalog import CodexCatalogRow, codex_catalog_rows, codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
@@ -12920,6 +12921,7 @@ async def model_list(
 
         admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
         if client_version is not None:
+            admin_codex_stock: Final = await codex_catalog_source.stock(client_version)
             return Response(
                 content=await asyncio.to_thread(
                     codex_model_list_body,
@@ -12928,6 +12930,8 @@ async def model_list(
                     llm_router,
                     team_id or user_api_key_dict.team_id,
                     client_version=client_version,
+                    stock=admin_codex_stock.models,
+                    instructions=admin_codex_stock.instructions,
                 ),
                 media_type="application/json",
             )
@@ -12967,6 +12971,7 @@ async def model_list(
     entries: Final = key_listing.entries
     labels: Final = key_listing.labels
     if client_version is not None:
+        codex_stock: Final = await codex_catalog_source.stock(client_version)
         return Response(
             content=await asyncio.to_thread(
                 codex_model_list_body,
@@ -12976,6 +12981,8 @@ async def model_list(
                 team_id or user_api_key_dict.team_id,
                 labels,
                 client_version=client_version,
+                stock=codex_stock.models,
+                instructions=codex_stock.instructions,
             ),
             media_type="application/json",
         )
