@@ -21,6 +21,7 @@ from litellm.integrations.websearch_interception.handler import (
 from litellm.types.integrations.custom_logger import (
     RESPONSES_AGENTIC_SURFACE,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_calls_the_choice_excludes
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, LlmProviders
 
@@ -388,6 +389,39 @@ async def test_deployment_hook_converts_native_responses_web_search_tool():
     assert tool["name"] == "litellm_web_search"
     assert "function" not in tool
     assert tool["parameters"]["required"] == ["query"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "tool_choice"),
+    [
+        (CallTypes.aresponses, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "web_search"}]}),
+        (CallTypes.acompletion, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "web_search"}]}),
+        (
+            CallTypes.acompletion,
+            {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": [{"type": "web_search"}]}},
+        ),
+    ],
+)
+async def test_deployment_hook_lets_an_allowed_tools_choice_listing_web_search_allow_the_search(
+    call_type: CallTypes, tool_choice: dict[str, object]
+):
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
+
+    result: Final = await logger.async_pre_call_deployment_hook(
+        kwargs={
+            "model": "gpt-4o",
+            "custom_llm_provider": "openai",
+            "tools": [{"type": "web_search"}, {"type": "function", "name": "get_weather"}],
+            "tool_choice": tool_choice,
+        },
+        call_type=call_type,
+    )
+
+    assert result is not None
+    assert tool_calls_the_choice_excludes(result["tool_choice"], ("litellm_web_search", "get_weather")) == (
+        "get_weather",
+    )
 
 
 @pytest.mark.asyncio

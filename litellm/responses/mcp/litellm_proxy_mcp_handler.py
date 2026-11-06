@@ -1,6 +1,7 @@
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
 from openai.types.chat import ChatCompletionToolParam
@@ -10,6 +11,7 @@ from typing_extensions import Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_calls_the_choice_excludes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.utils import (
@@ -25,6 +27,7 @@ from litellm.responses.mcp.tool_precheck import (
     names_gateway_explicitly,
     names_whole_gateway,
     proxy_path_mcp_name,
+    server_labels_serving,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
@@ -607,6 +610,22 @@ class LiteLLM_Proxy_MCP_Handler:
         return True
 
     _should_auto_execute_tools = should_auto_execute_tools
+
+    @staticmethod
+    def tool_calls_to_run(
+        tool_calls: Sequence[object],
+        tool_choice: object,
+        tool_server_map: Mapping[str, str],
+        mcp_tools: Iterable[object],
+    ) -> Sequence[object]:
+        names: Final = tuple(
+            LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)[0] or "" for tool_call in tool_calls
+        )
+        references: Final = tuple(mcp_tools)
+        labels_by_tool: Final = MappingProxyType(
+            {name: server_labels_serving(references, tool_server_map.get(name)) for name in names}
+        )
+        return () if tool_calls_the_choice_excludes(tool_choice, names, labels_by_tool) else tool_calls
 
     @staticmethod
     def extract_tool_calls_from_response(response: ResponsesAPIResponse) -> list[object]:

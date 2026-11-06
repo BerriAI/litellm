@@ -305,6 +305,44 @@ class TestUseResponsesApiBridgeFlag:
         assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
         assert response.output[0].content[0].text == "Answer"
 
+    def test_bridge_sends_a_responses_layout_allowed_tools_tool_choice_in_the_chat_layout(
+        self, respx_mock: respx.MockRouter
+    ):
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        litellm.responses(
+            model="openai/my-custom-model",
+            input="What time is it?",
+            use_chat_completions_api=True,
+            tools=[
+                {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                for name in ("get_time", "get_weather")
+            ],
+            tool_choice={"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+            api_key="fake-provider-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read())["tool_choice"] == {
+            "type": "allowed_tools",
+            "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+        }
+
     def test_bridge_merges_instructions_and_developer_input_for_databricks(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
             return_value=httpx.Response(

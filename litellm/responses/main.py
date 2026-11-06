@@ -456,7 +456,12 @@ async def aresponses_api_with_mcp(
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
         with first_round_billed_on_failure(logging_obj, response):
-            tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response)
+            tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response),
+                tool_choice,
+                tool_server_map,
+                mcp_tools_with_litellm_proxy,
+            )
 
             if tool_calls:
                 user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")

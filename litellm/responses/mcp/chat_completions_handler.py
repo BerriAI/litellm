@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
@@ -38,7 +39,7 @@ class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
 def _add_mcp_metadata_to_response(
     response: ModelResponse | CustomStreamWrapper,
     openai_tools: list | None,
-    tool_calls: list | None = None,
+    tool_calls: Sequence[object] | None = None,
     tool_results: list | None = None,
 ) -> None:
     """
@@ -253,7 +254,7 @@ async def acompletion_with_mcp(
                 self.base_call_args = base_call_args
                 self.request_tags = request_tags
                 self.collected_chunks: list[ModelResponseStream] = []
-                self.tool_calls: list | None = None
+                self.tool_calls: Sequence[object] | None = None
                 self.tool_results: list | None = None
                 self.complete_response: ModelResponse | None = None
                 self.stream_exhausted = False
@@ -490,8 +491,11 @@ async def acompletion_with_mcp(
                 if isinstance(complete_response, ModelResponse):
                     self.complete_response = complete_response
                     # Extract tool calls from complete response
-                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(
-                        response=complete_response
+                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                        LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=complete_response),
+                        kwargs.get("tool_choice"),
+                        self.tool_server_map,
+                        mcp_tools_with_litellm_proxy,
                     )
 
                     if self.tool_calls:
@@ -670,7 +674,12 @@ async def acompletion_with_mcp(
     if not isinstance(initial_response, ModelResponse):
         return initial_response
 
-    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response)
+    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+        LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response),
+        kwargs.get("tool_choice"),
+        tool_server_map,
+        mcp_tools_with_litellm_proxy,
+    )
 
     if not tool_calls:
         _add_mcp_metadata_to_response(

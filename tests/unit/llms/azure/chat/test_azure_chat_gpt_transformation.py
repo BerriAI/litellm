@@ -98,10 +98,21 @@ def test_map_openai_params_drop_params_still_drops_a_named_tool_choice_on_old_ap
     assert "tool_choice" not in mapped
 
 
-def test_map_openai_params_drop_params_never_drops_allowed_tools_on_old_api_version():
-    with pytest.raises(litellm.UnsupportedParamsError, match="allowed_tools") as exc:
-        _map_tool_choice_on_pre_tool_choice_api_version(
-            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}
+def test_map_openai_params_drop_params_drops_allowed_tools_on_old_api_version():
+    mapped: Final = _map_tool_choice_on_pre_tool_choice_api_version(
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}
+    )
+    assert "tool_choice" not in mapped
+
+
+def test_map_openai_params_allowed_tools_on_old_api_version_is_a_400_without_drop_params():
+    with pytest.raises(litellm.UnsupportedParamsError, match="2023-12-01-preview") as exc:
+        AzureOpenAIConfig().map_openai_params(
+            {"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}},
+            {},
+            "gpt-4o",
+            drop_params=False,
+            api_version="2023-07-01-preview",
         )
     assert exc.value.status_code == 400
 
