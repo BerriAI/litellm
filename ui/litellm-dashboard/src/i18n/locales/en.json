@@ -5710,6 +5710,151 @@
   "userBanner": {
     "dismiss": "Dismiss banner"
   },
+  "alerts": {
+    "page": {
+      "tabs": {
+        "modelDeprecations": "Model deprecations"
+      }
+    },
+    "panel": {
+      "title": "Model deprecations",
+      "adminRequired": "Gateway admin access is required to view affected keys and teams.",
+      "back": "← Model deprecations",
+      "loadError": "Could not load alerts. No alert status has been changed.",
+      "retry": "Retry",
+      "loadingAlert": "Loading alert…",
+      "missingAlert": "No matching model alert was found in the last 30 days."
+    },
+    "status": {
+      "open": "open",
+      "resolved": "resolved",
+      "dismissed": "dismissed"
+    },
+    "inbox": {
+      "columns": {
+        "model": "Model",
+        "deprecation": "Deprecation",
+        "requests": "Requests · 30d",
+        "lastSeen": "Last seen (UTC)"
+      },
+      "empty": {
+        "open": "No open model deprecations in the last 30 days.",
+        "resolved": "No resolved model deprecations in the last 30 days.",
+        "dismissed": "No dismissed model deprecations in the last 30 days."
+      },
+      "reviewImpact": "Review impact →",
+      "loading": "Loading model deprecations…",
+      "searchPlaceholder": "Search models…"
+    },
+    "timing": {
+      "deprecatesIn_one": "Deprecates in {{count}} day",
+      "deprecatesIn_other": "Deprecates in {{count}} days",
+      "today": "Deprecates today",
+      "deprecatedAgo_one": "Deprecated {{count}} day ago",
+      "deprecatedAgo_other": "Deprecated {{count}} days ago"
+    },
+    "recommendation": {
+      "sources": {
+        "modelCostMap": "LiteLLM model cost map",
+        "deploymentConfig": "Deployment configuration"
+      },
+      "notProvided": "Not provided",
+      "recommendedModel": "Recommended new model:",
+      "source": "Source:",
+      "providerNotice": "Provider deprecation notice ↗"
+    },
+    "alertItem": {
+      "deprecatedTitle": "{{model}} is deprecated",
+      "retiresTitle": "{{model}} retires in {{days}} days",
+      "usage": "{{requests}} requests in the last 30 days · Last seen {{date}} UTC",
+      "reviewMigration": "Review migration"
+    },
+    "emailSetup": {
+      "steps": {
+        "connect": {
+          "title": "Connect email delivery",
+          "description": "Add your SMTP settings and public gateway URL in Email Settings. Send a test email to verify delivery."
+        },
+        "enable": {
+          "title": "Enable model deprecation emails",
+          "description": "In Email events, turn on Model Deprecations and save. This is off by default."
+        },
+        "reminders": {
+          "title": "Owners get two reminders",
+          "description": "Affected key owners and team admins receive a reminder 30 days before retirement, and one final reminder 1 day before. Recipients are based on actual usage in the last 30 days. Dates are checked in UTC."
+        }
+      },
+      "summary": "Give affected owners time to migrate. Email reminders at 30 days and 1 day.",
+      "trigger": "Set up email reminders",
+      "title": "Set up model deprecation emails",
+      "description": "Help key owners and team admins act before a provider retires a model. Only their affected usage is included.",
+      "openSettings": "Open Email Settings"
+    },
+    "migrationDetail": {
+      "headings": {
+        "resolved": "Migration marked resolved",
+        "dismissed": "Model deprecation dismissed",
+        "deprecated": "Migration needed: model is deprecated",
+        "due": "Migration due {{date}}"
+      },
+      "columns": {
+        "key": "Virtual key",
+        "team": "Team",
+        "owner": "Owner",
+        "tags": "Usage tags",
+        "requests": "Requests · 30d",
+        "spend": "Spend · 30d"
+      },
+      "summary": {
+        "teamKeys": "Keys in this team",
+        "affectedKeys": "Affected keys",
+        "teams": "Teams using this model",
+        "deprecation": "Deprecation"
+      },
+      "keysTable": {
+        "title": "Affected keys",
+        "description": "Keys and owners that used this model in the last 30 days. Tags show actual usage with this model.",
+        "teamFilter": "Filter affected keys by team",
+        "allTeams": "All teams",
+        "teamOption": "{{team}} · {{keys}} keys",
+        "loadError": "Could not load affected keys.",
+        "retry": "Retry"
+      },
+      "unnamedKey": "Unnamed key",
+      "noTeam": "No team",
+      "notRecorded": "Not recorded",
+      "followUpCopied": "Follow-up copied",
+      "lastSeen": "Last seen {{date}} UTC · {{requests}} requests in the last 30 days",
+      "copyFollowUp": "Copy follow-up",
+      "markResolved": "Mark resolved",
+      "dismiss": "Dismiss",
+      "reopen": "Reopen",
+      "modelRouting": "Model routing",
+      "resolveHint": "Resolve across all teams once owners confirm migration. New traffic reopens the alert.",
+      "saveError": "Could not save alert status. Please retry.",
+      "teamsError": "Could not load team filters. The keys table still includes all matching teams."
+    },
+    "usageChart": {
+      "keyFallback": "Key · {{id}}",
+      "loadError": "Could not load daily requests.",
+      "retry": "Retry",
+      "showFewer": "Show fewer key labels",
+      "showAll": "Show all key labels",
+      "title": "Daily requests",
+      "subtitleTeam": "Requests to this model, stacked by key · Selected team",
+      "subtitleAll": "Requests to this model, stacked by key · All teams",
+      "footnote": "Last 30 days · UTC · Includes zero-usage days. Today is partial."
+    },
+    "usageTags": {
+      "loading": "Loading tags…",
+      "failed": "Tags unavailable",
+      "none": "No recorded tags",
+      "showFewer": "Show fewer usage tags",
+      "showMore": "Show {{hidden}} more usage tags",
+      "showLess": "Show less",
+      "more": "+{{hidden}} more"
+    }
+  },
   "caching": {
     "dashboard": {
       "tabs": {
