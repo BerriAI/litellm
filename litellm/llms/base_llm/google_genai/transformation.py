@@ -164,7 +164,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         tools: ToolConfigDict | None,
         generate_content_config_dict: dict,
         system_instruction: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the request parameters for the generate content API.
 

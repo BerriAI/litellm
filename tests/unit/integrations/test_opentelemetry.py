@@ -344,6 +344,11 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
         "cause": "heuristic",
         "classifier_failure_reason": "timeout",
         "classifier_error_type": "TimeoutError",
+        "classifier_input_budget_tokens": 24576,
+        "classifier_input_tokens": 23000,
+        "classifier_input_count_method": "estimated_tokens",
+        "classifier_input_truncated": True,
+        "classifier_input_budget_status": "truncated",
         "classifier_cost": 0.001,
     }
     with provider.get_tracer(__name__).start_as_current_span("inference") as span:
