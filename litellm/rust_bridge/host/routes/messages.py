@@ -279,6 +279,8 @@ def _upstream_failure(
         headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
     except ValidationError:
         return None
+    if not headers:
+        return status, text, headers
     # Python's `MaskedHTTPStatusError` rebuilds the response from its decoded body without the
     # wire's content-encoding and content-length, so httpx states a length only for a non-empty body.
     rebuilt: Final = httpx.Response(
