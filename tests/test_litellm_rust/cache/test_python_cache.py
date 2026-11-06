@@ -9,7 +9,11 @@ from litellm.caching.caching import Cache, CacheMode
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
-from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    _add_headers_to_response,  # pyright: ignore[reportPrivateUsage]  # stamp the response the way the router does
+    add_retry_headers_to_response,
+    get_hidden_params_dict,
+)
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
@@ -251,9 +255,11 @@ async def test_rust_responses_rejects_a_configured_python_cache(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_lookup", (False, True))
-async def test_python_cache_operations_stay_in_the_rust_callers_task(
+@pytest.mark.parametrize("stream", (False, True), ids=("response", "stream"))
+async def test_python_cache_operations_stay_in_the_rust_callers_task_except_the_unary_store(
     recording_server: RecordingServer,
     cancel_lookup: bool,
+    stream: bool,
 ) -> None:
     from litellm.caching.base_cache import BaseCache
     from litellm.caching.in_memory_cache import InMemoryCache
@@ -278,14 +284,19 @@ async def test_python_cache_operations_stay_in_the_rust_callers_task(
             return storage.get_cache(key, **kwargs)
 
         async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
-            assert asyncio.current_task() is caller
+            writer: Final = asyncio.current_task()
+            if stream:
+                assert writer is caller
+            else:
+                assert writer is not caller
+                assert writer in _PENDING_CACHE_WRITES
             await asyncio.sleep(0)
             storage.set_cache(key, value, **kwargs)
 
     litellm.cache = Cache(_backend=CallerCache())
     if cancel_lookup:
         recording_server.expected_requests = 0
-        task: Final = asyncio.create_task(invoke("messages", recording_server, {}))
+        task: Final = asyncio.create_task(invoke("messages", recording_server, {"stream": stream}))
         await asyncio.wait_for(entered.wait(), timeout=5)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -295,10 +306,47 @@ async def test_python_cache_operations_stay_in_the_rust_callers_task(
         assert len(recording_server.requests) == 0
         assert storage.cache_dict == {}
         return
-    first: Final = await invoke("messages", recording_server, {})
-    second: Final = await invoke("messages", recording_server, {})
-    assert payload(first) == payload(second)
+    first: Final = await invoke("messages", recording_server, {"stream": stream})
+    first_payload: Final = await collect(first) if stream else payload(first)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await invoke("messages", recording_server, {"stream": stream})
+    second_payload: Final = await collect(second) if stream else payload(second)
+    assert first_payload == second_payload
     assert cache_key(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_rust_unary_messages_store_keeps_the_hidden_params_stamped_after_the_call(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    storage: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(_backend=storage))
+    first: Final = await invoke("messages", recording_server, {})
+    assert isinstance(first, dict)
+    assert storage.cache_dict == {}
+    add_retry_headers_to_response(
+        _add_headers_to_response(first, {"x-litellm-model-group": "group"}), attempted_retries=0
+    )
+    get_hidden_params_dict(first)["model_id"] = "deployment"
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    (entry,) = storage.cache_dict.values()
+    stored: Final = TypeAdapter(dict[str, object]).validate_python(
+        TypeAdapter(dict[str, object]).validate_python(entry)["response"]
+    )
+    assert stored["_hidden_params"] == {
+        "additional_headers": {"x-litellm-model-group": "group", "x-litellm-attempted-retries": 0},
+        "model_id": "deployment",
+    }
+    assert get_hidden_params_dict(first)["additional_headers"] == {
+        "x-litellm-rust": "true",
+        "x-litellm-model-group": "group",
+        "x-litellm-attempted-retries": 0,
+    }
+    hit: Final = await invoke("messages", recording_server, {})
+    assert get_hidden_params_dict(hit)["cache_key"] == cache_key(hit)
     assert len(recording_server.requests) == 1
 
 
