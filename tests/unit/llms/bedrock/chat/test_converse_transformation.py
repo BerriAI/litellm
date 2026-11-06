@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -10147,3 +10147,67 @@ def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_
     )
     assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather", "get_stock_price"]
     assert all("defer_loading" not in tool and "defer_loading" not in tool["function"] for tool in mapped["tools"])
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def _converse_request_for_tools(
+    model: str, non_default_params: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object]:
+    config: Final = AmazonConverseConfig()
+    return config._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params=config.map_openai_params(
+            non_default_params=dict(non_default_params), optional_params={}, model=model, drop_params=drop_params
+        ),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+
+@pytest.mark.parametrize(
+    "model", ["us.openai.gpt-oss-120b-1:0", "us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"]
+)
+def test_a_hosted_mcp_tool_answers_400_on_converse_without_drop_params(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        _converse_request_for_tools(model, {"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]}, drop_params=False)
+    assert raised.value.status_code == 400
+    assert model in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+    assert 'server_url: "litellm_proxy/mcp/<server name>"' in str(raised.value)
+    assert "drop_params: true" in str(raised.value)
+
+
+def test_converse_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model: Final = "us.openai.gpt-oss-120b-1:0"
+    with caplog.at_level("WARNING"):
+        request: Final = _converse_request_for_tools(
+            model, {"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]}, drop_params=True
+        )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert any(
+        "`deepwiki`" in record.getMessage() and f"model={model} on bedrock (" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        "us.openai.gpt-oss-120b-1:0", {"tools": [_HOSTED_MCP_TOOL], "tool_choice": "auto"}, drop_params=True
+    )
+    assert "toolConfig" not in request
+    assert "toolChoice" not in json.dumps(request)
+    assert "tool_choice" not in json.dumps(request)
