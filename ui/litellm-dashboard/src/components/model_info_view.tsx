@@ -402,7 +402,7 @@ export default function ModelInfoView({
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError(t("modelInfoView.toasts.updateFailed"));
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }

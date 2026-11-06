@@ -204,6 +204,7 @@ class AutoRouter(CustomLogger):
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         """
         This hook is called before the routing decision is made.

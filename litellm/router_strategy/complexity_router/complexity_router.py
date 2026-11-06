@@ -4490,6 +4490,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> PreRoutingHookResponse | None:
         """
         Pre-routing hook called before the routing decision.
