@@ -84,6 +84,8 @@ export interface AgentFormValues {
   cost_per_query?: string | number;
   input_cost_per_token?: string | number;
   output_cost_per_token?: string | number;
+  auth_type?: string;
+  api_key?: string;
   static_headers?: StaticHeaderFormValue[];
   extra_headers?: string[];
   kill_switch?: KillSwitchFormValue;

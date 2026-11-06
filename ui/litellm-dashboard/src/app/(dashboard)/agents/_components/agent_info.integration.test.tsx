@@ -24,7 +24,11 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: () => ({ data: { keys: [] }, isLoading: false, refetch: vi.fn() }),
 }));
 
-vi.mock("./agent_card_discovery", () => ({ default: () => <div data-testid="agent-card-discovery" /> }));
+vi.mock("./agent_card_discovery", () => ({
+  default: ({ discoveryRequest }: { discoveryRequest?: object }) => (
+    <div data-testid="agent-card-discovery" data-plan={JSON.stringify(discoveryRequest ?? null)} />
+  ),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: () => ({ data: [], isLoading: false, isError: false }),
@@ -254,8 +258,7 @@ describe("AgentInfoView update payload", () => {
     await user.click(screen.getByRole("button", { name: /Optional Settings/ }));
     await user.click(screen.getByRole("button", { name: /Cost Configuration/ }));
     await user.click(screen.getByRole("button", { name: /LiteLLM Parameters/ }));
-    await user.click(screen.getByRole("button", { name: /Authentication Headers/ }));
-    await screen.findByLabelText("Forward Client Headers");
+    await screen.findByLabelText("Model (Optional)");
 
     await save(user);
 
@@ -275,8 +278,6 @@ describe("AgentInfoView update payload", () => {
         documentationUrl: "https://example.com/docs",
       },
       litellm_params: { model: "gpt-4o", make_public: true, cost_per_query: 0.5 },
-      static_headers: { Authorization: "Bearer x" },
-      extra_headers: ["x-api-key"],
       tpm_limit: 111,
       rpm_limit: 222,
       session_tpm_limit: 333,
@@ -363,6 +364,65 @@ describe("AgentInfoView update payload", () => {
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
       access_group_ids: [],
     });
+  });
+
+  it("loads a saved LangGraph key as a bearer token and sends a replacement typed over it", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...LANGGRAPH_AGENT,
+      litellm_params: { ...LANGGRAPH_AGENT.litellm_params, api_key: "REDACTED_BY_LITELM" },
+    } as never);
+    const user = setup();
+    renderView();
+    await openEditor(user);
+    expect(screen.getByRole("combobox", { name: "Authentication" })).toHaveTextContent("Bearer Token");
+    expect(
+      JSON.parse(screen.getByTestId("agent-card-discovery").getAttribute("data-plan") ?? "null"),
+    ).not.toHaveProperty("api_key");
+
+    fireEvent.change(screen.getByLabelText("Authentication Value"), { target: { value: "sk-rotated" } });
+    await save(user);
+
+    const rotated = {
+      custom_llm_provider: "langgraph",
+      api_base: "https://lg.example.com",
+      model: "langgraph/asst_1",
+      api_key: "sk-rotated",
+    };
+
+    expect(patchedPayload().litellm_params).toEqual(rotated);
+  });
+
+  it("clears a saved A2A key on None and keeps the params no open panel rebuilt", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      litellm_params: { ...A2A_AGENT.litellm_params, api_key: "REDACTED_BY_LITELM", guardrails: ["pii"] },
+    } as never);
+    const user = setup();
+    renderView();
+    await openEditor(user);
+
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(await screen.findByRole("option", { name: "None" }));
+    await save(user);
+
+    const cleared = { model: "gpt-4o", make_public: true, cost_per_query: 0.5, guardrails: ["pii"], api_key: null };
+
+    expect(patchedPayload().litellm_params).toEqual(cleared);
+  });
+
+  it("never offers Bearer to an agent whose own provider ignores it, and keeps its key on save", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      litellm_params: { ...A2A_AGENT.litellm_params, custom_llm_provider: "watsonx", api_key: "REDACTED_BY_LITELM" },
+    } as never);
+    const user = setup();
+    renderView();
+    await openEditor(user);
+
+    expect(screen.queryByRole("combobox", { name: "Authentication" })).not.toBeInTheDocument();
+    await save(user);
+
+    expect((patchedPayload().litellm_params as Record<string, unknown> | undefined)?.api_key).not.toBeNull();
   });
 
   it("keeps the agent's existing MCP grants in the update payload", async () => {

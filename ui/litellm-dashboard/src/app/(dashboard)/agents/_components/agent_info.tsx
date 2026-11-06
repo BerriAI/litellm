@@ -51,6 +51,8 @@ import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
 import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
+import AgentAuthSettings from "./AgentAuthSettings";
+import { agentAuthFormValues, agentAuthSupport, withAgentAuth, withoutBearerKeyField } from "./agent_auth";
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -78,6 +80,13 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
     <dd className="border-b border-border px-4 py-3 break-words text-foreground last-of-type:border-b-0">{children}</dd>
   </>
 );
+
+const dynamicAgentFormValues = (agent: Agent, typeInfo: AgentCreateInfo): AgentFormValues => ({
+  ...parseDynamicAgentForForm(agent, typeInfo),
+  ...agentAuthFormValues(agent),
+  ...parseMcpPermissionsForForm(agent),
+  ...parseAccessGroupIdsForForm(agent),
+});
 
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const { t } = useTranslation();
@@ -131,11 +140,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       } else {
         const typeInfo = agentTypeMetadata.find((info) => info.agent_type === agentType);
         if (typeInfo) {
-          form.reset({
-            ...parseDynamicAgentForForm(data, typeInfo),
-            ...parseMcpPermissionsForForm(data),
-            ...parseAccessGroupIdsForForm(data),
-          });
+          form.reset(dynamicAgentFormValues(data, typeInfo));
         } else {
           form.reset(parseAgentForForm(data));
         }
@@ -155,17 +160,23 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       if (agentType !== "a2a") {
         const typeInfo = agentTypeMetadata.find((info) => info.agent_type === agentType);
         if (typeInfo) {
-          form.reset({
-            ...parseDynamicAgentForForm(agent, typeInfo),
-            ...parseMcpPermissionsForForm(agent),
-            ...parseAccessGroupIdsForForm(agent),
-          });
+          form.reset(dynamicAgentFormValues(agent, typeInfo));
         }
       }
     }
   }, [agentTypeMetadata, agent]);
 
-  const selectedAgentTypeInfo = agentTypeMetadata.find((info) => info.agent_type === detectedAgentType);
+  const agentTypeInfo = agentTypeMetadata.find((info) => info.agent_type === detectedAgentType);
+  const usesA2AFormFields = agentTypeInfo?.use_a2a_form_fields;
+  const savedParams = agent?.litellm_params;
+  const authSupport = useMemo(
+    () => agentAuthSupport(detectedAgentType, usesA2AFormFields, savedParams),
+    [detectedAgentType, usesA2AFormFields, savedParams],
+  );
+  const selectedAgentTypeInfo = useMemo(
+    () => withoutBearerKeyField(agentTypeInfo, authSupport.bearer),
+    [agentTypeInfo, authSupport.bearer],
+  );
   const watchedFormValues = useWatch({ control: form.control });
   const mcpSelection = useWatch({ control: form.control, name: "allowed_mcp_servers_and_groups" });
   const mcpToolPermissions = useWatch({ control: form.control, name: "mcp_tool_permissions" });
@@ -183,8 +194,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   };
 
   const discoveryRequest = useMemo(
-    () => buildDiscoveryRequest(detectedAgentType, watchedFormValues || {}, selectedAgentTypeInfo),
-    [watchedFormValues, selectedAgentTypeInfo, detectedAgentType],
+    () => buildDiscoveryRequest(detectedAgentType, watchedFormValues || {}, selectedAgentTypeInfo, authSupport),
+    [watchedFormValues, selectedAgentTypeInfo, detectedAgentType, authSupport],
   );
 
   const handleApplyDiscoveredCard = (selection: DiscoveredAgentCardSelection | null) => {
@@ -233,9 +244,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
           : unmountedA2AFieldNames(panels.mountedPanels),
       );
 
-      const built: AgentRequestPayload = usesDynamicFields
-        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo, agent), agent_name: values.agent_name }
-        : buildAgentDataFromForm(values, agent);
+      const built: AgentRequestPayload = withAgentAuth(
+        usesDynamicFields
+          ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo, agent), agent_name: values.agent_name }
+          : buildAgentDataFromForm(values, agent),
+        values,
+        authSupport,
+        agent,
+      );
 
       const updateData = appliedDiscoveredSelection
         ? overlayDiscoveredCardParams(built, appliedDiscoveredSelection.selected_card)
@@ -552,6 +568,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                         )}
 
                         <AgentIdentityFields accessToken={accessToken} />
+
+                        <AgentAuthSettings support={authSupport} />
 
                         {discoveryRequest && (
                           <div className="mt-4">

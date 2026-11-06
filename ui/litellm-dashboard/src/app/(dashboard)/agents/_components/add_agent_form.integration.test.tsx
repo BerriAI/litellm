@@ -199,7 +199,6 @@ describe("AddAgentForm submit payload", () => {
     await user.type(await screen.findByLabelText("Model (Optional)"), "gpt-4o");
     await user.click(screen.getByRole("switch", { name: "Make Public" }));
 
-    await user.click(await panel(/Authentication Headers/));
     await user.click(await screen.findByRole("button", { name: /Add Static Header/ }));
     await user.type(await screen.findByPlaceholderText("Header name (e.g. Authorization)"), "X-Tenant");
     await user.type(screen.getByPlaceholderText("Value (e.g. Bearer token123)"), "acme");
@@ -321,7 +320,10 @@ describe("AddAgentForm submit payload", () => {
     await user.type(screen.getByPlaceholderText("Describe what this agent does..."), "graph agent");
     await user.type(screen.getByLabelText("API Base"), "https://lg.example.com");
     await user.type(screen.getByLabelText("Assistant ID"), "asst_1");
-    await user.type(screen.getByLabelText("API Key"), "secret-value");
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Authentication" }));
+    await user.click(await screen.findByRole("option", { name: "Bearer Token" }));
+    fireEvent.change(await screen.findByLabelText("Authentication Value"), { target: { value: "secret-value" } });
 
     await goToLastStepAndCreate(user);
 
