@@ -60,7 +60,9 @@ def _spend_counter_store() -> SpendCounterStore:
 
 
 @contextmanager
-def _patched_init_cache(litellm_settings: dict, cache_params: dict, user_cache: DualCache | None = None):
+def _patched_init_cache(
+    litellm_settings: dict[str, object], cache_params: dict[str, object], user_cache: DualCache | None = None
+):
     """
     Context manager that:
     1. Replaces the module-level globals with fresh DualCache instances.

@@ -18,19 +18,21 @@ if TYPE_CHECKING:
 __all__ = ("RoutingPrefetch", "RoutingReadBatch")
 
 
-def _selector_keys(selector: LowestTPMLoggingHandler_v2, deployments: list) -> list[str]:
-    tpm_keys, rpm_keys = selector.usage_counter_keys(deployments)
+def _selector_keys(selector: LowestTPMLoggingHandler_v2, deployments: Sequence[object]) -> list[str]:
+    tpm_keys, rpm_keys = selector.usage_counter_keys(list(deployments))
     return tpm_keys + rpm_keys
 
 
-def _selector_read(selector: LowestTPMLoggingHandler_v2 | None, deployments: list) -> TierRead | None:
+def _selector_read(selector: LowestTPMLoggingHandler_v2 | None, deployments: Sequence[object]) -> TierRead | None:
     return None if selector is None else selector_read(selector.router_cache, _selector_keys(selector, deployments))
 
 
 class RoutingPrefetch:
     @staticmethod
     @renamed_router_param("litellm_router_instance")
-    def arm(ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: list) -> None:
+    def arm(
+        ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: Sequence[object]
+    ) -> None:
         RoutingPrefetch.arm_cooldowns(ctx)
         read: Final = _selector_read(usage_selector, deployments)
         if read is not None:
@@ -77,7 +79,7 @@ class RoutingReadBatch:
 
     @renamed_router_param("litellm_router_instance")
     async def async_get_cooldown_deployments(
-        self, ctx: "RoutingContext", healthy_deployments: list, parent_otel_span: "Span | None"
+        self, ctx: "RoutingContext", healthy_deployments: Sequence[object], parent_otel_span: "Span | None"
     ) -> list[str]:
         cooldowns, _ = await asyncio.gather(
             routing_prefetch.read_cooldowns(
@@ -90,7 +92,7 @@ class RoutingReadBatch:
 
     async def read_usage(self, deployments: Sequence[object], parent_otel_span: "Span | None") -> None:
         """The selector's tpm/rpm counters for ``deployments``, kept as ``prefetched_usage``."""
-        usage_read: Final = _selector_read(self.usage_selector, list(deployments))
+        usage_read: Final = _selector_read(self.usage_selector, deployments)
         if usage_read is None:
             return
         values: Final = await routing_prefetch.read(usage_read, parent_otel_span)

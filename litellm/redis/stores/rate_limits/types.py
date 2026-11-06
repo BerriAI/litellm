@@ -86,6 +86,7 @@ AcquireReply: TypeAlias = GaugesAcquired | GaugeOverLimit
 
 
 __all__ = [
+    "RATE_LIMITS_TARGET",
     "AcquireReply",
     "AtomicApplied",
     "AtomicCounter",
@@ -97,7 +98,6 @@ __all__ = [
     "GaugesAcquired",
     "GuardedReply",
     "LocalValue",
-    "RATE_LIMITS_TARGET",
     "RateLimitCounter",
     "RateLimitEntry",
     "RateLimitGauge",

@@ -705,7 +705,7 @@ def _reservation_fixture(monkeypatch, spend: FakeSpendCounters) -> None:
     monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
 
 
-async def _reserve(spend: FakeSpendCounters, token: UserAPIKeyAuth, team_max_budget: float) -> dict | None:
+async def _reserve(spend: FakeSpendCounters, token: UserAPIKeyAuth, team_max_budget: float) -> dict[str, object] | None:
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request

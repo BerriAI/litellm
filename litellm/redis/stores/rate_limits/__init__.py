@@ -128,9 +128,7 @@ class RateLimitStore:
         batch: Batch,
     ) -> Awaitable[GuardedReply]:
         target: Final = route(batch)
-        return _script(
-            self._handle.guarded_increment(counter, expected_window_start, amount, ttl, target.send), target
-        )
+        return _script(self._handle.guarded_increment(counter, expected_window_start, amount, ttl, target.send), target)
 
     @with_service_target(RATE_LIMITS_TARGET)
     def parallel_acquire(
