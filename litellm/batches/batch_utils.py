@@ -587,9 +587,11 @@ def extract_file_access_credentials(
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
+            "s3_bucket_name",
+            "s3_output_bucket_name",
+            "allow_legacy_cloud_file_ids",
             "timeout",
             "max_retries",
-            "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
             # A federated deployment holds no api_key, so without these the fetch that reads a
             # finished batch's output has nothing to authenticate with and its cost is never billed.

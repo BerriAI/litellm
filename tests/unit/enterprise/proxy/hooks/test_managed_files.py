@@ -1963,7 +1963,6 @@ async def test_store_batch_output_file_retries_model_name_provider_fetch():
     assert all(
         call.kwargs["custom_llm_provider"] == "bedrock"
         and call.kwargs["max_retries"] == 0
-        and "_litellm_internal_model_credentials" not in call.kwargs
         for call in retrieve.call_args_list
     )
     assert sleep_calls == [0.5, 1.0]
@@ -2005,7 +2004,6 @@ async def test_store_batch_output_file_marks_model_name_fallback_after_four_tran
     assert all(
         call.kwargs["custom_llm_provider"] == "bedrock"
         and call.kwargs["max_retries"] == 0
-        and "_litellm_internal_model_credentials" not in call.kwargs
         for call in retrieve.call_args_list
     )
     assert sleep_calls == [0.5, 1.0, 2.0]
@@ -3639,7 +3637,6 @@ async def test_afile_retrieve_refreshes_marked_fallback_without_router_from_mode
     retrieve.assert_awaited_once()
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0
-    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
     updated_row: Final = managed_file_table.rows["unified-output"]
     assert updated_row.file_object == response
     assert updated_row.model_mappings == {"bedrock/model-x": "provider-output"}
@@ -3683,7 +3680,6 @@ async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployme
     )
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0
-    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -3811,7 +3807,6 @@ async def test_afile_retrieve_case3_uses_default_provider_for_unknown_router_dep
     assert retrieve.await_args.kwargs["file_id"] == "provider-output"
     assert retrieve.await_args.kwargs["max_retries"] == 0
     assert "custom_llm_provider" not in retrieve.await_args.kwargs
-    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
 
 
 @pytest.mark.asyncio

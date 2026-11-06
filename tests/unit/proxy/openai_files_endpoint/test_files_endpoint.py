@@ -4083,21 +4083,19 @@ def test_require_managed_files_rejects_raw_provider_file_id(
     mock_call.assert_not_called()
 
 
-def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkeypatch):
-    """A managed batch output id routes by model, and that branch must build the snapshot.
-
-    The managed-files pre-call hook sets data["model"] for any id carrying
-    llm_output_file_id, so batch output retrieval always takes the model-routed branch
-    and never reaches managed_files_obj.afile_content. Bedrock resolves its output
-    bucket only from _litellm_internal_model_credentials, so without the snapshot every
-    Bedrock batch output retrieval fails with "S3 bucket_name is required".
-    """
+def test_get_file_content_model_routed_reads_from_the_deployment_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A managed batch output id routes by model, so Bedrock batch output retrieval only
+    works when the deployment's s3_bucket_name reaches the SDK. Without it every
+    retrieval fails with "S3 bucket_name is required"."""
     import base64
-    from types import MappingProxyType
 
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
     from litellm.types.utils import SpecialEnums
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     router = Router(
         model_list=[
@@ -4105,6 +4103,8 @@ def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkey
                 "model_name": "anthropic.batch.claude-4.5-haiku",
                 "litellm_params": {
                     "model": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
                     "aws_region_name": "us-east-1",
                     "s3_bucket_name": "configured-batch-bucket",
                 },
@@ -4128,27 +4128,11 @@ def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkey
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
 
-    # One frozen snapshot per call rather than one dict merged across calls, so a second
-    # invocation is visible instead of silently overwriting the first.
-    calls: list[MappingProxyType] = []
-
-    async def _mock_router_afile_content(**kwargs):
-        calls.append(MappingProxyType(dict(kwargs)))
-        return HttpxBinaryResponseContent(
-            response=httpx.Response(
-                status_code=200,
-                content=b'{"recordId":"req-1"}',
-                headers={"content-type": "application/octet-stream"},
-            )
-        )
-
-    monkeypatch.setattr(router, "afile_content", _mock_router_afile_content)
-
     unified_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
         "application/jsonl",
         "unified-output-id",
         "anthropic.batch.claude-4.5-haiku",
-        "llm_output_file_id,s3://configured-batch-bucket/out/batch.jsonl",
+        "s3://configured-batch-bucket/litellm-batch-outputs/job/output.jsonl",
         "bedrock-batch-deployment-id",
     )
     encoded_id = base64.urlsafe_b64encode(unified_id.encode()).decode().rstrip("=")
@@ -4159,21 +4143,22 @@ def test_get_file_content_model_routed_attaches_trusted_model_credentials(monkey
         user_id="test-user",
     )
     try:
-        response = client.get(
-            f"/v1/files/{encoded_id}/content",
-            headers={"Authorization": "Bearer test-key", "custom-llm-provider": "bedrock"},
-        )
+        with respx.mock(assert_all_called=False) as s3:
+            s3_read: Final = s3.get(url__regex=r"https://.*amazonaws\.com/.*").mock(
+                return_value=httpx.Response(200, content=b'{"recordId":"req-1"}')
+            )
+            response = client.get(
+                f"/v1/files/{encoded_id}/content",
+                headers={"Authorization": "Bearer test-key", "custom-llm-provider": "bedrock"},
+            )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    assert len(calls) == 1, f"expected exactly one routed retrieval, got {len(calls)}"
-    snapshot = calls[0].get("_litellm_internal_model_credentials")
-    assert snapshot is not None, "model-routed branch must attach the trusted credential snapshot"
-    assert isinstance(
-        snapshot, MappingProxyType
-    ), "snapshot must be a MappingProxyType; a plain dict is rejected by get_configured_s3_bucket_name"
-    assert snapshot["s3_bucket_name"] == "configured-batch-bucket"
+    assert response.content == b'{"recordId":"req-1"}'
+    assert [call.request.url.path for call in s3_read.calls] == [
+        "/configured-batch-bucket/litellm-batch-outputs/job/output.jsonl"
+    ]
 
 
 def _unified_managed_file_id() -> str:
@@ -5387,16 +5372,11 @@ def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypa
     assert forwarded_calls == []
 
 
-def test_list_files_target_model_names_passes_trusted_bedrock_credentials(
-    mocker: MockerFixture, monkeypatch
-):
-    """
-    GET /v1/files?target_model_names=<bedrock model> must hand the deployment's
-    immutable credential snapshot to litellm.afile_list, since Bedrock resolves
-    the S3 bucket to list from that snapshot rather than from request params.
-    """
-    from types import MappingProxyType
-
+def test_list_files_target_model_names_passes_the_deployment_bucket(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /v1/files?target_model_names=<bedrock model> lists the deployment's bucket,
+    so its s3_bucket_name must reach litellm.afile_list."""
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -5448,9 +5428,7 @@ def test_list_files_target_model_names_passes_trusted_bedrock_credentials(
     assert response.status_code == 200, response.text
     assert captured_kwargs["custom_llm_provider"] == "bedrock"
     assert captured_kwargs["purpose"] == "batch"
-    trusted_credentials = captured_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+    assert captured_kwargs["s3_bucket_name"] == "my-bucket"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 

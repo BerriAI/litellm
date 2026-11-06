@@ -224,15 +224,6 @@ class _S3RequestTarget:
     request_params: _BedrockS3RequestParams
 
 
-class _TrustedS3ModelCredentials(LiteLLMBaseModel):
-    """The S3 buckets the server trusts file ids against, from the deployment snapshot."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    s3_bucket_name: str | None = None
-    s3_output_bucket_name: str | None = None
-
-
 def extract_s3_uri_from_file_id(file_id: str) -> str:
     """
     Resolve a Bedrock file id to its S3 URI.
@@ -256,27 +247,31 @@ def extract_s3_uri_from_file_id(file_id: str) -> str:
     raise ValueError("file_id must be a managed LiteLLM S3 file id")
 
 
-_S3_BUCKET_REQUIRED_ERROR: Final = "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+_S3_BUCKET_REQUIRED_ERROR: Final = (
+    "S3 bucket_name is required. Pass 's3_bucket_name', set it in proxy config, "
+    "or set AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+)
 
 
-def _trusted_s3_model_credentials(litellm_params: Mapping[str, object]) -> _TrustedS3ModelCredentials:
-    trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
-    if not isinstance(trusted_model_credentials, MappingProxyType):
-        return _TrustedS3ModelCredentials()
-    snapshot: Final[dict[str, object]] = {}
-    snapshot.update(trusted_model_credentials)  # any-ok: untyped snapshot
-    return _TrustedS3ModelCredentials.model_validate(snapshot)
+def _s3_param(litellm_params: Mapping[str, object], key: str, env_var: str) -> str | None:
+    value: Final = litellm_params.get(key)
+    return value if isinstance(value, str) and value else os.getenv(env_var)
+
+
+def _input_bucket_name(litellm_params: Mapping[str, object]) -> str | None:
+    return _s3_param(litellm_params, "s3_bucket_name", "AWS_S3_BUCKET_NAME")
+
+
+def _output_bucket_name(litellm_params: Mapping[str, object]) -> str | None:
+    return _s3_param(litellm_params, "s3_output_bucket_name", "AWS_S3_OUTPUT_BUCKET_NAME")
 
 
 def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
     """
-    Resolve the server-configured S3 bucket for Bedrock file operations.
-
-    Only trusts the immutable server-side credential snapshot or the
-    environment; never a request-supplied param, since the bucket is what
-    `validate_managed_cloud_file_id` checks file ids against.
+    Resolve the S3 bucket for Bedrock file operations: the call's ``s3_bucket_name``,
+    else ``AWS_S3_BUCKET_NAME``. File ids are validated against this bucket.
     """
-    bucket_name: Final = _trusted_s3_model_credentials(litellm_params).s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    bucket_name: Final = _input_bucket_name(litellm_params)
     if not bucket_name:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
     return bucket_name
@@ -284,16 +279,13 @@ def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
 
 def get_configured_s3_bucket_names(litellm_params: Mapping[str, object]) -> tuple[str, ...]:
     """
-    Resolve the server-configured S3 buckets a Bedrock file id may live in.
+    Resolve the S3 buckets a Bedrock file id may live in.
 
     Bedrock batch outputs land in ``s3_output_bucket_name`` when it differs from
-    the input bucket, so retrieval validates against both. Same trust rules as
-    ``get_configured_s3_bucket_name``: only the immutable credential snapshot or
-    the environment, never a request param.
+    the input bucket, so retrieval validates against both.
     """
-    trusted: Final = _trusted_s3_model_credentials(litellm_params)
-    input_bucket: Final = trusted.s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
-    output_bucket: Final = trusted.s3_output_bucket_name or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+    input_bucket: Final = _input_bucket_name(litellm_params)
+    output_bucket: Final = _output_bucket_name(litellm_params)
     buckets: Final = tuple(dict.fromkeys(bucket for bucket in (input_bucket, output_bucket) if bucket))
     if not buckets:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
@@ -413,12 +405,7 @@ def _output_location_still_unlisted(litellm_params: Mapping[str, object]) -> boo
 def _listing_bucket_name(litellm_params: Mapping[str, object], purpose: str | None) -> str:
     if purpose != "batch_output":
         return get_configured_s3_bucket_name(litellm_params)
-    trusted: Final = _trusted_s3_model_credentials(litellm_params)
-    return (
-        trusted.s3_output_bucket_name
-        or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
-        or get_configured_s3_bucket_name(litellm_params)
-    )
+    return _output_bucket_name(litellm_params) or get_configured_s3_bucket_name(litellm_params)
 
 
 def _listed_object_created_at(entry: ET.Element) -> int:
