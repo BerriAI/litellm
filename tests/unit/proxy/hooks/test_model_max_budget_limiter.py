@@ -517,12 +517,20 @@ async def test_latest_alias_budget_does_not_govern_other_requests(model: str) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", (Litellm_EntityType.KEY, Litellm_EntityType.TEAM))
-@pytest.mark.parametrize("entries", (("anthropic/claude-opus-latest", "claude-opus-5-5"), ("claude-opus*",)))
+@pytest.mark.parametrize(
+    "entries",
+    (
+        ("anthropic/claude-opus-latest", "claude-opus-5-5"),
+        ("claude-opus*",),
+        ("anthropic/claude-opus-5-5",),
+        ("claude-opus-5-5",),
+    ),
+)
 @pytest.mark.parametrize("requested", ("anthropic/claude-opus-latest", "anthropic/claude-opus-5-5"))
 async def test_latest_alias_spend_charges_each_governing_counter_once(
     scope: Litellm_EntityType, entries: tuple[str, ...], requested: str
 ) -> None:
-    budget: Final = {entry: ROOMY_CAP for entry in entries}
+    budget: Final = {entry: FAMILY_CAP for entry in entries}
     cache: Final = DualCache()
     limiter: Final = _family_limiter(dual_cache=cache)
     await _log_success(
@@ -556,6 +564,13 @@ async def test_latest_alias_spend_charges_each_governing_counter_once(
             else None
         )
         assert await cache.async_get_cache(spend_key, local_only=True) == expected
+    admission: Final = (
+        limiter.is_key_within_model_budget(_key(budget), requested)
+        if scope == Litellm_EntityType.KEY
+        else limiter.is_team_within_model_budget(TEAM_ID, budget, None, requested)
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+        await admission
 
 
 async def _spend_on(
