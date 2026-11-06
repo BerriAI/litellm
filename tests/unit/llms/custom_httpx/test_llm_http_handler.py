@@ -4894,6 +4894,10 @@ class _StreamRouteConfig(_TransformRecordingConfig):
     def __init__(self):
         super().__init__(transform_async=False)
 
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return True
+
     def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
         return f"{api_base}/{'stream' if stream else 'answer'}"
 

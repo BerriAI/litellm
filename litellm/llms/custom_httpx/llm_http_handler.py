@@ -1056,7 +1056,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
                 fake_stream=fake_stream,
             )
-            if provider_config.has_custom_stream_wrapper is True:
+            if provider_config.has_custom_stream_wrapper is True and not fake_stream:
                 return provider_config.get_sync_custom_stream_wrapper(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -1225,7 +1225,7 @@ class BaseLLMHTTPHandler:
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ):
-        if provider_config.has_custom_stream_wrapper is True:
+        if provider_config.has_custom_stream_wrapper is True and not fake_stream:
             return await provider_config.get_async_custom_stream_wrapper(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
