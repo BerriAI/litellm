@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     )
 
 from litellm.proxy.proxy_server import app as proxy_app
-from litellm.proxy.rust_forward.mode import InheritedFd, Supervised
+from litellm.proxy.rust_forward.mode import SUPERVISED_ENV, InheritedFd, Supervised, supervised_environment
 from litellm.proxy.rust_forward.peer import RustPeerMiddleware
 
 Headers = tuple[tuple[bytes, bytes], ...]
@@ -124,7 +124,9 @@ async def _peer_probe(request: Request) -> dict[str, object]:
 async def test_every_entry_point_hands_routes_the_peer_rust_saw(
     entry_point: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("_LITELLM_GATEWAY_FD", "17")
+    monkeypatch.setenv(
+        SUPERVISED_ENV, supervised_environment(Supervised(InheritedFd(17), True, "127.0.0.1"))[SUPERVISED_ENV]
+    )
     monkeypatch.setattr(proxy_app.router, "lifespan_context", proxy_app.router.lifespan_context)
     monkeypatch.setattr(
         proxy_app.router, "routes", [APIRoute("/__rust_forward_peer_probe", _peer_probe), *proxy_app.router.routes]

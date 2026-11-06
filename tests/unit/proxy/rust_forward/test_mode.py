@@ -8,12 +8,12 @@ from pydantic import ValidationError
 
 from litellm.proxy.proxy_cli import WORKER_APP, ProxyInitializationHelpers
 from litellm.proxy.rust_forward.mode import (
+    SUPERVISED_ENV,
     AssignedPort,
-    Disabled,
     InheritedFd,
+    Mode,
     RustForwardMode,
     Supervised,
-    Supervisor,
     gunicorn_bind,
     rust_forward_mode,
     server_proxy_headers,
@@ -26,21 +26,17 @@ from litellm.proxy.rust_forward.mode import (
 @pytest.mark.parametrize(
     ("environ", "expected"),
     [
-        ({}, Disabled()),
-        ({"LITELLM_RUST": "false"}, Disabled()),
-        ({"LITELLM_RUST": "off"}, Disabled()),
-        ({"LITELLM_RUST": "0"}, Disabled()),
-        ({"LITELLM_RUST": "true"}, Supervisor()),
-        ({"LITELLM_RUST": "1"}, Supervisor()),
-        ({"LITELLM_RUST": "yes"}, Supervisor()),
-        ({"LITELLM_RUST": "on"}, Supervisor()),
-        ({"LITELLM_RUST": " 1 "}, Supervisor()),
-        ({"LITELLM_RUST": ""}, Disabled()),
-        ({"LITELLM_RUST": " "}, Disabled()),
-        (
-            {"LITELLM_RUST": "true", "_LITELLM_GATEWAY_FD": "17", "FORWARDED_ALLOW_IPS": "127.0.0.1,10.0.0.5"},
-            Supervised(InheritedFd(17), True, "127.0.0.1,10.0.0.5"),
-        ),
+        ({}, Mode.DISABLED),
+        ({"LITELLM_RUST": "false"}, Mode.DISABLED),
+        ({"LITELLM_RUST": "off"}, Mode.DISABLED),
+        ({"LITELLM_RUST": "0"}, Mode.DISABLED),
+        ({"LITELLM_RUST": "true"}, Mode.SUPERVISOR),
+        ({"LITELLM_RUST": "1"}, Mode.SUPERVISOR),
+        ({"LITELLM_RUST": "yes"}, Mode.SUPERVISOR),
+        ({"LITELLM_RUST": "on"}, Mode.SUPERVISOR),
+        ({"LITELLM_RUST": " 1 "}, Mode.SUPERVISOR),
+        ({"LITELLM_RUST": ""}, Mode.DISABLED),
+        ({"LITELLM_RUST": " "}, Mode.DISABLED),
     ],
 )
 def test_mode_is_resolved_from_environment(environ: dict[str, str], expected: RustForwardMode) -> None:
@@ -48,35 +44,36 @@ def test_mode_is_resolved_from_environment(environ: dict[str, str], expected: Ru
 
 
 @pytest.mark.parametrize(
-    ("environ", "variable"),
+    ("environ", "invalid"),
     [
         ({"LITELLM_RUST": "enabled"}, "LITELLM_RUST"),
         ({"LITELLM_RUST": "2"}, "LITELLM_RUST"),
-        ({"_LITELLM_GATEWAY_FD": "seventeen"}, "_LITELLM_GATEWAY_FD"),
-        ({"_LITELLM_GATEWAY_FD": "17", "_LITELLM_GATEWAY_PROXY_HEADERS": "maybe"}, "_LITELLM_GATEWAY_PROXY_HEADERS"),
+        ({SUPERVISED_ENV: '{"listener": {"fd": "seventeen"}, "proxy_headers": true, "trusted_proxies": "*"}'}, "fd"),
+        (
+            {SUPERVISED_ENV: '{"listener": {"fd": 17}, "proxy_headers": "maybe", "trusted_proxies": "*"}'},
+            "proxy_headers",
+        ),
+        ({SUPERVISED_ENV: '{"listener": {"fd": 17}, "proxy_headers": true}'}, "trusted_proxies"),
     ],
 )
-def test_invalid_forwarding_value_stops_startup_naming_the_variable(environ: dict[str, str], variable: str) -> None:
-    with pytest.raises(ValidationError, match=variable):
+def test_invalid_forwarding_value_stops_startup_naming_it(environ: dict[str, str], invalid: str) -> None:
+    with pytest.raises(ValidationError, match=invalid):
         rust_forward_mode(environ)
 
 
 @pytest.mark.parametrize(
-    ("proxy_headers", "trusted_proxies", "inherited", "expected"),
+    "written",
     [
-        (True, None, {}, Supervised(InheritedFd(17), True, "127.0.0.1")),
-        (True, None, {"FORWARDED_ALLOW_IPS": "10.0.0.5"}, Supervised(InheritedFd(17), True, "10.0.0.5")),
-        (True, "*", {"FORWARDED_ALLOW_IPS": "10.0.0.5"}, Supervised(InheritedFd(17), True, "*")),
-        (False, None, {}, Supervised(InheritedFd(17), False, "127.0.0.1")),
-        (True, None, {}, Supervised(AssignedPort(45555), True, "127.0.0.1")),
-        (False, "*", {}, Supervised(AssignedPort(45555), False, "*")),
+        Supervised(InheritedFd(17), True, "127.0.0.1"),
+        Supervised(InheritedFd(17), True, "127.0.0.1,10.0.0.5"),
+        Supervised(InheritedFd(17), False, "127.0.0.1"),
+        Supervised(AssignedPort(45555), True, "*"),
+        Supervised(AssignedPort(45555), False, "*"),
     ],
 )
-def test_child_reads_back_the_listener_and_trust_the_supervisor_wrote(
-    proxy_headers: bool, trusted_proxies: str | None, inherited: dict[str, str], expected: Supervised
-) -> None:
-    written: Final = supervised_environment(expected.listener, proxy_headers, trusted_proxies)
-    assert rust_forward_mode({**inherited, **written}) == expected
+def test_child_reads_back_exactly_what_the_supervisor_wrote(written: Supervised) -> None:
+    inherited: Final = {"LITELLM_RUST": "true", "FORWARDED_ALLOW_IPS": "10.9.9.9"}
+    assert rust_forward_mode({**inherited, **supervised_environment(written)}) == written
 
 
 def _served_uvicorn_config(mode: RustForwardMode) -> uvicorn.Config:
@@ -93,7 +90,7 @@ def test_supervised_uvicorn_serves_the_inherited_socket_without_trusting_the_rus
     assert (config.app, config.factory) == (WORKER_APP, True)
 
 
-@pytest.mark.parametrize("mode", [Disabled(), Supervisor()])
+@pytest.mark.parametrize("mode", list(Mode))
 def test_unsupervised_servers_keep_their_own_socket_and_proxy_headers(mode: RustForwardMode) -> None:
     config: Final = _served_uvicorn_config(mode)
     assert (config.fd, config.proxy_headers, config.port) == (None, True, 45555)
@@ -117,7 +114,7 @@ def test_assigned_port_serves_only_the_loopback_hop_without_trusting_it() -> Non
 
 @pytest.mark.parametrize(
     ("mode", "stops"),
-    [(Supervised(InheritedFd(17), False, "127.0.0.1"), True), (Disabled(), False), (Supervisor(), False)],
+    [(Supervised(InheritedFd(17), False, "127.0.0.1"), True), (Mode.DISABLED, False), (Mode.SUPERVISOR, False)],
 )
 def test_only_a_supervised_server_stops_once_its_supervisor_is_gone(mode: RustForwardMode, stops: bool) -> None:
     read_end, write_end = os.pipe()

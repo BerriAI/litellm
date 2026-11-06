@@ -4,40 +4,28 @@ import signal
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum, auto
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.rust_bridge.configuration import ENV_NAME, RustSwitch
 
-GATEWAY_FD: Final = "_LITELLM_GATEWAY_FD"
-GATEWAY_PORT: Final = "_LITELLM_GATEWAY_PORT"
-PROXY_HEADERS: Final = "_LITELLM_GATEWAY_PROXY_HEADERS"
-TRUSTED_PROXIES: Final = "FORWARDED_ALLOW_IPS"
-DEFAULT_TRUSTED_PROXIES: Final = "127.0.0.1"
+SUPERVISED_ENV: Final = "_LITELLM_GATEWAY_SUPERVISED"
 RUST_HOP: Final = "127.0.0.1"
 
 
-class _ForwardEnvironment(BaseModel):
+class _Switch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     rust: RustSwitch = Field(None, validation_alias=ENV_NAME)
-    listener_fd: int | None = Field(None, validation_alias=GATEWAY_FD)
-    listener_port: int | None = Field(None, validation_alias=GATEWAY_PORT)
-    proxy_headers: bool = Field(True, validation_alias=PROXY_HEADERS)
-    trusted_proxies: str = Field(DEFAULT_TRUSTED_PROXIES, validation_alias=TRUSTED_PROXIES)
 
 
-@dataclass(frozen=True, slots=True)
-class Disabled:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Supervisor:
-    pass
+class Mode(Enum):
+    DISABLED = auto()
+    SUPERVISOR = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,41 +48,20 @@ class Supervised:
     trusted_proxies: str
 
 
-RustForwardMode: TypeAlias = Disabled | Supervisor | Supervised
+RustForwardMode: TypeAlias = Mode | Supervised
+_SUPERVISED: Final = TypeAdapter(Supervised)
 
 
-def _listener_environment(listener: ChildListener) -> tuple[str, str]:
-    match listener:
-        case InheritedFd(fd):
-            return GATEWAY_FD, str(fd)
-        case AssignedPort(port):
-            return GATEWAY_PORT, str(port)
-        case _:
-            assert_never(listener)
-
-
-def supervised_environment(
-    listener: ChildListener, proxy_headers: bool, trusted_proxies: str | None
-) -> Mapping[str, str]:
-    name, value = _listener_environment(listener)
-    return MappingProxyType(
-        {
-            name: value,
-            PROXY_HEADERS: str(proxy_headers).lower(),
-            **({} if trusted_proxies is None else {TRUSTED_PROXIES: trusted_proxies}),
-        }
-    )
+def supervised_environment(supervised: Supervised) -> Mapping[str, str]:
+    return MappingProxyType({SUPERVISED_ENV: _SUPERVISED.dump_json(supervised).decode()})
 
 
 def rust_forward_mode(environ: Mapping[str, str]) -> RustForwardMode:
-    parsed: Final = _ForwardEnvironment.model_validate(environ)
-    if parsed.listener_fd is not None:
-        return Supervised(InheritedFd(parsed.listener_fd), parsed.proxy_headers, parsed.trusted_proxies)
-    if parsed.listener_port is not None:
-        return Supervised(AssignedPort(parsed.listener_port), parsed.proxy_headers, parsed.trusted_proxies)
-    if parsed.rust:
-        return Supervisor()
-    return Disabled()
+    switch: Final = _Switch.model_validate(environ)
+    supervised: Final = environ.get(SUPERVISED_ENV)
+    if supervised is not None:
+        return _SUPERVISED.validate_json(supervised)
+    return Mode.SUPERVISOR if switch.rust else Mode.DISABLED
 
 
 def _wait_for_eof(fd: int) -> None:
@@ -118,7 +85,7 @@ def stop_with_supervisor(mode: RustForwardMode, fd: int = 0, stop: Callable[[], 
     match mode:
         case Supervised():
             threading.Thread(target=_stop_when_closed, args=(fd, stop), name="supervisor-stdin", daemon=True).start()
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             pass
         case _:
             assert_never(mode)
@@ -151,7 +118,7 @@ def uvicorn_options(mode: RustForwardMode, factory: str) -> Mapping[str, object]
             return MappingProxyType(
                 {"app": factory, "factory": True, **_uvicorn_listener(listener), "proxy_headers": False}
             )
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             return MappingProxyType({})
         case _:
             assert_never(mode)
@@ -171,7 +138,7 @@ def uvicorn_flags(mode: RustForwardMode) -> tuple[str, ...]:
     match mode:
         case Supervised(listener):
             return (*_uvicorn_listener_flags(listener), "--no-proxy-headers")
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             return ()
         case _:
             assert_never(mode)
@@ -191,7 +158,7 @@ def gunicorn_bind(mode: RustForwardMode, public: str) -> str:
     match mode:
         case Supervised(listener):
             return _gunicorn_listener(listener)
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             return public
         case _:
             assert_never(mode)
@@ -201,7 +168,7 @@ def server_proxy_headers(mode: RustForwardMode) -> bool:
     match mode:
         case Supervised():
             return False
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             return True
         case _:
             assert_never(mode)

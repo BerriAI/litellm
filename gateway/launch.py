@@ -80,40 +80,23 @@ def _serve(argv: Sequence[str]) -> None:
 
 def python_server(argv: Sequence[str]) -> "PythonServer":
     """What uvicorn would serve the public port with, read from the same flags and environment it reads."""
-    from pydantic import TypeAdapter
-
-    from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
+    from litellm.proxy.rust_forward.server import PythonServer, Server, UvicornCliParams, uvicorn_trusted_proxies
     from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
-    params: Final[Mapping[str, object]] = uvicorn_main.make_context(
-        "uvicorn", list(uvicorn_argv(argv, os.environ))
-    ).params
-    tls: Final = (
-        params["ssl_keyfile"] is not None
-        or params["ssl_certfile"] is not None
-        or any(arg.split("=")[0] == "--ssl-ciphers" for arg in argv)
+    params: Final = UvicornCliParams.model_validate(
+        uvicorn_main.make_context("uvicorn", list(uvicorn_argv(argv, os.environ))).params
     )
-    listener: Final = (
-        Listener.TLS
-        if tls
-        else Listener.UNIX_SOCKET
-        if params["uds"] is not None
-        else Listener.INHERITED_FD
-        if params["fd"] is not None
-        else Listener.TCP
-    )
-    graceful_timeout: Final = TypeAdapter[int | None](int | None).validate_python(params["timeout_graceful_shutdown"])
     return PythonServer(
         server=Server.UVICORN,
-        listener=listener,
-        host=TypeAdapter(str).validate_python(params["host"]),
-        port=TypeAdapter(int).validate_python(params["port"]),
-        keepalive_seconds=TypeAdapter(int).validate_python(params["timeout_keep_alive"]),
+        listener=params.listener,
+        host=params.host,
+        port=params.port,
+        keepalive_seconds=params.timeout_keep_alive,
         graceful_timeout_seconds=GracefulShutdownManager.get_timeout()
-        if graceful_timeout is None
-        else graceful_timeout,
-        proxy_headers=TypeAdapter(bool).validate_python(params["proxy_headers"]),
-        trusted_proxies=TypeAdapter[str | None](str | None).validate_python(params["forwarded_allow_ips"]),
+        if params.timeout_graceful_shutdown is None
+        else params.timeout_graceful_shutdown,
+        proxy_headers=params.proxy_headers,
+        trusted_proxies=uvicorn_trusted_proxies(params.forwarded_allow_ips),
     )
 
 
@@ -132,9 +115,8 @@ def configure_database() -> None:
 
 def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
     from litellm.proxy.rust_forward.mode import (
-        Disabled,
+        Mode,
         Supervised,
-        Supervisor,
         rust_forward_mode,
         stop_with_supervisor,
         uvicorn_flags,
@@ -143,14 +125,14 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
 
     mode: Final = rust_forward_mode(os.environ)
     match mode:
-        case Supervisor() if not isinstance(
+        case Mode.SUPERVISOR if not isinstance(
             exit_code := supervise(
                 python_server(argv), (sys.executable, "-m", "gateway.launch", *argv), before_start=configure_database
             ),
             StartupError,
         ):
             sys.exit(exit_code)
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             configure_database()
             serve(uvicorn_argv(argv, os.environ))
         case Supervised():

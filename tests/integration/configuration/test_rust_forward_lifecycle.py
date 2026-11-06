@@ -46,14 +46,14 @@ import uvicorn
 
 
 def listener():
-    fd = os.environ.get("_LITELLM_GATEWAY_FD")
-    if fd is None:
-        return {"host": "127.0.0.1", "port": int(sys.argv[2])}
-    from litellm.proxy.rust_forward.mode import rust_forward_mode, stop_with_supervisor
+    from litellm.proxy.rust_forward.mode import Supervised, rust_forward_mode, stop_with_supervisor
 
-    stop_with_supervisor(rust_forward_mode(os.environ))
+    mode = rust_forward_mode(os.environ)
+    if not isinstance(mode, Supervised):
+        return {"host": "127.0.0.1", "port": int(sys.argv[2])}
+    stop_with_supervisor(mode)
     pathlib.Path(os.environ["MARKERS"], "python.pid").write_text(str(os.getpid()))
-    return {"fd": int(fd)}
+    return {"fd": mode.listener.fd}
 
 
 if __name__ == "__main__":
@@ -123,7 +123,7 @@ from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
 from litellm.proxy.rust_forward.supervisor import supervise
 
 workers, port, scripts = sys.argv[1], int(sys.argv[2]), Path(sys.argv[3])
-server = PythonServer(Server.UVICORN, Listener.TCP, "127.0.0.1", port, 5, 30.0, True, None)
+server = PythonServer(Server.UVICORN, Listener.TCP, "127.0.0.1", port, 5, 30.0, True, "127.0.0.1")
 result = supervise(server, (sys.executable, str(scripts / "serve.py"), workers, str(port)), scripts_dir=str(scripts))
 raise SystemExit(result if isinstance(result, int) else 3)
 """

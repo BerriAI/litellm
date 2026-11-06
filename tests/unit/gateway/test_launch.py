@@ -126,7 +126,8 @@ class TestUvicornArgv:
             (("--fd", "0"), Listener.INHERITED_FD),
             (("--fd=17",), Listener.INHERITED_FD),
             (("--ssl-keyfile", "unused"), Listener.TLS),
-            (("--ssl-ciphers", "TLSv1.2"), Listener.TLS),
+            (("--ssl-certfile", "unused"), Listener.TLS),
+            (("--ssl-ciphers", "TLSv1.2"), Listener.TCP),
         ],
     )
     def test_forwarding_sees_the_public_listener_uvicorn_would_open(
@@ -135,18 +136,25 @@ class TestUvicornArgv:
         assert python_server(arguments).listener is listener
 
     @pytest.mark.parametrize(
-        ("argv", "trust"),
+        ("argv", "environ", "trust"),
         [
-            ((), (True, None)),
-            (("--forwarded-allow-ips", "10.0.0.5"), (True, "10.0.0.5")),
-            (("--forwarded-allow-ips=*",), (True, "*")),
-            (("--no-proxy-headers",), (False, None)),
+            ((), {}, (True, "127.0.0.1")),
+            ((), {"FORWARDED_ALLOW_IPS": "10.9.9.9"}, (True, "10.9.9.9")),
+            (("--forwarded-allow-ips", "10.0.0.5"), {"FORWARDED_ALLOW_IPS": "10.9.9.9"}, (True, "10.0.0.5")),
+            (("--forwarded-allow-ips=*",), {}, (True, "*")),
+            (("--no-proxy-headers",), {}, (False, "127.0.0.1")),
         ],
     )
-    def test_forwarding_carries_operator_proxy_header_options_to_the_child(
-        self, argv: tuple[str, ...], trust: tuple[bool, str | None], monkeypatch: pytest.MonkeyPatch
+    def test_forwarding_carries_the_trust_uvicorn_resolves_to_the_child(
+        self,
+        argv: tuple[str, ...],
+        environ: dict[str, str],
+        trust: tuple[bool, str],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+        for name, value in environ.items():
+            monkeypatch.setenv(name, value)
         server: Final = python_server(("--host", "0.0.0.0", "--port", "4000", *argv))
         assert (server.host, server.port) == ("0.0.0.0", 4000)
         assert (server.proxy_headers, server.trusted_proxies) == trust
@@ -335,7 +343,7 @@ class TestMain:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         monkeypatch.setenv("LITELLM_RUST", rust)
-        monkeypatch.delenv("_LITELLM_GATEWAY_FD", raising=False)
+        monkeypatch.delenv("_LITELLM_GATEWAY_SUPERVISED", raising=False)
         monkeypatch.delenv("LITELLM_PGBOUNCER_ENABLED", raising=False)
         served: Final[list[tuple[str, ...]]] = []
         main(("--uds", "/tmp/gateway.sock"), serve=lambda argv: served.append(tuple(argv)))

@@ -854,7 +854,7 @@ class ProxyInitializationHelpers:
         import uvicorn
         from gunicorn.config import Config as GunicornConfig
 
-        from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
+        from litellm.proxy.rust_forward.server import Listener, PythonServer, Server, uvicorn_trusted_proxies
         from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
         server: Final = (
@@ -883,7 +883,7 @@ class ProxyInitializationHelpers:
             proxy_headers=True,
             trusted_proxies=",".join(TypeAdapter(list[str]).validate_python(GunicornConfig().forwarded_allow_ips))
             if server is Server.GUNICORN
-            else None,
+            else uvicorn_trusted_proxies(None),
         )
 
     @staticmethod
@@ -1359,7 +1359,7 @@ def run_server(
     from pydantic import ValidationError
 
     from litellm.proxy.rust_forward.mode import (
-        Supervisor,
+        Mode,
         environment_error,
         gunicorn_bind,
         rust_forward_mode,
@@ -1373,7 +1373,7 @@ def run_server(
     except ValidationError as error:
         raise click.ClickException(environment_error(error)) from None
     stop_with_supervisor(forward_mode)
-    if isinstance(forward_mode, Supervisor) and not any(
+    if forward_mode is Mode.SUPERVISOR and not any(
         (version, validate_config, health, test, skip_server_startup, check_migrations_against_existing_data)
     ):
         from litellm.proxy.rust_forward.supervisor import StartupError, supervise
@@ -1385,7 +1385,7 @@ def run_server(
             run_gunicorn=run_gunicorn,
             run_hypercorn=run_hypercorn,
             run_granian=run_granian,
-            tls=any((ssl_keyfile_path, ssl_certfile_path, ciphers)),
+            tls=None not in (ssl_keyfile_path, ssl_certfile_path),
         )
         supervised: Final = supervise(server, (sys.executable, "-m", "litellm.proxy.proxy_cli", *sys.argv[1:]))
         if not isinstance(supervised, StartupError):

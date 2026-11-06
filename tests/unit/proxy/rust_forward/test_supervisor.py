@@ -31,10 +31,10 @@ from litellm.proxy.rust_forward.supervisor import (
     ChildExited,
     Event,
     Lifecycle,
-    PythonListening,
+    Phase,
+    Probe,
     Send,
     Spawn,
-    Spawned,
     StartupError,
     boot,
     exit_status,
@@ -54,7 +54,7 @@ POSIX_ONLY: Final = pytest.mark.skipif(sys.platform == "win32", reason="runs a P
 
 
 def _server(
-    server: Server = Server.UVICORN, listener: Listener = Listener.TCP, trusted_proxies: str | None = None
+    server: Server = Server.UVICORN, listener: Listener = Listener.TCP, trusted_proxies: str = "127.0.0.1"
 ) -> PythonServer:
     return PythonServer(server, listener, "0.0.0.0", 4000, 2, 2.5, False, trusted_proxies)
 
@@ -168,12 +168,11 @@ def test_binary_is_found_only_in_the_environment_scripts_dir(tmp_path: Path, mon
 
 
 PYTHON_CHILD: Final = """
-import os, pathlib, socket, time
+import json, os, pathlib, socket, time
 time.sleep(0.5)
 pathlib.Path(os.environ["MARKERS"], "listening").touch()
-fd = os.environ.get("_LITELLM_GATEWAY_FD")
-port = os.environ.get("_LITELLM_GATEWAY_PORT")
-listener = socket.socket(fileno=int(fd)) if fd else socket.create_server(("127.0.0.1", int(port)))
+private = json.loads(os.environ["_LITELLM_GATEWAY_SUPERVISED"])["listener"]
+listener = socket.socket(fileno=private["fd"]) if "fd" in private else socket.create_server(("127.0.0.1", private["port"]))
 listener.listen()
 time.sleep(10)
 """
@@ -240,7 +239,7 @@ def _after(world: World, event: Event) -> World:
     match event:
         case Caught(signum):
             return replace(world, stop_requested=world.stop_requested or signum in STOPS)
-        case PythonListening():
+        case Probe.PYTHON_LISTENING:
             return replace(world, reported_listening=world.reported_listening or Child.PYTHON in world.alive)
         case ChildExited(child, status) if child in world.alive:
             lost: Final = child is Child.RUST and Child.PYTHON in world.alive and not world.stop_requested
@@ -264,7 +263,7 @@ STOPS: Final = POSIX.stop_signals
 EVENTS: Final = st.lists(
     st.one_of(
         st.sampled_from(SIGNALS).map(Caught),
-        st.just(PythonListening()),
+        st.just(Probe.PYTHON_LISTENING),
         st.builds(ChildExited, st.sampled_from(Child), st.integers(-15, 3)),
     ),
     max_size=40,
@@ -272,8 +271,8 @@ EVENTS: Final = st.lists(
 
 
 @given(EVENTS)
-@example([Caught(TERM), Caught(signal.SIGHUP), PythonListening()])
-@example([PythonListening(), Caught(TERM), Caught(signal.SIGWINCH), ChildExited(Child.RUST, 0)])
+@example([Caught(TERM), Caught(signal.SIGHUP), Probe.PYTHON_LISTENING])
+@example([Probe.PYTHON_LISTENING, Caught(TERM), Caught(signal.SIGWINCH), ChildExited(Child.RUST, 0)])
 def test_lifecycle_relays_every_signal_and_ends_with_pythons_status(events: list[Event]) -> None:
     state, actions = boot()
     world = World()
@@ -284,7 +283,7 @@ def test_lifecycle_relays_every_signal_and_ends_with_pythons_status(events: list
         match event:
             case Caught(signum):
                 assert actions == _expected_relay(before, signum)
-            case PythonListening():
+            case Probe.PYTHON_LISTENING:
                 starts_rust = Child.PYTHON in world.alive and not world.reported_listening and not world.stop_requested
                 assert actions == ((Spawn(Child.RUST),) if starts_rust else ())
             case ChildExited(child) if child in world.alive:
@@ -308,7 +307,7 @@ def test_rust_starts_at_most_once_and_only_while_python_listens_unstopped(events
     spawns: Final = tuple((event, state) for event, state, action in history if isinstance(action, Spawn))
     assert len(spawns) <= 1
     assert all(
-        isinstance(event, PythonListening) and isinstance(state.python, Spawned) and not state.stop_requested
+        event is Probe.PYTHON_LISTENING and state.python is Phase.SPAWNED and not state.stop_requested
         for event, state in spawns
     )
 
@@ -316,10 +315,22 @@ def test_rust_starts_at_most_once_and_only_while_python_listens_unstopped(events
 @pytest.mark.parametrize(
     ("events", "expected"),
     [
-        ((PythonListening(), Caught(TERM), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)), -15),
-        ((PythonListening(), Caught(INT), Caught(INT), ChildExited(Child.PYTHON, 1), ChildExited(Child.RUST, 0)), 1),
-        ((PythonListening(), Caught(signal.SIGHUP), ChildExited(Child.PYTHON, -1), ChildExited(Child.RUST, 0)), -1),
-        ((PythonListening(), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, 0)), FAILURE),
+        ((Probe.PYTHON_LISTENING, Caught(TERM), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)), -15),
+        (
+            (
+                Probe.PYTHON_LISTENING,
+                Caught(INT),
+                Caught(INT),
+                ChildExited(Child.PYTHON, 1),
+                ChildExited(Child.RUST, 0),
+            ),
+            1,
+        ),
+        (
+            (Probe.PYTHON_LISTENING, Caught(signal.SIGHUP), ChildExited(Child.PYTHON, -1), ChildExited(Child.RUST, 0)),
+            -1,
+        ),
+        ((Probe.PYTHON_LISTENING, ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, 0)), FAILURE),
         ((ChildExited(Child.PYTHON, 3),), 3),
     ],
 )

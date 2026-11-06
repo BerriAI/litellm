@@ -4297,15 +4297,16 @@ class TestRustForwardServer:
             run_gunicorn=params["run_gunicorn"] is True,
             run_hypercorn=params["run_hypercorn"] is True,
             run_granian=params["run_granian"] is True,
-            tls=any((params["ssl_keyfile_path"], params["ssl_certfile_path"], params["ciphers"])),
+            tls=None not in (params["ssl_keyfile_path"], params["ssl_certfile_path"]),
         )
 
     @pytest.mark.parametrize(
         ("argv", "reason"),
         [
-            (["--ssl_keyfile_path", "unused"], "does not support TLS on the public port"),
-            (["--ssl_certfile_path", "unused"], "does not support TLS on the public port"),
-            (["--ciphers", "unused"], "does not support TLS on the public port"),
+            (
+                ["--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"],
+                "does not support TLS on the public port",
+            ),
             (["--run_hypercorn"], "does not support Hypercorn"),
             (["--run_granian"], "does not support Granian"),
         ],
@@ -4321,8 +4322,28 @@ class TestRustForwardServer:
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    @pytest.mark.parametrize(
+        ("argv", "reason", "served_keyfile"),
+        [
+            (
+                ["--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"],
+                "does not support TLS on the public port",
+                "key.pem",
+            ),
+            (["--ssl_keyfile_path", "key.pem"], "requires the litellm-gateway binary", None),
+            (["--ssl_certfile_path", "cert.pem"], "requires the litellm-gateway binary", None),
+            (["--ciphers", "ECDHE"], "requires the litellm-gateway binary", None),
+        ],
+    )
     def test_a_refused_forwarding_start_serves_from_python_alone(
-        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_uvicorn_run,
+        argv: list[str],
+        reason: str,
+        served_keyfile: str | None,
     ) -> None:
         from click.testing import CliRunner
 
@@ -4333,20 +4354,24 @@ class TestRustForwardServer:
             save_worker_config=MagicMock(),
         )
         environ: Final = {
-            **{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "_LITELLM_GATEWAY_FD")},
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("DATABASE_URL", "DIRECT_URL", "_LITELLM_GATEWAY_SUPERVISED")
+            },
             "LITELLM_RUST": "true",
         }
         with (
             patch.dict(os.environ, environ, clear=True),
             patch.dict("sys.modules", {"proxy_server": proxy_module, "litellm.proxy.proxy_server": proxy_module}),
+            patch("litellm.proxy.rust_forward.supervisor.gateway_binary", return_value=None),
         ):
-            result: Final = CliRunner().invoke(
-                run_server, ["--port", "45999", "--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"]
-            )
+            result: Final = CliRunner().invoke(run_server, ["--port", "45999", *argv])
         assert result.exit_code == 0, result.output
-        assert "LITELLM_RUST does not support TLS on the public port, so Python serves the public port" in result.output
+        assert f"LITELLM_RUST {reason}" in result.output
+        assert "so Python serves the public port without Rust forwarding" in result.output
         mock_uvicorn_run.assert_called_once()
-        assert mock_uvicorn_run.call_args.kwargs["ssl_keyfile"] == "key.pem"
+        assert mock_uvicorn_run.call_args.kwargs.get("ssl_keyfile") == served_keyfile
         assert mock_uvicorn_run.call_args.kwargs["port"] == 45999
 
     def test_an_invalid_rust_switch_stops_startup_with_one_line_naming_it(self) -> None:

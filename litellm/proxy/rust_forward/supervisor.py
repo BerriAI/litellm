@@ -7,15 +7,15 @@ import sys
 import sysconfig
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import Enum, auto
 from functools import partial
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from typing_extensions import assert_never
 
 from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
-from litellm.proxy.rust_forward.mode import RUST_HOP, supervised_environment
+from litellm.proxy.rust_forward.mode import RUST_HOP, Supervised, supervised_environment
 from litellm.proxy.rust_forward.platform import Platform, PrivateListener, SpawnOptions, current_platform
 from litellm.proxy.rust_forward.server import Listener, PythonServer, Server
 from litellm.rust_bridge.configuration import ENV_NAME
@@ -52,19 +52,10 @@ class Child(Enum):
 FAILURE: Final = 1
 
 
-@dataclass(frozen=True, slots=True)
-class NotStarted:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Spawned:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Listening:
-    pass
+class Phase(Enum):
+    NOT_STARTED = auto()
+    SPAWNED = auto()
+    LISTENING = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +70,8 @@ class Lost:
     status: int
 
 
-PythonState: TypeAlias = Spawned | Listening | Exited
-RustState: TypeAlias = NotStarted | Spawned | Exited | Lost
+PythonState: TypeAlias = Literal[Phase.SPAWNED, Phase.LISTENING] | Exited
+RustState: TypeAlias = Literal[Phase.NOT_STARTED, Phase.SPAWNED] | Exited | Lost
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,9 +86,8 @@ class Caught:
     signum: signal.Signals
 
 
-@dataclass(frozen=True, slots=True)
-class PythonListening:
-    pass
+class Probe(Enum):
+    PYTHON_LISTENING = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,39 +107,39 @@ class Send:
     signum: signal.Signals
 
 
-Event: TypeAlias = Caught | PythonListening | ChildExited
+Event: TypeAlias = Caught | Literal[Probe.PYTHON_LISTENING] | ChildExited
 Action: TypeAlias = Spawn | Send
 Transition: TypeAlias = tuple[Lifecycle, tuple[Action, ...]]
 
 
 def boot() -> Transition:
-    return Lifecycle(Spawned(), NotStarted(), stop_requested=False), (Spawn(Child.PYTHON),)
+    return Lifecycle(Phase.SPAWNED, Phase.NOT_STARTED, stop_requested=False), (Spawn(Child.PYTHON),)
 
 
 def _relay(state: Lifecycle, signum: signal.Signals, stops: bool) -> Transition:
-    to_rust: Final = (Send(Child.RUST, signum),) if stops and isinstance(state.rust, Spawned) else ()
+    to_rust: Final = (Send(Child.RUST, signum),) if stops and state.rust is Phase.SPAWNED else ()
     to_python: Final = (Send(Child.PYTHON, signum),) if not isinstance(state.python, Exited) else ()
     return replace(state, stop_requested=state.stop_requested or stops), (*to_rust, *to_python)
 
 
 # Python alone takes no connections until it has booted, so Rust only opens the public port once Python listens.
 def _python_listening(state: Lifecycle) -> Transition:
-    if not isinstance(state.python, Spawned):
+    if state.python is not Phase.SPAWNED:
         return state, ()
     if state.stop_requested:
-        return replace(state, python=Listening()), ()
-    return replace(state, python=Listening(), rust=Spawned()), (Spawn(Child.RUST),)
+        return replace(state, python=Phase.LISTENING), ()
+    return replace(state, python=Phase.LISTENING, rust=Phase.SPAWNED), (Spawn(Child.RUST),)
 
 
 def _python_exited(state: Lifecycle, status: int) -> Transition:
     if isinstance(state.python, Exited):
         return state, ()
     exited: Final = replace(state, python=Exited(status))
-    return exited, ((Send(Child.RUST, signal.SIGTERM),) if isinstance(state.rust, Spawned) else ())
+    return exited, ((Send(Child.RUST, signal.SIGTERM),) if state.rust is Phase.SPAWNED else ())
 
 
 def _rust_exited(state: Lifecycle, status: int) -> Transition:
-    if not isinstance(state.rust, Spawned):
+    if state.rust is not Phase.SPAWNED:
         return state, ()
     if state.stop_requested or isinstance(state.python, Exited):
         return replace(state, rust=Exited(status)), ()
@@ -162,7 +152,7 @@ def step(state: Lifecycle, event: Event, stop_signals: frozenset[signal.Signals]
     match event:
         case Caught(signum):
             return _relay(state, signum, signum in stop_signals)
-        case PythonListening():
+        case Probe.PYTHON_LISTENING:
             return _python_listening(state)
         case ChildExited(child, status):
             match child:
@@ -178,7 +168,7 @@ def step(state: Lifecycle, event: Event, stop_signals: frozenset[signal.Signals]
 
 def exit_status(state: Lifecycle) -> int | None:
     match state.python, state.rust:
-        case Exited(status), NotStarted() | Exited():
+        case Exited(status), Phase.NOT_STARTED | Exited():
             return status
         case Exited(), Lost():
             return FAILURE
@@ -198,7 +188,9 @@ def python_spec(
 ) -> ChildSpec:
     return ChildSpec(
         argv=(*command, "--port", str(private.port)),
-        env_overrides=supervised_environment(private.listener, server.proxy_headers, server.trusted_proxies),
+        env_overrides=supervised_environment(
+            Supervised(private.listener, server.proxy_headers, server.trusted_proxies)
+        ),
         spawn=platform.spawn_options(private.pass_fds),
     )
 
@@ -251,7 +243,7 @@ async def _accepts(port: int) -> bool:
 async def _report_once_listening(port: int, events: asyncio.Queue[Event]) -> None:
     while not await _accepts(port):
         await asyncio.sleep(PROBE_INTERVAL_SECONDS)
-    events.put_nowait(PythonListening())
+    events.put_nowait(Probe.PYTHON_LISTENING)
 
 
 @contextlib.asynccontextmanager
@@ -295,53 +287,22 @@ async def _launch_python(
         yield process
 
 
-@dataclass(frozen=True, slots=True)
-class _Launching:
-    state: Lifecycle
-    child: Child
-    rest: tuple[Action, ...]
-
-
-async def _advance(
-    platform: Platform,
-    transition: Transition,
-    events: asyncio.Queue[Event],
-    children: Mapping[Child, asyncio.subprocess.Process],
-) -> int | _Launching:
-    state, actions = transition
-    while True:
-        for index, action in enumerate(actions):
-            match action:
-                case Send(child, signum):
-                    platform.signal_child(children[child], signum)
-                case Spawn(child):
-                    return _Launching(state, child, actions[index + 1 :])
-                case _:
-                    assert_never(action)
-        status = exit_status(state)
-        if status is not None:
-            return status
-        state, actions = step(state, await events.get(), platform.stop_signals)
-
-
-async def _run(
-    platform: Platform,
-    transition: Transition,
-    events: asyncio.Queue[Event],
-    children: Mapping[Child, asyncio.subprocess.Process],
-    launches: Mapping[Child, Launch],
-) -> int:
-    advanced: Final = await _advance(platform, transition, events, children)
-    match advanced:
-        case int():
-            return advanced
-        case _Launching(state, child, rest):
-            async with launches[child](events) as process:
-                return await _run(
-                    platform, (state, rest), events, MappingProxyType({**children, child: process}), launches
-                )
-        case _:
-            assert_never(advanced)
+async def _run(platform: Platform, events: asyncio.Queue[Event], launches: Mapping[Child, Launch]) -> int:
+    async with contextlib.AsyncExitStack() as stack:
+        children: Final[dict[Child, asyncio.subprocess.Process]] = {}  # mutable-ok: indexes the stack's children
+        state, actions = boot()
+        while True:
+            for action in actions:
+                match action:
+                    case Spawn(child):
+                        children[child] = await stack.enter_async_context(launches[child](events))
+                    case Send(child, signum):
+                        platform.signal_child(children[child], signum)
+                    case _:
+                        assert_never(action)
+            if (status := exit_status(state)) is not None:
+                return status
+            state, actions = step(state, await events.get(), platform.stop_signals)
 
 
 async def _supervise(platform: Platform, binary: str, command: Sequence[str], server: PythonServer) -> int:
@@ -356,7 +317,7 @@ async def _supervise(platform: Platform, binary: str, command: Sequence[str], se
                 Child.RUST: partial(_launch, platform, Child.RUST, rust_spec(platform, binary, private.port, server)),
             }
         )
-        return await _run(platform, boot(), events, MappingProxyType({}), launches)
+        return await _run(platform, events, launches)
 
 
 def _exit_like(status: int) -> int:

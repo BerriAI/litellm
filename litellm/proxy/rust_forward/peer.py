@@ -7,7 +7,7 @@ from typing import (
 
 from typing_extensions import assert_never
 
-from litellm.proxy.rust_forward.mode import RUST_HOP, Disabled, RustForwardMode, Supervised, Supervisor
+from litellm.proxy.rust_forward.mode import RUST_HOP, Mode, RustForwardMode, Supervised
 
 if TYPE_CHECKING:
     import starlette.types
@@ -63,7 +63,7 @@ def wrap(app: "starlette.types.ASGIApp", mode: RustForwardMode) -> ASGIApp:
     match mode:
         case Supervised():
             return RustPeerMiddleware(converted, mode)
-        case Disabled() | Supervisor():
+        case Mode.DISABLED | Mode.SUPERVISOR:
             return converted
         case _:
             assert_never(mode)
