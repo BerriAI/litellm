@@ -1177,6 +1177,7 @@ _HOSTED_STATE: Final = frozenset(
         "_core_auto_routers",
         "_core_complexity_routers",
         "_core_quality_routers",
+        "_core_switchyard_routers",
         "_core_adaptive_routers",
         "_core_routing_plugins",
         "_core_deployment_latency_map",
@@ -1722,6 +1723,7 @@ class RustCore(
             run_plugins=partial(self._run_plugins, request_kwargs, messages)
             if self._hosted._core_routing_plugins  # pyright: ignore[reportPrivateUsage]  # the live plugin list
             else None,
+            call_type=None,
         )
 
     def _core_log_retry(
@@ -2715,7 +2717,7 @@ class RustCore(
         web_search: Final = not plan.sync and self._picks_async() and is_web_search_request(request)
         # The generic handler `_route_capability_pin` names: a call only some providers serve
         # drops the others, and a Decisions call carrying media skips the deployments refusing it.
-        handler: Final = plan.host_op.rsplit(".", 1)[-1]
+        handler: Final = plan.handler
         decisions_media: Final = handler in DECISIONS_MEDIA_CALL_TYPES and bool(
             request.get("audio") or request.get("videos")
         )
@@ -3113,6 +3115,7 @@ class RustCore(
         specific_deployment: object = _NO_INPUT,
         *,
         pass_through: bool = False,
+        call_type: str | None = None,
     ) -> object:
         """The host's pre-routing of one pick (router_rust.steps.prerouting): the model group to resolve
         instead of the step's ``model``, a custom strategy's deployment, or ``None``. ``pass_through``
@@ -3166,6 +3169,7 @@ class RustCore(
             fallback_depth=depth if isinstance(depth, int) else 0,
             router_strategy=normalize_strategy(r.routing_strategy),
             pass_through=pass_through,
+            call_type=call_type,
             enable_tag_filtering=r.enable_tag_filtering,
             match_any=r.tag_filtering_match_any,
             public_router=public if public is not None else self,
@@ -5266,7 +5270,9 @@ class _Driver:
     async def pre_route(self, step: Mapping[str, object]) -> object:
         request: Final = self._request
         try:
-            return await self._core._pre_route(step, request, *self._plan.pick_input(request))  # pyright: ignore[reportPrivateUsage]  # see above
+            return await self._core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
+                step, request, *self._plan.pick_input(request), call_type=self._plan.handler
+            )
         except Exception as error:  # noqa: BLE001  # see select
             return self._pick_raised(error, logged=True)
 

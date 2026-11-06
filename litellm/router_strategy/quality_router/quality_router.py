@@ -330,6 +330,7 @@ class QualityRouter(CustomLogger):
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         """Try keyword override first; fall back to complexity-tier routing."""
         from litellm.types.router import PreRoutingHookResponse
