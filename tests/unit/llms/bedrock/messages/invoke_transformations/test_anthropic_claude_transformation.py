@@ -2373,8 +2373,8 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
 def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_output_config(
     local_model_cost_map: None, local_beta_headers_config: None
 ) -> None:
-    """A live InvokeModel call on 2026-11-05 answered 200 with per-turn-control-2026-07-01 on every Claude model the
-    QA account can reach, and a made-up beta answered 400, so the client's beta must reach ``anthropic_beta``."""
+    """A live InvokeModel call on 2026-11-05 answered 200 with per-turn-control-2026-07-01 next to a message
+    ``output_config`` on Opus 5.5, so the client's beta and that message must both reach Bedrock."""
     from litellm.types.router import GenericLiteLLMParams
 
     messages: Final = [
@@ -2394,6 +2394,36 @@ def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_ou
 
     assert result["messages"] == messages
     assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
+
+
+@pytest.mark.parametrize(
+    ("model", "headers", "forwarded"),
+    [
+        ("anthropic.claude-3-haiku-20240307-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("eu.anthropic.claude-opus-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("global.anthropic.claude-sonnet-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("us.anthropic.claude-newfamily-6", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("us.anthropic.claude-sonnet-5-5", {}, False),
+    ],
+)
+def test_bedrock_invoke_transform_forwards_per_turn_control_beta_only_where_the_model_map_flags_it(
+    local_model_cost_map: None, local_beta_headers_config: None, model: str, headers: dict[str, str], forwarded: bool
+) -> None:
+    """On 2026-11-05 Bedrock InvokeModel answered 400 ``invalid beta flag`` to per-turn-control-2026-07-01 on Claude 3
+    Haiku and 200 on every Claude 4.5 and newer model a QA account reached in 13 regions."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 16, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    assert ("per-turn-control-2026-07-01" in result.get("anthropic_beta", ())) is forwarded
 
 
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):

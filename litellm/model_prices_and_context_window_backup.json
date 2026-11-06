@@ -64828,6 +64828,15 @@
                 }
             },
             {
+                "name": "claude-per-turn-control",
+                "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
+                "fill_missing_for_providers": ["bedrock", "bedrock_converse"],
+                "description": "Claude at version 4.5 or higher, with the same id shapes and version boundaries as claude-tool-search. On 2026-11-05 Bedrock InvokeModel answered 200 with the per-turn-control-2026-07-01 beta on every Claude 4.5 and newer model a QA account reached across 13 regions, and 400 invalid beta flag on Claude 3 Haiku in ca-central-1. Claude 3.5, 3.7, Sonnet 4, Opus 4 and Opus 4.1 were unreachable, so they keep the beta dropped as before. Bedrock Invoke forwards the beta only where this flag is set.",
+                "model_info": {
+                    "supports_per_turn_control": true
+                }
+            },
+            {
                 "name": "wandb-reasoning-baseline",
                 "pattern": "^wandb/",
                 "description": "Any Weights & Biases Inference model id, anchored to the wandb/ namespace so only that provider's ids match. W&B's serverless catalog is reasoning-first and grows faster than this registry names it, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort instead of dropping it or raising UnsupportedParamsError. Rules lose to exact entries, so a mapped non-reasoning model such as wandb/meta-llama/Llama-3.1-8B-Instruct is unaffected. Carries no mode and no pricing, so cost stays on the standard unpriced behavior and the deployment does not read as catalog-mapped to the router's reasoning-effort resolver.",
