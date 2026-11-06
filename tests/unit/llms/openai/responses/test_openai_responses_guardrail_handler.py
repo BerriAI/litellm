@@ -20,7 +20,9 @@ import pytest
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from openai.types.responses.response_function_web_search import ActionSearch
 from openai.types.responses import (
+    ResponseFunctionWebSearch,
     ResponseCustomToolCall,
     ResponseCustomToolCallInputDeltaEvent,
     ResponseCustomToolCallInputDoneEvent,
@@ -29,6 +31,7 @@ from openai.types.responses import (
     ResponseOutputRefusal,
     ResponseOutputText,
 )
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -60,6 +63,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.responses.litellm_completion_transformation.tool_search import build_tool_search_call
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
+    build_web_search_call,
     GenericResponseOutputItem,
     OutputText,
     OutputToolSearchCall,
@@ -247,6 +251,30 @@ CUSTOM_TOOL_CALL_ITEM = {
     "input": "echo persimmon",
     "status": "completed",
 }
+
+
+def _claude_web_calls_and_a_native_search() -> list[ResponseFunctionWebSearch]:
+    return [
+        build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed"),
+        build_web_search_call("srvtoolu_2", {"url": "https://persimmon.example"}, None, "in_progress", "web_fetch"),
+        ResponseFunctionWebSearch(
+            id="ws_native",
+            type="web_search_call",
+            status="completed",
+            action=ActionSearch(type="search", query="persimmon"),
+        ),
+    ]
+
+
+def _web_call_actions(items: list[object]) -> list[dict[str, object]]:
+    return [ResponseFunctionWebSearch.model_validate(item, from_attributes=True).action.model_dump() for item in items]
+
+
+_MASKED_WEB_CALL_ACTIONS: Final = [
+    {"type": "search", "query": "[MASKED]", "queries": ["[MASKED]"], "sources": []},
+    {"type": "open_page", "url": "https://[MASKED].example"},
+    {"type": "search", "query": "persimmon", "queries": None, "sources": None},
+]
 
 
 class TestOpenAIResponsesHandlerDiscovery:
@@ -1823,6 +1851,27 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert "name" not in search_call.model_dump()
 
     @pytest.mark.asyncio
+    async def test_process_output_response_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=_claude_web_calls_and_a_native_search(),
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [
+            ("web_search", '{"query": "persimmon"}'),
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+        ]
+        assert [item.type for item in result.output] == ["web_search_call"] * 3
+        assert _web_call_actions(result.output) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
     async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
         response = ResponsesAPIResponse(
             id="resp_1",
@@ -2758,6 +2807,117 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert "name" not in done.item.model_dump()
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        items: Final = _claude_web_calls_and_a_native_search()
+        added: Final = [
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=index,
+                item=BaseLiteLLMOpenAIResponseObject(**{**item.model_dump(), "action": None}),
+            )
+            for index, item in enumerate(items)
+        ]
+        done: Final = [
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=index,
+                sequence_number=index + 3,
+                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+            )
+            for index, item in enumerate(items)
+        ]
+        completed: Final = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=1,
+                model="claude-sonnet-5-5",
+                object="response",
+                status="completed",
+                output=_claude_web_calls_and_a_native_search(),
+            ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[*added, *done, completed],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert sorted(guardrail.seen_tool_calls) == [
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+            ("web_search", '{"query": "persimmon"}'),
+        ]
+        assert [event.item.model_dump()["action"] for event in added] == [None, None, None]
+        assert _web_call_actions([event.item for event in done]) == _MASKED_WEB_CALL_ACTIONS
+        assert _web_call_actions(completed.response.output) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_dict_shaped_claude_web_calls_but_not_native_search(self):
+        items: Final = [item.model_dump() for item in _claude_web_calls_and_a_native_search()]
+        done: Final = [
+            {"type": "response.output_item.done", "output_index": index, "item": dict(item)}
+            for index, item in enumerate(items)
+        ]
+        completed: Final = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "model": "claude-sonnet-5-5",
+                "status": "completed",
+                "output": [dict(item) for item in items],
+            },
+        }
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[*done, completed],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert sorted(guardrail.seen_tool_calls) == [
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+            ("web_search", '{"query": "persimmon"}'),
+        ]
+        assert _web_call_actions([event["item"] for event in done]) == _MASKED_WEB_CALL_ACTIONS
+        assert _web_call_actions(completed["response"]["output"]) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_streaming_output_item_done_reports_a_claude_web_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
+
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed").model_dump()
+            ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[done],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_a_native_tool_search_call_that_has_no_call_id(self):
         def search_call(arguments: dict, status: str) -> dict:
             return {
@@ -3348,6 +3508,25 @@ class TestGetStructuredMessages:
         data = {"input": None}
         result = handler.get_structured_messages(data)
         assert result is None
+
+    def test_should_return_none_for_a_moderation_style_list_of_strings(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "omni-moderation-latest", "input": ["safe text", "more safe text"]}
+        assert handler.get_structured_messages(data) is None
+
+    def test_should_keep_an_image_item_replayed_with_an_sdk_compaction_item(self):
+        handler = OpenAIResponsesHandler()
+        image_url = "https://example.com/cat.png"
+        data = {
+            "model": "gpt-5.5",
+            "input": [
+                ResponseCompactionItem(type="compaction", id="cmp_1", encrypted_content="abc"),
+                {"role": "user", "content": [{"type": "input_image", "image_url": image_url}]},
+            ],
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert image_url in json.dumps(result)
 
 
 class ToolAppendingGuardrail(CustomGuardrail):
@@ -4526,6 +4705,34 @@ class TestBuildBlockSseChunks:
         assert completed["model"] == "gpt-5.4-mini-2026-01-01"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_numbers_every_event_after_the_last_one_relayed(self):
+        yielded: Final = [
+            {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_live", "output": []}},
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {"id": "msg_orig", "type": "message", "role": "assistant"},
+            },
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_orig",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial",
+            },
+        ]
+
+        payloads: Final = self._payloads(
+            OpenAIResponsesHandler().build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+
+        assert payloads[-1]["type"] == "response.completed"
+        assert [payload.get("sequence_number") for payload in payloads] == list(range(3, 3 + len(payloads)))
 
     def test_continuation_reads_usage_from_typed_completed_event(self):
         from litellm.types.llms.openai import (

@@ -1,6 +1,8 @@
+import type { ParseKeys } from "i18next";
+
 export const CODE_TEMPLATES = {
   empty: {
-    name: "Empty Template",
+    nameKey: "guardrails.customCode.templates.empty",
     code: `async def apply_guardrail(inputs, request_data, input_type):
     # inputs: {texts, images, tools, tool_calls, structured_messages, model}
     # request_data: {model, user_id, team_id, end_user_id, metadata}
@@ -8,7 +10,7 @@ export const CODE_TEMPLATES = {
     return allow()`,
   },
   blockSSN: {
-    name: "Block SSN",
+    nameKey: "guardrails.customCode.templates.blockSsn",
     code: `def apply_guardrail(inputs, request_data, input_type):
     for text in inputs["texts"]:
         if regex_match(text, r"\\d{3}-\\d{2}-\\d{4}"):
@@ -16,7 +18,7 @@ export const CODE_TEMPLATES = {
     return allow()`,
   },
   redactEmail: {
-    name: "Redact Emails",
+    nameKey: "guardrails.customCode.templates.redactEmail",
     code: `def apply_guardrail(inputs, request_data, input_type):
     pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
     modified = []
@@ -25,7 +27,7 @@ export const CODE_TEMPLATES = {
     return modify(texts=modified)`,
   },
   blockSQL: {
-    name: "Block SQL Injection",
+    nameKey: "guardrails.customCode.templates.blockSql",
     code: `def apply_guardrail(inputs, request_data, input_type):
     if input_type != "request":
         return allow()
@@ -35,7 +37,7 @@ export const CODE_TEMPLATES = {
     return allow()`,
   },
   validateJSON: {
-    name: "Validate JSON",
+    nameKey: "guardrails.customCode.templates.validateJson",
     code: `def apply_guardrail(inputs, request_data, input_type):
     if input_type != "response":
         return allow()
@@ -51,7 +53,7 @@ export const CODE_TEMPLATES = {
     return allow()`,
   },
   externalAPI: {
-    name: "External API Check (async)",
+    nameKey: "guardrails.customCode.templates.externalApi",
     code: `async def apply_guardrail(inputs, request_data, input_type):
     # Call an external moderation API (async for non-blocking)
     for text in inputs["texts"]:
@@ -71,66 +73,129 @@ export const CODE_TEMPLATES = {
     
     return allow()`,
   },
-};
+} satisfies Record<string, { nameKey: ParseKeys; code: string }>;
 
-export const PRIMITIVES = {
-  "Return Values": [
-    { name: "allow()", desc: "Let request/response through" },
-    { name: "block(reason)", desc: "Reject with message" },
-    { name: "flag(reason, metadata={})", desc: "Let through, record a non-blocking violation" },
-    { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content" },
-  ],
-  "HTTP Requests (async)": [
-    { name: "await http_request(url, method, headers, body)", desc: "Make async HTTP request" },
-    { name: "await http_get(url, headers)", desc: "Async GET request" },
-    { name: "await http_post(url, body, headers)", desc: "Async POST request" },
-  ],
-  "Regex Functions": [
-    { name: "regex_match(text, pattern)", desc: "Returns True if pattern found" },
-    { name: "regex_replace(text, pattern, replacement)", desc: "Replace all matches" },
-    { name: "regex_find_all(text, pattern)", desc: "Return list of matches" },
-  ],
-  "JSON Functions": [
-    { name: "json_parse(text)", desc: "Parse JSON string, returns None on error" },
-    { name: "json_stringify(obj)", desc: "Convert to JSON string" },
-    { name: "json_schema_valid(obj, schema)", desc: "Validate against JSON schema" },
-  ],
-  "URL Functions": [
-    { name: "extract_urls(text)", desc: "Extract all URLs from text" },
-    { name: "is_valid_url(url)", desc: "Check if URL is valid" },
-    { name: "all_urls_valid(text)", desc: "Check all URLs in text are valid" },
-  ],
-  "Code Detection": [
-    { name: "detect_code(text)", desc: "Returns True if code detected" },
-    { name: "detect_code_languages(text)", desc: "Returns list of detected languages" },
-    { name: 'contains_code_language(text, ["sql"])', desc: "Check for specific languages" },
-  ],
-  "Text Utilities": [
-    { name: "contains(text, substring)", desc: "Check if substring exists" },
-    { name: "contains_any(text, [substr1, substr2])", desc: "Check if any substring exists" },
-    { name: "word_count(text)", desc: "Count words" },
-    { name: "char_count(text)", desc: "Count characters" },
-    { name: "lower(text) / upper(text) / trim(text)", desc: "String transforms" },
-  ],
-};
+interface Primitive {
+  name: string;
+  descKey: ParseKeys;
+}
 
-export const MODE_OPTIONS = [
-  { value: "pre_call", label: "pre_call (Request)" },
-  { value: "post_call", label: "post_call (Response)" },
-  { value: "during_call", label: "during_call (Parallel)" },
-  { value: "logging_only", label: "logging_only" },
-  { value: "pre_mcp_call", label: "pre_mcp_call (Before MCP Tool Call)" },
-  { value: "post_mcp_call", label: "post_mcp_call (After MCP Tool Call)" },
-  { value: "during_mcp_call", label: "during_mcp_call (During MCP Tool Call)" },
+interface PrimitiveCategory {
+  id: string;
+  labelKey: ParseKeys;
+  primitives: Primitive[];
+}
+
+export const DEFAULT_OPEN_PRIMITIVE_CATEGORY = "returnValues";
+
+export const PRIMITIVE_CATEGORIES: PrimitiveCategory[] = [
+  {
+    id: "returnValues",
+    labelKey: "guardrails.customCode.primitives.categories.returnValues",
+    primitives: [
+      { name: "allow()", descKey: "guardrails.customCode.primitives.descriptions.allow" },
+      { name: "block(reason)", descKey: "guardrails.customCode.primitives.descriptions.block" },
+      { name: "flag(reason, metadata={})", descKey: "guardrails.customCode.primitives.descriptions.flag" },
+      {
+        name: "modify(texts=[], images=[], tool_calls=[])",
+        descKey: "guardrails.customCode.primitives.descriptions.modify",
+      },
+    ],
+  },
+  {
+    id: "httpRequests",
+    labelKey: "guardrails.customCode.primitives.categories.httpRequests",
+    primitives: [
+      {
+        name: "await http_request(url, method, headers, body)",
+        descKey: "guardrails.customCode.primitives.descriptions.httpRequest",
+      },
+      { name: "await http_get(url, headers)", descKey: "guardrails.customCode.primitives.descriptions.httpGet" },
+      {
+        name: "await http_post(url, body, headers)",
+        descKey: "guardrails.customCode.primitives.descriptions.httpPost",
+      },
+    ],
+  },
+  {
+    id: "regex",
+    labelKey: "guardrails.customCode.primitives.categories.regex",
+    primitives: [
+      { name: "regex_match(text, pattern)", descKey: "guardrails.customCode.primitives.descriptions.regexMatch" },
+      {
+        name: "regex_replace(text, pattern, replacement)",
+        descKey: "guardrails.customCode.primitives.descriptions.regexReplace",
+      },
+      { name: "regex_find_all(text, pattern)", descKey: "guardrails.customCode.primitives.descriptions.regexFindAll" },
+    ],
+  },
+  {
+    id: "json",
+    labelKey: "guardrails.customCode.primitives.categories.json",
+    primitives: [
+      { name: "json_parse(text)", descKey: "guardrails.customCode.primitives.descriptions.jsonParse" },
+      { name: "json_stringify(obj)", descKey: "guardrails.customCode.primitives.descriptions.jsonStringify" },
+      {
+        name: "json_schema_valid(obj, schema)",
+        descKey: "guardrails.customCode.primitives.descriptions.jsonSchemaValid",
+      },
+    ],
+  },
+  {
+    id: "url",
+    labelKey: "guardrails.customCode.primitives.categories.url",
+    primitives: [
+      { name: "extract_urls(text)", descKey: "guardrails.customCode.primitives.descriptions.extractUrls" },
+      { name: "is_valid_url(url)", descKey: "guardrails.customCode.primitives.descriptions.isValidUrl" },
+      { name: "all_urls_valid(text)", descKey: "guardrails.customCode.primitives.descriptions.allUrlsValid" },
+    ],
+  },
+  {
+    id: "codeDetection",
+    labelKey: "guardrails.customCode.primitives.categories.codeDetection",
+    primitives: [
+      { name: "detect_code(text)", descKey: "guardrails.customCode.primitives.descriptions.detectCode" },
+      {
+        name: "detect_code_languages(text)",
+        descKey: "guardrails.customCode.primitives.descriptions.detectCodeLanguages",
+      },
+      {
+        name: 'contains_code_language(text, ["sql"])',
+        descKey: "guardrails.customCode.primitives.descriptions.containsCodeLanguage",
+      },
+    ],
+  },
+  {
+    id: "textUtilities",
+    labelKey: "guardrails.customCode.primitives.categories.textUtilities",
+    primitives: [
+      { name: "contains(text, substring)", descKey: "guardrails.customCode.primitives.descriptions.contains" },
+      {
+        name: "contains_any(text, [substr1, substr2])",
+        descKey: "guardrails.customCode.primitives.descriptions.containsAny",
+      },
+      { name: "word_count(text)", descKey: "guardrails.customCode.primitives.descriptions.wordCount" },
+      { name: "char_count(text)", descKey: "guardrails.customCode.primitives.descriptions.charCount" },
+      {
+        name: "lower(text) / upper(text) / trim(text)",
+        descKey: "guardrails.customCode.primitives.descriptions.stringTransforms",
+      },
+    ],
+  },
 ];
 
-export const TEMPLATE_ITEMS = Object.entries(CODE_TEMPLATES).map(([key, template]) => ({
-  value: key,
-  label: template.name,
-}));
+export const MODE_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
+  { value: "pre_call", labelKey: "guardrails.customCode.modes.preCall" },
+  { value: "post_call", labelKey: "guardrails.customCode.modes.postCall" },
+  { value: "during_call", labelKey: "guardrails.customCode.modes.duringCall" },
+  { value: "logging_only", labelKey: "guardrails.customCode.modes.loggingOnly" },
+  { value: "pre_mcp_call", labelKey: "guardrails.customCode.modes.preMcpCall" },
+  { value: "post_mcp_call", labelKey: "guardrails.customCode.modes.postMcpCall" },
+  { value: "during_mcp_call", labelKey: "guardrails.customCode.modes.duringMcpCall" },
+];
 
-export type ModeOption = (typeof MODE_OPTIONS)[number];
-
-export const MODE_OPTION_BY_VALUE: Record<string, ModeOption> = Object.fromEntries(
-  MODE_OPTIONS.map((option) => [option.value, option]),
+export const TEMPLATE_ITEMS: { value: string; labelKey: ParseKeys }[] = Object.entries(CODE_TEMPLATES).map(
+  ([key, template]) => ({ value: key, labelKey: template.nameKey }),
 );
+
+export type ModeOption = { value: string; label: string };

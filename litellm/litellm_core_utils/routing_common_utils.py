@@ -378,7 +378,8 @@ def filter_team_based_models(
 
     ids_to_remove: Final = set()
     if isinstance(healthy_deployments, dict):
-        return healthy_deployments
+        # A deployment asked for by id is filtered like any other: another team's is not served.
+        return [] if _owner_team(healthy_deployments) not in (None, request_team_id) else healthy_deployments  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the legacy untyped deployment dict
     for deployment in healthy_deployments:
         _model_info = deployment.get("model_info") or {}
         model_team_id = _model_info.get("team_id")
@@ -408,7 +409,7 @@ def deployments_the_caller_may_use(
         return ()
 
 
-_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+_WEB_SEARCH_TOOL_KEYS: Final = frozenset({"googleSearch", "google_search"})
 
 
 def _deployment_supports_web_search(deployment: dict) -> bool:
@@ -431,6 +432,23 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
+def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
+    """OpenAI ``web_search`` / ``web_search_preview``, Anthropic ``web_search_<version>``, Gemini
+    ``googleSearch`` / ``google_search``."""
+    tools: Final[object] = request_kwargs.get("tools")
+    return isinstance(tools, (list, tuple)) and any(
+        isinstance(tool, dict)
+        and (
+            any(key in tool for key in _WEB_SEARCH_TOOL_KEYS)
+            or (
+                isinstance(tool_type := tool.get("type"), str)
+                and (tool_type == "web_search" or tool_type.startswith("web_search_"))
+            )
+        )
+        for tool in tools
+    )
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
@@ -445,14 +463,7 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    tools: Final[object] = request_kwargs.get("tools")
-    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
-        isinstance(tool, dict)
-        and isinstance(tool_type := tool.get("type"), str)
-        and tool_type in _WEB_SEARCH_TOOL_TYPES
-        for tool in tools
-    )
-    if not is_web_search_request:
+    if not is_web_search_request(request_kwargs):
         return healthy_deployments
 
     # Filter out deployments that don't support web search
@@ -607,3 +618,9 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
     )
     verbose_router_logger.warning(warning)
     return warning
+
+
+def _owner_team(deployment: Mapping[str, object]) -> object:
+    """The team a deployment belongs to (``model_info.team_id``), or None."""
+    model_info: Final = deployment.get("model_info")
+    return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info

@@ -1,0 +1,21 @@
+{
+    "openai": {
+        "gpt-luna-latest": "gpt-6-luna",
+        "gpt-sol-latest": "gpt-6.1-sol",
+        "gpt-terra-latest": "gpt-6.1-terra",
+        "gpt-astra-latest": "gpt-6-astra",
+        "gpt-mini-latest": "gpt-5.4-mini"
+    },
+    "anthropic": {
+        "claude-opus-latest": "claude-opus-5-5",
+        "claude-sonnet-latest": "claude-sonnet-5-5",
+        "claude-haiku-latest": "claude-haiku-5-5",
+        "claude-fable-latest": "claude-fable-5-1"
+    },
+    "xai": {"grok-latest": "grok-4.7"},
+    "moonshot": {"kimi-latest": "kimi-k3"},
+    "zai": {"glm-latest": "glm-5.3", "glm-flash-latest": "glm-5.3-flash"},
+    "deepseek": {"deepseek-pro-latest": "deepseek-v4-pro", "deepseek-flash-latest": "deepseek-v4-flash"},
+    "dashscope": {"qwen-max-latest": "qwen3.8-max", "qwen-flash-latest": "qwen3.8-flash"},
+    "minimax": {"minimax-latest": "MiniMax-M3"}
+}

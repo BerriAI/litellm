@@ -40,7 +40,11 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Uni
 
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # TypeIs reaches typing only on 3.13
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -67,6 +71,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
+    web_search_call,
+    with_web_search_call_arguments,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
@@ -82,12 +88,14 @@ from litellm.responses.litellm_completion_transformation.tool_search import is_s
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALL_OUTPUT_ITEM_TYPES,
     LiteLLMCompletionResponsesConfig,
+    claude_web_search_call_tool_call,
     tool_output_to_chat_content,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
+    ChatCompletionAssistantToolCall,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
     ContentPartAddedEvent,
@@ -100,6 +108,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
     ResponseAPIUsage,
+    ResponseCompactionItem,
     ResponseCompletedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -261,6 +270,8 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
+_WEB_SEARCH_CALL_TYPE: Final = "web_search_call"
+_ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_SEARCH_CALL_TYPE})
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -330,8 +341,27 @@ def _is_tool_call_item(item: object) -> bool:
     return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
 
 
+def _claude_web_search_tool_call(item: object) -> ChatCompletionAssistantToolCall | None:
+    search: Final = web_search_call(item)
+    return None if search is None else claude_web_search_call_tool_call(search)
+
+
+def _claude_web_tool_call(item: object, index: int) -> ChatCompletionToolCallChunk | None:
+    tool_call: Final = _claude_web_search_tool_call(item)
+    if tool_call is None:
+        return None
+    return ChatCompletionToolCallChunk(id=tool_call["id"], type="function", function=tool_call["function"], index=index)
+
+
+def _is_output_tool_call_item(item: object) -> bool:
+    return (
+        stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
+        or _claude_web_search_tool_call(item) is not None
+    )
+
+
 def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
-    if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES:
+    if not _is_output_tool_call_item(item):
         return None
     if isinstance(item, Mapping):
         return cast("Mapping[str, object]", item)  # cast-ok: output items are str-keyed JSON objects
@@ -343,7 +373,7 @@ def _tool_call_item_key(item: object) -> str | None:
     if isinstance(call_id, str) and call_id:
         return call_id
     item_id: Final = stream_item_field(item, "id")
-    if stream_item_field(item, "type") == _TOOL_SEARCH_CALL_TYPE and isinstance(item_id, str) and item_id:
+    if stream_item_field(item, "type") in _ITEM_ID_KEYED_TOOL_CALL_TYPES and isinstance(item_id, str) and item_id:
         return item_id
     return None
 
@@ -361,6 +391,17 @@ def _scanned_tool_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
     if item.get("type") != _TOOL_SEARCH_CALL_TYPE:
         return item
     return {**item, "name": _SCANNED_TOOL_SEARCH_NAME, "arguments": json.dumps(item.get("arguments") or {})}
+
+
+def _scanned_tool_call(item: Mapping[str, object], index: int) -> ChatCompletionToolCallChunk:
+    web_tool_call: Final = _claude_web_tool_call(item, index)
+    if web_tool_call is not None:
+        return web_tool_call
+    return tool_call_dict_from_output_item(_scanned_tool_call_item(item), index)
+
+
+def _rewritten_web_search_call(item: object, payload: str | None) -> object:
+    return item if payload is None else with_web_search_call_arguments(item, payload)
 
 
 def _tool_search_rewrite(payload: str) -> Mapping[str, object]:
@@ -712,6 +753,15 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
+def _is_responses_input(
+    input_data: object,
+) -> TypeIs["str | ResponseInputParam"]:  # guard-ok: str, or a list of Mapping items
+    if isinstance(input_data, str):
+        return True
+    items: Final = cast(list[object], input_data)  # cast-ok: isinstance narrows to list[Unknown] only
+    return isinstance(input_data, list) and all(isinstance(item, (Mapping, ResponseCompactionItem)) for item in items)
+
+
 class OpenAIResponsesHandler(BaseTranslation):
     """
     Handler for processing OpenAI Responses API with guardrails.
@@ -733,8 +783,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         Transforms `input` (string or ResponseInputParam) and optional
         `instructions` into chat completion messages.
         """
-        input_data: Final = data.get("input")
-        if input_data is None:
+        input_data: Final[object] = data.get("input")
+        if not _is_responses_input(input_data):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
@@ -1308,17 +1358,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         # delivered, so a truncated buffer still reports text undeliverable. #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
-            finished_summary: Final = _output_compaction_summary(stream_item_field(final_chunk, "item"))
+            finished_item: Final = stream_item_field(final_chunk, "item")
+            finished_summary: Final = _output_compaction_summary(finished_item)
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
             )
-            tool_calls: Final = model_response_stream.choices[0].delta.tool_calls
+            finished_web_tool_call: Final = _claude_web_tool_call(finished_item, 0)
+            tool_calls: Final = [
+                *cast(list[ChatCompletionToolCallChunk], model_response_stream.choices[0].delta.tool_calls or []),
+                *(() if finished_web_tool_call is None else (finished_web_tool_call,)),
+            ]
             if tool_calls or finished_summary is not None:
                 inputs = GenericGuardrailAPIInputs()
                 if finished_summary is not None:
                     inputs["texts"] = [finished_summary]
                 if tool_calls:
-                    inputs["tool_calls"] = cast(list[ChatCompletionToolCallChunk], tool_calls)
+                    inputs["tool_calls"] = tool_calls
                 if hasattr(model_response_stream, "model") and model_response_stream.model:
                     inputs["model"] = model_response_stream.model
                 await guardrail_to_apply.apply_guardrail(
@@ -1615,7 +1670,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         if event_type not in _OUTPUT_ITEM_EVENT_TYPES:
             return None
         item: Final = stream_item_field(event, "item")
-        return _tool_call_item_key(item) if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES else None
+        return _tool_call_item_key(item) if _is_output_tool_call_item(item) else None
 
     @staticmethod
     def _write_tool_call_item(item: object, name: str | None, payload: str | None) -> object:
@@ -1629,6 +1684,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             return item
         if item_type == _TOOL_SEARCH_CALL_TYPE:
             return _rewritten_tool_search_call(item, payload)
+        if item_type == _WEB_SEARCH_CALL_TYPE:
+            return _rewritten_web_search_call(item, payload)
         if name is not None:
             OpenAIResponsesHandler._write_event_field(item, "name", name)
         if payload is not None and isinstance(item_type, str) and item_type in _TOOL_CALL_PAYLOAD_FIELDS:
@@ -1684,7 +1741,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
             or (
                 stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
-                and stream_item_field(stream_item_field(event, "item"), "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
+                and _is_output_tool_call_item(stream_item_field(event, "item"))
             )
             for event in responses_so_far
         )
@@ -1692,9 +1749,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     @staticmethod
     def _completed_response_scan_key(response: object) -> StreamingScanKey:
         output_items: Final = stream_item_items(response, "output")
-        message_items: Final = tuple(
-            item for item in output_items if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES
-        )
+        message_items: Final = tuple(item for item in output_items if not _is_output_tool_call_item(item))
         message_parts: Final = chain.from_iterable(stream_item_items(item, "content") for item in message_items)
         part_texts: Final = tuple(
             text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
@@ -1702,11 +1757,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
         return StreamingScanKey(
             texts=(*part_texts, *summaries),
-            tool_calls=tuple(
-                stream_item_fingerprint(item)
-                for item in output_items
-                if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
-            ),
+            tool_calls=tuple(stream_item_fingerprint(item) for item in output_items if _is_output_tool_call_item(item)),
             stream_ended=True,
         )
 
@@ -1819,9 +1870,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         tool_call_item: Final = _tool_call_output_item_mapping(output_item)
         if tool_call_item is not None:
             if tool_calls_to_check is not None:
-                tool_calls_to_check.append(
-                    tool_call_dict_from_output_item(_scanned_tool_call_item(tool_call_item), output_idx)
-                )
+                tool_calls_to_check.append(_scanned_tool_call(tool_call_item, output_idx))
             return
 
         summary: Final = _output_compaction_summary(output_item)
@@ -1974,7 +2023,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             "annotations": (),
             "logprobs": None,
         }
-        return (
+        events: Final = (
             *_open_item_closing_events(responses_so_far),
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -2018,6 +2067,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=_blocked_response(exc, response_id=response_id, model=model, output_item=item),
             ),
+        )
+        return tuple(
+            event.model_copy(update={"sequence_number": number})
+            for number, event in enumerate(events, start=_next_stream_sequence_number(responses_so_far))
         )
 
 
