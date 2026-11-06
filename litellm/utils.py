@@ -1111,10 +1111,22 @@ def function_setup(
             for index in reversed(removed_async_items):
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None
-        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = None
+        get_litellm_logging_class: Final[_LoggingClassGetter] = litellm_utils.get_litellm_logging_class
+        logging_class: Final = get_litellm_logging_class()
+        callback_context: Final[object] = kwargs.pop("_dynamic_callback_context", None)
+        _dynamic_callback_context: Final = callback_context if isinstance(callback_context, logging_class) else None
+        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = (
+            copy.copy(_dynamic_callback_context.dynamic_success_callbacks) if _dynamic_callback_context else None
+        )
+        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+            copy.copy(_dynamic_callback_context.dynamic_async_success_callbacks) if _dynamic_callback_context else None
+        )
+        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = (
+            copy.copy(_dynamic_callback_context.dynamic_failure_callbacks) if _dynamic_callback_context else None
+        )
+        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = (
+            copy.copy(_dynamic_callback_context.dynamic_async_failure_callbacks) if _dynamic_callback_context else None
+        )
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
@@ -1312,9 +1324,8 @@ def function_setup(
             call_type=call_type,
         ):
             stream = True
-        get_litellm_logging_class: Final[_LoggingClassGetter] = litellm_utils.get_litellm_logging_class
         # Victim for object pool
-        logging_obj = get_litellm_logging_class()(  # rebind-ok: 2nd assignment to logging_obj (see initial None above)
+        logging_obj = logging_class(  # rebind-ok: 2nd assignment to logging_obj (see initial None above)
             model=model,
             messages=messages,
             stream=stream,
