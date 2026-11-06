@@ -684,12 +684,19 @@ def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_te
     ]
 
 
-@pytest.mark.parametrize("background", [True, False])
-def test_background_answers_400_without_drop_params(background: bool) -> None:
+@pytest.mark.parametrize(
+    "background_request",
+    [
+        pytest.param({"background": True}, id="background-true"),
+        pytest.param({"background": False}, id="background-false"),
+        pytest.param({"extra_body": {"background": True}}, id="extra-body-background"),
+    ],
+)
+def test_background_answers_400_without_drop_params(background_request: Mapping[str, object]) -> None:
     with pytest.raises(litellm.UnsupportedParamsError) as rejected:
         _build_responses_kwargs(
             model="openai/gpt-5.6",
-            extra_kwargs={**OPENAI_API, "background": background},
+            extra_kwargs={**OPENAI_API, **background_request},
             max_tokens=1024,
             messages=MESSAGES,
         )
@@ -708,12 +715,18 @@ def test_background_answers_400_without_drop_params(background: bool) -> None:
 def test_dropped_background_never_reaches_the_responses_request(drop_setting: Mapping[str, object]) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
-        extra_kwargs={**OPENAI_API, **drop_setting, "background": True},
+        extra_kwargs={
+            **OPENAI_API,
+            **drop_setting,
+            "background": True,
+            "extra_body": {"background": True, "service_tier": "priority"},
+        },
         max_tokens=1024,
         messages=MESSAGES,
     )
 
     assert "background" not in responses_kwargs
+    assert responses_kwargs["extra_body"] == {"service_tier": "priority"}
     assert responses_kwargs["max_output_tokens"] == 1024
 
 

@@ -179,8 +179,19 @@ def _drops_background(forwarded_kwargs: Mapping[str, object]) -> bool:
     )
 
 
+def _requests_background(forwarded_kwargs: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body"))
+    return forwarded_kwargs.get("background") is not None or (
+        extra_body is not None and extra_body.get("background") is not None
+    )
+
+
+def _without_background(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in extra_body.items() if key != "background"}
+
+
 def _reject_background_mode(model: str, forwarded_kwargs: Mapping[str, object]) -> None:
-    if forwarded_kwargs.get("background") is None or _drops_background(forwarded_kwargs):
+    if not _requests_background(forwarded_kwargs) or _drops_background(forwarded_kwargs):
         return
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     raise litellm.UnsupportedParamsError(
@@ -396,6 +407,8 @@ def _build_responses_kwargs(
                 # Responses API result back to a ModelResponse for the row.
                 setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
+        elif key == "extra_body" and (extra_body := as_str_mapping(value)) is not None:
+            responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
 
