@@ -13865,12 +13865,12 @@
     "azure_ai/jais-30b-chat": {
         "deprecation_date": "2026-01-30",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
-        "input_cost_per_token": 0.0032,
+        "input_cost_per_token": 3.2e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 0.00971,
+        "output_cost_per_token": 9.71e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_pdf_input": false
     },
@@ -55160,8 +55160,8 @@
     "watsonx/core42/jais-13b-chat": {
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0005,
-        "output_cost_per_token": 0.002,
+        "input_cost_per_token": 1.8e-06,
+        "output_cost_per_token": 1.8e-06,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": false,
