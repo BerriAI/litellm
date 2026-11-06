@@ -7,9 +7,11 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from prisma.errors import DataError
 
 from litellm import constants
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
@@ -1013,6 +1015,96 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
     assert user_page_call is not None
     assert user_page_call[1:] == (0, constants.USAGE_USER_PAGE_DEFAULT)
     assert repository.user_metadata.call_args.args[0] == frozenset(("user-a", "user-b"))
+
+
+_LOOKUP_DATABASE_FAILURES: Final = pytest.mark.parametrize(
+    "failure",
+    [
+        DataError({"user_facing_error": {"error_code": "P1001", "message": "Can't reach database server"}}),
+        httpx.ConnectError("the query engine refused the connection"),
+    ],
+    ids=["unreachable-database", "engine-connect-error"],
+)
+_KEY_ROWS_ROUTES: Final = pytest.mark.parametrize(
+    ("suffix", "extra_params"),
+    [
+        ("keys", {}),
+        ("search", {"search": "key"}),
+        ("model_top_keys", {"model_group": "rare-group"}),
+        ("cache_leakage_keys", {}),
+    ],
+    ids=["keys", "search", "model_top_keys", "cache_leakage_keys"],
+)
+
+
+@_LOOKUP_DATABASE_FAILURES
+@_KEY_ROWS_ROUTES
+def test_key_routes_keep_spend_when_the_key_lookup_hits_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    suffix: str,
+    extra_params: Mapping[str, str],
+    failure: Exception,
+) -> None:
+    client, repository = daily_activity_client
+    repository.key_metadata.side_effect = failure
+
+    response: Final = client.get(
+        f"/user/daily/activity/aggregated/{suffix}",
+        params={**_entity_params("user_id", "user-a"), **extra_params},
+    )
+
+    assert response.status_code == 200, response.text
+    rows: Final = response.json()["api_keys"]
+    assert rows
+    assert all(row["metrics"]["spend"] > 0 for row in rows)
+    assert {row["metadata"]["key_alias"] for row in rows} == {None}
+
+
+@_KEY_ROWS_ROUTES
+def test_key_routes_still_report_a_lookup_bug_that_is_not_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    suffix: str,
+    extra_params: Mapping[str, str],
+) -> None:
+    client, repository = daily_activity_client
+    repository.key_metadata.side_effect = AttributeError("not a database failure")
+
+    response: Final = client.get(
+        f"/user/daily/activity/aggregated/{suffix}",
+        params={**_entity_params("user_id", "user-a"), **extra_params},
+    )
+
+    assert response.status_code == 500, response.text
+    assert "not a database failure" in response.text
+
+
+@_LOOKUP_DATABASE_FAILURES
+def test_user_page_route_keeps_spend_when_the_user_lookup_hits_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    failure: Exception,
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.side_effect = failure
+
+    response: Final = client.get("/user/daily/activity/aggregated/users", params=_DATE_PARAMS)
+
+    assert response.status_code == 200, response.text
+    assert [(user["user_id"], user["spend"], user["user_email"]) for user in response.json()["users"]] == [
+        ("user-b", 100.0, None),
+        ("user-a", 14.5, None),
+    ]
+
+
+def test_user_page_route_still_reports_a_lookup_bug_that_is_not_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.side_effect = AttributeError("not a database failure")
+
+    response: Final = client.get("/user/daily/activity/aggregated/users", params=_DATE_PARAMS)
+
+    assert response.status_code == 500, response.text
+    assert "not a database failure" in response.text
 
 
 def test_user_page_route_forwards_offset_and_limit(
