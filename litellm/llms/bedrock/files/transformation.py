@@ -1105,7 +1105,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 non_default_params={k: v for k, v in optional_params.items() if k != "requestMetadata"},
                 optional_params={},
                 model=model,
-                drop_params=False,
+                drop_params=optional_params.get("drop_params") is True,
             )
             return converse_config.transform_request(
                 model=model,

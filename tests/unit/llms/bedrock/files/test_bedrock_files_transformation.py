@@ -99,6 +99,39 @@ class TestBedrockFilesTransformation:
         assert "_litellm_undeclared_sentinel" not in model_input, model_input
         assert result[0]["modelInput"]["max_tokens"] == 10
 
+    @staticmethod
+    def _nova_row(**body_params: object) -> dict[str, object]:
+        return {
+            "custom_id": "nova-tier-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "us.amazon.nova-pro-v1:0",
+                "messages": [{"role": "user", "content": "hi"}],
+                **body_params,
+            },
+        }
+
+    def test_nova_row_with_null_service_tier_sends_no_tier(self):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(service_tier=None)]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    def test_nova_row_with_unmapped_service_tier_fails_the_row_like_real_time(self):
+        with pytest.raises(litellm.UnsupportedParamsError, match="ultrafast"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(service_tier="ultrafast")]
+            )
+
+    def test_nova_row_level_drop_params_drops_the_unmapped_service_tier(self):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(service_tier="ultrafast", drop_params=True)]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
     def test_nova_text_only_uses_converse_format(self):
         """
         Test that Nova models produce Converse API format in batch modelInput.
