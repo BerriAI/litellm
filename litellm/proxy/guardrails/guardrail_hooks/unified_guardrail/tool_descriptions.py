@@ -1,13 +1,15 @@
-"""Opt-in pre_call scan of the description strings in a request's tools[].
+"""Opt-in pre_call scan of the description strings in a request's tool definitions.
 
 Every API surface (Chat Completions, Responses, Anthropic Messages) carries its tool
-definitions in the request's top-level ``tools`` list, so walking each tool for string
+definitions in the request's top-level ``tools`` list, plus Chat Completions' legacy
+``functions`` list, so walking each definition for string
 leaves keyed ``description`` covers tool and parameter descriptions without per-surface
 parsing. Each tool is one ``apply_guardrail`` call, mirroring the MCP ``tools/list`` scan.
 """
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
 
 _MAX_CONCURRENT_TOOL_SCANS: Final = 8
 _TOOLS: Final = TypeAdapter(tuple[object, ...])
+_TOOL_DEFINITION_FIELDS: Final = ("tools", "functions")
 
 
 def _blocked(reason: str) -> HTTPException:
@@ -50,9 +53,9 @@ def _masked_texts(guarded: GenericGuardrailAPIInputs, scanned: int) -> Sequence[
     return masked
 
 
-def _request_tools(request_data: Mapping[str, object]) -> tuple[object, ...]:
+def _request_tools(request_data: Mapping[str, object], field: str) -> tuple[object, ...]:
     try:
-        return _TOOLS.validate_python(request_data.get("tools") or ())
+        return _TOOLS.validate_python(request_data.get(field) or ())
     except ValidationError:
         return ()
 
@@ -61,14 +64,13 @@ async def scanned_request_tools(
     guardrail: "CustomGuardrail",
     request_data: dict[str, object],  # mutable-ok: guardrails annotate the hook's request dict in place
     logging_obj: "LiteLLMLoggingObj | None",
-) -> tuple[object, ...] | None:
-    """The request's tools with masked descriptions, or None when nothing was rewritten.
+) -> Mapping[str, tuple[object, ...]]:
+    """Each tool definition field (``tools``, legacy ``functions``) whose descriptions were masked.
 
     A guardrail blocks by raising, which surfaces as the usual pre_call HTTP 400.
     """
     if guardrail.scan_tool_descriptions_as_text is not True:
-        return None
-    tools: Final = _request_tools(request_data)
+        return MappingProxyType({})
     limiter: Final = asyncio.Semaphore(_MAX_CONCURRENT_TOOL_SCANS)
 
     async def scanned(tool: object) -> object:
@@ -88,7 +90,10 @@ async def scanned_request_tools(
         replacements: Final = {path: new for (path, old), new in zip(leaves, masked) if new != old}
         return with_json_string_leaves(tool, replacements) if replacements else tool
 
-    results: Final = tuple(await asyncio.gather(*(scanned(tool) for tool in tools)))
-    if all(new is old for new, old in zip(results, tools)):
-        return None
-    return results
+    async def scanned_field(field: str) -> tuple[str, tuple[object, ...]] | None:
+        tools: Final = _request_tools(request_data, field)
+        results: Final = tuple(await asyncio.gather(*(scanned(tool) for tool in tools)))
+        return None if all(new is old for new, old in zip(results, tools)) else (field, results)
+
+    fields: Final = await asyncio.gather(*(scanned_field(field) for field in _TOOL_DEFINITION_FIELDS))
+    return MappingProxyType(dict(field for field in fields if field is not None))

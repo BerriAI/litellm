@@ -300,8 +300,8 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         if event_type is GuardrailEventHooks.pre_call:
             scanned: Final = await scanned_request_tools(guardrail_to_apply, data, data.get("litellm_logging_obj"))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # hook data is an untyped dict
-            if scanned is not None:
-                data["tools"] = list(scanned)  # rebind-ok: pre_call hooks rewrite the request dict in place
+            for field, tools in scanned.items():
+                data[field] = list(tools)  # rebind-ok: pre_call hooks rewrite the request dict in place
 
         data = await endpoint_translation.process_input_messages(
             data=data,
