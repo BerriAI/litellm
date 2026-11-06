@@ -36546,6 +36546,10 @@ export interface components {
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
             } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -47001,7 +47005,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -47010,6 +47014,12 @@ export interface components {
             score?: number;
             /** Signals */
             signals?: string[];
+            /** Switchyard Algorithm */
+            switchyard_algorithm?: string;
+            /** Switchyard Evidence */
+            switchyard_evidence?: unknown;
+            /** Switchyard Fallback Reason */
+            switchyard_fallback_reason?: string;
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
@@ -52293,6 +52303,10 @@ export interface components {
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;

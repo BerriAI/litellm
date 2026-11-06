@@ -10,7 +10,7 @@ from litellm.router_strategy.switchyard_router.switchyard_router import Switchya
 from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.utils import ModelResponse
 
-libsy = pytest.importorskip("switchyard.libsy")
+libsy = pytest.importorskip("switchyard_rust.libsy")
 
 
 async def unexpected_judge(request: Mapping[str, object]) -> ModelResponse:

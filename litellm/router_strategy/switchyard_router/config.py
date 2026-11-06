@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, TypeAdapter, model_validator
 
 if TYPE_CHECKING:
-    from switchyard.libsy import Algorithm, TaskClassifierConfig
+    from switchyard_rust.libsy import Algorithm, TaskClassifierConfig
 
 
 class LlmClassifierConfig(BaseModel):
@@ -32,10 +32,17 @@ class DecisionClassifierConfig(BaseModel):
     evidence: Mapping[str, object] | None = None
 
 
+_KIND: Final = TypeAdapter(Mapping[str, object])
+
+
 def _classifier_kind(value: object) -> str:
-    if isinstance(value, Mapping):
-        return str(value.get("kind", "llm"))
-    return str(getattr(value, "kind", "llm"))
+    match value:
+        case LlmClassifierConfig() | DecisionClassifierConfig():
+            return value.kind
+        case Mapping():
+            return str(_KIND.validate_python(value).get("kind", "llm"))
+        case _:
+            return "llm"
 
 
 ClassifierConfig: TypeAlias = Annotated[
@@ -98,7 +105,7 @@ class SwitchyardRouterConfig(BaseModel):
 
 
 def _task_classifier(config: SwitchyardRouterConfig) -> TaskClassifierConfig | None:
-    from switchyard.libsy import TaskClassifierConfig
+    from switchyard_rust.libsy import TaskClassifierConfig
 
     match config.classifier:
         case None:
@@ -124,10 +131,10 @@ def _task_classifier(config: SwitchyardRouterConfig) -> TaskClassifierConfig | N
 
 
 def build_algorithm(config: SwitchyardRouterConfig) -> Algorithm:
-    from switchyard.libsy import LlmFallback, algorithms
+    from switchyard_rust.libsy import LlmFallback, stage_router
 
     classifier: Final = _task_classifier(config)
-    return algorithms.stage_router(
+    return stage_router(
         picker=config.options.picker,
         confidence_threshold=config.confidence_threshold,
         recent_window=config.options.recent_window,

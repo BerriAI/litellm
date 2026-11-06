@@ -80,7 +80,7 @@ def test_missing_package_rejects_save_with_install_instructions() -> None:
     import sys
     from unittest.mock import patch
 
-    with patch.dict(sys.modules, {"switchyard.libsy": None}):
+    with patch.dict(sys.modules, {"switchyard_rust.libsy": None}):
         violation: Final = validate_switchyard_config_write({"models": {"capable": "strong", "efficient": "fast"}})
     assert violation is not None
     assert "litellm[switchyard]" in violation

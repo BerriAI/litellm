@@ -15,7 +15,7 @@ from litellm.types.decisions import (
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
-    from switchyard.libsy import LlmResponse
+    from switchyard_rust.libsy import LlmResponse
 
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _SEQUENCE: Final = TypeAdapter(tuple[object, ...])
@@ -50,7 +50,7 @@ def tool_call(value: object) -> Mapping[str, object]:
         "type": "tool_call",
         "id": call["id"],
         "name": function["name"],
-        "arguments": mapping(json.loads(arguments)),
+        "arguments": _MAPPING.validate_json(arguments),
     }
 
 
@@ -123,9 +123,9 @@ def judge_request(request: Mapping[str, object], model: str) -> Mapping[str, obj
 
 
 def judge_response(response: ModelResponse) -> LlmResponse.Agg:
-    from switchyard.libsy import LlmResponse
+    from switchyard_rust.libsy import LlmResponse
 
-    body: Final = mapping(response.model_dump())
+    body: Final = _MAPPING.validate_json(response.model_dump_json(exclude_unset=True))
     choices: Final = tuple(mapping(choice) for choice in sequence(body["choices"]))
     return LlmResponse.Agg(
         {
@@ -169,7 +169,7 @@ def decision_request(request: Mapping[str, object], model: str) -> Mapping[str, 
 
 def _choice_value(answer: object) -> Mapping[str, object]:
     if not isinstance(answer, OpenAIChoiceAnswer):
-        raise ValueError("The decision model refused or returned a non-choice answer")
+        raise TypeError("The decision model refused or returned a non-choice answer")
     return {
         "type": "choice",
         "data": {

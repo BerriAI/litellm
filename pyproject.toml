@@ -268,6 +268,7 @@ proxy-dev = [
     "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "nemo-switchyard==0.4.0a1",
     "backports-zstd==1.8.0; python_version < '3.14'",
     "httptools>=0.7.1,<0.8",
 ]

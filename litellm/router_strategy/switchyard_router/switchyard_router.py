@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
-from pydantic import TypeAdapter
-
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
@@ -29,7 +27,7 @@ from litellm.types.router import PreRoutingHookResponse
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, ModelResponse, StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
-    from switchyard.libsy import Algorithm
+    from switchyard_rust.libsy import Algorithm, DecisionCall, ModelCall, RoutingOutcome
 
 JudgeCompletion: TypeAlias = Callable[[Mapping[str, object]], Awaitable[ModelResponse]]
 DecisionCompletion: TypeAlias = Callable[[Mapping[str, object]], Awaitable[OpenAIDecisionResponse]]
@@ -42,7 +40,6 @@ FallbackReason: TypeAlias = Literal[
     "no_decision",
 ]
 _T = TypeVar("_T")
-_OBJECT: Final = TypeAdapter(object)
 _SESSION_HEADER: Final = "x-switchyard-session-id"
 _FORWARDED_HEADER_PREFIXES: Final = ("x-switchyard-", "x-codex-", "x-nemo-relay-", "x-dynamo-")
 _FORWARDED_HEADERS: Final = frozenset(
@@ -127,13 +124,44 @@ class SwitchyardRouter:
             "router_model_name": self.model_name,
             "routed_model": pick,
             "switchyard_algorithm": self.config.algorithm,
-            **({"switchyard_evidence": evidence} if evidence is not None else {}),
+            "switchyard_evidence": evidence,
         }
         return PreRoutingHookResponse(
             model=pick,
             messages=[dict(message) for message in messages] if messages is not None else None,
             routing_decision=decision,
         )
+
+    async def _answer_judge(self, call: ModelCall, caller: Mapping[str, object]) -> None:
+        try:
+            converted: Final = judge_response(
+                await self.completion(self._internal_call(judge_request(call.request, call.models[0]), caller))
+            )
+        except Exception as error:  # noqa: BLE001  # judge/provider failures are inputs to Switchyard's fall-open decision
+            await call.fail(error)
+        else:
+            await call.respond(_resolved(converted))
+
+    async def _answer_decision(self, call: DecisionCall, caller: Mapping[str, object]) -> None:
+        try:
+            answer: Final = decision_response(
+                await self.decide(self._internal_call(decision_request(call.request, call.model), caller)),
+                call.request,
+            )
+        except Exception as error:  # noqa: BLE001  # decision/provider failures are inputs to Switchyard's fall-open decision
+            await call.fail(error)
+        else:
+            await call.respond(_resolved(answer))
+
+    def _outcome(
+        self, outcome: RoutingOutcome, messages: Sequence[Mapping[str, object]] | None
+    ) -> PreRoutingHookResponse:
+        pick: Final = outcome.selected_model_ids[0]
+        if pick not in (self.config.models.capable, self.config.models.efficient):
+            return self._fallback("target_outside_config", messages)
+        metadata: Final = outcome.metadata
+        evidence: Final[object] = metadata.evidence if metadata is not None else None
+        return self._decision(pick, evidence, messages)
 
     async def async_pre_routing_hook(
         self,
@@ -143,7 +171,7 @@ class SwitchyardRouter:
         input: object = None,
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse | None:
-        from switchyard.libsy import LibsyError, Step
+        from switchyard_rust.libsy import LibsyError, Step
 
         if model != self.model_name:
             return None
@@ -157,44 +185,20 @@ class SwitchyardRouter:
                 request, self.config.runtime_models(), headers=switchyard_headers(request_kwargs)
             ):
                 match step:
-                    case Step.CallModel(call):
-                        if not isinstance(self.config.classifier, LlmClassifierConfig) or call.models[:1] != [judge]:
-                            return self._fallback("unexpected_judge_call", messages)
-                        try:
-                            converted: Final = judge_response(
-                                await self.completion(
-                                    self._internal_call(judge_request(call.request, call.models[0]), request_kwargs)
-                                )
-                            )
-                        except Exception as error:  # noqa: BLE001  # judge/provider failures are inputs to Switchyard's fall-open decision
-                            await call.fail(error)
-                        else:
-                            await call.respond(_resolved(converted))
-                    case Step.CallDecision(call):
-                        if not isinstance(self.config.classifier, DecisionClassifierConfig) or call.model != judge:
-                            return self._fallback("unexpected_decision_call", messages)
-                        try:
-                            answer: Final = decision_response(
-                                await self.decide(
-                                    self._internal_call(decision_request(call.request, call.model), request_kwargs)
-                                ),
-                                call.request,
-                            )
-                        except Exception as error:  # noqa: BLE001  # decision/provider failures are inputs to Switchyard's fall-open decision
-                            await call.fail(error)
-                        else:
-                            await call.respond(_resolved(answer))
+                    case Step.CallModel(call) if isinstance(
+                        self.config.classifier, LlmClassifierConfig
+                    ) and call.models[:1] == [judge]:
+                        await self._answer_judge(call, request_kwargs)
+                    case Step.CallDecision(call) if (
+                        isinstance(self.config.classifier, DecisionClassifierConfig) and call.model == judge
+                    ):
+                        await self._answer_decision(call, request_kwargs)
+                    case Step.CallModel():
+                        return self._fallback("unexpected_judge_call", messages)
+                    case Step.CallDecision():
+                        return self._fallback("unexpected_decision_call", messages)
                     case Step.Done(outcome):
-                        pick: Final = outcome.selected_model_ids[0]
-                        if pick not in (self.config.models.capable, self.config.models.efficient):
-                            return self._fallback("target_outside_config", messages)
-                        return self._decision(
-                            pick,
-                            _OBJECT.validate_python(outcome.metadata.evidence)
-                            if outcome.metadata is not None
-                            else None,
-                            messages,
-                        )
+                        return self._outcome(outcome, messages)
         except LibsyError:
             return self._fallback("libsy_error", messages)
         return self._fallback("no_decision", messages)
