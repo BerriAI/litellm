@@ -48,12 +48,14 @@ class UsageExportKeyMetadata(BaseModel, frozen=True):
     tag: str | None = None
     webhook_token: str | None = None
     apiKey: str | None = None
+    OpenAIAPIKey: str | None = None
 
 
 class UsageExportUserMetadata(BaseModel, frozen=True):
     department: str | None = None
     ldap_password: str | None = None
     clientSecret: str | None = None
+    APIKEY: str | None = None
 
 
 class UsageExportRow(BaseModel, frozen=True):
@@ -113,6 +115,7 @@ class TestUsageExportMetadata:
                         "department": f"research-{marker}",
                         "ldap_password": f"pw-{marker}",
                         "clientSecret": f"cs-{marker}",
+                        "APIKEY": f"upper-{marker}",
                     },
                 ),
                 response_type=UserNewResponse,
@@ -125,7 +128,10 @@ class TestUsageExportMetadata:
                 models=[model],
                 key_alias=f"e2e-usage-export-{marker}",
                 metadata=KeyMetadata(
-                    tag=f"cost-center-{marker}", webhook_token=f"whsec-{marker}", apiKey=f"ak-{marker}"
+                    tag=f"cost-center-{marker}",
+                    webhook_token=f"whsec-{marker}",
+                    apiKey=f"ak-{marker}",
+                    OpenAIAPIKey=f"acr-{marker}",
                 ),
             )
         )
@@ -171,10 +177,12 @@ class TestUsageExportMetadata:
             masked = (
                 row.key_metadata.webhook_token,
                 row.key_metadata.apiKey,
+                row.key_metadata.OpenAIAPIKey,
                 row.user_metadata.ldap_password,
                 row.user_metadata.clientSecret,
+                row.user_metadata.APIKEY,
             )
-            assert masked == ("REDACTED",) * 4, f"credential-named metadata values reached the export unmasked: {row}"
+            assert masked == ("REDACTED",) * 6, f"credential-named metadata values reached the export unmasked: {row}"
 
         own_view: Final = client.proxy.transport.probe(
             EXPORT_ROUTE,

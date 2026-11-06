@@ -61,6 +61,7 @@ class KeyMetadata(BaseModel):
     guardrails: list[str] | None = None
     webhook_token: str | None = None
     apiKey: str | None = None
+    OpenAIAPIKey: str | None = None
 
 
 class ObjectPermission(BaseModel):
