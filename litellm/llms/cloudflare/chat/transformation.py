@@ -5,6 +5,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    audio_or_image_in_message_content,
     handle_messages_with_content_list_to_str_conversion,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -113,7 +114,9 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         model: str,
         is_async: bool = False,
     ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:  # mutable-ok: base signature
-        flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
+        # Flattening keeps only the text, so skip it when any message carries an image or audio part
+        has_media: Final = any(audio_or_image_in_message_content(message) for message in messages)
+        flattened: Final = messages if has_media else handle_messages_with_content_list_to_str_conversion(messages)
         if is_async:
             return super()._transform_messages(messages=flattened, model=model, is_async=True)
         return super()._transform_messages(messages=flattened, model=model, is_async=False)

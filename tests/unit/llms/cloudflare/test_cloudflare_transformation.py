@@ -246,6 +246,24 @@ def test_transform_request_leaves_string_content_untouched():
     assert [m["content"] for m in body["messages"]] == ["you are terse", "weather in nyc?"]
 
 
+def test_transform_request_does_not_flatten_when_a_part_is_not_text():
+    config = CloudflareChatConfig()
+    parts = [
+        {"type": "text", "text": "What is in this picture?"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+    ]
+
+    body = config.transform_request(
+        model="@cf/meta/llama-3.2-11b-vision-instruct",
+        messages=[{"role": "user", "content": parts}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["messages"][0]["content"] == parts
+
+
 def test_async_transform_request_flattens_content_part_arrays_to_string():
     config = CloudflareChatConfig()
     messages = [
