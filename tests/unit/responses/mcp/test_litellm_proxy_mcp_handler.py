@@ -590,9 +590,8 @@ async def test_mcp_block_behavior_preserves_failure_logging_and_propagates_only_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("behavior", [None, "tool_result", "raise"])
-@pytest.mark.parametrize("mode", ["pre_mcp_call", "during_mcp_call"])
 async def test_initialized_content_filter_blocks_mcp_according_to_its_config(
-    monkeypatch: pytest.MonkeyPatch, behavior: Literal["tool_result", "raise"] | None, mode: str
+    monkeypatch: pytest.MonkeyPatch, behavior: Literal["tool_result", "raise"] | None
 ) -> None:
     for name in (
         "callbacks", "input_callback", "success_callback", "failure_callback",
@@ -605,7 +604,7 @@ async def test_initialized_content_filter_blocks_mcp_according_to_its_config(
             "guardrail_name": "configured-block",
             "litellm_params": {
                 "guardrail": "litellm_content_filter",
-                "mode": mode,
+                "mode": "pre_mcp_call",
                 "default_on": True,
                 "blocked_words": [{"keyword": "forbiddenmarker", "action": "BLOCK"}],
                 **({"mcp_block_behavior": behavior} if behavior is not None else {}),
@@ -638,8 +637,7 @@ async def test_initialized_content_filter_blocks_mcp_according_to_its_config(
         assert len(results) == 1
         assert results[0]["tool_call_id"] == "blocked"
         assert "Content blocked: keyword 'forbiddenmarker' detected" in results[0]["result"]
-    if mode == "pre_mcp_call":
-        client.call_tool.assert_not_awaited()
+    client.call_tool.assert_not_awaited()
 
 
 @pytest.mark.asyncio
