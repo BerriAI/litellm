@@ -10,7 +10,6 @@ from litellm.exceptions import BadRequestError
 
 ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "litellm_proxy"})
 _FIRST_AZURE_API_VERSION_WITH_TOOL_CHOICE: Final = "2023-12-01"
-_TOOL_TYPES_THE_CALLER_RUNS: Final = frozenset({"function", "custom"})
 
 CHAT_ALLOWED_TOOLS_LAYOUT: Final = (
     '{"type": "allowed_tools", "allowed_tools": {"mode": "auto" | "required", "tools": [<at least one tool>]}}'
@@ -59,19 +58,11 @@ class _ToolChoiceType(BaseModel):
 _TOOL_CHOICE_TYPE: Final = TypeAdapter(_ToolChoiceType)
 
 
-def _declared_type(value: object) -> str | None:
-    try:
-        return _TOOL_CHOICE_TYPE.validate_python(value).type
-    except ValidationError:
-        return None
-
-
 def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
-    return _declared_type(tool_choice) == "allowed_tools"
-
-
-def caller_runs_every_tool(tools: Iterable[object] | None) -> bool:
-    return all(_declared_type(tool) in _TOOL_TYPES_THE_CALLER_RUNS for tool in tools or ())
+    try:
+        return _TOOL_CHOICE_TYPE.validate_python(tool_choice).type == "allowed_tools"
+    except ValidationError:
+        return False
 
 
 def drops_unsupported_allowed_tools_tool_choice(
@@ -79,14 +70,11 @@ def drops_unsupported_allowed_tools_tool_choice(
     custom_llm_provider: str,
     model: str,
     drop_params: bool,
-    tools: Iterable[object] | None,
 ) -> bool:
     if not is_allowed_tools_tool_choice(tool_choice) or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
         return False
-    if drop_params and caller_runs_every_tool(tools):
-        return True
     if drop_params:
-        raise _a_choice_drop_params_keeps(custom_llm_provider, model)
+        return True
     raise BadRequestError(
         message=(
             "tool_choice type 'allowed_tools' is only supported for "
@@ -165,25 +153,6 @@ def unenforced_allowed_tools_tool_choice(
     )
 
 
-def _a_choice_drop_params_keeps(custom_llm_provider: str | None, model: str) -> BadRequestError:
-    return BadRequestError(
-        message=(
-            f"This allowed_tools tool_choice can't be enforced on custom_llm_provider={custom_llm_provider}, and the "
-            "caller does not run every tool on this request, so drop_params does not drop it. Send only the allowed "
-            "tools in `tools` with tool_choice='auto' or 'required'."
-        ),
-        model=model,
-        llm_provider=custom_llm_provider or "",
-    )
-
-
-def refuse_unenforced_allowed_tools_tool_choice(
-    tool_choice: object, custom_llm_provider: str | None, model: str, api_version: str | None = None
-) -> None:
-    if unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, api_version):
-        raise _a_choice_drop_params_keeps(custom_llm_provider, model)
-
-
 def _allowed_tool_names(tool_choice: object) -> frozenset[object]:
     parsed: Final = parse_allowed_tools_tool_choice(tool_choice)
     if parsed is None:
@@ -192,11 +161,27 @@ def _allowed_tool_names(tool_choice: object) -> frozenset[object]:
     return frozenset(tool.get("name") for tool in flattened if tool is not None)
 
 
-def refuse_tool_calls_the_choice_excludes(tool_choice: object, tool_names: Iterable[str], model: str) -> None:
+def refuse_a_malformed_allowed_tools_tool_choice(tool_choice: object, model: str) -> None:
+    if is_allowed_tools_tool_choice(tool_choice) and parse_allowed_tools_tool_choice(tool_choice) is None:
+        raise BadRequestError(
+            message=(
+                f"Invalid tool choice, tool_choice={tool_choice}. An allowed_tools tool_choice must be "
+                f"{CHAT_ALLOWED_TOOLS_LAYOUT} or {RESPONSES_ALLOWED_TOOLS_LAYOUT}"
+            ),
+            model=model,
+            llm_provider="",
+        )
+
+
+def tool_calls_the_choice_excludes(tool_choice: object, tool_names: Iterable[str]) -> tuple[str, ...]:
     if not is_allowed_tools_tool_choice(tool_choice):
-        return
+        return ()
     allowed: Final = _allowed_tool_names(tool_choice)
-    excluded: Final = tuple(name for name in tool_names if name not in allowed)
+    return tuple(name for name in tool_names if name not in allowed)
+
+
+def refuse_tool_calls_the_choice_excludes(tool_choice: object, tool_names: Iterable[str], model: str) -> None:
+    excluded: Final = tool_calls_the_choice_excludes(tool_choice, tool_names)
     if excluded:
         raise BadRequestError(
             message=(

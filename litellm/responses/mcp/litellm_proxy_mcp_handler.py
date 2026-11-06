@@ -10,7 +10,7 @@ from typing_extensions import Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
-from litellm.litellm_core_utils.allowed_tools_tool_choice import refuse_tool_calls_the_choice_excludes
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_calls_the_choice_excludes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.utils import (
@@ -610,6 +610,13 @@ class LiteLLM_Proxy_MCP_Handler:
     _should_auto_execute_tools = should_auto_execute_tools
 
     @staticmethod
+    def tool_calls_to_run(tool_calls: Sequence[object], tool_choice: object) -> Sequence[object]:
+        names: Final = tuple(
+            LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)[0] or "" for tool_call in tool_calls
+        )
+        return () if tool_calls_the_choice_excludes(tool_choice, names) else tool_calls
+
+    @staticmethod
     def extract_tool_calls_from_response(response: ResponsesAPIResponse) -> list[object]:
         """Extract tool calls from the response output."""
         tool_calls: Final[list[object]] = []
@@ -741,7 +748,6 @@ class LiteLLM_Proxy_MCP_Handler:
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
         request_trace_id: str | None = None,
-        tool_choice: object = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -756,11 +762,6 @@ class LiteLLM_Proxy_MCP_Handler:
         )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        refuse_tool_calls_the_choice_excludes(
-            tool_choice,
-            tuple(LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)[0] or "" for tool_call in tool_calls),
-            "",
-        )
         tool_results: Final[list[MCPToolResult]] = []
         tool_call_id: str | None = None
         rules_obj: Final = Rules()

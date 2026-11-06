@@ -31,6 +31,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Ha
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
 from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
+    ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
     ToolParam,
@@ -1696,30 +1697,6 @@ async def _auto_execute(
     return response
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-async def test_mcp_tools_keep_the_400_for_a_choice_the_chat_bridge_would_drop(
-    respx_mock: respx.MockRouter, stream: bool
-) -> None:
-    async def call_with_the_choice() -> None:
-        response: Final = await litellm.aresponses(
-            model="anthropic/claude-haiku-4-5",
-            input="Call echo with PING",
-            tools=[dict(_ECHO_MCP_TOOL)],
-            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "echo"}]},
-            drop_params=True,
-            stream=stream,
-            api_key="sk-ant-fake",
-        )
-        if stream:
-            [event async for event in response]
-
-    with _echo_tool_served("PING"), pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
-        await call_with_the_choice()
-
-    assert not respx_mock.calls
-
-
 async def _auto_execute_echo(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
 ) -> ResponsesAPIResponse:
@@ -1806,10 +1783,57 @@ async def test_an_mcp_tool_the_choice_excludes_never_runs_when_the_model_ignored
     call_tool: Final = AsyncMock()
     _served_by_a_recording_mcp_server(monkeypatch, call_tool)
 
-    with pytest.raises(litellm.BadRequestError, match="LiteLLM did not run the call"):
-        await _call_with_a_choice_excluding_echo(stream=False)
+    (response,) = await _call_with_a_choice_excluding_echo(stream=False)
 
     call_tool.assert_not_awaited()
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.status == "completed"
+    assert _output_types(response.output) == ("function_call",)
+
+
+def _anthropic_call_to_echo() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_echo",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}}],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_choice_hands_back_an_mcp_call_it_excludes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_call_to_echo()
+    )
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    with _echo_tool_listed():
+        response: Final = await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            tool_choice=_ALLOWED_ONLY_ANOTHER_TOOL,
+            drop_params=True,
+            api_key="sk-ant-fake",
+        )
+
+    call_tool.assert_not_awaited()
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.tool_choice == "auto"
+    assert _output_types(response.output) == ("function_call",)
 
 
 @pytest.mark.asyncio
@@ -1839,9 +1863,13 @@ async def test_a_streamed_mcp_tool_the_choice_excludes_never_runs_when_the_model
     call_tool: Final = AsyncMock()
     _served_by_a_recording_mcp_server(monkeypatch, call_tool)
 
-    await _call_with_a_choice_excluding_echo(stream=True)
+    events: Final = await _call_with_a_choice_excluding_echo(stream=True)
 
     call_tool.assert_not_awaited()
+    last: Final = events[-1]
+    assert isinstance(last, ResponseCompletedEvent)
+    assert _output_types(last.response.output) == ("function_call",)
+    assert not any("mcp_call" in str(getattr(event, "type", "")) for event in events)
 
 
 def _rounds_logging_obj(recorder: _RoundRecorder, call_id: str) -> Logging:

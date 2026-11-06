@@ -664,20 +664,32 @@ async def test_a_malformed_allowed_tools_tool_choice_stays_a_400_on_mcp_gateway_
     assert not respx_mock.calls
 
 
-@pytest.mark.asyncio
-async def test_drop_params_keeps_the_400_when_the_provider_would_run_an_mcp_tool(respx_mock: respx.MockRouter):
-    with pytest.raises(litellm.BadRequestError, match="drop_params does not drop it") as exc:
-        await litellm.acompletion(
-            model="anthropic/claude-haiku-4-5",
-            messages=[{"role": "user", "content": "What time is it?"}],
-            tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
-            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
-            drop_params=True,
-            api_key="sk-ant-fake",
+def test_drop_params_drops_the_choice_beside_a_tool_the_provider_runs(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
         )
+    )
 
-    assert exc.value.status_code == 400
-    assert not respx_mock.calls
+    litellm.completion(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
