@@ -958,7 +958,8 @@ class AmazonConverseConfig(BaseConfig):
     ) -> bool:
         """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
 
-        ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
+        ``supports_native_structured_output`` or ``bedrock_native_structured_output_by_default`` in
+        ``litellm.model_cost`` turns it on for every request, and
         ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) also when Claude
         will think, which the json tool path would drop. When the request does not ask for thinking, a model
         that cannot force the json tool gets it unless that key is false.

@@ -5654,7 +5654,9 @@ def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "native_past_limit"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
+    ("native_key", "native_past_limit"),
+    [("legacy", True), ("default", True), ("bedrock", False)],
+    ids=["legacy-key", "default-key", "bedrock-key"],
 )
 def test_field_count_limit_sends_the_json_tool_only_on_the_bedrock_native_key(
     set_native_structured_output, native_key, native_past_limit
@@ -11687,9 +11689,9 @@ _OUTPUT_CONFIG_FORMAT: Final = {
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
 def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    local_model_cost_map, monkeypatch, model, request_params
+    set_native_structured_output, model, request_params
 ):
-    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
+    set_native_structured_output(model, "bedrock")
     optional_params: Final = _converse_params(model, None, request_params)
 
     assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})

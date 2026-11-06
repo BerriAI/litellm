@@ -388,6 +388,16 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
+def test_bedrock_native_output_default_reaches_only_versions_that_read_its_key(local_model_cost_map):
+    flagged: Final = tuple(
+        key for key, row in litellm.model_cost.items() if row.get("bedrock_native_structured_output_by_default")
+    )
+
+    assert flagged
+    assert [key for key in flagged if litellm.model_cost[key].get("supports_native_structured_output")] == []
+    assert [key for key in flagged if not get_model_info(key)["supports_native_structured_output"]] == []
+
+
 def _is_positive_cost(value: object) -> bool:
     return isinstance(value, (int, float)) and value > 0
 
