@@ -100,6 +100,7 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
+from litellm.proxy.auth.key_disallowed_models import ensure_key_may_call_model
 from litellm.proxy.auth.model_access_denied import (
     customer_model_access_denied_client_message,
     model_access_denied_client_message,
@@ -5521,6 +5522,7 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    ensure_key_may_call_model(model, valid_token, llm_router)
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
         return can_object_call_model(
@@ -5596,7 +5598,9 @@ async def can_key_call_resolved_model(
     skip_key_model_check: Final = valid_token.config or (
         isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
     )
-    if not skip_key_model_check:
+    if skip_key_model_check:
+        ensure_key_may_call_model(model, valid_token, llm_router)
+    else:
         await can_key_call_model(
             model=model,
             llm_model_list=llm_model_list,

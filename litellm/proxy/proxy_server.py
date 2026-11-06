@@ -452,6 +452,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.key_disallowed_models import key_disallowed_models, without_key_disallowed_models
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
@@ -18311,7 +18312,7 @@ async def _v1_model_info_lists_every_deployment(
         model_access_groups=model_access_groups,
     ):
         return False
-    if personal_key_team_model_access_applies(user_api_key_dict):
+    if personal_key_team_model_access_applies(user_api_key_dict) or key_disallowed_models(user_api_key_dict):
         return False
     return not user_api_key_dict.agent_id or await resolve_agent_ceiling(user_api_key_dict.agent_id) is None
 
@@ -18915,17 +18916,21 @@ async def model_group_info(
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     )
     all_models_str: Final = (
-        await run_model_listing(
-            partial(
-                get_complete_model_list,
-                key_models=(),
-                team_models=(),
-                proxy_model_list=llm_router.registry().names(),
-                user_model=user_model,
-                infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-                return_wildcard_routes=False,
-                llm_router=llm_router,
-            )
+        without_key_disallowed_models(
+            await run_model_listing(
+                partial(
+                    get_complete_model_list,
+                    key_models=(),
+                    team_models=(),
+                    proxy_model_list=llm_router.registry().names(),
+                    user_model=user_model,
+                    infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+                    return_wildcard_routes=False,
+                    llm_router=llm_router,
+                )
+            ),
+            user_api_key_dict,
+            llm_router,
         )
         if is_proxy_admin
         else await get_available_models_for_user(
