@@ -141,6 +141,23 @@ async def test_pre_api_call_sees_the_shaped_optional_params(server: RecordingSer
 
 
 @pytest.mark.asyncio
+async def test_success_event_logs_the_requested_reasoning_effort_not_its_translation(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server, reasoning_effort="low")
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    sent: Final = server.requests[0].body
+    assert isinstance(sent, dict)
+    assert sent["output_config"] == {"effort": "low"}
+    assert isinstance(success[0].kwargs, dict)
+    logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
+    assert logged["model_parameters"] == {"max_tokens": 64, "stream": False, "reasoning_effort": "low"}
+
+
+@pytest.mark.asyncio
 async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(server: RecordingServer) -> None:
     class Rewrite(HookRecorder):
         async def async_logging_hook(
