@@ -4481,7 +4481,7 @@ def _batch_line_with_body(field: str, value: object) -> str:
 _BATCH_S3_IMAGE: Final = "s3://media-bucket/dir/cat.png"
 _BATCH_S3_MEDIA_REFUSAL: Final = (
     f"Batch input file line 2 has s3:// media URLs ({_BATCH_S3_IMAGE}). "
-    "Bedrock batch files do not take s3:// media URLs yet"
+    "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
 )
 _CHAT_BATCH_LINE_WITH_AN_S3_IMAGE: Final = _batch_line_with_body(
     "messages",

@@ -395,8 +395,8 @@ def _batch_body_problem(record: Mapping[str, object]) -> str | None:
     s3_uris: Final = s3_media_uris(body)
     if s3_uris:
         return (
-            f"has s3:// media URLs ({', '.join(s3_uris)}). Bedrock batch files do not take s3:// media URLs yet, "
-            "so send the media inline as base64 data"
+            f"has s3:// media URLs ({', '.join(s3_uris)}). "
+            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
         )
     return None
 
