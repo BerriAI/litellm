@@ -658,6 +658,7 @@ class HostRegistry(HostModelInfo):
         self._core_complexity_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
         self._core_adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
         self._core_quality_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
+        self._core_switchyard_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
         self.strategies: PreRoutingStrategies | None = None
         # The router's optional pre-call checks (deployment budgets, prompt caching pins);
         # RustCore installs its ``OptionalChecks`` (litellm/router_rust/steps/callbacks.py).

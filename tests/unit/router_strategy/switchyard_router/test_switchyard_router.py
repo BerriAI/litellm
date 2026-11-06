@@ -8,9 +8,11 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_api import ChangeSet
 from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
 from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
 from litellm.types.decisions import OpenAIDecisionResponse
+from litellm.types.router import Deployment
 from litellm.types.utils import ModelResponse
 
 libsy = pytest.importorskip("switchyard_rust.libsy")
@@ -123,12 +125,17 @@ def llm_router(
             deployment("strong", "strong"),
             deployment("fast", "fast"),
             *((deployment("judge", Exception("judge down")),) if judge_fails else ()),
-            {
-                "model_name": "route",
-                "litellm_params": {"model": "auto_router/switchyard", "switchyard_router_config": route_config},
-            },
+            switchyard_deployment(route_config),
         ],
     )
+
+
+def switchyard_deployment(route_config: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": "route",
+        "litellm_params": {"model": "auto_router/switchyard", "switchyard_router_config": route_config},
+        "model_info": {"id": "route-id"},
+    }
 
 
 @pytest.mark.asyncio
@@ -160,6 +167,20 @@ async def routed_reply(proxy: litellm.Router, endpoint: str, edits: tuple[str, .
 async def test_router_routes_agent_traffic_from_every_endpoint(endpoint: str) -> None:
     proxy: Final = llm_router(route_config={"models": {"capable": "strong", "efficient": "fast"}})
     assert await routed_reply(proxy, endpoint, ("Edit applied",) * 3) == "fast"
+
+
+@pytest.mark.asyncio
+async def test_router_follows_an_edited_switchyard_router_and_forgets_a_deleted_one() -> None:
+    proxy: Final = llm_router(route_config={"models": {"capable": "strong", "efficient": "fast"}})
+    assert await routed_reply(proxy, "acompletion", ("Edit applied",) * 3) == "fast"
+
+    swapped: Final = switchyard_deployment({"models": {"capable": "fast", "efficient": "strong"}})
+    _ = proxy.apply(ChangeSet(upsert=[Deployment(**swapped)]))
+    assert await routed_reply(proxy, "acompletion", ("Edit applied",) * 3) == "strong"
+
+    _ = proxy.apply(ChangeSet(delete=["route-id"]))
+    with pytest.raises(litellm.BadRequestError):
+        await proxy.acompletion(model="route", messages=HELLO)
 
 
 @pytest.mark.asyncio
