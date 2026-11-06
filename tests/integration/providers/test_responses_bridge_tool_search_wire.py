@@ -998,7 +998,7 @@ def test_a_callers_function_named_like_the_search_tool_stays_a_function_call(gat
         assert [tool["name"] for tool in _ITEMS.validate_python(body["tools"])] == [_REGEX_TOOL_NAME], body
 
 
-def test_an_unrequested_server_tool_use_from_the_vendor_stays_a_function_call(gateway: Gateway) -> None:
+def test_an_unrequested_server_tool_use_from_the_vendor_is_not_returned_as_a_function_call(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor(searched=True).respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
@@ -1007,7 +1007,11 @@ def test_an_unrequested_server_tool_use_from_the_vendor_stays_a_function_call(ga
         )
         assert "tool_search_call" not in _output_types(answer.payload), answer
         calls: Final = {str(item["call_id"]): str(item["name"]) for item in _tool_items(answer.payload)}
-        assert calls == {f"srvtoolu_{marker}": _REGEX_TOOL_NAME, f"toolu_{marker}": "get_weather"}, answer
+        assert calls == {f"toolu_{marker}": "get_weather"}, answer
+        server_calls: Final = _ITEMS.validate_python(
+            _JSON_OBJECT.validate_python(answer.payload["provider_specific_fields"])["server_tool_calls"]
+        )
+        assert [call["id"] for call in server_calls] == [f"srvtoolu_{marker}"], answer
         _, body = _only_request(wire)
         _assert_dropped_on_wire(body, ("get_weather",))
 
@@ -1224,15 +1228,17 @@ def test_chat_completions_keep_forwarding_the_regex_tool_and_defer_loading(gatew
         if stream:
             assert "data: [DONE]" in response.text and "get_weather" in response.text, response.text
         else:
-            calls: Final = _ITEMS.validate_python(
-                _JSON_OBJECT.validate_python(
-                    _ITEMS.validate_python(_JSON_OBJECT.validate_json(response.content)["choices"])[0]["message"]
-                )["tool_calls"]
+            message: Final = _JSON_OBJECT.validate_python(
+                _ITEMS.validate_python(_JSON_OBJECT.validate_json(response.content)["choices"])[0]["message"]
             )
-            assert [_JSON_OBJECT.validate_python(call["function"])["name"] for call in calls] == [
-                _REGEX_TOOL_NAME,
-                "get_weather",
-            ], calls
+            calls: Final = _ITEMS.validate_python(message["tool_calls"])
+            server_calls: Final = _ITEMS.validate_python(
+                _JSON_OBJECT.validate_python(message["provider_specific_fields"])["server_tool_calls"]
+            )
+            assert [_JSON_OBJECT.validate_python(call["function"])["name"] for call in calls] == ["get_weather"], calls
+            assert [_JSON_OBJECT.validate_python(call["function"])["name"] for call in server_calls] == [
+                _REGEX_TOOL_NAME
+            ], message
         request, sent = _only_request(wire)
         _assert_anthropic_wire(request, sent, ("get_weather",))
 

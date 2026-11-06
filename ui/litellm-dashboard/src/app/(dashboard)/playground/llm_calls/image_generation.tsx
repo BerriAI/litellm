@@ -2,6 +2,7 @@ import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http
 import openai from "openai";
 import { getGatewayBaseUrl } from "@/components/networking";
 import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 
 export async function makeOpenAIImageGenerationRequest(
@@ -56,7 +57,7 @@ export async function makeOpenAIImageGenerationRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      toast.fromError(`Error occurred while generating image. Please try again. Error: ${error}`);
+      toast.fromError(i18n.t("playground.llmCalls.imageGeneration.requestFailed", { error: String(error) }));
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

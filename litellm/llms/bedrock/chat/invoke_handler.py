@@ -16,7 +16,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
-from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    native_redacted_thinking_data,
+)
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )

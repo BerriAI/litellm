@@ -24,7 +24,9 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import chat_completion_prompt_cache_breakpoint_for_wire
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoint_for_wire,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
