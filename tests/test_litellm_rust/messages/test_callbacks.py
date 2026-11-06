@@ -158,6 +158,30 @@ async def test_success_event_logs_the_requested_reasoning_effort_not_its_transla
 
 
 @pytest.mark.asyncio
+async def test_success_event_logs_the_sent_messages_and_the_callers_params(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+    tool_use: Final = {"type": "tool_use", "id": "functions.Bash:0", "name": "bash", "input": {"command": "ls"}}
+    messages: Final = [
+        {"role": "user", "content": "List /tmp"},
+        {"role": "assistant", "content": [{"type": "text", "text": " \n"}, tool_use]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "a"}]},
+    ]
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server, messages=messages, temperature=1)
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    sent: Final = server.requests[0].body
+    assert isinstance(sent, dict)
+    assert sent["messages"][1]["content"] == [{**tool_use, "id": "functions_Bash_0"}]
+    assert isinstance(success[0].kwargs, dict)
+    logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
+    assert logged["messages"] == sent["messages"]
+    assert repr(_OBJECT.validate_python(logged["model_parameters"])["temperature"]) == "1"
+
+
+@pytest.mark.asyncio
 async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(server: RecordingServer) -> None:
     class Rewrite(HookRecorder):
         async def async_logging_hook(

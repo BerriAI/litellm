@@ -129,6 +129,7 @@ class StubCoroutine:
 class StubLogger:
     def __init__(self):
         self.calls = []
+        self.model_call_details = {}
         self.hooks = {}
         self.on_enqueue = lambda coroutine: None
 
