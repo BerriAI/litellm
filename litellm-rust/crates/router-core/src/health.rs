@@ -247,6 +247,10 @@ impl Health {
         self.clock.now()
     }
 
+    pub(crate) fn timestamp(&self) -> jiff::Timestamp {
+        jiff::Timestamp::try_from(self.clock.now()).unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+    }
+
     fn now(&self) -> f64 {
         unix_seconds(self.clock.now())
     }

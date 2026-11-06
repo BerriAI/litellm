@@ -22,6 +22,7 @@ pypdf = "2026-10-28T17:01:00Z"
 members = [
     "litellm",
     "litellm-enterprise",
+    "litellm-proxy",
     "litellm-proxy-extras",
 ]
 constraints = [
@@ -5525,6 +5526,11 @@ provides-extras = ["test"]
 name = "litellm-enterprise"
 version = "0.1.81"
 source = { editable = "enterprise" }
+
+[[package]]
+name = "litellm-proxy"
+version = "1.109.0"
+source = { editable = "packaging/litellm-proxy" }
 
 [[package]]
 name = "litellm-proxy-extras"

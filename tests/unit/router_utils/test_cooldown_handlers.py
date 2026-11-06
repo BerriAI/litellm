@@ -36,6 +36,7 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
     get_cooldown_deployments,
+    is_response_lookup_not_found,
     mark_advisor_orchestration_failure,
     set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
@@ -3565,3 +3566,25 @@ def test_the_refusal_names_each_cooled_deployment_some_cooldown_state_routes_the
     with pytest.raises(RouterRateLimitError) as refusal:
         _select(_tenant_router(EVERY_TENANT, **BOTH_ON), "async", "tenants", copy.deepcopy(request_kwargs))
     assert {deployment["model_id"] for deployment in refusal.value.cooldown_deployments or ()} == reachable
+
+
+@pytest.mark.parametrize(
+    ("status_code", "call_type", "expected"),
+    [
+        (404, "aget_responses", True),
+        (404, "adelete_responses", True),
+        (404, "acancel_responses", True),
+        (404, "alist_input_items", True),
+        (404, "get_responses", True),
+        (404, "aresponses", False),
+        (404, "acompact_responses", False),
+        (404, "acompletion", False),
+        (500, "aget_responses", False),
+        (429, "alist_input_items", False),
+    ],
+)
+def test_is_response_lookup_not_found(status_code: int, call_type: str, expected: bool) -> None:
+    error: Final = litellm.NotFoundError(message="gone", llm_provider="openai", model="gpt-4o-mini")
+    error.status_code = status_code
+
+    assert is_response_lookup_not_found(error, {"call_type": call_type}) is expected
