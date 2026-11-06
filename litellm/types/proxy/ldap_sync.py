@@ -19,7 +19,8 @@ class LDAPSyncSettings(BaseModel):
     member_lookup_attribute: str = "uid"
     user_match_attribute: str = "mail"
     litellm_match_field: Literal["user_email", "user_id", "sso_user_id"] = "user_email"
-    interval_minutes: float = Field(default=30, ge=0.1, allow_inf_nan=False)
+    # At least 5 minutes so the job lock (interval - 1s) outlasts the time budget plus one roster transaction.
+    interval_minutes: float = Field(default=30, ge=5, allow_inf_nan=False)
     dry_run: bool = False
     allow_empty_groups: bool = False
     bind_dn: str | None = None

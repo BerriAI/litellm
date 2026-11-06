@@ -247,6 +247,7 @@ def test_disabled_configuration_needs_no_connection_details():
         {"group_id_attribute": "cn)(uid=*"},
         {"litellm_match_field": "user_role"},
         {"interval_minutes": 0},
+        {"interval_minutes": 4.9},
     ],
 )
 def test_invalid_configuration_is_rejected(updates: Mapping[str, object]):
