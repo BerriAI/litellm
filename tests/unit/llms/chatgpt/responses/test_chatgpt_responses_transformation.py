@@ -776,12 +776,13 @@ def _send_responses_with_instructions(
     instructions: str,
     text_format: dict[str, object],
     user_content: str | list[dict[str, str]] = "Paris is the capital of France. Return the city and country.",
+    earlier_turns: tuple[dict[str, object], ...] = (),
 ) -> _ForwardedRequest:
     upstream: Final = _completed_codex_upstream('{"city": "Paris", "country": "France"}')
     litellm.responses(
         model="chatgpt/gpt-6.1-sol",
         instructions=instructions,
-        input=[{"role": "user", "content": user_content}],
+        input=[*earlier_turns, {"role": "user", "content": user_content}],
         text={"format": text_format},
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream))),
     )
@@ -790,12 +791,30 @@ def _send_responses_with_instructions(
 
 @pytest.mark.usefixtures("chatgpt_token_dir")
 @pytest.mark.parametrize(
-    "instructions",
-    [_JSON_INSTRUCTION, f"{get_chatgpt_default_instructions()}\n\n{_JSON_INSTRUCTION}"],
-    ids=["caller_only", "with_codex_base"],
+    ("instructions", "earlier_turns"),
+    [
+        (_JSON_INSTRUCTION, ()),
+        (f"{get_chatgpt_default_instructions()}\n\n{_JSON_INSTRUCTION}", ()),
+        (
+            _JSON_INSTRUCTION,
+            (
+                {"role": "user", "content": "I will ask you about a city."},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Sure, I will answer as a json object."}],
+                },
+            ),
+        ),
+    ],
+    ids=["caller_only", "with_codex_base", "only_assistant_turn_says_json"],
 )
-def test_json_object_instructions_reach_the_codex_backend_as_an_input_message(instructions: str) -> None:
-    forwarded: Final = _send_responses_with_instructions(instructions, {"type": "json_object"})
+def test_json_object_instructions_reach_the_codex_backend_as_an_input_message(
+    instructions: str, earlier_turns: tuple[dict[str, object], ...]
+) -> None:
+    forwarded: Final = _send_responses_with_instructions(
+        instructions, {"type": "json_object"}, earlier_turns=earlier_turns
+    )
 
     assert forwarded["input"][0] == {"role": "developer", "content": _JSON_INSTRUCTION}
     assert forwarded["instructions"] == get_chatgpt_default_instructions()
