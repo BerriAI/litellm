@@ -7,7 +7,14 @@ from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, TypeAlias, cast
+from typing import (
+    Any,
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # cast-ok: key metadata is an untyped JSON blob, narrowed by TypeAdapter right after
+)
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
