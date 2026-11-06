@@ -427,6 +427,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
+    allow_legacy_cloud_file_ids: bool | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
@@ -1040,6 +1041,21 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return MappingProxyType(get_type_hints(model_class))
 
 
+class PriceTier(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    range: tuple[float, float]
+    costs: Mapping[str, float]
+
+
+class DeploymentPricing(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    costs: Mapping[str, float]
+    tiered_pricing: tuple[PriceTier, ...] = ()
+
+
 class ModelGroupInfo(LiteLLMBaseModel):
     model_group: str
     providers: list[str]
@@ -1070,6 +1086,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():

@@ -41,6 +41,7 @@ impl Sink for StderrSink {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    litellm_gateway::install_crypto_provider();
     if let Some(forward) = litellm_gateway_forward::Settings::from_env()? {
         let log: LogSettings = settings::from_iter(std::env::vars_os())?;
         Logger::new(StderrSink {
@@ -55,7 +56,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
     let inference = litellm_gateway::build_inference(&config)?;
-    let _redis = litellm_gateway::build_redis(&config).await?;
+    let _redis =
+        litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;

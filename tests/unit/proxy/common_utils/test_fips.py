@@ -152,6 +152,11 @@ def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPa
     assert fips_mode_active() is False
 
 
+def test_a_fips_openssl_alone_does_not_activate_fips_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    assert fips_mode_active() is False
+
+
 @pytest.mark.skipif(
     not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
 )
