@@ -93,7 +93,6 @@ class UsageAlertRule(UsageAlertRuleInput):
     evaluation_status: UsageAlertEvaluationStatus = "pending"
     is_default: bool = False
     evaluation_progress: UsageAlertProgress | None = Field(default=None, exclude=True)
-    overrides_defaults: bool = Field(default=False, exclude=True)
 
 
 class UsageAlert(BaseModel):
