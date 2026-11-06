@@ -13,6 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { uiHref } from "@/utils/uiHref";
@@ -149,19 +150,20 @@ export function AriaSidebarLink({ active }: { active: boolean }) {
 }
 
 export function LiteAdminPage() {
+  const { t } = useTranslation();
   const setPageContainer = useContext(LiteAdminContext)?.setPageContainer;
-  if (!setPageContainer)
-    return <p className="p-6 text-sm text-muted-foreground">Aria is not available for this session.</p>;
+  if (!setPageContainer) return <p className="p-6 text-sm text-muted-foreground">{t("aria.page.unavailable")}</p>;
   return <div ref={setPageContainer} className="flex min-h-0 flex-1 flex-col" />;
 }
 
 export function AriaUsageTrigger() {
+  const { t } = useTranslation();
   const state = useContext(LiteAdminContext);
   if (!state) return null;
   return (
     <Link href={uiHref("aria")} className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}>
       <AriaAvatar size={18} />
-      Ask Aria
+      {t("aria.usageTrigger.ask")}
     </Link>
   );
 }
@@ -200,6 +202,7 @@ function Destination({
   retry: () => void;
   open: boolean;
 }) {
+  const { t } = useTranslation();
   const [approved, setApproved] = useState(false);
   if (target?.baseUrl && (!target.requiresConsent || approved)) {
     return <LiteAdminChat session={{ ...session, inferenceBaseUrl: target.baseUrl }} open={open} />;
@@ -208,29 +211,26 @@ function Destination({
     <Panel
       composer={
         <div className="p-4">
-          {loading && <Skeleton className="h-24" aria-label="Loading gateway settings" />}
+          {loading && <Skeleton className="h-24" aria-label={t("aria.destination.loadingSettings")} />}
           {!loading && !target?.baseUrl && (
             <Alert variant="destructive">
-              <AlertDescription>{target?.error || "Could not load gateway settings."}</AlertDescription>
+              <AlertDescription>{target?.error || t("aria.destination.settingsError")}</AlertDescription>
               <Button variant="link" onClick={retry}>
-                Retry
+                {t("aria.destination.retry")}
               </Button>
             </Alert>
           )}
           {!loading && target?.baseUrl && (
             <Card size="sm">
               <CardHeader>
-                <CardTitle>Connect to the configured gateway</CardTitle>
+                <CardTitle>{t("aria.destination.consentTitle")}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="break-all font-mono text-xs">{target.baseUrl}</p>
-                <p className="text-muted-foreground">
-                  This gateway uses a different address. Aria will send your existing session credential to the address
-                  shown above.
-                </p>
+                <p className="text-muted-foreground">{t("aria.destination.consentBody")}</p>
               </CardContent>
               <CardFooter>
-                <Button onClick={() => setApproved(true)}>Use configured gateway</Button>
+                <Button onClick={() => setApproved(true)}>{t("aria.destination.useConfigured")}</Button>
               </CardFooter>
             </Card>
           )}
@@ -292,6 +292,7 @@ function useForegroundReviewFocus(
 }
 
 function LiteAdminChat({ session, open }: { session: LiteAdminSession; open: boolean }) {
+  const { t } = useTranslation();
   const state = useContext(LiteAdminContext);
   const chat = useLiteAdmin(session);
   const [input, setInput] = useState("");
@@ -391,7 +392,7 @@ function LiteAdminChat({ session, open }: { session: LiteAdminSession; open: boo
             className="text-muted-foreground"
           >
             <RotateCcw className="size-3.5" />
-            Start over
+            {t("aria.chat.startOver")}
           </Button>
         )}
       </PanelHeader>
@@ -418,13 +419,14 @@ function LiteAdminComposer({
   onModelChange: (value: string | null) => void;
   tooLong: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-3 px-4 pt-2 pb-5 sm:px-6">
       <ModelStatus models={models} />
-      {tooLong && <FieldError>Keep your message within {MAX_INPUT_LENGTH.toLocaleString()} characters.</FieldError>}
+      {tooLong && <FieldError>{t("aria.composer.tooLong", { limit: MAX_INPUT_LENGTH.toLocaleString() })}</FieldError>}
       <ChatComposer
         {...props}
-        placeholder="Ask Aria…"
+        placeholder={t("aria.composer.placeholder")}
         className="[&>div>[data-slot=input-group]]:min-h-0 [&>div>[data-slot=input-group]]:rounded-2xl [&>div>[data-slot=input-group]]:border-foreground/15 [&>div>[data-slot=input-group]]:shadow-none [&>div>[data-slot=input-group]]:ring-0 dark:[&>div>[data-slot=input-group]]:bg-foreground/[0.03] [&_textarea]:min-h-20 [&_textarea]:px-5 [&_textarea]:pt-5 [&_textarea]:text-base [&_textarea]:placeholder:text-muted-foreground"
         tools={
           <ModelPicker
@@ -453,15 +455,16 @@ function ModelPicker({
   disabled: boolean;
   compact?: boolean;
 }) {
-  if (models.isPending) return <Skeleton className="h-8 w-full" aria-label="Loading models" />;
+  const { t } = useTranslation();
+  if (models.isPending) return <Skeleton className="h-8 w-full" aria-label={t("aria.modelPicker.loading")} />;
   return (
     <SearchSelect
-      aria-label={`${ARIA_AGENT_LABEL} model`}
+      aria-label={t("aria.modelPicker.ariaLabel", { agent: ARIA_AGENT_LABEL })}
       options={(models.data ?? []).map((item) => ({ value: item.model_group, label: item.model_group }))}
       value={value}
       onValueChange={onChange}
-      placeholder="Choose a chat model"
-      emptyText={models.data?.length ? "No matching models" : "No available models"}
+      placeholder={t("aria.modelPicker.placeholder")}
+      emptyText={models.data?.length ? t("aria.modelPicker.noMatch") : t("aria.modelPicker.noModels")}
       disabled={disabled}
       allowClear={false}
       className={compact ? "border-transparent shadow-none dark:bg-transparent" : undefined}
@@ -470,13 +473,14 @@ function ModelPicker({
 }
 
 function ModelStatus({ models }: { models: UseQueryResult<ModelGroup[]> }) {
+  const { t } = useTranslation();
   if (!models.isError) return null;
   return (
     <Alert variant="destructive">
       <AlertDescription>
-        Could not load models.{" "}
+        {t("aria.modelStatus.loadError")}{" "}
         <Button variant="link" onClick={() => void models.refetch()}>
-          Retry
+          {t("aria.modelStatus.retry")}
         </Button>
       </AlertDescription>
     </Alert>

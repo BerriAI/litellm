@@ -35,7 +35,7 @@ interface ErrorsTabProps {
   userScoped?: boolean;
 }
 
-const ENTITY_OPTIONS = ERROR_ENTITY_KINDS.map((kind) => ({ value: kind, label: ERROR_ENTITY_LABEL[kind].plural }));
+const ENTITY_OPTIONS = ERROR_ENTITY_KINDS.map((kind) => ({ value: kind, labelKey: ERROR_ENTITY_LABEL[kind].plural }));
 
 const shortDate = (iso: string): string =>
   new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -187,7 +187,7 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
             <Segmented
               label={t("usage.errors.rateChart.viewLabel")}
               value={rateView}
-              options={ERROR_RATE_VIEW_OPTIONS}
+              options={ERROR_RATE_VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               onChange={setRateView}
             />
           }
@@ -280,7 +280,7 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
             <Segmented
               label={t("usage.errors.entities.groupByLabel")}
               value={kind}
-              options={ENTITY_OPTIONS}
+              options={ENTITY_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               onChange={setKind}
             />
           }
@@ -290,14 +290,14 @@ export default function ErrorsTab({ activity, loading, failed, userScoped = fals
             height="h-48"
             empty={
               rows.length === 0
-                ? t("usage.errors.entities.empty", { entities: ERROR_ENTITY_LABEL[kind].plural.toLowerCase() })
+                ? t("usage.errors.entities.empty", { entities: t(ERROR_ENTITY_LABEL[kind].plural).toLowerCase() })
                 : null
             }
           >
-            <Table aria-label={t("usage.errors.entities.tableLabel", { entities: ERROR_ENTITY_LABEL[kind].plural })}>
+            <Table aria-label={t("usage.errors.entities.tableLabel", { entities: t(ERROR_ENTITY_LABEL[kind].plural) })}>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{ERROR_ENTITY_LABEL[kind].singular}</TableHead>
+                  <TableHead>{t(ERROR_ENTITY_LABEL[kind].singular)}</TableHead>
                   <TableHead className="text-right">{t("usage.errors.entities.columns.requests")}</TableHead>
                   <TableHead className="text-right">{t("usage.errors.entities.columns.failed")}</TableHead>
                   <TableHead>{t("usage.errors.entities.columns.errorRate")}</TableHead>

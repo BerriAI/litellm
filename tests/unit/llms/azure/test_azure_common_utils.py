@@ -477,6 +477,7 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "acompact_responses",
             "aresponses_websocket",
             "alist_input_items",
             "acreate_fine_tuning_job",

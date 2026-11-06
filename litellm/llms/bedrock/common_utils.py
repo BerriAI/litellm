@@ -35,7 +35,9 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import lax_bool
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
-from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    schema_property_count,
+)
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -292,6 +294,22 @@ def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "be
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
 
 
+def _bedrock_native_output_enabled(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    deployment_info: Final = model_info or {}
+    deployment_flag: Final = deployment_info.get("supports_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return deployment_info.get("supports_bedrock_native_structured_output") is not False and (
+        bedrock_model_always_takes_native_output(model, custom_llm_provider)
+    )
+
+
+def bedrock_model_always_takes_native_output(model: str, custom_llm_provider: str = "bedrock") -> bool:
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+
+
 _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
@@ -312,9 +330,9 @@ def _bedrock_native_output_opt_in(
 def bedrock_supports_native_structured_output(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return _bedrock_native_output_enabled(model, custom_llm_provider, model_info) or _bedrock_native_output_opt_in(
+        model, custom_llm_provider, model_info
+    )
 
 
 def _bedrock_map_native_output_flag(model: str) -> object:
@@ -349,7 +367,7 @@ def bedrock_chat_opts_into_native_structured_output(
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+    return _bedrock_native_output_enabled(model, custom_llm_provider, model_info) or (
         thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
     )
 
@@ -370,15 +388,15 @@ def bedrock_chat_uses_native_structured_output(
 def bedrock_native_output_is_deployment_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return not _bedrock_native_output_enabled(model, custom_llm_provider, model_info) and _bedrock_native_output_opt_in(
+        model, custom_llm_provider, model_info
+    )
 
 
 def bedrock_native_output_is_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) and (
+    return not _bedrock_native_output_enabled(model, custom_llm_provider, model_info) and (
         _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
         or _bedrock_native_output_replaces_unforceable_tool(model, model_info)
     )
@@ -387,7 +405,21 @@ def bedrock_native_output_is_opt_in(
 def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return {
         **litellm_params,
-        "model_info": {**deployment_model_info(litellm_params), "supports_bedrock_native_structured_output": False},
+        "model_info": {
+            **deployment_model_info(litellm_params),
+            "supports_bedrock_native_structured_output": False,
+        },
+    }
+
+
+def for_bedrock_json_tool_retry(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    opt_in_disabled: Final = without_bedrock_native_output_opt_in(litellm_params)
+    return {
+        **opt_in_disabled,
+        "model_info": {
+            **deployment_model_info(opt_in_disabled),
+            "supports_native_structured_output": False,
+        },
     }
 
 
@@ -395,6 +427,7 @@ _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs 
 _BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
     _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
     "compilation exceeded limits: Schema is too complex",
+    "The compiled grammar is too large",
     "output_config.format.schema:",
 )
 
@@ -414,6 +447,18 @@ def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
         "Bedrock rejected native structured output for model=%s, so litellm sent the request again without it.%s",
         model,
         opt_out_advice,
+    )
+
+
+def is_bedrock_stream_permission_denial(status_code: int, error_text: str) -> bool:
+    return status_code == 403 and "bedrock:InvokeModelWithResponseStream" in error_text
+
+
+def warn_bedrock_native_output_stream_denied(model: str) -> None:
+    verbose_logger.warning(
+        "Bedrock denied bedrock:InvokeModelWithResponseStream for model=%s, so litellm sent the structured output "
+        "request again as a buffered stream. Allow that action to stream it.",
+        model,
     )
 
 
@@ -475,8 +520,27 @@ def requests_output_config_format(optional_params: Mapping[str, object]) -> bool
 
 
 def requests_native_output(anthropic_optional_params: Mapping[str, object]) -> bool:
-    return isinstance(anthropic_optional_params.get("output_format"), Mapping) or requests_output_config_format(
-        anthropic_optional_params
+    output_config: Final = json_object_or_none(anthropic_optional_params.get("outputConfig"))
+    return (
+        isinstance(anthropic_optional_params.get("output_format"), Mapping)
+        or requests_output_config_format(anthropic_optional_params)
+        or (
+            anthropic_optional_params.get("json_mode") is True
+            and output_config is not None
+            and isinstance(output_config.get("textFormat"), Mapping)
+        )
+    )
+
+
+def bedrock_native_output_retry_requested(
+    model: str,
+    optional_params: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return requests_native_output(optional_params) and (
+        bedrock_native_output_is_opt_in(model, custom_llm_provider, model_info)
+        or _bedrock_native_output_enabled(model, custom_llm_provider, model_info)
     )
 
 
@@ -496,6 +560,22 @@ def json_object_or_none(value: object) -> Mapping[str, object] | None:
 
 
 BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def _response_format_json_schema(response_format: object) -> Mapping[str, object] | None:
+    json_schema: Final = json_object_or_none((json_object_or_none(response_format) or {}).get("json_schema"))
+    return json_object_or_none((json_schema or {}).get("schema"))
+
+
+def bedrock_batch_record_takes_native_output(
+    model: str, response_format: object, model_info: Mapping[str, object] | None = None
+) -> bool:
+    schema: Final = _response_format_json_schema(response_format)
+    return _bedrock_native_output_enabled(model, "bedrock", model_info) and (
+        schema is None
+        or schema_property_count(schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+        or not _bedrock_model_supports(model, "supports_bedrock_native_structured_output_by_default")
+    )
 
 
 def bedrock_cleaned_output_schema(
@@ -518,7 +598,7 @@ def bedrock_native_output_schema(
     model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
-    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+    if _bedrock_native_output_enabled(model, custom_llm_provider, model_info):
         return schema if native_schema is None else native_schema
     if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
         return native_schema
@@ -1493,6 +1573,19 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_model_name_without_provider(model: str) -> str:
+    """The model id without Bedrock's routing and region prefixes and without its provider namespace.
+
+    A Bedrock foundation model id is ``<provider>.<model>`` with a one-word provider (``anthropic.``,
+    ``deepseek.``, ``moonshotai.``), so a base model whose first dot-separated part is one word drops it:
+    ``bedrock/us.openai.gpt-6.1-sol`` and ``us-east-1/openai.gpt-6.1-sol`` are ``gpt-6.1-sol``,
+    ``us.deepseek.r1-v1:0`` is ``r1-v1:0``. Any other base model, such as ``gpt-5.5`` or an imported model's
+    ARN id, is returned as is."""
+    base: Final = get_bedrock_base_model(model)
+    provider, separator, name = base.partition(".")
+    return name if separator and provider.isalnum() else base
+
+
 def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
     """
     Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
@@ -1502,13 +1595,27 @@ def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | Non
     its own. An ARN that hides its model, like an application inference profile, falls back to the
     deployment's ``base_model`` and counts as non-Claude without one.
     """
+    return _is_claude(_converse_target_model(model, base_model))
+
+
+def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None) -> bool:
+    if base_model is None and "." not in get_bedrock_base_model(model):
+        return False
+    return not _is_claude_behind_any_region_prefix(_converse_target_model(model, base_model))
+
+
+def _converse_target_model(model: str, base_model: str | None) -> str:
     if base_model is None or "." in get_bedrock_base_model(model):
-        return _is_claude(model)
-    return _is_claude(base_model)
+        return model
+    return base_model
 
 
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
+def _is_claude_behind_any_region_prefix(model: str) -> bool:
+    return _is_claude(model) or get_bedrock_base_model(model).partition(".")[2].startswith("anthropic.")
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
@@ -1648,6 +1755,15 @@ def bedrock_supports_tool_search(model: str) -> bool:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
+
+
+def bedrock_supports_per_turn_control(model: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    deployment_flag: Final = (model_info or {}).get("supports_per_turn_control")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return AnthropicModelInfo.supports_model_capability(model, "supports_per_turn_control", "bedrock")
 
 
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:

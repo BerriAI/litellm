@@ -1,5 +1,6 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -27,30 +28,35 @@ import { LOG_FILTER_IDS, type LogsWindow } from "./useLogFilterLogic";
 
 const ALL_VALUE = "all";
 
-const STATUS_FILTER_ITEMS = [
-  { value: ALL_VALUE, label: "All Statuses" },
-  { value: "success", label: "Success" },
-  { value: "failure", label: "Failure" },
-] as const;
+interface FilterItem {
+  value: string;
+  labelKey: ParseKeys;
+}
 
-const CACHE_FILTER_ITEMS = [
-  { value: ALL_VALUE, label: "All Requests" },
-  { value: "hit", label: "Cache Hit" },
-  { value: "miss", label: "Cache Miss" },
-] as const;
+const STATUS_FILTER_ITEMS: readonly FilterItem[] = [
+  { value: ALL_VALUE, labelKey: "logs.request.filters.allStatuses" },
+  { value: "success", labelKey: "logs.request.filters.statusOptions.success" },
+  { value: "failure", labelKey: "logs.request.filters.statusOptions.failure" },
+];
 
-const CREDENTIAL_FILTER_ITEMS = [
-  { value: ALL_VALUE, label: "All Credentials" },
-  ...Object.entries(CREDENTIAL_LABELS).map(([value, label]) => ({ value, label })),
-] as const;
+const CACHE_FILTER_ITEMS: readonly FilterItem[] = [
+  { value: ALL_VALUE, labelKey: "logs.request.filters.allRequests" },
+  { value: "hit", labelKey: "logs.request.filters.cacheOptions.hit" },
+  { value: "miss", labelKey: "logs.request.filters.cacheOptions.miss" },
+];
 
-const SPAN_TYPE_FILTER_ITEMS = [
-  { value: ALL_VALUE, label: "All Types" },
-  { value: "llm", label: "LLM" },
-  { value: "agent", label: "Agent" },
-  { value: "mcp", label: "MCP" },
-  { value: "batch", label: "Batch" },
-] as const;
+const CREDENTIAL_FILTER_ITEMS: readonly FilterItem[] = [
+  { value: ALL_VALUE, labelKey: "logs.request.filters.allCredentials" },
+  ...Object.entries(CREDENTIAL_LABELS).map(([value, labelKey]) => ({ value, labelKey })),
+];
+
+const SPAN_TYPE_FILTER_ITEMS: readonly FilterItem[] = [
+  { value: ALL_VALUE, labelKey: "logs.request.filters.allTypes" },
+  { value: "llm", labelKey: "logs.common.spanTypes.llm" },
+  { value: "agent", labelKey: "logs.common.spanTypes.agent" },
+  { value: "mcp", labelKey: "logs.common.spanTypes.mcp" },
+  { value: "batch", labelKey: "logs.common.spanTypes.batch" },
+];
 const PAGE_SIZE = 50;
 
 const SEARCH_INPUT_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
@@ -278,21 +284,26 @@ function ErrorCodeFilterField({ value, onChange }: { value: string; onChange: (v
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
 
+  const errorCodeOptions = useMemo<SearchSelectOption[]>(
+    () => ERROR_CODE_OPTIONS.map(({ labelKey, value: code }) => ({ label: t(labelKey), value: code })),
+    [t],
+  );
+
   const options = useMemo<SearchSelectOption[]>(() => {
     const trimmed = query.trim();
     const lowered = trimmed.toLowerCase();
-    const matches = ERROR_CODE_OPTIONS.filter((option) => option.label.toLowerCase().includes(lowered));
-    const isKnownCode = ERROR_CODE_OPTIONS.some(
+    const matches = errorCodeOptions.filter((option) => option.label.toLowerCase().includes(lowered));
+    const isKnownCode = errorCodeOptions.some(
       (option) => option.value === trimmed || option.label.toLowerCase() === lowered,
     );
     if (trimmed === "" || isKnownCode) return matches;
     return [...matches, { label: t("logs.request.filters.customErrorCode", { code: trimmed }), value: trimmed }];
-  }, [query, t]);
+  }, [query, t, errorCodeOptions]);
 
   const selected = useMemo<SearchSelectOption | null>(() => {
     if (value === "") return null;
-    return ERROR_CODE_OPTIONS.find((option) => option.value === value) ?? { label: value, value };
-  }, [value]);
+    return errorCodeOptions.find((option) => option.value === value) ?? { label: value, value };
+  }, [value, errorCodeOptions]);
 
   const items = useMemo<SearchSelectOption[]>(() => {
     if (selected === null) return options;
@@ -346,6 +357,11 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
   const { t } = useTranslation();
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
+  const withLabel = ({ value, labelKey }: FilterItem) => ({ value, label: t(labelKey) });
+  const spanTypeItems = SPAN_TYPE_FILTER_ITEMS.map(withLabel);
+  const statusItems = STATUS_FILTER_ITEMS.map(withLabel);
+  const cacheItems = CACHE_FILTER_ITEMS.map(withLabel);
+  const credentialItems = CREDENTIAL_FILTER_ITEMS.map(withLabel);
 
   return (
     <>
@@ -357,7 +373,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <DataTableFilterField label={t("logs.request.filters.spanType")}>
         <Select
-          items={SPAN_TYPE_FILTER_ITEMS}
+          items={spanTypeItems}
           value={valueOf(LOG_FILTER_IDS.SPAN_TYPE) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.SPAN_TYPE)}
           onValueChange={(next) =>
             set(LOG_FILTER_IDS.SPAN_TYPE, next === null || next === ALL_VALUE ? undefined : next)
@@ -367,7 +383,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
             <SelectValue placeholder={t("logs.request.filters.allTypes")} />
           </SelectTrigger>
           <SelectContent>
-            {SPAN_TYPE_FILTER_ITEMS.map((item) => (
+            {spanTypeItems.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
@@ -378,7 +394,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <DataTableFilterField label={t("logs.request.filters.status")}>
         <Select
-          items={STATUS_FILTER_ITEMS}
+          items={statusItems}
           value={valueOf(LOG_FILTER_IDS.STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.STATUS)}
           onValueChange={(next) => set(LOG_FILTER_IDS.STATUS, next === null || next === ALL_VALUE ? undefined : next)}
         >
@@ -386,7 +402,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
             <SelectValue placeholder={t("logs.request.filters.allStatuses")} />
           </SelectTrigger>
           <SelectContent>
-            {STATUS_FILTER_ITEMS.map((item) => (
+            {statusItems.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
@@ -397,7 +413,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <DataTableFilterField label={t("logs.request.filters.cache")}>
         <Select
-          items={CACHE_FILTER_ITEMS}
+          items={cacheItems}
           value={valueOf(LOG_FILTER_IDS.CACHE_STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CACHE_STATUS)}
           onValueChange={(next) =>
             set(LOG_FILTER_IDS.CACHE_STATUS, next === null || next === ALL_VALUE ? undefined : next)
@@ -407,7 +423,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
             <SelectValue placeholder={t("logs.request.filters.allRequests")} />
           </SelectTrigger>
           <SelectContent>
-            {CACHE_FILTER_ITEMS.map((item) => (
+            {cacheItems.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
@@ -418,7 +434,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <DataTableFilterField label={t("logs.request.filters.credential")}>
         <Select
-          items={CREDENTIAL_FILTER_ITEMS}
+          items={credentialItems}
           value={valueOf(LOG_FILTER_IDS.CREDENTIAL) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CREDENTIAL)}
           onValueChange={(next) =>
             set(LOG_FILTER_IDS.CREDENTIAL, next === null || next === ALL_VALUE ? undefined : next)
@@ -428,7 +444,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
             <SelectValue placeholder={t("logs.request.filters.allCredentials")} />
           </SelectTrigger>
           <SelectContent>
-            {CREDENTIAL_FILTER_ITEMS.map((item) => (
+            {credentialItems.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
