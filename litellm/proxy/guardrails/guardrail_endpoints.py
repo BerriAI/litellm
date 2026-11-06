@@ -2347,7 +2347,7 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
         return {}
 
 
-_WITHHELD_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_request_route", "agent_id"})
+_WITHHELD_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key_request_route", "agent_id", "user_api_key_auth"})
 
 _PROXY_RESOLVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -2360,8 +2360,33 @@ _PROXY_RESOLVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
         "billing_agent_id",
         "agent_execution_mode",
         "verified_human_user_id",
+        "user_api_end_user_max_budget",
     }
 )
+
+_SECRET_HEADER_MARKERS: Final = ("authorization", "cookie", "key", "token", "secret", "password", "credential")
+
+
+def _is_secret_header(name: str) -> bool:
+    """Whether a header name carries a credential rather than request context."""
+    lowered: Final = name.lower()
+    return any(marker in lowered for marker in _SECRET_HEADER_MARKERS)
+
+
+def _is_json_safe(value: object) -> bool:
+    """Whether a value survives the JSON encoding a guardrail vendor puts it through."""
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _forwarded_identity_value(key: str, value: object) -> object:
+    """The value to forward, with the credential headers taken out of the header bucket."""
+    if key != "headers":
+        return value
+    return {name: item for name, item in _metadata_fields(value).items() if not _is_secret_header(name)}
 
 
 def _is_proxy_identity_field(key: str) -> bool:
@@ -2384,7 +2409,9 @@ def _guardrail_request_metadata(
 
     The caller's bucket goes through the sanitizer the LLM routes use, so this endpoint drops
     the same fields they do, and what that leaves is then overlaid with the identity the proxy
-    resolved.
+    resolved. A vendor receives this encoded as JSON, so only JSON-safe values are forwarded,
+    which leaves the authenticated key object behind, and the headers go without the ones
+    carrying a credential.
 
     The request route is withheld from both sides. The tool policy guardrail reads the request
     itself when a route is present, instead of the tools replayed to it, so a route here turns
@@ -2401,9 +2428,9 @@ def _guardrail_request_metadata(
     strip_caller_supplied_identity(sanitized)
     caller_fields: Final = tuple((key, value) for key, value in sanitized.items() if not _is_proxy_identity_field(key))
     key_identity: Final = tuple(
-        (key, value)
+        (key, _forwarded_identity_value(key, value))
         for key, value in _metadata_fields(proxy).items()
-        if _is_proxy_identity_field(key) and key not in _WITHHELD_FIELDS
+        if _is_proxy_identity_field(key) and key not in _WITHHELD_FIELDS and _is_json_safe(value)
     )
     bound_agent: Final = (("agent_id", agent_id),) if agent_id is not None else ()
     return dict((*caller_fields, *key_identity, *bound_agent))
@@ -2581,10 +2608,7 @@ async def apply_guardrail(
             _GUARDRAIL_METADATA_ADAPTER.validate_python(data).get("metadata"),
             agent_id=user_api_key_dict.invoked_agent_id or user_api_key_dict.agent_id,
         )
-        if caller_metadata is not None or metadata:
-            request_data["metadata"] = metadata
-        else:
-            request_data.pop("metadata", None)
+        request_data["metadata"] = metadata
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},

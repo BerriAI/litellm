@@ -2171,7 +2171,7 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
 
 
 def _patch_apply_guardrail_env(
-    mocker: MockerFixture, guardrail_result: object, processed_data: dict[str, object] | None = None
+    mocker: MockerFixture, guardrail_result: object
 ) -> Mock:
     mock_guardrail: Final = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
@@ -2185,7 +2185,7 @@ def _patch_apply_guardrail_env(
     mock_logging_obj.model_call_details = {}
     mock_processor: Final = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=(processed_data or {"guardrail_name": "test-guardrail"}, mock_logging_obj)
+        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
     )
     mocker.patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
@@ -2597,6 +2597,43 @@ def test_a_reserved_identity_field_the_proxy_left_empty_is_dropped() -> None:
     assert metadata == {"topic": "tax"}
 
 
+def test_the_end_user_budget_is_not_a_caller_field() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {"user_api_end_user_max_budget": 999.0, "topic": "tax"},
+        {"user_api_end_user_max_budget": 10.0},
+    )
+    assert metadata == {"topic": "tax", "user_api_end_user_max_budget": 10.0}
+
+
+def test_the_authenticated_key_object_is_left_behind() -> None:
+    """A guardrail vendor receives this encoded as JSON, which the auth object does not survive."""
+    metadata: Final = _guardrail_request_metadata(
+        {},
+        {
+            "user_api_key_auth": UserAPIKeyAuth(key_alias="billing-app"),
+            "user_api_key_metadata": {"tags": {"a", "b"}},
+            "user_api_key_alias": "billing-app",
+        },
+    )
+    assert metadata == {"user_api_key_alias": "billing-app"}
+
+
+def test_credential_headers_do_not_reach_the_guardrail() -> None:
+    """The header bucket carries provider credentials that the logging redaction does not name."""
+    metadata: Final = _guardrail_request_metadata(
+        {},
+        {
+            "headers": {
+                "anthropic-api-key": "sk-ant-secret",
+                "x-amz-security-token": "aws-session-token",
+                "authorization": "Bearer sk-caller",
+                "user-agent": "curl/8.7",
+            }
+        },
+    )
+    assert metadata == {"headers": {"user-agent": "curl/8.7"}}
+
+
 def test_a_guardrail_can_annotate_what_it_is_handed() -> None:
     """OpenAI moderation and Presidio write their detection details into this mapping."""
     metadata: Final = _guardrail_request_metadata({}, {"user_api_key_alias": "billing-app"})
@@ -2614,7 +2651,7 @@ class _MetadataRecordingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional[object] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -2668,6 +2705,7 @@ async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_k
         },
         UserAPIKeyAuth(key_alias="billing-app", user_id="u-1"),
     )
+    json.dumps(forwarded)
     assert forwarded["forbidden_topics"] == ["tax"]
     assert forwarded.get("user_api_key_alias") == "billing-app"
     assert "victim@example.com" not in forwarded.values()
@@ -2685,8 +2723,9 @@ async def test_apply_guardrail_attaches_key_identity_when_caller_sends_no_metada
 @pytest.mark.asyncio
 async def test_apply_guardrail_prefers_the_agent_the_key_was_invoked_as() -> None:
     """A key bound to an agent can be invoked as another, and the invoked one is who is acting."""
-    auth: Final = UserAPIKeyAuth(agent_id="support-agent")
-    auth.invoked_agent_id = "billing-agent"
+    auth: Final = UserAPIKeyAuth(agent_id="support-agent").model_copy(
+        update={"invoked_agent_id": "billing-agent"}
+    )
     forwarded: Final = await _metadata_the_guardrail_was_handed(None, auth)
     assert forwarded.get("agent_id") == "billing-agent"
 

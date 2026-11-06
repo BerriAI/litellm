@@ -116,7 +116,13 @@ def _assert_guardrail_request(request: Request, text: str, response: httpx.Respo
         "tool_calls": None,
         "model": None,
     }, response.text
-    assert payload["request_data"] == {}, response.text
+    direct_request_data: Final = payload["request_data"]
+    assert isinstance(direct_request_data, dict), response.text
+    assert set(direct_request_data) == {"metadata"}, response.text
+    direct_metadata: Final = direct_request_data["metadata"]
+    assert isinstance(direct_metadata, dict), response.text
+    assert "user_api_key_auth" not in direct_metadata, response.text
+    assert "authorization" not in (direct_metadata.get("headers") or {}), response.text
     request_headers: Final = payload["request_headers"]
     assert request_headers is None or isinstance(request_headers, dict), response.text
     if isinstance(request_headers, dict):

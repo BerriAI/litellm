@@ -233,7 +233,11 @@ def _assert_guardrail_request(
     assert payload["litellm_version"] is None or isinstance(payload["litellm_version"], str), payload
     request_data: Final = object_value(payload["request_data"])
     if model is None:
-        assert request_data == {}, payload
+        assert set(request_data) == {"metadata"}, payload
+        direct_metadata: Final = object_value(request_data["metadata"])
+        assert direct_metadata.get("user_api_key_alias") == key_alias, direct_metadata
+        assert "user_api_key_auth" not in direct_metadata, direct_metadata
+        assert "authorization" not in object_value(direct_metadata.get("headers") or {}), direct_metadata
     else:
         assert set(request_data).issubset(
             {
