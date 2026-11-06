@@ -3494,7 +3494,7 @@ def mock_access_group_lookup(monkeypatch: pytest.MonkeyPatch) -> Callable[[froze
 
         find_many: Final = AsyncMock(side_effect=_find_many)
         fake_prisma: Final = MagicMock()
-        fake_prisma.db.litellm_accessgrouptable.find_many = find_many
+        fake_prisma.writer_db.litellm_accessgrouptable.find_many = find_many
 
         monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)

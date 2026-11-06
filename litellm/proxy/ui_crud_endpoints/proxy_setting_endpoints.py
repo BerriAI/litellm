@@ -1187,7 +1187,7 @@ async def _validate_default_access_groups_exist(access_group_ids: Sequence[str])
         )
 
     existing_groups: Final = await find_many_in(
-        AccessGroupRepository(prisma_client).table, "access_group_id", dict.fromkeys(access_group_ids)
+        AccessGroupRepository(prisma_client, use_writer=True).table, "access_group_id", dict.fromkeys(access_group_ids)
     )
     existing_ids: Final = {group.access_group_id for group in existing_groups}
     missing_ids: Final = tuple(dict.fromkeys(ag_id for ag_id in access_group_ids if ag_id not in existing_ids))
