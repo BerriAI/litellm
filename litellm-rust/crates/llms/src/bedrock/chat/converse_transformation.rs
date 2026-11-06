@@ -456,15 +456,20 @@ mod tests {
         json!({"max_completion_tokens": 32}),
         json!({"maxTokens": 32})
     )]
-    #[case::later_max_tokens_wins(
+    #[case::max_completion_tokens_wins_when_sent_first(
         CLAUDE,
         json!({"max_completion_tokens": 32, "max_tokens": 16}),
-        json!({"maxTokens": 16})
+        json!({"maxTokens": 32})
     )]
-    #[case::later_max_completion_tokens_wins(
+    #[case::max_completion_tokens_wins_when_sent_last(
         CLAUDE,
         json!({"max_tokens": 16, "max_completion_tokens": 32}),
         json!({"maxTokens": 32})
+    )]
+    #[case::null_max_completion_tokens_keeps_max_tokens(
+        CLAUDE,
+        json!({"max_tokens": 16, "max_completion_tokens": null}),
+        json!({"maxTokens": 16})
     )]
     #[case::sampling(
         CLAUDE,

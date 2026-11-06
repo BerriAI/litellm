@@ -328,6 +328,14 @@ mod tests {
     #[case::empty_stop_list(json!({"stop": []}), json!({}))]
     #[case::stop_list(json!({"stop": ["a", "b"]}), json!({"stop_sequences": ["a", "b"]}))]
     #[case::max_completion_tokens(json!({"max_completion_tokens": 32}), json!({"max_tokens": 32}))]
+    #[case::max_completion_tokens_wins_when_sent_first(
+        json!({"max_completion_tokens": 32, "max_tokens": 16}),
+        json!({"max_tokens": 32})
+    )]
+    #[case::max_completion_tokens_wins_when_sent_last(
+        json!({"max_tokens": 16, "max_completion_tokens": 32}),
+        json!({"max_tokens": 32})
+    )]
     #[case::anthropic_name_unchanged(
         json!({"stop_sequences": ["5"]}),
         json!({"stop_sequences": ["5"]})

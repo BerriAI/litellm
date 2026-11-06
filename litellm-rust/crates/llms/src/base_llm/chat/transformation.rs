@@ -119,14 +119,38 @@ pub fn map_openai_param_names(
     config: &'static [&'static str],
     params: Map<String, Value>,
 ) -> Result<Map<String, Value>, Decline> {
+    let superseded = superseded_openai_names(supported, &params);
     params
         .into_iter()
-        .filter(|(_, value)| !value.is_null())
+        .filter(|(name, value)| !value.is_null() && !superseded.contains(&name.as_str()))
         .map(|(name, value)| {
             provider_param_name(supported, config, name)
                 .map(|provider_name| (provider_name, value))
                 .ok_or(Decline::new(UNRECOGNIZED_PARAM))
         })
+        .collect()
+}
+
+/// When two OpenAI names map to one provider name, the later table entry wins
+/// whatever the body order, as Python's `get_optional_params` argument order does.
+fn superseded_openai_names(
+    supported: &'static [(&'static str, &'static str)],
+    params: &Map<String, Value>,
+) -> Vec<&'static str> {
+    supported
+        .iter()
+        .enumerate()
+        .filter(|(position, (_, provider_name))| {
+            supported[position + 1..]
+                .iter()
+                .any(|(later_name, later_provider_name)| {
+                    later_provider_name == provider_name
+                        && params
+                            .get(*later_name)
+                            .is_some_and(|value| !value.is_null())
+                })
+        })
+        .map(|(_, (openai_name, _))| *openai_name)
         .collect()
 }
 
