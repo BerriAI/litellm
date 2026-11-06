@@ -62,6 +62,11 @@ def _json_object(value: object) -> Mapping[str, object] | None:
         return None
 
 
+def _turn_copy(value: object) -> object:
+    mapping: Final = _json_object(value)
+    return value if mapping is None else dict(mapping)
+
+
 def _typed_text(part: object) -> str | None:
     part_object: Final = _json_object(part)
     if part_object is None or part_object.get("type") not in _TYPED_TEXT_PART_TYPES:
@@ -264,7 +269,10 @@ async def realtime_guardrail_verdict(
         if guardrail is not None and _in_role_scope(guardrail, role)
     }
     in_scope: Final = tuple(guardrails.values())
-    guardrail_request_data: Final = {**request_data, "user_api_key_dict": user_api_key_dict}
+    guardrail_request_data: Final = {
+        **{key: _turn_copy(value) for key, value in request_data.items()},
+        "user_api_key_dict": user_api_key_dict,
+    }
     joined: Final = _joins(texts)
     screened: Final = await _screen_each(in_scope, joined, guardrail_request_data)
     if isinstance(screened, RealtimeGuardrailBlock):

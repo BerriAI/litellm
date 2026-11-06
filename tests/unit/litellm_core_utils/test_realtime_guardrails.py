@@ -339,6 +339,44 @@ async def test_a_mask_in_a_message_with_more_text_parts_than_the_recursion_limit
     assert verdict == RealtimeGuardrailRewrite(texts=(*parts[:-1], "my code is [MASKED]."))
 
 
+class GuardrailLogRecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="log-recorder", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.guardrail_log_lengths: list[int] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.guardrail_log_lengths.append(
+            len(request_data["litellm_metadata"].get("standard_logging_guardrail_information", []))
+        )
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_sees_only_the_current_turns_guardrail_log_however_long_the_session_runs() -> None:
+    session_request_data: Final = {"litellm_metadata": {"user_api_key_team_id": "team-a"}}
+    content_filter: Final = ContentFilterGuardrail(
+        guardrail_name="phrase-filter",
+        blocked_words=[BlockedWord(keyword="hunter2", action=ContentFilterAction.BLOCK)],
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    recorder: Final = GuardrailLogRecordingGuardrail()
+
+    for turn in ("hello", "how are you", "goodbye"):
+        await realtime_guardrail_verdict(
+            (turn,), "user", (GuardrailEventHooks.pre_call,), session_request_data, None, (content_filter, recorder)
+        )
+
+    assert recorder.guardrail_log_lengths == [1, 1, 1]
+    assert session_request_data == {"litellm_metadata": {"user_api_key_team_id": "team-a"}}
+
+
 class ScopedGuardrail(RaisingGuardrail):
     def __init__(
         self, *, skip_system_message: bool | None, skip_tool_message: bool | None, scan_only_tool_results: bool | None

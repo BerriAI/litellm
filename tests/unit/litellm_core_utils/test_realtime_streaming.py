@@ -1082,6 +1082,35 @@ async def test_a_non_string_transcript_does_not_end_the_session(transcript: obje
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transcript", [None, 123, ["a"]])
+async def test_a_non_string_transcript_fails_the_session_when_a_transcript_guardrail_would_screen_it(
+    transcript: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": transcript, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    close: Final = await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    assert close.code == 1011
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed"]
+    backend_ws.send.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_transcription_session_captures_usage_and_skips_response_create():
     """
     For a transcription-only session (session.type == "transcription", e.g.

@@ -1670,12 +1670,18 @@ class RealTimeStreaming:
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
         """
-        if not isinstance(transcript, str):
-            return False
-        verdict: Final = await self.apply_realtime_guardrails(
-            (transcript,), "user", item_id, pre_block_backend_message, event_hooks
-        )
-        return isinstance(verdict, RealtimeGuardrailBlock)
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        if isinstance(transcript, str):
+            verdict: Final = await self.apply_realtime_guardrails(
+                (transcript,), "user", item_id, pre_block_backend_message, event_hooks
+            )
+            return isinstance(verdict, RealtimeGuardrailBlock)
+        if self._has_realtime_guardrails_for_event_hooks(
+            event_hooks or (GuardrailEventHooks.realtime_input_transcription,)
+        ):
+            raise TypeError(f"Realtime guardrails cannot screen a {type(transcript).__name__} transcript")
+        return False
 
     async def _screen_client_item(self, guarded_item: RealtimeGuardedItem | None) -> RealtimeGuardrailVerdict:
         from litellm.types.guardrails import GuardrailEventHooks
