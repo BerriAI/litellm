@@ -2,14 +2,11 @@ import asyncio
 import json
 import os
 import socket
-import subprocess
-import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
-from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
@@ -27,13 +24,10 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from websockets.sync.client import connect
 
 from tests.integration._support.asgi import asgi_server
-from tests.integration._support.client import eventually
 from tests.integration._support.mcp import mcp_peer
-from tests.integration._support.ports import allocate_port
-from tests.integration._support.process import stop_root_process
+from tests.integration._support.rust_forward import MASTER_KEY, EntryPoint, forwarded_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
-MASTER_KEY: Final = "sk-rust-forward-traffic-key-not-a-secret"
 KEEPALIVE_SECONDS: Final = 1
 FILES_MODEL: Final = "rust-forward-files"
 FILE_ID: Final = "file-rust-forward"
@@ -59,7 +53,6 @@ class ScriptedProvider:
 class RustProxy:
     url: str
     port: int
-    log: Path
     provider: ScriptedProvider
 
 
@@ -151,13 +144,6 @@ def _routable_address() -> str:
     return address
 
 
-def _ready(client: httpx.Client) -> bool:
-    try:
-        return client.get("/health/liveliness").status_code == 200
-    except httpx.TransportError:
-        return False
-
-
 def _files_peer(content: bytes) -> Callable[[Request], Reply]:
     file_object: Final = json.dumps(
         {
@@ -205,9 +191,6 @@ def files_upstream() -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def rust_proxy(tmp_path_factory: pytest.TempPathFactory, files_upstream: str) -> Iterator[RustProxy]:
-    directory: Final = tmp_path_factory.mktemp("rust-forward-traffic")
-    log: Final = directory / "proxy.log"
-    port: Final = allocate_port()
     released: Final = threading.Event()
     hung_up: Final[SimpleQueue[str]] = SimpleQueue()
     with ExitStack() as stack:
@@ -215,90 +198,37 @@ def rust_proxy(tmp_path_factory: pytest.TempPathFactory, files_upstream: str) ->
         provider: Final = ScriptedProvider(
             stack.enter_context(asgi_server(_provider_app(released, hung_up))), released, hung_up
         )
-        config: Final = directory / "config.yaml"
-        config.write_text(
-            json.dumps(
+        proxy: Final = stack.enter_context(
+            forwarded_proxy(
+                EntryPoint.LITELLM,
                 {
                     "model_list": [
+                        _deployment(CHAT_MODEL, "openai/gpt-4o-mini", f"{provider.url}/v1"),
                         {
-                            "model_name": CHAT_MODEL,
-                            "litellm_params": {
-                                "model": "openai/gpt-4o-mini",
-                                "api_base": f"{provider.url}/v1",
-                                "api_key": "integration-provider-key",
-                            },
-                        },
-                        {
-                            "model_name": REALTIME_MODEL,
-                            "litellm_params": {
-                                "model": "openai/gpt-realtime",
-                                "api_base": provider.url,
-                                "api_key": "integration-provider-key",
-                            },
+                            **_deployment(REALTIME_MODEL, "openai/gpt-realtime", provider.url),
                             "model_info": {"mode": "realtime"},
                         },
-                        {
-                            "model_name": FILES_MODEL,
-                            "litellm_params": {
-                                "model": "openai/gpt-4o-mini",
-                                "api_base": f"{files_upstream}/v1",
-                                "api_key": "integration-provider-key",
-                            },
-                        },
+                        _deployment(FILES_MODEL, "openai/gpt-4o-mini", f"{files_upstream}/v1"),
                     ],
                     "mcp_servers": {"math": {**mcp.registration(), "available_on_public_internet": False}},
                     "general_settings": {
                         "master_key": "os.environ/LITELLM_MASTER_KEY",
                         "mcp_internal_ip_ranges": ["127.0.0.0/8"],
                     },
-                }
+                },
+                tmp_path_factory.mktemp("rust-forward-traffic"),
+                ("--keepalive_timeout", str(KEEPALIVE_SECONDS)),
             )
         )
-        environment: Final = {
-            **{
-                key: value
-                for key, value in os.environ.items()
-                if not key.startswith("DATABASE_") and key != "DIRECT_URL"
-            },
-            "LITELLM_MASTER_KEY": MASTER_KEY,
-            "LITELLM_RUST": "true",
-            "STORE_MODEL_IN_DB": "False",
-            "PYTHON_DOTENV_DISABLED": "1",
-        }
-        output: Final = stack.enter_context(log.open("wb"))
-        supervisor: Final = stack.enter_context(
-            subprocess.Popen(
-                (
-                    sys.executable,
-                    "-I",
-                    "-m",
-                    "litellm.proxy.proxy_cli",
-                    "--config",
-                    str(config),
-                    "--host",
-                    "0.0.0.0",
-                    "--port",
-                    str(port),
-                    "--num_workers",
-                    "2",
-                    "--keepalive_timeout",
-                    str(KEEPALIVE_SECONDS),
-                    "--timeout_worker_healthcheck",
-                    "120",
-                ),
-                env=environment,
-                stdout=output,
-                stderr=output,
-            )
-        )
-        try:
-            with httpx.Client(base_url=f"http://127.0.0.1:{port}", trust_env=False, timeout=5) as probe:
-                assert eventually(lambda: _ready(probe), bool, seconds=180), log.read_text()
-            yield RustProxy(f"http://127.0.0.1:{port}", port, log, provider)
-        finally:
-            released.set()
-            assert stop_root_process(supervisor), log.read_text()
-        assert supervisor.returncode == 0, log.read_text()
+        stack.callback(released.set)
+        yield RustProxy(proxy.url, proxy.port, provider)
+
+
+def _deployment(name: str, model: str, api_base: str) -> dict[str, JsonValue]:
+    return {
+        "model_name": name,
+        "litellm_params": {"model": model, "api_base": api_base, "api_key": "integration-provider-key"},
+    }
 
 
 def _still_open(stream: httpx.Response) -> bool:

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeVar
 
 import httpx
 import psutil
@@ -128,6 +128,7 @@ result = supervise(server, (sys.executable, str(scripts / "serve.py"), workers, 
 raise SystemExit(result if isinstance(result, int) else 3)
 """
 
+T = TypeVar("T")
 EXIT_SECONDS: Final = 15
 TIME_TOLERANCE_SECONDS: Final = 5
 
@@ -206,7 +207,7 @@ def _signal_after_ready(process: subprocess.Popen[bytes], port: int, scenario: S
             return Run(Outcome(_exit_status(process, EXIT_SECONDS), True), time.monotonic() - started)
 
 
-def _run(argv: tuple[str, ...], environment: dict[str, str], act: Callable[[subprocess.Popen[bytes]], Run]) -> Run:
+def _run(argv: tuple[str, ...], environment: dict[str, str], act: Callable[[subprocess.Popen[bytes]], T]) -> T:
     with subprocess.Popen(argv, env=environment, start_new_session=True) as process:
         try:
             return act(process)
@@ -252,18 +253,17 @@ def test_children_exit_when_the_supervisor_is_killed(tmp_path: Path, workers: in
     scripts: Final = _scripts(tmp_path)
     port: Final = allocate_port()
 
-    def kill_supervisor(process: subprocess.Popen[bytes]) -> Run:
+    def survivors_of_killing_the_supervisor(process: subprocess.Popen[bytes]) -> tuple[int, ...]:
         assert eventually(lambda: _serving(port), bool, seconds=120)
         python: Final = int((tmp_path / "python.pid").read_text())
         rust: Final = int((tmp_path / "rust.pid").read_text())
         descendants: Final = (python, rust, *(child.pid for child in psutil.Process(python).children(recursive=True)))
-        started: Final = time.monotonic()
         kill_stray_process(process.pid)
-        assert eventually(lambda: tuple(pid for pid in descendants if _alive(pid)), lambda alive: not alive) == ()
-        return Run(Outcome(None, False), time.monotonic() - started)
+        return eventually(lambda: tuple(pid for pid in descendants if _alive(pid)), lambda alive: not alive)
 
-    _run(
+    survivors: Final = _run(
         (sys.executable, str(scripts / "supervise.py"), str(workers), str(port), str(scripts)),
         _environment(tmp_path),
-        kill_supervisor,
+        survivors_of_killing_the_supervisor,
     )
+    assert survivors == ()
