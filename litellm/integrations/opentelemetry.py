@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_requested_service_tier,
     get_served_service_tier,
 )
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params, tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.integrations.otel_span_attributes import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload
@@ -72,7 +73,7 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.proxy_server import UserAPIKeyAuth as _UserAPIKeyAuth
 
-    Span = _Span | Any
+    Span = _Span
     Tracer = _Tracer
     Context = _Context
     SpanExporter = _SpanExporter
@@ -1440,7 +1441,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             span = None
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
+            if parent_span is not None and hasattr(parent_span, "set_status"):
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
@@ -2233,7 +2234,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # record error on parent span (keeps hierarchy shallow)
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_otel_span is guaranteed to be not None here
-            if parent_otel_span.is_recording():
+            if parent_otel_span is not None and parent_otel_span.is_recording():
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 parent_error_message: Final = self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
                 parent_otel_span.set_status(Status(StatusCode.ERROR, parent_error_message))
@@ -2736,9 +2737,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
                             message = choice.get("message")
-                            tool_calls = message.get("tool_calls")
-                            if tool_calls:
-                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)
+                            if tool_calls := tool_calls_with_server_tool_calls(message):
+                                kv_pairs = OpenTelemetry._tool_calls_kv_pair(list(tool_calls))
                                 for key, value in kv_pairs.items():
                                     self.safe_set_attribute(
                                         span=span,
@@ -2856,7 +2856,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             transformed_msg = {"role": role, "parts": parts}
             if "id" in msg:
                 transformed_msg["id"] = msg["id"]
-            if "tool_calls" in msg:
+            if server_tool_calls := anthropic_server_tool_call_params(cast(object, msg)):
+                transformed_msg["tool_calls"] = [*server_tool_calls, *(msg.get("tool_calls") or [])]
+            elif "tool_calls" in msg:
                 transformed_msg["tool_calls"] = msg["tool_calls"]
             if "tool_call_id" in msg:
                 transformed_msg["tool_call_id"] = msg["tool_call_id"]

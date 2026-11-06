@@ -7,10 +7,10 @@ from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, constants, provider_list
@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.url_utils import (
 from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
@@ -48,6 +49,16 @@ from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange
 from litellm.types.videos.main import DecodedVideoId
 
 
+def is_unauthorized_error(exception: BaseException | None) -> bool:
+    """True when the proxy itself rejected the caller's credentials with a 401."""
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    return str(status_code) == str(status.HTTP_401_UNAUTHORIZED)
+
+
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     """True when an authentication error rejects a malformed virtual key.
 
@@ -57,15 +68,7 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     match would let a request body demote an authorization failure to the
     quiet log path.
     """
-    if not isinstance(exception, (HTTPException, ProxyException)):
-        return False
-
-    code: Final[object] = getattr(exception, "code", None)
-    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
-    if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
-        return False
-
-    return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
+    return is_unauthorized_error(exception) and getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
 
 
 def log_model_access_denial(exc: BaseException) -> None:
@@ -220,11 +223,12 @@ def _allow_model_level_clientside_configurable_parameters(
     if llm_router is None:
         return False
     # check if model is set
-    model_info = llm_router.get_model_group_info(model_group=model)
+    registry: Final = llm_router.registry()
+    model_info = registry.group(model)
     if model_info is None:
         # check if wildcard model is set
         if model.split("/", 1)[0] in provider_list:
-            model_info = llm_router.get_model_group_info(model_group=model.split("/", 1)[0])
+            model_info = registry.group(model.split("/", 1)[0])
 
     if model_info is None:
         return False
@@ -438,6 +442,9 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
     # ``deployment_url`` redirects SAP deployments.
     "s3_endpoint_url",
+    "s3_bucket_name",
+    "s3_output_bucket_name",
+    "allow_legacy_cloud_file_ids",
     "sagemaker_base_url",
     "deployment_url",
     # NVIDIA Riva fields consumed by the audio-transcription handler
@@ -475,6 +482,48 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 )
 
 
+_ClientSideAllowlistSetting: TypeAlias = Literal[
+    "allowed_client_side_s3_buckets", "allowed_client_side_s3_endpoint_urls"
+]
+
+_PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSetting]] = MappingProxyType(
+    {
+        "s3_bucket_name": "allowed_client_side_s3_buckets",
+        "s3_output_bucket_name": "allowed_client_side_s3_buckets",
+        "s3_endpoint_url": "allowed_client_side_s3_endpoint_urls",
+    }
+)
+
+
+class _ClientSideStorageAllowlist(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = None
+    allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = None
+
+    def admits(self, setting: _ClientSideAllowlistSetting, value: object) -> bool:
+        match setting:
+            case "allowed_client_side_s3_buckets":
+                return value in (self.allowed_client_side_s3_buckets or ())
+            case "allowed_client_side_s3_endpoint_urls":
+                return value in (self.allowed_client_side_s3_endpoint_urls or ())
+
+
+def _banned_param_error(param: str) -> ValueError:
+    setting: Final = _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+    allowlist_hint: Final = (
+        "" if setting is None else f" To allow specific values only, list them in `general_settings.{setting}`."
+    )
+    return ValueError(
+        f"Rejected Request: {param} is not allowed in request body. "
+        "Clientside passthrough requires explicit admin opt-in via "
+        "either `general_settings.allow_client_side_credentials = true` "
+        "(proxy-wide) or `configurable_clientside_auth_params` on the "
+        "deployment in your proxy config.yaml. "
+        f"Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997{allowlist_hint}",
+    )
+
+
 def _check_banned_params(
     body: Mapping[str, object],
     general_settings: dict,
@@ -505,6 +554,10 @@ def _check_banned_params(
             # entirely so the rest of the loop doesn't waste work.
             return
         if (
+            setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+        ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
+            continue
+        if (
             _allow_model_level_clientside_configurable_parameters(
                 model=model,
                 param=param,
@@ -519,14 +572,7 @@ def _check_banned_params(
             # ``api_base`` with an unallowed ``langfuse_host`` is still
             # rejected for the second field.
             continue
-        raise ValueError(
-            f"Rejected Request: {param} is not allowed in request body. "
-            "Clientside passthrough requires explicit admin opt-in via "
-            "either `general_settings.allow_client_side_credentials = true` "
-            "(proxy-wide) or `configurable_clientside_auth_params` on the "
-            "deployment in your proxy config.yaml. "
-            "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
-        )
+        raise _banned_param_error(param)
 
 
 _FALLBACK_FIELDS: Final[tuple[str, ...]] = (
@@ -881,7 +927,6 @@ def route_in_additonal_public_routes(current_route: str):
         public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/api/*"]
     ```
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:
@@ -1206,7 +1251,7 @@ def _get_deployment_default_limit(model_name: str, field: str) -> int | None:
 
     if llm_router is None:
         return None
-    deployments: Final = llm_router.get_model_list(model_name=model_name)
+    deployments: Final = llm_router.registry().deployments(model_name)
     if not deployments:
         return None
     limits: Final = []
@@ -1968,6 +2013,7 @@ _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
 # can_key_call_model() validates the real target model.
 _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/client_secrets",
+    "/realtime/translations/client_secrets",
     "/realtime/calls",
 )
 _MODEL_ROUTING_ID_FIELDS: Final = (
@@ -2122,7 +2168,7 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
     if model_id is None or llm_router is None:
         return model_id
     try:
-        return llm_router.resolve_model_name_from_model_id(model_id) or model_id
+        return llm_router.registry().resolve(model_id, kind="from_id") or model_id
     except Exception as e:
         verbose_proxy_logger.debug("Unable to resolve model_id from managed resource ID: %s", str(e))
         return model_id
@@ -2131,8 +2177,9 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
 def get_cache_prediction_deployments(
     *, current_deployment_id: str, candidate_deployment_id: str, llm_router: Router, team_id: str | None
 ) -> tuple[Deployment, Deployment] | None:
-    current: Final = llm_router.get_deployment(current_deployment_id)
-    candidate: Final = llm_router.get_deployment(candidate_deployment_id)
+    registry: Final = llm_router.registry()
+    current: Final = registry.deployment(current_deployment_id)
+    candidate: Final = registry.deployment(candidate_deployment_id)
     if current is None or candidate is None:
         return None
     if any(deployment.model_info.team_id not in (None, team_id) for deployment in (current, candidate)):
@@ -2171,6 +2218,13 @@ def _extract_model_candidates_from_request(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _dedupe_model_candidates((f"{provider}/{decision_model}",))
+    if RouteChecks.is_builtin_eu_jev_decision_route(route=route):
+        from litellm.llms.eu_jev.common_utils import eu_jev_registry_model
+
+        requested_model: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data).get("model")
+        if requested_model is not None and not isinstance(requested_model, str):
+            raise HTTPException(status_code=400, detail="eu_jev model must be a string")
+        return [f"eu_jev/{eu_jev_registry_model(requested_model)}"]
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
         return _dedupe_model_candidates(prediction_models)
@@ -2344,7 +2398,7 @@ def get_model_from_request(
 
     if route.lower().startswith("/nvidia_nim/"):
         nvidia_nim_model: Final = (
-            nvidia_nim_model_group_in_path(route, llm_router.get_model_list()) if llm_router else None
+            nvidia_nim_model_group_in_path(route, llm_router.registry().deployments()) if llm_router else None
         )
         return model if nvidia_nim_model is None else nvidia_nim_model
 
@@ -2355,7 +2409,7 @@ def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str
     if llm_router is None:
         return None
     endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
-    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.get_model_names()))
+    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.registry().names()))
 
 
 def _model_from_bedrock_route(route: str) -> str | None:

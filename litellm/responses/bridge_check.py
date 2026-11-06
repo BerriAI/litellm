@@ -9,6 +9,7 @@ from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
+    is_foundry_project_agent,
 )
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
@@ -180,6 +181,9 @@ def responses_api_bridge_check(
         model_info["mode"] = "responses"
     elif pinned_mode == "chat" and backend_serves_chat_completions(model_info):
         model_info["mode"] = "chat"
+
+    if custom_llm_provider == LlmProviders.AZURE_AI.value and is_foundry_project_agent(model):
+        model_info["mode"] = "responses"
 
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"

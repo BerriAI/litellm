@@ -18,16 +18,16 @@ from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+from litellm.proxy.mcp_server.semantic_tool_filter import (
     SemanticToolFilterContextWindowError,
 )
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
-    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 
@@ -487,7 +487,7 @@ class SemanticToolFilterHook(CustomLogger):
         Returns:
             SemanticToolFilterHook instance if enabled, None otherwise
         """
-        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        from litellm.proxy.mcp_server.semantic_tool_filter import (
             SemanticMCPToolFilter,
         )
 

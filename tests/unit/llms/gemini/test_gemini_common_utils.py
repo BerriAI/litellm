@@ -512,6 +512,40 @@ def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config()
     assert _map_image_config('{"aspectRatio": "1:1"}') == {"imageConfig": {"aspectRatio": "1:1"}}
 
 
+@pytest.mark.parametrize("prefix", ("", "gemini/", "vertex_ai/"))
+@pytest.mark.parametrize(
+    "model, size, expected",
+    (
+        ("gemini-3-pro-image", "256x256", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3-pro-image", "512x512", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3-pro-image-preview", "512x512", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3-pro-image", "2048x2048", {"aspectRatio": "1:1", "imageSize": "2K"}),
+        ("gemini-3-pro-image", "4096x4096", {"aspectRatio": "1:1", "imageSize": "4K"}),
+        ("gemini-3.1-flash-image", "512x512", {"aspectRatio": "1:1", "imageSize": "512"}),
+        ("gemini-3.1-flash-image-preview", "512x512", {"aspectRatio": "1:1", "imageSize": "512"}),
+        ("gemini-3.1-flash-image", "2048x2048", {"aspectRatio": "1:1", "imageSize": "2K"}),
+        ("gemini-3.1-flash-image", "4096x4096", {"aspectRatio": "1:1", "imageSize": "4K"}),
+        ("gemini-3.1-flash-lite-image", "256x256", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3.1-flash-lite-image", "512x512", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3.1-flash-lite-image", "2048x2048", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3.1-flash-lite-image", "4096x4096", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-2.5-flash-image", "512x512", {"aspectRatio": "1:1"}),
+        ("gemini-2.5-flash-image", "1024x256", {"aspectRatio": "21:9"}),
+        ("gemini-2.5-flash-image", "256x1024", {"aspectRatio": "9:16"}),
+        ("gemini-2.5-flash-image", "8000x1000", {"aspectRatio": "21:9"}),
+        ("gemini-2.5-flash-image", "1000x8000", {"aspectRatio": "9:16"}),
+        ("gemini-3.1-flash-image", "1024x256", {"aspectRatio": "4:1", "imageSize": "512"}),
+    ),
+)
+def test_size_mapping_respects_model_image_limits(
+    prefix: str, model: str, size: str, expected: dict[str, str]
+) -> None:
+    """Limits as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
+    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {
+        "imageConfig": expected
+    }
+
+
 @pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])
 def test_map_openai_image_params_to_gemini_drops_or_refuses_a_non_object_image_config(raw_image_config: str):
     with contextlib.suppress(litellm.UnsupportedParamsError):

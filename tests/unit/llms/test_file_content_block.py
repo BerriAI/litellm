@@ -19,13 +19,15 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_file_ids_from_messages,
     migrate_file_to_image_url,
-    update_messages_with_model_file_ids,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     anthropic_process_openai_file_message,
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_file_ids_from_messages,
+    update_messages_with_model_file_ids,
 )
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
