@@ -6,7 +6,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )

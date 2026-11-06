@@ -6,6 +6,7 @@ import importlib
 import inspect
 import io
 import itertools
+import logging
 import os
 import random
 import re
@@ -423,6 +424,9 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -2930,7 +2934,11 @@ def configured_max_request_size_mb() -> int | float | None:
 
 
 _ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
-    {("POST", "/claude-code/plugins/upload"): 11}
+    {
+        ("POST", "/claude-code/plugins/upload"): 11,
+        ("POST", "/skill-hub/skills/upload"): 11,
+        ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+    }
 )
 
 
@@ -18662,7 +18670,11 @@ async def model_deprecations(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
+    return collect_model_deprecations(
+        llm_router=llm_router,
+        warn_within_days=warn_within_days,
+        successor_log_level=logging.DEBUG,
+    )
 
 
 def get_model_group_info(
@@ -22429,6 +22441,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(model_deprecation_alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)

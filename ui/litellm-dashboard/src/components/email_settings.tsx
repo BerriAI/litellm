@@ -21,6 +21,7 @@ const REQUIRED_MARKER = (
 );
 
 const FIELD_HELP: Record<string, React.ReactNode> = {
+  PROXY_BASE_URL: "Public HTTP(S) gateway URL. Required for model deprecation emails so owners can review their usage.",
   SMTP_HOST: (
     <>
       <Trans i18nKey="loggingAndAlerts.emailSettings.help.smtpHost" />
@@ -154,11 +155,12 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                           ✨ {key}
                         </a>
                       ) : (
-                        <p className="text-sm">{key}</p>
+                        <p className="text-sm">{key === "PROXY_BASE_URL" ? "Gateway URL" : key}</p>
                       )}
                       <InputGroup className="max-w-100">
                         <InputGroupInput
                           name={key}
+                          aria-label={key === "PROXY_BASE_URL" ? "Gateway URL" : key}
                           defaultValue={value as string}
                           type={isSensitive && !isVisible ? "password" : "text"}
                           disabled={isLocked}

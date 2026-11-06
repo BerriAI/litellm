@@ -108,6 +108,26 @@ def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, ob
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
+# The calls on an existing response id. ``compact_responses`` is left out: it sends a model and input,
+# so its 404 can mean a missing model rather than a missing response.
+RESPONSE_ID_CALL_TYPES: Final = frozenset(
+    {
+        "aget_responses",
+        "get_responses",
+        "adelete_responses",
+        "delete_responses",
+        "acancel_responses",
+        "cancel_responses",
+        "alist_input_items",
+    }
+)
+
+
+def is_response_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing response id failed with a provider 404: the response is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in RESPONSE_ID_CALL_TYPES
+
+
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
     # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
     (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
@@ -125,12 +145,13 @@ _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
 def _first_present(*sources: Mapping[str, Any] | None, key: str) -> int | float | None:
     """Return *key* from the first source mapping where it's set, so callers can
     support a setting living in more than one deployment config location. Sources
-    are checked in order from most to least specific to that setting."""
+    are checked in order from most to least specific to that setting. Only a number
+    counts: a bool or a string is skipped, so the router default applies."""
     for source in sources:
         if source is None:
             continue
         value = source.get(key)
-        if value is not None:
+        if isinstance(value, int | float) and not isinstance(value, bool):
             return value
     return None
 
@@ -811,7 +832,7 @@ def _is_allowed_fails_set_on_router(
     return False
 
 
-def cast_exception_status_to_int(exception_status: str | int) -> int:
+def cast_exception_status_to_int(exception_status: object) -> int:
     if isinstance(exception_status, str):
         try:
             exception_status = int(exception_status)
@@ -820,6 +841,13 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
                 "Unable to cast exception status to int %s. Defaulting to status=500.", exception_status
             )
             exception_status = 500
+    # A bool or a number no HTTP status can be is read as a 500, as the Rust router core reads it.
+    if (
+        isinstance(exception_status, bool)
+        or not isinstance(exception_status, int)
+        or not 0 <= exception_status <= 65535
+    ):
+        return 500
     return exception_status
 
 

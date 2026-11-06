@@ -78,7 +78,6 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     NewTeamRequest,
-    NewUserRequest,
     NewUserRequestTeam,
     NewUserResponse,
     ProxyErrorTypes,
@@ -164,6 +163,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
     RoleMappings,
+    SSONewUserRequest,
     TeamMappings,
 )
 from litellm.types.proxy.ui_sso import ParsedOpenIDResult
@@ -2915,7 +2915,7 @@ async def insert_sso_user(
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
-    new_user_request: Final = NewUserRequest(
+    new_user_request: Final = SSONewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
         user_alias=_get_sso_user_alias(result_openid),
@@ -2924,10 +2924,8 @@ async def insert_sso_user(
         budget_duration=user_defined_values["budget_duration"],
         sso_user_id=user_defined_values["user_id"],
         auto_create_key=False,
+        metadata={"auth_provider": getattr(result_openid, "provider")} if hasattr(result_openid, "provider") else {},
     )
-
-    if result_openid and hasattr(result_openid, "provider"):
-        new_user_request.metadata = {"auth_provider": getattr(result_openid, "provider")}
 
     from litellm.proxy.proxy_server import premium_user
 

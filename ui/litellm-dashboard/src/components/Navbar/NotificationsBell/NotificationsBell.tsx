@@ -17,7 +17,12 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { ArrowUpRight, Bell } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Bell } from "lucide-react";
+import DeprecationAlertItem from "@/components/ModelDeprecationAlerts/DeprecationAlertItem";
+import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
+import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
+import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
+import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
 import React, { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
@@ -32,13 +37,13 @@ interface Announcement {
   href: string;
 }
 
-const AUTO_ROUTER_ANNOUNCEMENT: Announcement = {
+const autoRouterAnnouncement = (): Announcement => ({
   readKey: "litellmHideAutoRouterAnnouncement",
-  title: "LiteLLM Auto Router",
-  description: "Route every request to the cheapest model that can handle it, no prompt changes needed.",
-  linkLabel: "Read the docs",
+  title: i18n.t("shell.notifications.autoRouter.title"),
+  description: i18n.t("shell.notifications.autoRouter.description"),
+  linkLabel: i18n.t("shell.notifications.autoRouter.link"),
   href: AUTO_ROUTER_DOCS_URL,
-};
+});
 
 const describeRelease = ({ new_features, bug_fixes, other_updates }: LatestReleaseInfo): string =>
   [
@@ -102,6 +107,7 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
 };
 
 interface NotificationsBellViewProps {
+  deprecationAlerts?: readonly DeprecationAlert[];
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -111,25 +117,39 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   currentVersion,
   latestRelease,
   deploymentHealthLink,
+  deprecationAlerts,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
-  const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
+  const announcements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
+
+  const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
+  const openDeprecations = openAlerts.length;
+  let label =
+    unreadCount > 0
+      ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
+      : t("shell.notifications.bell.trigger");
+  if (openDeprecations > 0) {
+    label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
+  }
 
   return (
     <Popover>
       <PopoverTrigger
         render={<Button variant="ghost" size="icon" className="text-muted-foreground" />}
-        aria-label={
-          unreadCount > 0
-            ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
-            : t("shell.notifications.bell.trigger")
-        }
+        aria-label={label}
       >
         <span className="relative inline-flex">
-          <Bell className="size-4" aria-hidden />
-          {unreadCount > 0 ? <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden /> : null}
+          <Bell className={cn("size-4", openDeprecations > 0 && "text-amber-700")} aria-hidden />
+          {openDeprecations > 0 ? (
+            <span className="absolute -top-2 -right-2 rounded-full bg-background p-px text-amber-600" aria-hidden>
+              <AlertTriangle className="size-3" fill="currentColor" stroke="var(--background)" strokeWidth={1.5} />
+            </span>
+          ) : null}
+          {openDeprecations === 0 && unreadCount > 0 ? (
+            <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden />
+          ) : null}
         </span>
       </PopoverTrigger>
       <PopoverContent
@@ -142,6 +162,33 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         </PopoverTitle>
         <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
           <div className="space-y-4 p-4">
+            {openAlerts.length > 0 && (
+              <>
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold">Model deprecations</p>
+                    <a className="text-xs text-primary hover:underline" href={migrationHref()}>
+                      View all {openDeprecations}
+                    </a>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">Model migrations across your keys and teams.</p>
+                </div>
+                {openAlerts.slice(0, 3).map((alert) => (
+                  <Fragment key={alert.id}>
+                    <Separator />
+                    <DeprecationAlertItem alert={alert} />
+                  </Fragment>
+                ))}
+                <Separator />
+                <p className="text-xs font-medium text-muted-foreground">Announcements</p>
+              </>
+            )}
+            {deprecationAlerts && openAlerts.length === 0 && (
+              <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
+                View model deprecations
+              </a>
+            )}
+
             {announcements.map((announcement, index) => (
               <Fragment key={announcement.readKey}>
                 {index > 0 ? <Separator /> : null}
@@ -162,10 +209,12 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
 }) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
+  const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
+      deprecationAlerts={deprecationAlerts}
       deploymentHealthLink={deploymentHealthLink}
     />
   );
