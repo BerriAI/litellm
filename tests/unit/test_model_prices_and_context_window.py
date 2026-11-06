@@ -654,6 +654,12 @@ TENCENT_TOKENHUB_KIMI_ROWS: Final = MappingProxyType(
         "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000, False, False),
     }
 )
+TENCENT_TOKENHUB_HY4_ROWS: Final = MappingProxyType(
+    {
+        "tencent/hy4": (8.34e-07, 2.501e-06, 4.2e-08, True),
+        "tencent/hy4-preview": (8.34e-07, 2.501e-06, 4.2e-08, False),
+    }
+)
 
 
 def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
@@ -771,6 +777,40 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
         or not entry.get("supports_prompt_caching")
     )
     assert actual == TENCENT_TOKENHUB_KIMI_ROWS
+    assert invalid_metadata == ()
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_hy4_rows_match_published_metadata(path: Path):
+    """TokenHub publishes these Hy4 prices, limits, and capabilities in its official model catalog
+    and rate card (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-11-06)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    actual: Final = MappingProxyType(
+        {
+            name: (
+                entry.get("input_cost_per_token"),
+                entry.get("output_cost_per_token"),
+                entry.get("cache_read_input_token_cost"),
+                entry.get("supports_vision", False),
+            )
+            for name in TENCENT_TOKENHUB_HY4_ROWS
+            if isinstance(entry := rows.get(name), dict)
+        }
+    )
+    invalid_metadata: Final = tuple(
+        name
+        for name in TENCENT_TOKENHUB_HY4_ROWS
+        if not isinstance(entry := rows.get(name), dict)
+        or entry.get("litellm_provider") != "tencent"
+        or entry.get("max_input_tokens") != 960000
+        or entry.get("max_output_tokens") != 64000
+        or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
+        or not entry.get("supports_reasoning")
+        or not entry.get("supports_response_schema")
+        or not entry.get("supports_function_calling")
+        or not entry.get("supports_prompt_caching")
+    )
+    assert actual == TENCENT_TOKENHUB_HY4_ROWS
     assert invalid_metadata == ()
 
 

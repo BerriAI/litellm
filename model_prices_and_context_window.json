@@ -64172,6 +64172,50 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "tencent/hy4": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 4.2e-08,
+        "comment": "TokenHub bills Hy4 at 50% of list until 2026-12-31 23:59:59 Beijing time; these are the list rates.",
+        "input_cost_per_token": 8.34e-07,
+        "input_cost_per_token_cache_hit": 4.2e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 960000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.501e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "tencent/hy4-preview": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 4.2e-08,
+        "comment": "TokenHub bills Hy4 preview at 50% of list until 2026-12-31 23:59:59 Beijing time; these are the list rates.",
+        "input_cost_per_token": 8.34e-07,
+        "input_cost_per_token_cache_hit": 4.2e-08,
+        "litellm_provider": "tencent",
+        "max_input_tokens": 960000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.501e-06,
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": false
+    },
     "tencent/minimax-m3": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 6e-08,
