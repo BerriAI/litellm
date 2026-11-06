@@ -2097,8 +2097,32 @@ async def test_responses_with_another_tool_set_are_a_different_prefix():
 
 
 @pytest.mark.asyncio
-async def test_chat_and_responses_requests_sending_the_same_tool_share_one_prefix():
-    described_tool: Final = {**_RESPONSES_TOOL, "description": "Get the time"}
+async def test_responses_custom_tools_with_another_grammar_are_a_different_prefix():
+    custom_tool: Final = {
+        "type": "custom",
+        "name": "run_sql",
+        "description": "Run a query",
+        "format": {"type": "grammar", "syntax": "lark", "definition": "start: SELECT"},
+    }
+    other_grammar: Final = {**custom_tool, "format": {"type": "grammar", "syntax": "lark", "definition": "start: UPDATE"}}
+
+    pinned = await _pinned_deployment_ids(
+        {"input": _marked_responses_input(), "tools": [custom_tool]},
+        _marked_responses_input(),
+        {"input": _marked_responses_input(), "tools": [other_grammar]},
+    )
+
+    assert len(pinned) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parameters",
+    [{"type": "object", "properties": {}}, {"properties": {"city": {"type": "string"}}}],
+    ids=["typed_parameters", "untyped_parameters"],
+)
+async def test_chat_and_responses_requests_sending_the_same_tool_share_one_prefix(parameters: dict[str, object]):
+    described_tool: Final = {**_RESPONSES_TOOL, "description": "Get the time", "parameters": parameters}
     chat_tool: Final = {
         "type": "function",
         "function": {key: value for key, value in described_tool.items() if key != "type"},
