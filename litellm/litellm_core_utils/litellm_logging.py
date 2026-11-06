@@ -4301,7 +4301,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
-        executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+        if self.claim_sync_success_log():
+            executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
         """The success-event payload with the request messages put back where `turn_off_message_logging`
