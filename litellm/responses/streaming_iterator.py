@@ -53,7 +53,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -641,6 +641,24 @@ class BaseResponsesAPIStreamingIterator:
             self._handle_failure(e)
             raise
 
+    def _deferred_logging_dispatch(
+        self, logging_coroutine: Coroutine[object, object, None], logging_response: object
+    ) -> BilledRoundsDispatch | Coroutine[object, object, None]:
+        response: Final[object] = getattr(logging_response, "response", None)
+        if not isinstance(response, ResponsesAPIResponse):
+            return logging_coroutine
+        price: Final = (
+            UncachedPrice(0.0, None)
+            if self._completed_response_cache_hit
+            else self.logging_obj.uncached_price(response)
+        )
+        spend: Final = BilledRoundsSpend(
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage),
+            price.cost or 0.0,
+            price.cost_breakdown,
+        )
+        return BilledRoundsDispatch(logging_coroutine, spend)
+
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
             return
@@ -665,7 +683,9 @@ class BaseResponsesAPIStreamingIterator:
             if deferred_dispatch_armed:
                 # End-of-stream guardrail scans write guardrail_information after
                 # the terminal event; dispatching now would snapshot metadata early.
-                self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+                self.logging_obj._deferred_stream_complete_args = (
+                    self._deferred_logging_dispatch(logging_coroutine, logging_response),
+                )
             else:
                 spawn_logging_task(
                     asyncio.get_running_loop(), logging_coroutine, task_name="Responses stream success logging"

@@ -2533,9 +2533,7 @@ def non_openai_responses_bridge(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(
-        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
-    )
+    (tmp_path / "access-token").write_text("gho_test")
     litellm.register_model(
         {
             **{
@@ -2579,7 +2577,11 @@ def non_openai_responses_bridge(
             {"api_base": _FOUNDRY_API_BASE, "api_key": "fake-key"},
         ),
         "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
-        "github_copilot": ("github_copilot/gpt-6.1-bridge-test", "https://api.githubcopilot.com/responses", {}),
+        "github_copilot": (
+            "github_copilot/gpt-6.1-bridge-test",
+            "https://api.githubcopilot.com/responses",
+            {"api_base": "https://api.githubcopilot.com"},
+        ),
         "databricks": (
             "databricks/responses/databricks-gpt-bridge-test",
             "https://dbx.example/serving-endpoints/responses",
@@ -7703,6 +7705,7 @@ async def test_bedrock_converse_parses_scripted_response(
     assert json.loads(route.calls[0].request.content) == {
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
         "inferenceConfig": {},
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
     assert response.choices[0].message.content == "Hello from Bedrock."
     assert response.usage.prompt_tokens == 8

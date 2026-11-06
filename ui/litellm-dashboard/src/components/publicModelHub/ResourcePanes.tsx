@@ -1,184 +1,197 @@
 "use client";
 
-import { Bot, Puzzle, Server } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Puzzle } from "lucide-react";
 import * as React from "react";
+import { useTranslation } from "react-i18next";
 
 import type { Plugin } from "@/components/claude_code_plugins/types";
-import type { AgentCard, MCPServerData } from "@/components/PublicModelHubTableColumns";
-import { ItemActions, ItemContent, ItemDescription, ItemMedia } from "@/components/ui/item";
-import { matchesSearchTerm } from "@/utils/searchUtils";
+import { DataTableSortHeader } from "@/components/shared/DataTable/DataTableSortHeader";
+import { DataTable } from "@/components/shared/DataTable";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
+import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
+import { useSkillFilters, matchesSkillFilters, skillTags } from "@/components/claude_code_plugins/skillCatalog";
 
-import { AgentInspector } from "./AgentInspector";
-import { FilterChip } from "./FilterChip";
-import { mcpAuthLabel } from "./hubFormat";
-import { HubMasterDetail } from "./HubMasterDetail";
-import { LoadFailed, NoResults } from "./HubEmpty";
-import { RowTitle, SearchInput } from "./HubParts";
-import { McpInspector } from "./McpInspector";
+import { CatalogDetails } from "./CatalogDetails";
+import { CatalogFilters } from "./CatalogFilters";
+import { LoadFailed, NoResults, NotListed } from "./HubEmpty";
 import { SkillInspector } from "./SkillInspector";
+import { useOpenHref } from "./useHubUrlState";
 
-interface ResourcePaneProps<T> {
-  rows: T[];
+interface SkillsPaneProps {
+  rows: Plugin[] | undefined;
   loading: boolean;
   error: boolean;
   onRetry: () => void;
-  noun: string;
-  icon: React.ReactNode;
-  search: (row: T) => (string | null | undefined)[];
-  filter: { label: string; noun: string; values: (row: T) => string[] };
   selected: string | null;
   onSelect: (key: string | null) => void;
-  getKey: (row: T) => string;
-  renderDetail: (row: T) => React.ReactNode;
-  title: (row: T) => string;
-  description: (row: T) => string | null | undefined;
-  meta: (row: T) => string | null | undefined;
 }
 
-function ResourcePane<T>({
-  rows,
-  loading,
-  error,
-  onRetry,
-  noun,
-  icon,
-  search,
-  filter,
+function SkillLink({
+  skill,
   selected,
   onSelect,
-  getKey,
-  renderDetail,
-  title,
-  description,
-  meta,
-}: ResourcePaneProps<T>) {
-  const [query, setQuery] = React.useState("");
-  const [chosen, setChosen] = React.useState<string[]>([]);
-  const options = [...new Set(rows.flatMap(filter.values))].sort();
-  const sorted = [...rows].sort((a, b) => title(a).localeCompare(title(b)));
-  const shown = sorted.filter(
-    (row) =>
-      matchesSearchTerm(query, search(row)) &&
-      (chosen.length === 0 || filter.values(row).some((v) => chosen.includes(v))),
-  );
-  const filtered = query.trim() !== "" || chosen.length > 0;
-  const clear = () => {
-    setQuery("");
-    setChosen([]);
-  };
-  return (
-    <HubMasterDetail
-      rows={shown}
-      loading={loading}
-      selectedKey={selected}
-      opened={rows.find((row) => getKey(row) === selected)}
-      getKey={getKey}
-      onSelect={onSelect}
-      empty={
-        error ? (
-          <LoadFailed noun={noun} onRetry={onRetry} />
-        ) : (
-          <NoResults icon={icon} noun={noun} query={query} onClear={filtered ? clear : undefined} />
-        )
-      }
-      toolbar={
-        <div className="flex items-center gap-2">
-          <SearchInput value={query} onChange={setQuery} placeholder={`Search ${noun}`} />
-          {options.length > 0 && (
-            <FilterChip
-              label={filter.label}
-              noun={filter.noun}
-              options={options.map((option) => ({ value: option, label: option }))}
-              value={chosen}
-              onChange={setChosen}
-            />
-          )}
-        </div>
-      }
-      renderItem={(row) => (
-        <>
-          <ItemMedia variant="icon" className="size-5 text-muted-foreground">
-            {icon}
-          </ItemMedia>
-          <ItemContent className="min-w-0 gap-0.5">
-            <RowTitle>{title(row)}</RowTitle>
-            {description(row) && <ItemDescription>{description(row)}</ItemDescription>}
-          </ItemContent>
-          {meta(row) && <ItemActions className="text-xs text-muted-foreground">{meta(row)}</ItemActions>}
-        </>
-      )}
-      renderDetail={renderDetail}
-    />
-  );
-}
-
-interface PaneProps<T> {
-  rows: T[] | undefined;
-  loading: boolean;
-  error: boolean;
-  onRetry: () => void;
+}: {
+  skill: Plugin;
   selected: string | null;
   onSelect: (key: string | null) => void;
-}
-
-export function AgentsPane({ rows, ...props }: PaneProps<AgentCard>) {
+}) {
+  const hrefFor = useOpenHref();
+  const follow = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (event.button !== 0 || event.defaultPrevented) return;
+    if (event.metaKey || event.ctrlKey) return;
+    if (event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    onSelect(skill.name);
+  };
   return (
-    <ResourcePane<AgentCard>
-      {...props}
-      rows={rows ?? []}
-      noun="agents"
-      icon={<Bot />}
-      search={(agent) => [agent.name, agent.description]}
-      filter={{
-        label: "Skill tag",
-        noun: "skill tags",
-        values: (agent) => (agent.skills ?? []).flatMap((s) => s.tags ?? []),
-      }}
-      getKey={(agent) => agent.name}
-      title={(agent) => agent.name}
-      description={(agent) => agent.description}
-      meta={(agent) => (agent.version ? `v${agent.version}` : undefined)}
-      renderDetail={(agent) => <AgentInspector agent={agent} />}
-    />
+    <a
+      href={hrefFor(skill.name)}
+      aria-current={selected === skill.name ? "true" : undefined}
+      className="flex min-w-0 flex-col gap-1 rounded-sm py-2 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+      onClick={follow}
+    >
+      <span className="font-mono text-sm font-medium whitespace-normal wrap-anywhere">{skill.name}</span>
+      {skill.description && (
+        <span className="line-clamp-2 text-xs whitespace-normal text-muted-foreground">{skill.description}</span>
+      )}
+      {skill.domain && <span className="text-xs whitespace-normal text-muted-foreground">{skill.domain}</span>}
+    </a>
   );
 }
 
-export function McpPane({ rows, ...props }: PaneProps<MCPServerData>) {
-  return (
-    <ResourcePane<MCPServerData>
-      {...props}
-      rows={rows ?? []}
-      noun="MCP servers"
-      icon={<Server />}
-      search={(server) => [server.name, server.mcp_info?.description]}
-      filter={{
-        label: "Transport",
-        noun: "transports",
-        values: (server) => (server.transport ? [server.transport] : []),
-      }}
-      getKey={(server) => server.name}
-      title={(server) => server.name}
-      description={(server) => server.mcp_info?.description}
-      meta={(server) => (server.auth_type ? mcpAuthLabel(server.auth_type) : undefined)}
-      renderDetail={(server) => <McpInspector server={server} />}
-    />
+export function SkillsPane({ rows, loading, error, onRetry, selected, onSelect }: SkillsPaneProps) {
+  const { t } = useTranslation();
+  const filters = useSkillFilters();
+  const query = filters.search;
+  const [domains, setDomains] = React.useState<string[]>([]);
+  const skills = React.useMemo(() => [...(rows ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [rows]);
+  const options = React.useMemo(
+    () =>
+      [...new Set(skills.flatMap((skill) => (skill.domain ? [skill.domain] : [])))].sort().map((domain) => ({
+        domain,
+        count: skills.filter((skill) => skill.domain === domain).length,
+      })),
+    [skills],
   );
-}
+  const shown = React.useMemo(
+    () =>
+      skills.filter((skill) => {
+        const matchesQuery = matchesSkillFilters(skill, {
+          search: filters.search,
+          tag: filters.tag,
+          scan: filters.scan,
+        });
+        const matchesDomain = domains.length === 0 || domains.includes(skill.domain ?? "");
+        return matchesQuery && matchesDomain;
+      }),
+    [skills, filters.search, filters.tag, filters.scan, domains],
+  );
+  const opened = skills.find((skill) => skill.name === selected);
+  const missingName = opened === undefined && !loading ? selected : null;
+  const showRefreshError = error && !loading && shown.length > 0;
+  const filtered = filters.active || domains.length > 0;
+  const clear = () => {
+    filters.clear();
+    setDomains([]);
+  };
+  const columns: ColumnDef<Plugin>[] = [
+    {
+      accessorKey: "name",
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={t("publicModelHub.catalog.skill", { defaultValue: "Skill" })} />
+      ),
+      meta: { skeleton: "twoLine", className: "min-w-48 whitespace-normal" },
+      cell: ({ row }) => <SkillLink skill={row.original} selected={selected} onSelect={onSelect} />,
+    },
+    ...getSkillMetadataColumns<Plugin>(),
+  ];
+  const countOptions = {
+    count: shown.length,
+    defaultValue_one: "{{count}} skill",
+    defaultValue_other: "{{count}} skills",
+    defaultValue: "{{count}} skills",
+  };
 
-export function SkillsPane({ rows, ...props }: PaneProps<Plugin>) {
   return (
-    <ResourcePane<Plugin>
-      {...props}
-      rows={rows ?? []}
-      noun="skills"
-      icon={<Puzzle />}
-      search={(skill) => [skill.name, skill.description, skill.namespace, skill.domain, ...(skill.keywords ?? [])]}
-      filter={{ label: "Domain", noun: "domains", values: (skill) => (skill.domain ? [skill.domain] : []) }}
-      getKey={(skill) => skill.name}
-      title={(skill) => skill.name}
-      description={(skill) => skill.description}
-      meta={(skill) => skill.domain}
-      renderDetail={(skill) => <SkillInspector skill={skill} />}
-    />
+    <div data-slot="catalog-layout" className="grid min-w-0 gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <CatalogFilters count={domains.length} onClear={() => setDomains([])}>
+        <fieldset data-slot="catalog-filter-section" className="min-w-0">
+          <legend className="mb-3 text-sm font-medium">
+            {t("publicModelHub.catalog.domain", { defaultValue: "Domain" })}
+          </legend>
+          <div className="flex flex-col gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-between"
+              aria-pressed={domains.length === 0}
+              onClick={() => setDomains([])}
+            >
+              {t("publicModelHub.catalog.allDomains", { defaultValue: "All domains" })}
+              <span className="text-xs text-muted-foreground tabular-nums">{loading ? "-" : skills.length}</span>
+            </Button>
+            {options.map(({ domain, count }) => (
+              <label key={domain} className="flex cursor-pointer items-center gap-2.5 text-sm">
+                <Checkbox
+                  checked={domains.includes(domain)}
+                  onCheckedChange={(checked) =>
+                    setDomains((current) =>
+                      checked ? [...current, domain] : current.filter((value) => value !== domain),
+                    )
+                  }
+                />
+                <span className="min-w-0 flex-1 wrap-anywhere">{domain}</span>
+                <span aria-hidden="true" className="text-xs text-muted-foreground tabular-nums">
+                  {count}
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      </CatalogFilters>
+      <div data-slot="catalog-results" className="flex min-w-0 flex-col gap-4">
+        <div data-slot="catalog-toolbar" className="flex flex-wrap items-center gap-3">
+          <SkillFilters {...filters} tags={skillTags(skills)} active={filtered} clear={clear} />
+        </div>
+        <div data-slot="catalog-count" className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
+          {loading
+            ? t("publicModelHub.catalog.loadingSkills", { defaultValue: "Loading skills…" })
+            : !error && t("publicModelHub.catalog.skillCount", countOptions)}
+        </div>
+        {showRefreshError && <LoadFailed noun={t("publicModelHub.skillsPane.noun")} onRetry={onRetry} />}
+        <div data-slot="catalog-table" aria-busy={loading}>
+          <DataTable
+            data={shown}
+            sortingMode="client"
+            sorting={filters.sorting}
+            onSortingChange={filters.onSortingChange}
+            columns={columns}
+            getRowId={(skill) => skill.name}
+            isLoading={loading}
+            loadingMessage={t("publicModelHub.catalog.loadingSkills", { defaultValue: "Loading skills…" })}
+            isError={error}
+            errorMessage={t("publicModelHub.loadFailed.title", { noun: t("publicModelHub.skillsPane.noun") })}
+            onRetry={onRetry}
+            rowClassName={(row) => (row.original.name === selected ? "bg-muted/50" : "")}
+            noDataMessage={
+              <NoResults
+                icon={<Puzzle />}
+                noun={t("publicModelHub.skillsPane.noun")}
+                query={query}
+                onClear={filtered ? clear : undefined}
+              />
+            }
+          />
+        </div>
+      </div>
+      <CatalogDetails name={selected} loading={loading && opened === undefined} onClose={() => onSelect(null)}>
+        {opened && <SkillInspector skill={opened} />}
+        {missingName !== null && !error && <NotListed name={missingName} />}
+        {missingName !== null && error && <LoadFailed noun={t("publicModelHub.skillsPane.noun")} onRetry={onRetry} />}
+      </CatalogDetails>
+    </div>
   );
 }

@@ -2,6 +2,7 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
+from datetime import datetime
 from typing import Final, Literal, TypeAlias
 
 from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, model_validator
@@ -32,7 +33,7 @@ class PluginMetadata(LiteLLMBaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    version: str | None = Field("1.0.0", description="Semantic version")
+    version: str | None = Field("1.0.0", description="Semantic version, defaults to 1.0.0 on creation")
     description: str | None = Field(None, description="Plugin description")
     author: PluginAuthor | None = Field(None, description="Plugin author")
     homepage: str | None = Field(None, description="Plugin homepage URL")
@@ -105,11 +106,14 @@ class UpdatePluginRequest(PluginSpec):
 
     The plugin name is the resource identity and is supplied as the path
     parameter, so it cannot be changed here. This is a full replace: omitted
-    fields reset to their defaults, so version is cleared rather than
-    defaulting to the create-time "1.0.0".
+    fields reset to their defaults, except version which automatically increments
+    the published patch version when omitted or null.
     """
 
-    version: str | None = Field(None, description="Semantic version; cleared if omitted")
+    version: str | None = Field(None, description="Explicit higher SemVer, or omit/null for an automatic patch bump")
+    expected_updated_at: datetime | None = Field(
+        None, description="Published updated_at read by the editor. A stale value returns 409", exclude=True
+    )
 
 
 class PluginResponse(LiteLLMBaseModel):
@@ -150,6 +154,12 @@ class PluginListItem(LiteLLMBaseModel):
     enabled: bool
     created_at: str | None
     updated_at: str | None
+    created_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    security_scan_passed: bool = False
+    download_count: int | None = None
+    has_agent_skill_metadata: bool = Field(default=False, exclude=True)
 
 
 class ListPluginsResponse(LiteLLMBaseModel):

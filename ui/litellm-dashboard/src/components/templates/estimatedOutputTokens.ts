@@ -8,8 +8,6 @@ type FormValues = Record<string, unknown>;
 const ESTIMATE_FIELD = "default_estimated_output_tokens";
 const PER_MODEL_FIELD = "default_estimated_output_tokens_per_model";
 
-const INVALID_PER_MODEL_MESSAGE = 'Enter a JSON object of positive integers, e.g. {"gpt-4": 4096}';
-
 const perModelEstimateToText = (value: unknown): string =>
   value != null && typeof value === "object" ? JSON.stringify(value) : "";
 
@@ -49,17 +47,18 @@ export const estimateChecks = {
   perModel: {
     isValid: (value: unknown): boolean =>
       typeof value !== "string" || value.trim() === "" ? true : parsePerModelEstimates(value) !== null,
-    message: INVALID_PER_MODEL_MESSAGE,
+    messageKey: "keyDetail.estimatedOutputTokens.invalidPerModel" as ParseKeys,
   },
   positive: {
     isValid: (value: unknown): boolean =>
       value === "" || value === null || value === undefined ? true : isPositiveInteger(Number(value)),
-    message: "Enter a positive integer",
+    messageKey: "keyDetail.estimatedOutputTokens.invalidPositive" as ParseKeys,
   },
 };
 
-const asValidatorRule = ({ isValid, message }: { isValid: (value: unknown) => boolean; message: string }) => ({
-  validator: (_: unknown, value: unknown) => (isValid(value) ? Promise.resolve() : Promise.reject(new Error(message))),
+const asValidatorRule = ({ isValid, messageKey }: { isValid: (value: unknown) => boolean; messageKey: ParseKeys }) => ({
+  validator: (_: unknown, value: unknown) =>
+    isValid(value) ? Promise.resolve() : Promise.reject(new Error(i18n.t(messageKey))),
 });
 
 export const estimateRules = {

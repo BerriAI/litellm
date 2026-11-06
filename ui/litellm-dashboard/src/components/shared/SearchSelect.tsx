@@ -9,6 +9,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import i18n from "@/i18n/i18n";
 
 export interface SearchSelectOption {
   label: string;
@@ -50,8 +51,8 @@ export function SearchSelect({
   options,
   value,
   onValueChange,
-  placeholder = "Select…",
-  emptyText = "No results",
+  placeholder = i18n.t("shared.searchSelect.placeholder"),
+  emptyText = i18n.t("shared.searchSelect.empty"),
   disabled = false,
   className,
   inputId,

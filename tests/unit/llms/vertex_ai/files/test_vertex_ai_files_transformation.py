@@ -2161,7 +2161,7 @@ class TestVertexClaudeBatch:
         monkeypatch.setattr(litellm, "drop_params", False)
         entry: Final = _claude_chat_entry("r1", "hi", max_tokens=10, top_p=0.5)
 
-        with pytest.raises(VertexAIError, match=r"line 1 .*top_p=0.5.*drop_params") as exc_info:
+        with pytest.raises(VertexAIError, match=r"line 1 .*top_p.*drop_params") as exc_info:
             _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}, [entry])
         assert exc_info.value.status_code == 400
 
