@@ -238,6 +238,15 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
             id="tool-schema",
         ),
         pytest.param(
+            _user_turn(
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "filename": _MANAGED_UPLOAD},
+                }
+            ),
+            id="media-part-filename",
+        ),
+        pytest.param(
             _user_turn({"type": "image_url", "image_url": {"url": "S3://media-bucket/litellm-bedrock-files/x.png"}}),
             id="uppercase-scheme",
         ),
