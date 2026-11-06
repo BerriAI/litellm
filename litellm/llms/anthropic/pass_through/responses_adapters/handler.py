@@ -14,9 +14,9 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
-from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -53,6 +53,33 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
     return extra_kwargs or {}
+
+
+def _requests_background(forwarded_kwargs: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    return any(
+        value is not None and value is not False
+        for value in (forwarded_kwargs.get("background"), extra_body.get("background"))
+    )
+
+
+def _without_background(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in extra_body.items() if key != "background"}
+
+
+def _reject_background_mode(model: str, forwarded_kwargs: Mapping[str, object]) -> None:
+    if not _requests_background(forwarded_kwargs) or drop_policy(forwarded_kwargs).drops("background"):
+        return
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    raise litellm.UnsupportedParamsError(
+        model=model,
+        llm_provider=provider if isinstance(provider, str) else None,
+        message=(
+            f"/v1/messages does not support parameters: ['background'], for model={model}. "
+            "A background run answers with a response id the Anthropic Messages API has no way to retrieve. "
+            "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+    )
 
 
 def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
@@ -142,6 +169,7 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    _reject_background_mode(model, forwarded_kwargs)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
     request_tools: Final = tools_without_mcp_servers(
         forwarded_kwargs.get("mcp_servers"),
@@ -222,7 +250,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "mcp_servers"}
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "background", "mcp_servers"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
@@ -236,6 +264,8 @@ def _build_responses_kwargs(
                 # Responses API result back to a ModelResponse for the row.
                 setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
+        elif key == "extra_body" and (extra_body := as_str_mapping(value)) is not None:
+            responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
 

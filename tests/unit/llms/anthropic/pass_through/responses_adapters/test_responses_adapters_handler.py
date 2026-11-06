@@ -555,6 +555,69 @@ def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_rea
     assert marked == unmarked
 
 
+@pytest.mark.parametrize(
+    "background_request",
+    [
+        pytest.param({"background": True}, id="background"),
+        pytest.param({"extra_body": {"background": True}}, id="extra-body-background"),
+        pytest.param({"extra_body": {"background": "true"}}, id="extra-body-background-string"),
+        pytest.param({"background": 0}, id="background-zero"),
+    ],
+)
+def test_background_answers_400_without_drop_params(background_request: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs={**OPENAI_API, **background_request},
+            max_tokens=1024,
+            messages=MESSAGES,
+        )
+
+    assert rejected.value.status_code == 400
+    assert "['background']" in rejected.value.message
+
+
+@pytest.mark.parametrize(
+    ("drop_setting", "global_drop_params"),
+    [
+        pytest.param({"drop_params": True}, False, id="drop_params"),
+        pytest.param({"additional_drop_params": ["background"]}, False, id="additional_drop_params"),
+        pytest.param({}, True, id="litellm.drop_params"),
+    ],
+)
+def test_dropped_background_never_reaches_the_responses_request(
+    drop_setting: Mapping[str, object], global_drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs={
+            **OPENAI_API,
+            **drop_setting,
+            "background": True,
+            "extra_body": {"background": True, "service_tier": "priority"},
+        },
+        max_tokens=1024,
+        messages=MESSAGES,
+    )
+
+    assert "background" not in responses_kwargs
+    assert responses_kwargs["extra_body"] == {"service_tier": "priority"}
+    assert responses_kwargs["max_output_tokens"] == 1024
+
+
+def test_background_false_still_succeeds_without_reaching_the_responses_request() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs={**OPENAI_API, "background": False, "extra_body": {"background": False}},
+        max_tokens=1024,
+        messages=MESSAGES,
+    )
+
+    assert "background" not in responses_kwargs
+    assert responses_kwargs["extra_body"] == {}
+
+
 REASONING_MODEL: Final = "gpt-bridge-reasoning-cost"
 REASONING_RATES: Final = {
     "input_cost_per_token": 2e-06,
