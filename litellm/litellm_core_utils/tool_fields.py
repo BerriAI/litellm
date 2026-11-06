@@ -218,7 +218,7 @@ _HOSTED_MCP_GATEWAY_REMEDY: Final = (
 )
 HOSTED_MCP_BATCH_ROW_REMEDY: Final = (
     "A batch row cannot reach the LiteLLM MCP gateway, so remove the tool from the row, or set `drop_params: true` "
-    "on the row or its deployment to drop it."
+    "on the row, or on its deployment when the upload names a model, to drop it."
 )
 
 

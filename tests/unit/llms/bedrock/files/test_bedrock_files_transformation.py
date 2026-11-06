@@ -4754,6 +4754,35 @@ def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can
     assert "litellm_proxy/mcp" not in exc_info.value.message
 
 
+_PASSTHROUGH_BATCH_MODEL: Final = "bedrock/openai.gpt-oss-120b-1:0"
+
+
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
+)
+def test_passthrough_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, row_drop_params: bool | None, deployment_drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = _uploaded_hosted_mcp_row(_PASSTHROUGH_BATCH_MODEL, row_drop_params, deployment_drop_params)
+
+    assert model_input["tools"] == [_WEATHER_TOOL]
+    assert "deepwiki" not in json.dumps(model_input)
+    assert "drop_params" not in model_input
+
+
+def test_passthrough_batch_row_without_drop_params_keeps_its_tools_and_never_sends_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = _uploaded_hosted_mcp_row(_PASSTHROUGH_BATCH_MODEL, False, None)
+
+    assert model_input["tools"] == [_HOSTED_MCP_TOOL, _WEATHER_TOOL]
+    assert "drop_params" not in model_input
+
+
 @pytest.mark.parametrize("model", _BATCH_MODELS)
 def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_mcp_server(
     monkeypatch: pytest.MonkeyPatch, model: str
