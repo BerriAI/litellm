@@ -1,7 +1,7 @@
-export const PROMPT_CACHE_READ_TOOLTIP =
-  "Input tokens read from the LLM provider's prompt cache (e.g. Anthropic / OpenAI), billed at a discounted rate. Reported by the provider.";
-export const PROMPT_CACHE_CREATION_TOOLTIP =
-  "Input tokens written to the LLM provider's prompt cache for reuse by later requests.";
+import type { ParseKeys } from "i18next";
+
+export const PROMPT_CACHE_READ_TOOLTIP: ParseKeys = "promptCacheUsage.readTooltip";
+export const PROMPT_CACHE_CREATION_TOOLTIP: ParseKeys = "promptCacheUsage.creationTooltip";
 
 interface CachedTokenDetails {
   cached_tokens?: number | null;

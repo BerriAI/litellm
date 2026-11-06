@@ -635,6 +635,57 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert "persim" not in raw and '"query"' not in raw
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_lands_on_its_own_block_when_server_tool_use_follows(self):
+        class MaskFruitLookup(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: LiteLLMLoggingObj | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                for tool_call in inputs.get("tool_calls", []):
+                    if tool_call.function.name == "lookup_fruit":
+                        tool_call.function.arguments = '{"fruit": "[MASKED]"}'
+                return inputs
+
+        handler: Final = AnthropicMessagesHandler()
+        tool_use: Final = self._ended_tool_use_sse_chunks()
+        server_tool_use: Final = [
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"query": "fruit"}'},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        ]
+        chunks: Final = (
+            tool_use[:-2]
+            + [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in server_tool_use]
+            + tool_use[-2:]
+        )
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MaskFruitLookup(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._partial_jsons(chunks) == ['{"fruit": "[MASKED]"}', "", "", '{"query": "fruit"}']
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_use_rewrite_on_an_unindexed_tool_block_fails_closed(self):
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 

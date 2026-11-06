@@ -17,6 +17,7 @@ class PreparedCost:
     amount: float
     payload: StandardLoggingPayload
     usage: Usage
+    price_known: bool = True
 
 
 @dataclass(frozen=True, slots=True)

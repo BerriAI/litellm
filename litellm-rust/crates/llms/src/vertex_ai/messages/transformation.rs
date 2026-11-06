@@ -77,7 +77,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(request, context)?;
+        let request = transform_messages_request(request, &context.keeping_display_updates())?;
         let request = strip_cache_control_scope(normalize_system_role_messages(
             request,
             context

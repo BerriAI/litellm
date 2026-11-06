@@ -14,9 +14,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     anthropic_inline_document,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
     responses_reasoning_items_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
@@ -580,6 +584,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
+    @staticmethod
+    def _resolve_output_format_strict(strict: bool | None) -> bool:
+        if strict is None:
+            return True
+        return strict
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -689,7 +699,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         "type": "json_schema",
                         "name": "structured_output",
                         "schema": schema,
-                        "strict": output_format.get("strict", False),
+                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
                     }
                 }
 

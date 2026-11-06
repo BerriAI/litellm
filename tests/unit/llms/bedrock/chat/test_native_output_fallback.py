@@ -13,9 +13,32 @@ _MODEL: Final = "us.anthropic.claude-opus-4-8"
 _FALLBACK: Final = NativeOutputFallback(
     optional_params={"tools": "json_tool_call"}, litellm_params={"model_info": {"opted_out": True}}
 )
+_NATIVE_RETRY_WITH_STRICT_TOOLS: Final = NativeOutputFallback(
+    optional_params={
+        "tools": (
+            {"function": {"name": "json_schema", "strict": True}},
+            {"function": {"name": "custom", "strict": True}},
+        )
+    },
+    litellm_params={
+        "model_info": {
+            "supports_native_structured_output": False,
+            "supports_bedrock_native_structured_output": False,
+        }
+    },
+)
+_COMPOSED_FALLBACK: Final = NativeOutputFallback(
+    optional_params={"tools": [{"function": {"name": "json_schema"}}, {"function": {"name": "custom"}}]},
+    litellm_params=_NATIVE_RETRY_WITH_STRICT_TOOLS.litellm_params,
+)
 _REJECTION: Final = BedrockError(
     status_code=400,
     message='{"message":"The model returned the following errors: output_config.format: Extra inputs are not permitted"}',
+)
+_GRAMMAR_REJECTION: Final = BedrockError(
+    status_code=400,
+    message='{"message":"The model returned the following errors: The compiled grammar is too large, which would cause '
+    'performance issues. Simplify your tool schemas or reduce the number of strict tools."}',
 )
 _SCHEMA_REFUSAL: Final = BedrockError(
     status_code=400, message='{"message":"output_config.format.schema: pattern is too complex for structured output"}'
@@ -58,8 +81,15 @@ _MODES: Final = pytest.mark.parametrize("asynchronous", [False, True], ids=["syn
 
 
 @_MODES
-def test_a_native_output_rejection_is_sent_again_once_with_the_fallback_params(asynchronous: bool) -> None:
-    bedrock: Final = ScriptedBedrock(errors=(_REJECTION, None), asynchronous=asynchronous)
+@pytest.mark.parametrize(
+    "rejection",
+    [_REJECTION, _GRAMMAR_REJECTION],
+    ids=["format_not_permitted", "compiled_grammar_too_large"],
+)
+def test_a_native_output_rejection_is_sent_again_once_with_the_fallback_params(
+    asynchronous: bool, rejection: BedrockError
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(rejection, None), asynchronous=asynchronous)
 
     response: Final = _call(bedrock, _FALLBACK)
 
@@ -75,6 +105,19 @@ def test_a_second_native_output_rejection_reaches_the_caller(asynchronous: bool)
         _call(bedrock, _FALLBACK)
 
     assert len(bedrock.sent) == 2
+
+
+@_MODES
+def test_a_grammar_rejection_after_a_native_retry_reaches_the_caller_without_strict_tools_fallback(
+    asynchronous: bool,
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(_GRAMMAR_REJECTION, _GRAMMAR_REJECTION), asynchronous=asynchronous)
+
+    with pytest.raises(BedrockError) as raised:
+        _resolve(call_with_native_output_fallback(bedrock, lambda: _FALLBACK, _MODEL))
+
+    assert raised.value is _GRAMMAR_REJECTION
+    assert bedrock.sent == (None, _FALLBACK)
 
 
 @_MODES
@@ -155,13 +198,16 @@ _OTHER_400S_WITH_A_STRICT_TOOL: Final = tuple(
 
 
 def _call_with_strict_tools_fallback(
-    bedrock: ScriptedBedrock, fallback: NativeOutputFallback | None, strict_tools_fallback: NativeOutputFallback | None
+    bedrock: ScriptedBedrock,
+    fallback: NativeOutputFallback | None,
+    strict_tools_fallback: NativeOutputFallback | None,
+    model: str = _MODEL,
 ) -> object:
     return _resolve(
         call_with_native_output_fallback(
             bedrock,
             None if fallback is None else lambda: fallback,
-            _MODEL,
+            model,
             strict_tools_fallback=None if strict_tools_fallback is None else lambda: strict_tools_fallback,
         )
     )
@@ -223,3 +269,18 @@ def test_each_rejection_is_sent_again_with_its_own_fallback_when_both_are_set(
     _call_with_strict_tools_fallback(bedrock, _FALLBACK, _STRICT_FALLBACK)
 
     assert bedrock.sent == (None, retried_with)
+
+
+@_MODES
+def test_a_strict_tools_rejection_after_native_retry_composes_both_fallbacks(asynchronous: bool) -> None:
+    bedrock: Final = ScriptedBedrock(
+        errors=(_GRAMMAR_REJECTION, _GRAMMAR_REJECTION, None),
+        asynchronous=asynchronous,
+    )
+
+    response: Final = _call_with_strict_tools_fallback(
+        bedrock, _NATIVE_RETRY_WITH_STRICT_TOOLS, _STRICT_FALLBACK, "us.anthropic.claude-sonnet-4-6"
+    )
+
+    assert isinstance(response, ModelResponse) and response.id == "answer-3"
+    assert bedrock.sent == (None, _NATIVE_RETRY_WITH_STRICT_TOOLS, _COMPOSED_FALLBACK)

@@ -10,7 +10,7 @@
 use std::{hint::black_box, time::Duration};
 
 use criterion::{
-    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+    BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
     measurement::WallTime,
 };
 use litellm_python_compat::{Value, json, literal::literal_eval, pickle, repr::repr};
@@ -72,14 +72,9 @@ fn formats(c: &mut Criterion) {
     let mut group = c.benchmark_group("cached_completion");
     text_formats(&mut group, &text, &value);
     binary_formats(&mut group, &value, &pickled);
-    // `from_json` consumes its input, so each iteration gets a freshly parsed one.
     group.throughput(Throughput::Bytes(dumped.len() as u64));
-    group.bench_function("from_json", |bencher| {
-        bencher.iter_batched(
-            || serde_json::from_str::<serde_json::Value>(&dumped).expect("dumps output parses"),
-            json::from_json,
-            BatchSize::SmallInput,
-        )
+    group.bench_function("json_loads", |bencher| {
+        bencher.iter(|| json::loads(black_box(&dumped)))
     });
     group.finish();
 }
