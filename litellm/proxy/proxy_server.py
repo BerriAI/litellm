@@ -1971,12 +1971,11 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
     tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
-    async with manage_tracing(
-        enabled=tracing_enabled,
-        settings=tracing_settings,
-        fallback_factory=lambda: _spend_log_trace_receiver(database),
-    ) as receiver:
-        state: Final[ProxyLifespanState] = {"tracing_receiver": receiver, "database": database}
+    async with manage_tracing(enabled=tracing_enabled, settings=tracing_settings):
+        state: Final[ProxyLifespanState] = {
+            "tracing_receiver": _spend_log_trace_receiver(database),
+            "database": database,
+        }
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
         telemetry_settings: Final = load_telemetry_settings()
