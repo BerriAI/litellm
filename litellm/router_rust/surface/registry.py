@@ -94,6 +94,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
 from litellm.litellm_core_utils.routing_groups import apply_routing_group_priority
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_api import RouterRegistry, deployment_id
@@ -675,7 +676,7 @@ class HostRegistry(HostModelInfo):
         # The routing cache usage reads come from; RustCore sets it to the one its Rust core writes.
         self._core_cache: DualCache = DualCache()
         # The tpm/rpm store usage reads come from; RustCore sets it to the one its Rust core writes.
-        self._core_usage_store: RouterUsage = RouterUsageStore(None)
+        self._core_usage_store: RouterUsage = RouterUsageStore(connect(None).router_usage())
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=1, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
         )
