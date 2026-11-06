@@ -95,6 +95,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     is_model_cost_zero,
@@ -115,6 +116,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    OverloadedProxyException,
     attribute_of,
     error_status_code,
     openai_error_param,
@@ -164,6 +166,7 @@ _ChunkT: Final = TypeVar("_ChunkT")
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
 )
+_OPENAI_OVERLOAD_ROUTE_TYPES: Final = frozenset({"acompletion", "atext_completion", "aresponses"})
 
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
@@ -4398,28 +4401,28 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ) -> Never:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        log_llm_api_exception(e, self.litellm_call_id)
+        answered: Final = with_openai_overload_status(e) if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES else e
+        log_llm_api_exception(answered, self.litellm_call_id)
         billing_logging_obj: Final = _REQUEST_FIELDS.validate_python(self.data).get("litellm_logging_obj")
         failed_in_agentic_follow_up: Final = is_agentic_followup_failure(e)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
+            original_exception=answered,
             request_data=self.data,
             dispatched_call_type=self.route_type,
         )
         # Use transformed exception if callback returned one, otherwise use original
-        if transformed_exception is not None:
-            e = transformed_exception
-        litellm_debug_info: Final = getattr(e, "litellm_debug_info", "")
+        failure: Final = transformed_exception if transformed_exception is not None else answered
+        litellm_debug_info: Final = getattr(failure, "litellm_debug_info", "")
         verbose_proxy_logger.debug(
             "An error occurred: %s %s",
-            e,
+            failure,
             litellm_debug_info,
         )
 
         timeout: Final = getattr(
-            e, "timeout", None
+            failure, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
         _litellm_logging_obj: Final = (
             billing_logging_obj if isinstance(billing_logging_obj, LiteLLMLoggingObj) else None
@@ -4451,11 +4454,11 @@ class ProxyBaseLLMRequestProcessing:
             # a failed request reports no timing, matching /v1/chat/completions
             read_timing_from_logging_obj=False,
         )
-        headers = getattr(e, "headers", None) or {}
+        headers = getattr(failure, "headers", None) or {}
         if not headers:
-            _response: Final = attribute_of(e, "response")
+            _response: Final = attribute_of(failure, "response")
             _response_headers: Final = getattr(_response, "headers", None) if _response is not None else None
-            _provider_headers: Final = _response_headers or getattr(e, "litellm_response_headers", None)
+            _provider_headers: Final = _response_headers or getattr(failure, "litellm_response_headers", None)
             if _provider_headers:
                 headers = get_response_headers(dict(_provider_headers))
         headers.update(custom_headers)
@@ -4475,21 +4478,21 @@ class ProxyBaseLLMRequestProcessing:
 
         safe_headers: Final = {k: v for k, v in headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS}
 
-        self._apply_router_cooldown_retry_after(safe_headers, e)
+        self._apply_router_cooldown_retry_after(safe_headers, failure)
 
-        if isinstance(e, ProxyException):
-            e.headers = {
-                **{k: v for k, v in e.headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS},
+        if isinstance(failure, ProxyException):
+            failure.headers = {
+                **{k: v for k, v in failure.headers.items() if k.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS},
                 **{k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()},
             }
-            raise e
+            raise failure
 
-        if isinstance(e, HTTPException):
-            raise proxy_exception_from_http_exception(e, safe_headers)
-        elif isinstance(e, httpx.HTTPStatusError):
+        if isinstance(failure, HTTPException):
+            raise proxy_exception_from_http_exception(failure, safe_headers)
+        elif isinstance(failure, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f
-            http_status_error: Final[httpx.HTTPStatusError] = e
+            http_status_error: Final[httpx.HTTPStatusError] = failure
             error_body: Final = await http_status_error.response.aread()
             error_text: Final = error_body.decode("utf-8")
 
@@ -4499,12 +4502,12 @@ class ProxyBaseLLMRequestProcessing:
                 detail={"error": error_text},
                 headers=error_headers,
             )
-        error_msg: Final = f"{e}"
+        error_msg: Final = f"{failure}"
         # Check for AttributeError in the exception chain.
         # The AttributeError may be wrapped in multiple layers
         # (e.g. AttributeError -> OpenAIException -> APIConnectionError),
         # so walk __cause__, __context__, and original_exception recursively.
-        has_attribute_error: Final = _has_attribute_error_in_chain(e)
+        has_attribute_error: Final = _has_attribute_error_in_chain(failure)
 
         if has_attribute_error:
             raise ProxyException(
@@ -4519,12 +4522,12 @@ class ProxyBaseLLMRequestProcessing:
         # VertexAIError, etc.) all have a status_code attribute reflecting
         # the upstream API response. Use it to return the correct HTTP code
         # instead of defaulting to 500.
-        _exc_status_code: Final = getattr(e, "status_code", None)
+        _exc_status_code: Final = getattr(failure, "status_code", None)
         if _exc_status_code is not None and isinstance(_exc_status_code, int) and 400 <= _exc_status_code <= 599:
             _code = _exc_status_code
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            if should_report_bug(e):
+            if should_report_bug(failure):
                 proxy_server_request: Final = self.data.get("proxy_server_request")
                 request_url: Final = (
                     proxy_server_request.get("url") if isinstance(proxy_server_request, Mapping) else None
@@ -4533,24 +4536,33 @@ class ProxyBaseLLMRequestProcessing:
                 verbose_proxy_logger.error(
                     bug_report_notice(
                         build_proxy_bug_report(
-                            e,
+                            failure,
                             call_type=allowlisted(request_path, KNOWN_PROXY_ROUTES),
                             custom_llm_provider=self.data.get("custom_llm_provider"),
                             stream=self.data.get("stream"),
                         )
                     )
                 )
-        client_message: Final = getattr(e, "message", error_msg)
+        client_message: Final = getattr(failure, "message", error_msg)
+        redacted_client_message: Final = redact_internal_details_from_client_message(
+            strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
+        )
+        provider_specific_fields: Final = getattr(
+            failure, "provider_specific_fields", None
+        ) or relayed_provider_specific_fields(failure)
+        if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES and is_provider_overload(failure):
+            raise OverloadedProxyException(
+                message=redacted_client_message,
+                headers=cast(dict[str, str], safe_headers),  # cast-ok: ProxyException coerces header values to strings
+                provider_specific_fields=provider_specific_fields,
+            )
         raise ProxyException(
-            message=redact_internal_details_from_client_message(
-                strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
-            ),
-            type=openai_error_type(e, _code),
-            param=openai_error_param(e),
-            openai_code=getattr(e, "code", None),
+            message=redacted_client_message,
+            type=openai_error_type(failure, _code),
+            param=openai_error_param(failure),
+            openai_code=getattr(failure, "code", None),
             code=_code,
-            provider_specific_fields=getattr(e, "provider_specific_fields", None)
-            or relayed_provider_specific_fields(e),
+            provider_specific_fields=provider_specific_fields,
             headers=safe_headers,
         )
 

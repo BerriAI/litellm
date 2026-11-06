@@ -22,6 +22,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -1422,6 +1423,33 @@ def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(m
 
     assert "output_format" in optional_params
     assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
+
+def test_dict_fields_take_the_unforced_json_tool_on_a_default_thinking_model(local_model_cost_map):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-5",
+        drop_params=False,
+    )
+
+    assert "output_format" not in optional_params
+    assert "tool_choice" not in optional_params
+    assert [
+        (tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]
+    ] == [("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})]
 
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
@@ -6956,6 +6984,63 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
     assert "tool_choice" not in result
 
 
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "forced"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}, False),
+        ("claude-opus-5", {}, False),
+        ("claude-sonnet-5", {}, False),
+        ("claude-haiku-5-5", {}, False),
+        ("claude-fable-5", {"reasoning_effort": "none"}, False),
+        ("claude-opus-4-8", {}, True),
+        ("claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("claude-haiku-5-5", {"reasoning_effort": "none"}, True),
+    ],
+    ids=[
+        "opus-4-8-adaptive",
+        "opus-5-default-thinking",
+        "sonnet-5-default-thinking",
+        "haiku-5-5-default-thinking",
+        "fable-5-always-on-reasoning-effort-none",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+        "haiku-5-5-reasoning-effort-none",
+    ],
+)
+def test_response_format_tool_is_forced_only_when_the_model_will_not_think(
+    set_native_structured_output, model, thinking_params, forced
+):
+    set_native_structured_output(model, None)
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "capital",
+                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert [tool["name"] for tool in request["tools"]] == ["json_tool_call"]
+    assert (request.get("tool_choice") == {"name": "json_tool_call", "type": "tool"}) is forced
+    assert request["tools"][0].get("description") == (None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION)
+
+
 def _eager_chat_function(**extra: object) -> dict[str, object]:
     return {
         "name": "write_file",
@@ -10962,3 +11047,24 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
     assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
     assert json.dumps(body).count('"cache_control"') == 4
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
+def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
+    local_model_cost_map, model: str
+):
+    """What get_supported_openai_params says about temperature/top_p must match what
+    map_openai_params does with them under drop_params, so a caller that pre-flights
+    from the list is never told a param is fine that the request path then drops."""
+    config = AnthropicConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    sent = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
+    assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)

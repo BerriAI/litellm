@@ -1,6 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
+import localFont from "next/font/local";
+import { useTranslation } from "react-i18next";
 
 import Navbar from "@/components/navbar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,92 +11,69 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { HubHeader, type HubStatus } from "./HubHeader";
 import { HubNotEnabled } from "./HubEmpty";
 import { ModelsPane } from "./ModelsPane";
-import { AgentsPane, McpPane, SkillsPane } from "./ResourcePanes";
+import { SkillsPane } from "./ResourcePanes";
 import { type HubData, useHubData } from "./useHubData";
 import { type HubTab, useHubUrlState } from "./useHubUrlState";
 import { useRequirePublicHubAuth } from "./useRequirePublicHubAuth";
+import styles from "./catalog.module.css";
 
-function TabLabel({ children, count }: { children: ReactNode; count: number | undefined }) {
-  return (
-    <>
-      {children}
-      <span className="text-xs text-muted-foreground tabular-nums">{count ?? "-"}</span>
-    </>
-  );
-}
+const displayFont = localFont({
+  src: "./fonts/barlow-condensed-latin-600.ttf",
+  weight: "600",
+  variable: "--font-catalog-display",
+});
 
 const hubStatus = (hub: HubData): HubStatus => {
-  const failures = [hub.models.error, hub.agents.error, hub.mcp.error, hub.skills.error].filter(Boolean);
-  if (failures.length === 4) return "unavailable";
-  if (hub.models.isLoading) return "loading";
-  return failures.length > 0 ? "degraded" : "operational";
+  if (hub.models.error && hub.skills.isError) return "unavailable";
+  if (hub.models.isLoading || hub.skills.isPending) return "loading";
+  return hub.models.error || hub.skills.isError ? "degraded" : "operational";
 };
 
-function HubTabs({ hub }: { hub: HubData }) {
-  const { tab, setTab, open, setOpen } = useHubUrlState();
-  const paneProps = { selected: open, onSelect: setOpen };
-  return (
-    <Tabs value={tab} onValueChange={(next) => setTab(next as HubTab)} className="gap-4">
-      <TabsList className="w-full sm:w-fit">
-        <TabsTrigger value="models" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.modelTotal}>Models</TabLabel>
-        </TabsTrigger>
-        <TabsTrigger value="agents" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.agents.data?.length}>Agents</TabLabel>
-        </TabsTrigger>
-        <TabsTrigger value="mcp" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.mcp.data?.length}>
-            <span className="sm:hidden">MCP</span>
-            <span className="hidden sm:inline">MCP servers</span>
-          </TabLabel>
-        </TabsTrigger>
-        <TabsTrigger value="skills" className="px-1.5 sm:px-2">
-          <TabLabel count={hub.skills.data?.length}>Skills</TabLabel>
-        </TabsTrigger>
-      </TabsList>
-      <TabsContent value="models">
-        <ModelsPane hub={hub} {...paneProps} />
-      </TabsContent>
-      <TabsContent value="agents">
-        <AgentsPane
-          rows={hub.agents.data}
-          loading={hub.agents.isPending}
-          error={hub.agents.isError}
-          onRetry={() => void hub.agents.refetch()}
-          {...paneProps}
-        />
-      </TabsContent>
-      <TabsContent value="mcp">
-        <McpPane
-          rows={hub.mcp.data}
-          loading={hub.mcp.isPending}
-          error={hub.mcp.isError}
-          onRetry={() => void hub.mcp.refetch()}
-          {...paneProps}
-        />
-      </TabsContent>
-      <TabsContent value="skills">
-        <SkillsPane
-          rows={hub.skills.data}
-          loading={hub.skills.isPending}
-          error={hub.skills.isError}
-          onRetry={() => void hub.skills.refetch()}
-          {...paneProps}
-        />
-      </TabsContent>
-    </Tabs>
-  );
-}
-
-function PublicAiHubContent() {
+function PublicAiHubContent({ accessToken }: { accessToken: string | null }) {
+  const { t } = useTranslation();
   useRequirePublicHubAuth();
   const hub = useHubData();
   const status = hubStatus(hub);
+  const { tab, setTab, open, setOpen } = useHubUrlState();
+  const paneProps = { selected: open, onSelect: setOpen };
   return (
-    <div className="flex w-full flex-col gap-6 p-4 sm:p-6">
-      <HubHeader info={hub.info.data} status={status} />
-      {status === "unavailable" ? <HubNotEnabled /> : <HubTabs hub={hub} />}
-    </div>
+    <Tabs
+      value={tab}
+      onValueChange={(next) => setTab(next as HubTab)}
+      className={`${styles.catalog} ${displayFont.variable}`}
+    >
+      <Navbar
+        accessToken={accessToken}
+        isPublicPage
+        publicNavigation={
+          <TabsList variant="line" className={styles.navigation} aria-label={t("publicModelHub.header.title")}>
+            <TabsTrigger value="models">{t("publicModelHub.catalog.modelHub")}</TabsTrigger>
+            <TabsTrigger value="skills">{t("publicModelHub.catalog.skillsHub")}</TabsTrigger>
+          </TabsList>
+        }
+      />
+      <main className={styles.main}>
+        <HubHeader info={hub.info.data} status={status} tab={tab} />
+        {status === "unavailable" ? (
+          <HubNotEnabled />
+        ) : (
+          <>
+            <TabsContent value="models">
+              <ModelsPane hub={hub} {...paneProps} />
+            </TabsContent>
+            <TabsContent value="skills">
+              <SkillsPane
+                rows={hub.skills.data}
+                loading={hub.skills.isPending}
+                error={hub.skills.isError}
+                onRetry={() => void hub.skills.refetch()}
+                {...paneProps}
+              />
+            </TabsContent>
+          </>
+        )}
+      </main>
+    </Tabs>
   );
 }
 
@@ -103,10 +81,7 @@ export default function PublicAiHub({ accessToken }: { accessToken: string | nul
   return (
     <ThemeProvider accessToken={accessToken}>
       <TooltipProvider>
-        <div className="min-h-screen bg-background">
-          <Navbar accessToken={accessToken} isPublicPage />
-          <PublicAiHubContent />
-        </div>
+        <PublicAiHubContent accessToken={accessToken} />
       </TooltipProvider>
     </ThemeProvider>
   );

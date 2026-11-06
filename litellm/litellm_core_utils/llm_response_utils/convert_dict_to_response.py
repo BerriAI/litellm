@@ -1081,4 +1081,8 @@ def convert_to_model_response_object(
             end_time=end_time,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
-        raise Exception(f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}")
+        # The conversion's own traceback, without the errors being handled when it ran: a router
+        # retry runs inside the handler of the attempt before it, and that attempt's error text
+        # (a rate limit) would otherwise decide how this one is classified.
+        own_traceback: Final = "".join(traceback.format_exception(type(e), e, e.__traceback__, chain=False))
+        raise Exception(f"Invalid response object {own_traceback}\n\nreceived_args={received_args}")
