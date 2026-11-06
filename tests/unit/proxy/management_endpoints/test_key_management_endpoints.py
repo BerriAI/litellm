@@ -24441,3 +24441,38 @@ async def test_regenerate_key_cannot_drop_a_reference_for_a_non_admin(monkeypatc
     assert str(exc.value.code) == "403"
     assert "callback_settings" in str(exc.value.message)
     prisma.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("arize_space_a")
+@pytest.mark.parametrize(
+    "metadata",
+    [{"note": "edited"}, {"logging": [{"callback_name": "arize_space_a", "callback_type": "success"}]}],
+)
+async def test_bulk_key_updates_run_the_callback_reference_gate_against_the_stored_row(
+    metadata: Mapping[str, object],
+) -> None:
+    """``/key/bulk_update`` and ``/team/key/bulk_update`` write metadata through this helper, so a team admin
+    must not be able to drop a reference from, or attach one to, a key this way either."""
+    existing_key_row: Final = MagicMock()
+    existing_key_row.token = "hashed_token"
+    existing_key_row.user_id = "alice"
+    existing_key_row.team_id = "team-a"
+    existing_key_row.metadata = {"logging": [_REFERENCE_ENTRY]} if "note" in metadata else {"note": "plain"}
+    prisma: Final = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(key="hashed_token", metadata=dict(metadata)),
+            user_api_key_dict=_non_admin(),
+            litellm_changed_by=None,
+            prisma_client=prisma,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=None,
+            existing_key_row=existing_key_row,
+        )
+
+    assert exc.value.status_code == 403
+    assert "callback_settings" in str(exc.value.detail)
+    prisma.update_data.assert_not_awaited()
