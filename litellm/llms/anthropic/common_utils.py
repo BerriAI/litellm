@@ -350,7 +350,7 @@ def _beta_header_values(side: str | Sequence[str] | None) -> tuple[str, ...]:
 
 def context_management_betas(context_management: JsonValue) -> frozenset[str]:
     edits: Final = context_management.get("edits") if isinstance(context_management, dict) else None
-    if not isinstance(edits, list):
+    if not isinstance(edits, (list, tuple)):
         return frozenset()
     return frozenset(
         ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
