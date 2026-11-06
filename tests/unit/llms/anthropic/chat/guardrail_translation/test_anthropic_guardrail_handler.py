@@ -8,7 +8,8 @@ with guardrail transformations, specifically testing edge cases with empty choic
 import json
 import logging
 import re
-from typing import Any, Literal, Optional, Final
+from collections.abc import Callable, Sequence
+from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +22,8 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import truncate_tool_name
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.types.llms.anthropic import AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
@@ -274,12 +277,42 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     @staticmethod
     def _ended_sse_chunks() -> list:
         events = [
-            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
-            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello "}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}}),
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            (
+                "content_block_start",
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            ),
+            (
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello "}},
+            ),
+            (
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}},
+            ),
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 2},
+                },
+            ),
             ("message_stop", {"type": "message_stop"}),
         ]
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
@@ -376,13 +409,58 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:
         events = [
-            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
-            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'}}),
-            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}}),
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 0},
+                    },
+                },
+            ),
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}},
+                },
+            ),
+            (
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": 'mon"}'},
+                },
+            ),
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                    "usage": {"output_tokens": 2},
+                },
+            ),
             ("message_stop", {"type": "message_stop"}),
         ]
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
@@ -403,7 +481,8 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
             json.loads(line[len("data:") :].strip())["delta"]["partial_json"]
             for chunk in chunks
             for line in chunk.decode().split("\n")
-            if line.startswith("data:") and json.loads(line[len("data:") :].strip()).get("type") == "content_block_delta"
+            if line.startswith("data:")
+            and json.loads(line[len("data:") :].strip()).get("type") == "content_block_delta"
         ]
 
     @pytest.mark.asyncio
@@ -496,7 +575,10 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
                 logging_obj: Optional[LiteLLMLoggingObj] = None,
             ) -> GenericGuardrailAPIInputs:
                 for tool_call in inputs.get("tool_calls", []):
-                    if isinstance(tool_call, ChatCompletionMessageToolCall) and "persimmon" in tool_call.function.arguments:
+                    if (
+                        isinstance(tool_call, ChatCompletionMessageToolCall)
+                        and "persimmon" in tool_call.function.arguments
+                    ):
                         tool_call.function.arguments = '{"fruit": "[MASKED]"}'
                 return inputs
 
@@ -2602,9 +2684,7 @@ class TestAnthropicMessagesScanOnlyToolResults:
                 {"role": "user", "content": "weather in Paris?"},
                 {
                     "role": "assistant",
-                    "content": [
-                        {"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}
-                    ],
+                    "content": [{"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "Paris"}}],
                 },
                 {
                     "role": "user",
@@ -2949,9 +3029,7 @@ class TestStructuredWriteBackKeepsToolResults:
         ],
         ids=["tool_reference", "empty"],
     )
-    async def test_tool_result_stays_right_after_its_tool_use(
-        self, tool_result_content, expected_written_back_content
-    ):
+    async def test_tool_result_stays_right_after_its_tool_use(self, tool_result_content, expected_written_back_content):
         handler = AnthropicMessagesHandler()
         data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
 
@@ -3458,3 +3536,172 @@ def test_reading_a_dropped_budget_for_a_guardrail_logs_no_drop_warning(caplog: p
 
     assert messages == [{"role": "user", "content": "hi"}]
     assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+
+def _tool_call_returning_guardrail(returned: Callable[[Sequence[object]], object]) -> CustomGuardrail:
+    class ReturnToolCalls(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict[str, object],
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            return cast(
+                GenericGuardrailAPIInputs,
+                {
+                    **inputs,
+                    "texts": [f"[SCANNED] {text}" for text in inputs["texts"]],
+                    "tool_calls": returned(inputs["tool_calls"]),
+                },
+            )
+
+    return ReturnToolCalls(guardrail_name="tool-call-rewriter")
+
+
+def _with_arguments(tool_call: object, arguments: str) -> dict[str, object]:
+    fields: Final = cast(dict[str, object], tool_call)
+    function: Final = cast(dict[str, object], fields["function"])
+    return {**fields, "function": {**function, "arguments": arguments}}
+
+
+def _redacting(tool_calls: Sequence[object]) -> list[dict[str, object]]:
+    return [_with_arguments(tool_call, '{"cmd": "echo [REDACTED]"}') for tool_call in tool_calls]
+
+
+def _dict_tool_use_response() -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [
+            {"type": "text", "text": "Running it"},
+            {"type": "tool_use", "id": "toolu_1", "name": "run_shell", "input": {"cmd": "echo SECRET-123"}},
+        ],
+        "stop_reason": "tool_use",
+    }
+
+
+def _object_tool_use_response() -> dict[str, object]:
+    return {
+        **_dict_tool_use_response(),
+        "content": [
+            AnthropicResponseContentBlockText(type="text", text="Running it"),
+            AnthropicResponseContentBlockToolUse(
+                type="tool_use", id="toolu_1", name="run_shell", input={"cmd": "echo SECRET-123"}
+            ),
+        ],
+    }
+
+
+def _tool_use_block(response: dict[str, object], index: int = 1) -> dict[str, object]:
+    block: Final = cast(list[object], response["content"])[index]
+    return cast(
+        dict[str, object], block.model_dump() if isinstance(block, AnthropicResponseContentBlockToolUse) else block
+    )
+
+
+class TestOutputToolCallRewrites:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response", [_dict_tool_use_response(), _object_tool_use_response()], ids=["dict_blocks", "object_blocks"]
+    )
+    async def test_rewritten_arguments_land_in_the_tool_use_input(self, response: dict[str, object]) -> None:
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(_redacting),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        block: Final = _tool_use_block(response)
+        assert (block["id"], block["name"], block["input"]) == ("toolu_1", "run_shell", {"cmd": "echo [REDACTED]"})
+        assert "SECRET-123" not in json.dumps(response, default=lambda block: block.model_dump())
+
+    @pytest.mark.asyncio
+    async def test_a_rewritten_name_lands_on_the_tool_use_block(self) -> None:
+        response: Final = _dict_tool_use_response()
+
+        def rename(tool_calls: Sequence[object]) -> list[dict[str, object]]:
+            fields: Final = cast(dict[str, object], tool_calls[0])
+            function: Final = cast(dict[str, object], fields["function"])
+            return [{**fields, "function": {**function, "name": "run_safely"}}]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(rename),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["name"] == "run_safely"
+        assert _tool_use_block(response)["input"] == {"cmd": "echo SECRET-123"}
+
+    @pytest.mark.asyncio
+    async def test_each_returned_call_lands_on_the_tool_use_block_in_the_same_position(self) -> None:
+        response: Final = _dict_tool_use_response()
+        content: Final = cast(list[object], response["content"])
+        content.append({"type": "text", "text": "and then"})
+        content.append({"type": "tool_use", "id": "toolu_2", "name": "lookup", "input": {"query": "SECRET-123"}})
+
+        def redact_second_only(tool_calls: Sequence[object]) -> list[object]:
+            return [tool_calls[0], _with_arguments(tool_calls[1], '{"query": "[REDACTED]"}')]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(redact_second_only),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response, 1)["input"] == {"cmd": "echo SECRET-123"}
+        assert _tool_use_block(response, 3)["input"] == {"query": "[REDACTED]"}
+        assert [block["text"] for block in content if cast(dict[str, object], block)["type"] == "text"] == [
+            "[SCANNED] Running it",
+            "[SCANNED] and then",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_rewritten_arguments_that_are_not_a_json_object_fail_the_response(self) -> None:
+        response: Final = _dict_tool_use_response()
+
+        def break_arguments(tool_calls: Sequence[object]) -> list[dict[str, object]]:
+            return [_with_arguments(tool_calls[0], "echo [REDACTED]")]
+
+        with pytest.raises(UnappliableRequestRewrite, match="tool-call-rewriter"):
+            await AnthropicMessagesHandler().process_output_response(
+                response=cast(Any, response),
+                guardrail_to_apply=_tool_call_returning_guardrail(break_arguments),
+                litellm_logging_obj=MagicMock(),
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned",
+        [lambda tool_calls: [], lambda tool_calls: list(_redacting(tool_calls)) * 2, lambda tool_calls: None],
+        ids=["empty", "doubled", "none"],
+    )
+    async def test_a_returned_list_that_cannot_be_placed_leaves_the_tool_use_input_as_scanned(
+        self, returned: Callable[[Sequence[object]], object]
+    ) -> None:
+        response: Final = _dict_tool_use_response()
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(returned),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] == {"cmd": "echo SECRET-123"}
+        assert _tool_use_block(response, 0) == {"type": "text", "text": "[SCANNED] Running it"}
+
+    @pytest.mark.asyncio
+    async def test_echoed_tool_calls_leave_the_tool_use_block_untouched(self) -> None:
+        response: Final = _dict_tool_use_response()
+        original_input: Final = _tool_use_block(response)["input"]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(list),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] is original_input
