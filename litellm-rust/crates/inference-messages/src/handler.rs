@@ -30,7 +30,7 @@ use serde_json::{Map, Value};
 
 use super::{
     Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
+    common_utils::{MessagesProvider, merge_messages_header_sources, sendable_headers},
     constants::MESSAGES_TIMEOUT_SECS,
     route::Messages,
     types::invalid_request,
@@ -140,10 +140,10 @@ async fn provider_call(
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
-    let forwarded = string_headers(Some(merge_messages_header_sources([
+    let (forwarded, refused_header) = sendable_headers(merge_messages_header_sources([
         extra_headers.unwrap_or_default(),
         scoped,
-    ])))?;
+    ]));
     let validated = config.validate_environment(
         forwarded,
         api_key.as_deref(),
@@ -197,6 +197,9 @@ async fn provider_call(
             request_context,
         )
         .await?;
+    if let Some(error) = refused_header {
+        return Err(error);
+    }
     let stream = match wire.body.get("stream") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(stream)) => *stream,
