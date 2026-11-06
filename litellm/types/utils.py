@@ -212,6 +212,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
+    supports_per_turn_control: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
@@ -4093,7 +4094,9 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
-DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {"supports_regex_lookaround", "supports_per_turn_control"}
+)
 
 DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
 

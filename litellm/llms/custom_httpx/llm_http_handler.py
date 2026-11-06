@@ -2270,7 +2270,11 @@ class BaseLLMHTTPHandler:
         )
 
         if anthropic_messages_provider_config.should_filter_anthropic_beta_headers():
-            headers = update_headers_with_filtered_beta(headers=headers, provider=custom_llm_provider)
+            headers = update_headers_with_filtered_beta(
+                headers=headers,
+                provider=custom_llm_provider,
+                keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model, litellm_params),
+            )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
