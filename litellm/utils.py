@@ -4170,7 +4170,7 @@ def _registration_base(
 def native_structured_output_support(model_info: Mapping[str, object]) -> bool | None:
     by_default: Final = model_info.get("supports_bedrock_native_structured_output_by_default")
     if isinstance(by_default, bool):
-        return by_default
+        return by_default and model_info.get("supports_bedrock_native_structured_output") is not False
     declared: Final = model_info.get("supports_native_structured_output")
     return declared if isinstance(declared, bool) else None
 
