@@ -365,7 +365,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         )
         content: str = ""
         for chunk in streamed_response:
-            content += chunk["choices"][0]["delta"]["content"]
+            delta_content = chunk.choices[0].delta.content
+            if delta_content is None:
+                raise TypeError('can only concatenate str (not "NoneType") to str')
+            content += delta_content
         completion_response: Final[list[dict[str, str]]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(
