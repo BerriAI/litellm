@@ -434,7 +434,7 @@ async def route_create_file(
     )
     storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
     if storage is not None:
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
             extract_file_data,
         )
         from litellm.proxy.openai_files_endpoints.storage_backend_service import (

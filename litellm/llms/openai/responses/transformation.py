@@ -21,10 +21,12 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    cache_control_as_prompt_cache_breakpoint,
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_for_wire,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
