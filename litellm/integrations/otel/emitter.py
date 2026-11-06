@@ -238,6 +238,7 @@ class SpanEmitter:
         end_time_ns: int | None = None,
         tracer: Tracer | None = None,
         links: Sequence[Link] | None = None,
+        attempt_key: str | None = None,
     ) -> Span | None:
         """Emit one complete span: dedup, start, map attributes, status, end.
 
@@ -254,7 +255,7 @@ class SpanEmitter:
             if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData, MCPListToolsSpanData))
             else None
         )
-        if self._seen(dedup_key, role):
+        if self._seen(attempt_key or dedup_key, role):
             return None
         span: Final = self.start_span(
             role,

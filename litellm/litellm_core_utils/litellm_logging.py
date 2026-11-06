@@ -691,6 +691,7 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
     _on_failure_payload_built: "Callable[[], None] | None" = None
+    _telemetry_failure_logged_attempt: object = None
 
     @property
     def _defer_async_logging(self) -> bool:
@@ -2688,6 +2689,67 @@ class Logging(LiteLLMLoggingBaseClass):
         attempt.model_call_details = dict(self.model_call_details)
         return attempt
 
+    def failure_callbacks_blocked_for_attempt(self) -> bool:
+        current_marker: Final = self._model_call_details_view.get("current_attempt_api_call_start_time")
+        logged_marker: Final = self._model_call_details_view.get("async_failure_logged_attempt")
+        return self._model_call_details_view.get("has_logged_async_failure", False) is True and not same_attempt_marker(
+            current_marker, logged_marker
+        )
+
+    async def _log_failed_attempt(
+        self,
+        exception: Exception,
+        traceback_exception: str,
+        start_time: datetime.datetime | None,
+        end_time: datetime.datetime | None,
+    ) -> None:
+        marker: Final = self._model_call_details_view.get("current_attempt_api_call_start_time")
+        if not self.failure_callbacks_blocked_for_attempt() or same_attempt_marker(
+            marker, self._telemetry_failure_logged_attempt
+        ):
+            return
+        self._telemetry_failure_logged_attempt = marker
+        callbacks: Final = tuple(
+            callback
+            for callback in self.get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+                global_callbacks=litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Existing registry has no public accessor
+            )
+            if isinstance(callback, CustomLogger) and callback.logs_every_failed_attempt
+        )
+        if not callbacks:
+            return
+        attempt: Final = self.attempt_scoped_copy()
+        attempt.model_call_details.pop("standard_logging_object", None)
+        params: Final = _LITELLM_PARAMS.validate_python(self._model_call_details_view.get("litellm_params") or {})
+        metadata: Final = _LITELLM_PARAMS.validate_python(params.get("metadata") or {})
+        internal: Final = _LITELLM_PARAMS.validate_python(metadata.get("_otel_internal") or {})
+        spans_logged: Final[object] = internal.get("spans_logged") or {}
+        attempt.model_call_details["litellm_params"] = {
+            **params,
+            "metadata": {
+                **metadata,
+                "_otel_internal": {**internal, "spans_logged": copy.copy(spans_logged)},
+            },
+        }
+        attempt.litellm_params = attempt.model_call_details["litellm_params"]
+        attempt_start, attempt_end = attempt._failure_handler_helper_fn(
+            exception, traceback_exception, start_time, end_time
+        )
+        for callback in callbacks:
+            try:
+                if not attempt.should_run_callback(callback, params, "async_failure_handler"):
+                    continue
+                await callback.async_log_failure_event(  # pyright: ignore[reportUnknownMemberType]  # CustomLogger's hook signature is untyped
+                    kwargs=attempt.model_call_details,
+                    response_obj=None,
+                    start_time=attempt_start,
+                    end_time=attempt_end,
+                )
+            except Exception:  # noqa: BLE001  # Third-party callbacks must not fail the request
+                verbose_logger.exception("LiteLLM.LoggingError: failed attempt callback %s", callback)
+                attempt._handle_callback_failure(callback=callback)
+
     def guardrail_scoped_copy(self) -> "Logging":
         request_params: Final = _LITELLM_PARAMS.validate_python(
             self.litellm_params or {}  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
@@ -2918,7 +2980,9 @@ class Logging(LiteLLMLoggingBaseClass):
         """Deprecated alias of mark_logging_complete, kept for callers of the old name"""
         self.mark_logging_complete(event_type=event_type)
 
-    def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
+    def should_run_callback(
+        self, callback: litellm.CALLBACK_TYPES, litellm_params: Mapping[str, object], event_hook: str
+    ) -> bool:
         if litellm.global_disable_no_log_param:
             return True
 
@@ -4537,7 +4601,13 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
-    def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
+    def _failure_handler_helper_fn(
+        self,
+        exception: Exception,
+        traceback_exception: str | None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> tuple[datetime.datetime, datetime.datetime]:
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -4569,10 +4639,11 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
 
-        if hasattr(exception, "headers") and isinstance(exception.headers, dict):
+        exception_headers: Final[object] = getattr(exception, "headers", None)
+        if isinstance(exception_headers, dict):
             self.model_call_details.setdefault("litellm_params", {})
             metadata: Final = self.model_call_details["litellm_params"].get("metadata", {}) or {}
-            metadata.update(exception.headers)
+            metadata.update(_LITELLM_PARAMS.validate_python(exception_headers))
 
         ## STANDARDIZED LOGGING PAYLOAD
 
@@ -4860,6 +4931,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.invalidate_baseline_cache_estimate("failed_request")
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
+            await self._log_failed_attempt(exception, traceback_exception, start_time, end_time)
             return
         start_time, end_time = self._failure_handler_helper_fn(
             exception=exception,

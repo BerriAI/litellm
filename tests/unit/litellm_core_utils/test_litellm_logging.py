@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import Final, Literal
+from typing import ClassVar, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -74,9 +74,90 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
 import inspect
 from typing import List, Optional
 from litellm.types.utils import LiteLLMCommonStrings
+
+
+class _FailureAttemptRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: list[StandardLoggingPayload] = []
+        self.successes = 0
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.successes += 1
+
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.payloads.append(cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+
+class _EveryFailureAttemptRecorder(_FailureAttemptRecorder):
+    logs_every_failed_attempt: ClassVar[bool] = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dynamic", [True, False])
+async def test_reused_logging_dispatches_only_opted_in_loggers_for_each_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    dynamic: bool,
+) -> None:
+    normal: Final = _FailureAttemptRecorder()
+    telemetry: Final = _EveryFailureAttemptRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [normal] if dynamic else [normal, telemetry])
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="attempts",
+        function_id="fn",
+        dynamic_async_failure_callbacks=[telemetry] if dynamic else None,
+        dynamic_async_success_callbacks=[normal, telemetry],
+    )
+    error: Final = litellm.ServiceUnavailableError("outage", model="gpt-4o", llm_provider="openai")
+    for index in range(3):
+        marker: Final = start + datetime.timedelta(seconds=index + 1)
+        logging_obj.model_call_details["litellm_params"] = {
+            "api_base": f"https://region-{index}.example/v1",
+            "custom_llm_provider": "openai",
+            "metadata": {},
+        }
+        logging_obj.model_call_details["api_call_start_time"] = marker
+        logging_obj.model_call_details["current_attempt_api_call_start_time"] = marker
+        prior_payload: Final = logging_obj.model_call_details.get("standard_logging_object")
+        await logging_obj.async_failure_handler(error, "trace", marker, marker + datetime.timedelta(seconds=1))
+        if index > 0:
+            assert logging_obj.model_call_details["standard_logging_object"] is prior_payload
+            assert logging_obj.model_call_details["async_failure_logged_attempt"] == start + datetime.timedelta(
+                seconds=1
+            )
+        saved_payload: Final = logging_obj.model_call_details["standard_logging_object"]
+        await logging_obj.async_failure_handler(error, "trace", marker, marker + datetime.timedelta(seconds=1))
+        assert logging_obj.model_call_details["standard_logging_object"] is saved_payload
+    await logging_obj.async_success_handler(
+        litellm.ModelResponse(model="gpt-4o"), start, start + datetime.timedelta(seconds=5)
+    )
+    assert [p["api_base"] for p in telemetry.payloads] == [f"https://region-{i}.example/v1" for i in range(3)]
+    assert [p["api_base"] for p in normal.payloads] == ["https://region-0.example/v1"]
+    assert all(p["status"] == "failure" for p in telemetry.payloads)
+    assert normal.successes == telemetry.successes == 1
 
 
 @pytest.fixture
