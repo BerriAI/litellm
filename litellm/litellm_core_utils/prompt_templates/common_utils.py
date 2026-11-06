@@ -277,18 +277,12 @@ _MOVED_PRIVATE_NAME_MODULES: Final = MappingProxyType(
         ),
         **dict.fromkeys(
             (
-                "_AcceptedBreakpointT",
                 "_BREAKPOINT_BLOCKS",
                 "_BREAKPOINT_BLOCK_LIST_KEYS",
                 "_BREAKPOINT_FIELDS",
-                "_CHAT_COMPLETION_PROMPT_CACHE_BREAKPOINT",
                 "_MarkedT",
                 "_PROMPT_CACHE_BREAKPOINT",
-                "_accepted_prompt_cache_breakpoint",
-                "_breakpoint_fields_or_none",
                 "_breakpoints_stripped_from",
-                "_cache_control_for_prompt_cache_breakpoint",
-                "_part_with_chat_completion_prompt_cache_breakpoint",
                 "_without_prompt_cache_breakpoint",
             ),
             "prompt_cache_breakpoint_utils",
@@ -315,18 +309,10 @@ _MOVED_PRIVATE_NAME_MODULES: Final = MappingProxyType(
         ),
         **dict.fromkeys(
             (
-                "_BASE64_PAYLOAD",
                 "_TPMMediaProjection",
-                "_TPM_EMBEDDING_FILE_MIME_PREFIXES",
-                "_is_base64_data_uri",
-                "_is_json_array",
                 "_tpm_blank_fields",
                 "_tpm_code_output_media",
                 "_tpm_document_media",
-                "_tpm_embedding_file",
-                "_tpm_embedding_file_block",
-                "_tpm_embedding_item",
-                "_tpm_embedding_leaf",
                 "_tpm_file_media",
                 "_tpm_image_part",
                 "_tpm_input_media",
@@ -1697,8 +1683,10 @@ def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
 
 
-def __getattr__(name: str) -> object:
-    module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    return getattr(importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}"), name)
+if not TYPE_CHECKING:
+
+    def __getattr__(name: str) -> object:
+        module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
+        if module_name is None:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        return getattr(importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}"), name)
