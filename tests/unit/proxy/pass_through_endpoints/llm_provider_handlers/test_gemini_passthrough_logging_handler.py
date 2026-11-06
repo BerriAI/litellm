@@ -83,6 +83,7 @@ class TestGeminiPassthroughLoggingHandler:
         mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {}
         mock_logging_obj.optional_params = {}
+        mock_logging_obj.litellm_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-123"
         return mock_logging_obj
 

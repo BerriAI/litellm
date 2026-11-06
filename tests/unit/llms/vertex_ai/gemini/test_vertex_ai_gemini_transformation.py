@@ -1980,7 +1980,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
 
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
@@ -2066,7 +2065,7 @@ def test_extract_file_data_with_path_object():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2105,7 +2104,7 @@ def test_extract_file_data_with_pathlib_path():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2129,7 +2128,7 @@ def test_extract_file_data_with_pathlib_path():
 
 def test_extract_file_data_with_tuple_format():
     """Test that tuple format (with explicit content_type) still works correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2152,7 +2151,7 @@ def test_extract_file_data_fallback_to_octet_stream():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2824,7 +2823,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
     """gemini-2.5 history (signed text, unsigned tool call) replayed to gemini-3 keeps the real
     text signature; the dummy signature synthesized for the unsigned tool call must not suppress it."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        _get_dummy_thought_signature,
+        get_dummy_thought_signature,
     )
     from litellm.llms.vertex_ai.gemini.transformation import (
         gemini_convert_messages_with_history,
@@ -2848,7 +2847,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
     assert parts[0]["text"] == "I will list the directory."
     assert parts[0]["thoughtSignature"] == "real_25_signature"
     assert "function_call" in parts[1]
-    assert parts[1]["thoughtSignature"] == _get_dummy_thought_signature()
+    assert parts[1]["thoughtSignature"] == get_dummy_thought_signature()
 
 
 def test_gemini_function_call_signature_round_trip_no_duplicate():
@@ -2990,7 +2989,7 @@ def test_thinking_block_signature_is_not_forwarded_to_gemini() -> None:
 
 
 def test_anthropic_messages_history_replays_to_gemini_without_claude_signature() -> None:
-    from litellm.litellm_core_utils.prompt_templates.factory import _get_dummy_thought_signature
+    from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
     from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
     thinking: Final = "I should look the weather up before answering."
@@ -3013,6 +3012,6 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     parts: Final = _parts_of(gemini_convert_messages_with_history(messages=chat_messages, model="gemini-3.8-flash"))
 
     signatures: Final = [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
-    assert signatures == [_get_dummy_thought_signature()]
+    assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
-    assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == _get_dummy_thought_signature()
+    assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()

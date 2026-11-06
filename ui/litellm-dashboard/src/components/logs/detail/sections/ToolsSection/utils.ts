@@ -2,6 +2,7 @@
  * Utility functions for parsing and processing tool data from log entries
  */
 
+import i18n from "@/i18n/i18n";
 import { LogEntry } from "../../../types";
 import { ParsedTool, ToolDefinition, ToolCall } from "./types";
 
@@ -148,7 +149,7 @@ export function parseToolsFromLog(log: LogEntry): ParsedTool[] {
   // Parse each tool definition
   // Handle both OpenAI format (tool.function.name) and Anthropic format (tool.name + tool.input_schema)
   return requestTools.map((tool: any, index: number) => {
-    const name = tool.function?.name || tool.name || `Tool ${index + 1}`;
+    const name = tool.function?.name || tool.name || i18n.t("logs.detail.tools.fallbackName", { index: index + 1 });
     const description = tool.function?.description || tool.description || "";
     const parameters = tool.function?.parameters || tool.input_schema || {};
 
