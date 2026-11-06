@@ -208,12 +208,12 @@ async def test_latest_alias_collision_charges_and_settles_one_counter_per_metric
     entity: Final = {
         "key": auth.api_key, "team": auth.team_id, "project": auth.project_id, "organization": auth.org_id
     }[scope]
-    rpm_key: Final = handler.create_rate_limit_keys(f"model_per_{scope}", f"{entity}:{target}", "requests")
-    tpm_key: Final = handler.create_rate_limit_keys(f"model_per_{scope}", f"{entity}:{target}", "tokens")
+    rpm_key: Final = _counter(f"model_per_{scope}", f"{entity}:{target}", "requests")
+    tpm_key: Final = _counter(f"model_per_{scope}", f"{entity}:{target}", "tokens")
     stash: Final = get_request_stash()
     assert stash is not None
-    assert await cache.async_get_cache(rpm_key) == 1
-    assert await cache.async_get_cache(tpm_key) == (stash.reserved_tokens if reservation else 1)
+    assert await handler.rate_limits.get(rpm_key) == 1
+    assert await handler.rate_limits.get(tpm_key) == (stash.reserved_tokens if reservation else 1)
     usage: Final = Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
     kwargs: Final = {
         "standard_logging_object": {
@@ -231,9 +231,9 @@ async def test_latest_alias_collision_charges_and_settles_one_counter_per_metric
     else:
         await handler.async_log_failure_event(kwargs, None, None, None)
     actual_tokens: Final = 5 if event == "success" or (event == "partial" and reservation) else 0
-    assert await cache.async_get_cache(tpm_key) == actual_tokens + (0 if reservation else 1)
-    alias_key: Final = handler.create_rate_limit_keys(f"model_per_{scope}", f"{entity}:{alias}", "tokens")
-    assert await cache.async_get_cache(alias_key) is None
+    assert await handler.rate_limits.get(tpm_key) == actual_tokens + (0 if reservation else 1)
+    alias_key: Final = _counter(f"model_per_{scope}", f"{entity}:{alias}", "tokens")
+    assert await handler.rate_limits.get(alias_key) is None
     assert await handler.async_pre_call_hook(auth, cache, {"model": alias}, "acompletion") is None
     with pytest.raises(ProxyRateLimitError) as exc:
         await handler.async_pre_call_hook(auth, cache, {"model": alias}, "acompletion")
@@ -259,8 +259,8 @@ async def test_latest_alias_collision_project_io_reservations_settle_once(
         ("model_per_project_itpm", stash.itpm_reserved_tokens), ("model_per_project_otpm", stash.otpm_reserved_tokens),
     ):
         assert reserved > 0
-        counter: Final = handler.create_rate_limit_keys(scope, f"{auth.project_id}:{target}", "tokens")
-        assert await cache.async_get_cache(counter) == reserved
+        counter: Final = _counter(scope, f"{auth.project_id}:{target}", "tokens")
+        assert await handler.rate_limits.get(counter) == reserved
     usage: Final = Usage(
         prompt_tokens=3, completion_tokens=2, total_tokens=5, prompt_tokens_details={"cached_tokens": 1}
     )
@@ -277,8 +277,8 @@ async def test_latest_alias_collision_project_io_reservations_settle_once(
     else:
         await handler.async_log_failure_event(kwargs, None, None, None)
     for scope in ("model_per_project_itpm", "model_per_project_otpm"):
-        counter: Final = handler.create_rate_limit_keys(scope, f"{auth.project_id}:{target}", "tokens")
-        assert int(await cache.async_get_cache(counter) or 0) == (0 if event == "failure" else 2)
+        counter: Final = _counter(scope, f"{auth.project_id}:{target}", "tokens")
+        assert int(await handler.rate_limits.get(counter) or 0) == (0 if event == "failure" else 2)
 
 
 @pytest.mark.asyncio
@@ -311,8 +311,8 @@ async def test_latest_alias_collision_settles_the_target_team_limit_beside_the_k
         await handler.async_log_failure_event(kwargs, None, None, None)
     actual_tokens: Final = 5 if reservation or event == "success" else 0
     for scope, entity in (("model_per_key", auth.api_key), ("model_per_team", auth.team_id)):
-        counter: Final = handler.create_rate_limit_keys(scope, f"{entity}:{target}", "tokens")
-        assert await cache.async_get_cache(counter) == actual_tokens + (0 if reservation else 1)
+        counter: Final = _counter(scope, f"{entity}:{target}", "tokens")
+        assert await handler.rate_limits.get(counter) == actual_tokens + (0 if reservation else 1)
 
 
 @pytest.mark.asyncio
@@ -329,8 +329,8 @@ async def test_latest_alias_collision_project_frames_charge_once_and_enforce_the
         await handler.enforce_project_io_token_quota_for_frame(auth, alias, 3, 2)
     assert exc.value.status_code == 429
     for scope, expected in (("model_per_project_itpm", 3), ("model_per_project_otpm", 2)):
-        counter: Final = handler.create_rate_limit_keys(scope, f"{auth.project_id}:{target}", "tokens")
-        assert await cache.async_get_cache(counter) == expected
+        counter: Final = _counter(scope, f"{auth.project_id}:{target}", "tokens")
+        assert await handler.rate_limits.get(counter) == expected
 
 
 @pytest.mark.asyncio
@@ -409,11 +409,11 @@ async def test_latest_alias_rpm_draws_from_both_model_counters(scope: str) -> No
         "key": auth.api_key, "team": auth.team_id, "project": auth.project_id, "organization": auth.org_id
     }[scope]
     for model in (alias, target):
-        counter: Final = handler.create_rate_limit_keys(descriptor, f"{entity}:{model}", "requests")
-        assert await cache.async_get_cache(counter) == 1
+        counter: Final = _counter(descriptor, f"{entity}:{model}", "requests")
+        assert await handler.rate_limits.get(counter) == 1
     if scope == "organization":
-        global_counter: Final = handler.create_rate_limit_keys("organization", str(auth.org_id), "requests")
-        assert await cache.async_get_cache(global_counter) == 1
+        global_counter: Final = _counter("organization", str(auth.org_id), "requests")
+        assert await handler.rate_limits.get(global_counter) == 1
     with pytest.raises(ProxyRateLimitError) as exc:
         await handler.async_pre_call_hook(auth, cache, {"model": alias}, "acompletion")
     assert exc.value.status_code == 429
@@ -456,10 +456,10 @@ async def test_latest_alias_tpm_settles_both_counters(
         "key": auth.api_key, "team": auth.team_id, "project": auth.project_id, "organization": auth.org_id
     }[scope]
     keys: Final = tuple(
-        handler.create_rate_limit_keys(descriptor, f"{entity}:{model}", "tokens") for model in (alias, target)
+        _counter(descriptor, f"{entity}:{model}", "tokens") for model in (alias, target)
     )
     for key in keys:
-        assert int(await cache.async_get_cache(key) or 0) == (stash.reserved_tokens if reservation else 1)
+        assert int(await handler.rate_limits.get(key) or 0) == (stash.reserved_tokens if reservation else 1)
     kwargs: Final = {
         "standard_logging_object": {
             "model_group": alias,
@@ -487,8 +487,8 @@ async def test_latest_alias_tpm_settles_both_counters(
     else:
         await handler.async_log_failure_event(kwargs, None, None, None)
     actual_tokens: Final = 5 if event == "success" or (event == "partial" and reservation) else 0
-    for key in (*keys, handler.create_rate_limit_keys("api_key", auth.api_key, "tokens")):
-        assert int(await cache.async_get_cache(key) or 0) == actual_tokens + (0 if reservation else 1)
+    for key in (*keys, _counter("api_key", auth.api_key, "tokens")):
+        assert int(await handler.rate_limits.get(key) or 0) == actual_tokens + (0 if reservation else 1)
 
 
 @pytest.mark.asyncio
@@ -538,8 +538,8 @@ async def test_failed_latest_alias_without_open_reservation_matches_direct_model
     }[scope]
     models: Final = (alias, target) if request_alias else (target,)
     keys: Final = (
-        handler.create_rate_limit_keys("api_key", auth.api_key, "tokens"),
-        *(handler.create_rate_limit_keys(f"model_per_{scope}", f"{entity}:{name}", "tokens") for name in models),
+        _counter("api_key", auth.api_key, "tokens"),
+        *(_counter(f"model_per_{scope}", f"{entity}:{name}", "tokens") for name in models),
     )
     await handler.async_log_failure_event(
         {
@@ -560,7 +560,7 @@ async def test_failed_latest_alias_without_open_reservation_matches_direct_model
         None,
     )
     for key in keys:
-        assert int(await cache.async_get_cache(key) or 0) == (0 if reservation_released else 1)
+        assert int(await handler.rate_limits.get(key) or 0) == (0 if reservation_released else 1)
 
 
 @pytest.mark.asyncio
@@ -623,8 +623,8 @@ async def test_latest_alias_project_io_reservations_settle_both_counters(event: 
     ):
         assert reserved > 0
         for model in (alias, target):
-            counter: Final = handler.create_rate_limit_keys(scope, f"{auth.project_id}:{model}", "tokens")
-            assert await cache.async_get_cache(counter) == reserved
+            counter: Final = _counter(scope, f"{auth.project_id}:{model}", "tokens")
+            assert await handler.rate_limits.get(counter) == reserved
     usage: Final = Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5, prompt_tokens_details={"cached_tokens": 1})
     kwargs: Final = {
         "standard_logging_object": {
@@ -640,8 +640,8 @@ async def test_latest_alias_project_io_reservations_settle_both_counters(event: 
         await handler.async_log_failure_event(kwargs, None, None, None)
     for scope in ("model_per_project_itpm", "model_per_project_otpm"):
         for model in (alias, target):
-            counter: Final = handler.create_rate_limit_keys(scope, f"{auth.project_id}:{model}", "tokens")
-            assert int(await cache.async_get_cache(counter) or 0) == (0 if event == "failure" else 2)
+            counter: Final = _counter(scope, f"{auth.project_id}:{model}", "tokens")
+            assert int(await handler.rate_limits.get(counter) or 0) == (0 if event == "failure" else 2)
 
 
 @pytest.mark.asyncio
@@ -658,8 +658,8 @@ async def test_latest_alias_project_io_frame_reservations_charge_both_names() ->
     await handler.enforce_project_io_token_quota_for_frame(auth, alias, 3, 2)
     for scope, expected in (("model_per_project_itpm", 3), ("model_per_project_otpm", 2)):
         for model in (alias, target):
-            counter: Final = handler.create_rate_limit_keys(scope, f"{auth.project_id}:{model}", "tokens")
-            assert await cache.async_get_cache(counter) == expected
+            counter: Final = _counter(scope, f"{auth.project_id}:{model}", "tokens")
+            assert await handler.rate_limits.get(counter) == expected
 
 
 @pytest.mark.parametrize(
