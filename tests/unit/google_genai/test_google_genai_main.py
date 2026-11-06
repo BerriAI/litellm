@@ -4,6 +4,8 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
+from collections.abc import AsyncIterator, Iterator
+from typing import Final
 
 import pytest
 
@@ -11,6 +13,8 @@ import pytest
 
 
 import litellm
+from litellm.google_genai.main import agenerate_content_stream, generate_content_stream
+from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 
 
 @pytest.mark.asyncio
@@ -286,3 +290,183 @@ def test_vertex_generate_content_routes_by_deployment_base_model(base_model, use
     )
 
     assert (setup.generate_content_provider_config is not None) is uses_native_api
+
+
+class NativeContentLLM(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: tuple[dict[str, object], ...] = ()
+        self.response: dict[str, object] = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}],
+                    },
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 5, "totalTokenCount": 8},
+        }
+
+    def generate_content(self, **kwargs: object) -> dict[str, object]:
+        self.requests = (*self.requests, kwargs)
+        return self.response
+
+    async def agenerate_content(self, **kwargs: object) -> dict[str, object]:
+        self.requests = (*self.requests, kwargs)
+        return self.response
+
+
+class CompletionContentLLM(CustomLLM):
+    def completion(self, **kwargs: object) -> litellm.ModelResponse:
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "adapter result"}}])
+
+    async def acompletion(self, **kwargs: object) -> litellm.ModelResponse:
+        return self.completion(**kwargs)
+
+
+class StreamingContentLLM(NativeContentLLM):
+    def streaming(self, **kwargs: object) -> Iterator[litellm.GenericStreamingChunk]:
+        yield litellm.GenericStreamingChunk(
+            text="stream adapter",
+            tool_use=None,
+            is_finished=True,
+            finish_reason="stop",
+            index=0,
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        )
+
+    async def astreaming(self, **kwargs: object) -> AsyncIterator[litellm.GenericStreamingChunk]:
+        for chunk in self.streaming(**kwargs):
+            yield chunk
+
+
+@pytest.fixture
+def native_content_handler(monkeypatch: pytest.MonkeyPatch) -> NativeContentLLM:
+    handler: Final = NativeContentLLM()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": handler}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return handler
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_native_content_preserves_images_and_config(
+    native_content_handler: NativeContentLLM, is_async: bool
+) -> None:
+    contents: Final = [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "aW5wdXQ="}}]}]
+    config: Final = {"imageConfig": {"aspectRatio": "1:1"}, "responseModalities": ["IMAGE"], "seed": 17}
+    tools: Final = [{"googleSearch": {}}]
+    request: Final = dict(
+        model="native_image_test/image-model",
+        contents=contents,
+        config=config,
+        tools=tools,
+        safetySettings=[],
+        systemInstruction={"parts": [{"text": "draw"}]},
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result is native_content_handler.response
+    received: Final = native_content_handler.requests[0]
+    assert received["model"] == "image-model"
+    assert received["contents"] is contents
+    assert received["config"] == config
+    assert received["tools"] is tools
+    optional_params: Final = received["optional_params"]
+    assert isinstance(optional_params, dict)
+    assert optional_params["safetySettings"] == []
+    assert optional_params["systemInstruction"] == request["systemInstruction"]
+    params: Final = received["litellm_params"]
+    assert isinstance(params, litellm.types.router.GenericLiteLLMParams)
+    assert params.custom_llm_provider == "native_image_test"
+    assert received["logging_obj"] is not None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("config", [None, {}])
+@pytest.mark.asyncio
+async def test_custom_native_content_preserves_empty_request(
+    native_content_handler: NativeContentLLM, is_async: bool, config: object
+) -> None:
+    request: Final = dict(model="native_image_test/image-model", contents=[], config=config)
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result is native_content_handler.response
+    received: Final = native_content_handler.requests[0]
+    assert received["contents"] == []
+    assert received["config"] == config
+    assert received["tools"] is None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_without_native_hook_uses_completion(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    request: Final = dict(model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}])
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+@pytest.mark.asyncio
+async def test_router_custom_native_content_leg(native_content_handler: NativeContentLLM) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "image-group", "litellm_params": {"model": "native_image_test/image-model", "order": 0}},
+            {
+                "model_name": "image-group",
+                "litellm_params": {"model": "gemini/test-model", "api_key": "test-key", "order": 1},
+            },
+        ]
+    )
+    result: Final = await router.agenerate_content(model="image-group", contents=[], config={})
+    assert result == native_content_handler.response
+    assert native_content_handler.requests[0]["contents"] == []
+    assert native_content_handler.requests[0]["config"] == {}
+
+
+class FailingContentLLM(CustomLLM):
+    def generate_content(self, **kwargs: object) -> dict[str, object]:
+        raise CustomLLMError(status_code=429, message="native quota exhausted")
+
+    async def agenerate_content(self, **kwargs: object) -> dict[str, object]:
+        raise CustomLLMError(status_code=429, message="native quota exhausted")
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_native_content_maps_errors(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": FailingContentLLM()}]
+    )
+    if is_async:
+        with pytest.raises(litellm.RateLimitError, match="native quota exhausted"):
+            await litellm.agenerate_content(model="native_image_test/image-model", contents=[])
+    else:
+        with pytest.raises(litellm.RateLimitError, match="native quota exhausted"):
+            litellm.generate_content(model="native_image_test/image-model", contents=[])
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_stream_uses_completion_adapter(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    handler: Final = StreamingContentLLM()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": handler}])
+    stream: Final = (
+        await agenerate_content_stream(model="native_image_test/chat-model", contents=[])
+        if is_async
+        else generate_content_stream(model="native_image_test/chat-model", contents=[])
+    )
+    chunks: Final = [chunk async for chunk in stream]
+    assert any(b"stream adapter" in chunk for chunk in chunks)
+    assert handler.requests == ()
