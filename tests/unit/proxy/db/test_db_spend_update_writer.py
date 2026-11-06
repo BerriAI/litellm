@@ -29,6 +29,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
+    _response_read_reuses_addressed_id,
     _spend_tables_left_to_send,
     _SpendTableName,
 )
@@ -43,6 +44,33 @@ from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
+
+@pytest.mark.parametrize("call_type", ["aget_responses", "acancel_responses", "aresponses", "acompletion"])
+@pytest.mark.parametrize("logged_id", ["resp-original", "resp-read", "resp-original_background_cost"])
+def test_response_reads_cannot_claim_the_addressed_create_row(call_type: str, logged_id: str) -> None:
+    payload: Final = {"call_type": call_type, "request_id": logged_id}
+    request: Final = {
+        "litellm_params": {"proxy_server_request": {"body": {"_litellm_addressed_response_id": "resp-original"}}}
+    }
+    assert _response_read_reuses_addressed_id(payload, request) is (
+        call_type in {"aget_responses", "acancel_responses"} and logged_id == "resp-original"
+    )
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {},
+        {"litellm_params": None},
+        {"litellm_params": {"proxy_server_request": None}},
+        {"litellm_params": {"proxy_server_request": {"body": {}}}},
+        {"litellm_params": {"proxy_server_request": {"body": {"_litellm_addressed_response_id": 12}}}},
+    ],
+)
+def test_response_reads_without_an_addressed_id_do_not_collide(request_fields: dict[str, object]) -> None:
+    assert not _response_read_reuses_addressed_id(
+        {"call_type": "aget_responses", "request_id": "resp-id"}, request_fields
+    )
 
 
 @pytest.fixture(autouse=True)
