@@ -239,6 +239,142 @@ _S3_MEDIA_SURFACES: Final = (
 )
 
 
+_S3_OBJECT: Final = "s3://media-bucket/dir/cat.png"
+_HELLO: Final = {"role": "user", "content": "hello"}
+_S3_VALUES_OUTSIDE_MEDIA_PARTS: Final = (
+    pytest.param(
+        "acompletion",
+        "/v1/chat/completions",
+        {"messages": [_HELLO], "metadata": {"url": _S3_OBJECT}},
+        id="chat-metadata-url",
+    ),
+    pytest.param(
+        "acompletion",
+        "/v1/chat/completions",
+        {"messages": [_HELLO], "extra_body": {"url": _S3_OBJECT}},
+        id="chat-extra-body-url",
+    ),
+    pytest.param(
+        "acompletion",
+        "/v1/chat/completions",
+        {
+            "messages": [
+                _HELLO,
+                {
+                    "role": "assistant",
+                    "content": "See the source.",
+                    "annotations": [{"type": "url_citation", "url_citation": {"url": _S3_OBJECT}}],
+                },
+                _HELLO,
+            ]
+        },
+        id="chat-url-citation",
+    ),
+    pytest.param(
+        "acompletion",
+        "/v1/chat/completions",
+        {
+            "messages": [_HELLO],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "fetch",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"url": {"type": "string", "enum": [_S3_OBJECT]}},
+                            "default": {"url": _S3_OBJECT},
+                        },
+                    },
+                }
+            ],
+        },
+        id="chat-tool-schema",
+    ),
+    pytest.param(
+        "aresponses",
+        "/v1/responses",
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "See the file.",
+                            "annotations": [{"type": "file_citation", "file_id": _S3_OBJECT, "index": 0}],
+                        }
+                    ],
+                },
+                _HELLO,
+            ]
+        },
+        id="responses-file-citation",
+    ),
+    pytest.param(
+        "agenerate_content",
+        _GEMINI_GENERATE_CONTENT_PATH,
+        {
+            "contents": [
+                {"role": "user", "parts": [{"text": "hello"}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "fetch", "args": {"url": _S3_OBJECT}}}]},
+                {"role": "user", "parts": [{"functionResponse": {"name": "fetch", "response": {"ok": True}}}]},
+            ]
+        },
+        id="gemini-function-call-camel-case",
+    ),
+    pytest.param(
+        "agenerate_content",
+        _GEMINI_GENERATE_CONTENT_PATH,
+        {
+            "contents": [
+                {"role": "user", "parts": [{"text": "hello"}]},
+                {"role": "model", "parts": [{"function_call": {"name": "fetch", "args": {"url": _S3_OBJECT}}}]},
+                {"role": "user", "parts": [{"function_response": {"name": "fetch", "response": {"ok": True}}}]},
+            ]
+        },
+        id="gemini-function-call-snake-case",
+    ),
+)
+_S3_VALUES_ON_NON_MEDIA_ROUTES: Final = (
+    pytest.param(
+        "call_mcp_tool",
+        "/mcp-rest/tools/call",
+        {"name": "fetch", "arguments": {"url": _S3_OBJECT}},
+        id="mcp-tool-arguments",
+    ),
+    pytest.param("afile_retrieve", "/v1/files/s3-object", {"file_id": _S3_OBJECT}, id="file-retrieve"),
+    pytest.param("afile_content", "/v1/files/s3-object/content", {"file_id": _S3_OBJECT}, id="file-content"),
+    pytest.param(
+        "avector_store_file_create",
+        "/v1/vector_stores/vs_1/files",
+        {"vector_store_id": "vs_1", "file_id": _S3_OBJECT},
+        id="vector-store-file-create",
+    ),
+    pytest.param(
+        "asend_message",
+        "/a2a/agent-1/message/send",
+        {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "messageId": "m1",
+                    "parts": [
+                        {"kind": "data", "data": {"file_url": _S3_OBJECT}},
+                        {"kind": "file", "file": {"uri": _S3_OBJECT, "mimeType": "image/png"}},
+                    ],
+                }
+            },
+        },
+        id="a2a-data-and-file-parts",
+    ),
+)
+
+
 async def _send_s3_media(
     route_type: _S3MediaRoute,
     path: str,
@@ -649,6 +785,57 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "a cat" in str(response)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("route_type", "path", "body"), _S3_VALUES_OUTSIDE_MEDIA_PARTS)
+    async def test_non_admin_s3_values_outside_media_parts_pass_with_no_bucket_listed(
+        self, route_type: _S3MediaRoute, path: str, body: dict[str, object]
+    ) -> None:
+        response: Final = await _send_s3_media(route_type, path, body, LitellmUserRoles.INTERNAL_USER, {})
+
+        assert "a cat" in str(response)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("route_type", "path", "body"), _S3_VALUES_ON_NON_MEDIA_ROUTES)
+    async def test_non_admin_s3_values_on_routes_without_media_parts_reach_the_route(
+        self, route_type: str, path: str, body: dict[str, object]
+    ) -> None:
+        from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+        data, _ = await ProxyBaseLLMRequestProcessing(data=copy.deepcopy(body)).common_processing_pre_call_logic(
+            request=Request({"type": "http", "method": "POST", "path": path, "query_string": b"", "headers": []}),
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            proxy_config=RealProxyConfig(),
+            route_type=route_type,
+        )
+
+        assert {key: data[key] for key in body} == body
+
+    @pytest.mark.asyncio
+    async def test_non_admin_s3_media_refusal_names_a_repeated_object_once(self) -> None:
+        with pytest.raises(HTTPException) as refused:
+            await _send_s3_media(
+                "acompletion",
+                "/v1/chat/completions",
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": _S3_OBJECT}},
+                                {"type": "image_url", "image_url": {"url": _S3_OBJECT}},
+                            ],
+                        }
+                    ]
+                },
+                LitellmUserRoles.INTERNAL_USER,
+                {},
+            )
+
+        assert refused.value.status_code == status.HTTP_403_FORBIDDEN
+        assert refused.value.detail.count(_S3_OBJECT) == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("safe_memory_mode", [False, True])

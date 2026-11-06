@@ -105,7 +105,18 @@ def _gemini_turn(*parts: object) -> dict[str, object]:
             {"system_instruction": {"parts": [{"file_data": {"file_uri": _MANAGED_UPLOAD}}]}, "contents": []},
             id="gemini-system-instruction",
         ),
-        pytest.param({"metadata": {"url": _MANAGED_UPLOAD}}, id="media-key-in-any-field"),
+        pytest.param(
+            {
+                "input": [
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "call_1",
+                        "output": {"type": "computer_screenshot", "image_url": _MANAGED_UPLOAD},
+                    }
+                ]
+            },
+            id="responses-computer-screenshot",
+        ),
     ),
 )
 def test_s3_media_uris_finds_an_s3_object_on_every_media_surface(request_body: dict[str, object]):
@@ -124,8 +135,6 @@ def test_s3_media_uris_finds_an_s3_object_on_every_media_surface(request_body: d
         "s3://media-bucket/litellm%2Dbedrock-files/x.pdf",
         "s3://media-bucket/litellm%252Dbedrock-files/x.pdf",
         "s3://media-bucket%2Flitellm-bedrock-files/x.pdf",
-        "s3%3A%2F%2Fmedia-bucket%2Flitellm-bedrock-files%2Fx.pdf",
-        "%73%33%3A%2F%2Fmedia-bucket%2Flitellm-bedrock-files%2Fx.pdf",
         "s3:///litellm-bedrock-files/x.pdf",
     ),
 )
@@ -169,10 +178,96 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
         pytest.param({"input": _MANAGED_UPLOAD}, id="responses-string-input"),
         pytest.param({"system": _MANAGED_UPLOAD, "messages": []}, id="string-system"),
         pytest.param({"metadata": {"note": _MANAGED_UPLOAD}}, id="non-media-key"),
+        pytest.param({"metadata": {"url": _MANAGED_UPLOAD}}, id="metadata-url"),
+        pytest.param({"extra_body": {"url": _MANAGED_UPLOAD}}, id="extra-body-url"),
+        pytest.param({"name": "fetch", "arguments": {"url": _MANAGED_UPLOAD}}, id="mcp-tool-arguments"),
+        pytest.param(
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "See the source.",
+                        "annotations": [{"type": "url_citation", "url_citation": {"url": _MANAGED_UPLOAD}}],
+                    }
+                ]
+            },
+            id="chat-url-citation",
+        ),
+        pytest.param(
+            {
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "See the file.",
+                                "annotations": [{"type": "file_citation", "file_id": _MANAGED_UPLOAD, "index": 0}],
+                            }
+                        ],
+                    }
+                ]
+            },
+            id="responses-file-citation",
+        ),
+        pytest.param(
+            _gemini_turn({"functionCall": {"name": "fetch", "args": {"url": _MANAGED_UPLOAD}}}),
+            id="gemini-function-call-camel-case",
+        ),
+        pytest.param(
+            _gemini_turn({"function_call": {"name": "fetch", "args": {"url": _MANAGED_UPLOAD}}}),
+            id="gemini-function-call-snake-case",
+        ),
+        pytest.param(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "fetch",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"url": {"type": "string", "enum": [_MANAGED_UPLOAD]}},
+                                "default": {"url": _MANAGED_UPLOAD},
+                            },
+                        },
+                    }
+                ]
+            },
+            id="tool-schema",
+        ),
+        pytest.param(
+            _user_turn({"type": "image_url", "image_url": {"url": "S3://media-bucket/litellm-bedrock-files/x.png"}}),
+            id="uppercase-scheme",
+        ),
+        pytest.param(
+            _user_turn(
+                {"type": "file", "file": {"file_id": "s3%3A%2F%2Fmedia-bucket%2Flitellm-bedrock-files%2Fx.pdf"}}
+            ),
+            id="encoded-scheme",
+        ),
+        pytest.param(
+            _user_turn(
+                {"type": "file", "file": {"file_id": "%73%33%3A%2F%2Fmedia-bucket%2Flitellm-bedrock-files%2Fx.pdf"}}
+            ),
+            id="fully-encoded-scheme",
+        ),
     ),
 )
 def test_s3_media_uris_ignores_what_never_becomes_an_s3_media_source(request_body: dict[str, object]):
     assert s3_media_uris(request_body) == ()
+
+
+def test_s3_media_uris_names_each_s3_object_once_in_the_order_it_first_appears():
+    other_upload: Final = "s3://media-bucket/dir/cat.png"
+    request_body: Final = _user_turn(
+        {"type": "image_url", "image_url": {"url": other_upload}},
+        {"type": "file", "file": {"file_id": _MANAGED_UPLOAD}},
+        {"type": "image_url", "image_url": {"url": other_upload}},
+    )
+
+    assert s3_media_uris(request_body) == (other_upload, _MANAGED_UPLOAD)
 
 
 @pytest.mark.parametrize(

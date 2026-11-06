@@ -43,14 +43,36 @@ def is_managed_cloud_storage_uri(file_id: str) -> bool:
 
 
 _S3_SCHEME: Final = "s3://"
-_FIRST_CHARACTERS_THAT_CAN_DECODE_TO_S3: Final = ("s", "%")
+_S3_MEDIA_PART_TYPES: Final = frozenset(
+    {"image_url", "file", "input_image", "input_file", "computer_screenshot", "image", "document"}
+)
+_GEMINI_MEDIA_PART_KEYS: Final = frozenset({"file_data", "fileData"})
 _MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "file_data", "file_uri", "fileUri"})
 
 
-def _media_uris(value: object, key: str | None = None) -> Iterator[str]:
+def is_s3_uri(value: str) -> bool:
+    return value.startswith(_S3_SCHEME)
+
+
+def _media_part_uris(value: object, key: str | None = None) -> Iterator[str]:
     if isinstance(value, str):
         return iter((value,) if key in _MEDIA_URI_KEYS else ())
     fields: Final = as_str_mapping(value)
+    if fields is not None:
+        return chain.from_iterable(_media_part_uris(child, child_key) for child_key, child in fields.items())
+    items: Final = as_object_list(value)
+    return chain.from_iterable(map(_media_part_uris, items)) if items is not None else iter(())
+
+
+def _is_media_part(fields: Mapping[str, object], key: str | None) -> bool:
+    part_type: Final = fields.get("type")
+    return (isinstance(part_type, str) and part_type in _S3_MEDIA_PART_TYPES) or key in _GEMINI_MEDIA_PART_KEYS
+
+
+def _media_uris(value: object, key: str | None = None) -> Iterator[str]:
+    fields: Final = as_str_mapping(value)
+    if fields is not None and _is_media_part(fields, key):
+        return _media_part_uris(fields)
     if fields is not None:
         return chain.from_iterable(_media_uris(child, child_key) for child_key, child in fields.items())
     items: Final = as_object_list(value)
@@ -81,14 +103,8 @@ def _refused_in_some_decoding(
     return bool(parts) and (not settled or not all(map(is_allowed, parts)))
 
 
-def _is_s3_uri(uri: str) -> bool:
-    return uri.startswith(_FIRST_CHARACTERS_THAT_CAN_DECODE_TO_S3) and any(
-        decoding.startswith(_S3_SCHEME) for decoding in _decodings(uri)
-    )
-
-
 def s3_media_uris(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    return tuple(filter(_is_s3_uri, _media_uris(request_body)))
+    return tuple(dict.fromkeys(filter(is_s3_uri, _media_uris(request_body))))
 
 
 def is_managed_s3_uri(uri: str) -> bool:

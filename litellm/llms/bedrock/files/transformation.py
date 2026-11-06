@@ -342,19 +342,12 @@ def _batch_line_error(line_number: int, problem: str) -> BedrockError:
     return _rejected_request(f"Batch input file line {line_number} {problem}")
 
 
-def _json_object(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, dict) else None
-
-
-def _batch_body_problem(body: object) -> str | None:
-    json_body: Final = _json_object(body)
-    s3_uris: Final = s3_media_uris(json_body) if json_body is not None else ()
-    if not s3_uris:
-        return None
-    return (
-        f"has s3:// media URLs ({', '.join(s3_uris)}). "
-        "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
-    )
+class _S3MediaInBatchRecord(ValueError):
+    def __init__(self, s3_uris: tuple[str, ...]) -> None:
+        super().__init__(
+            f"has s3:// media URLs ({', '.join(s3_uris)}). "
+            "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+        )
 
 
 def _resolve_managed_s3_object(file_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:
@@ -1042,6 +1035,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
+            s3_uris: Final = s3_media_uris(openai_request_body)
+            if s3_uris:
+                raise _S3MediaInBatchRecord(s3_uris)
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
                 non_default_params=optional_params,
@@ -1106,8 +1102,6 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
-            if (body_problem := _batch_body_problem(openai_body)) is not None:
-                raise _batch_line_error(idx + 1, body_problem)
             record_model = openai_body.get("model", "")
             resolved_model = litellm.model_alias_map.get(record_model, record_model)
             model_for_transform, provider = self._resolve_batch_record_model_and_provider(
@@ -1125,11 +1119,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     openai_request_body=openai_body, model=model_for_transform
                 )
             else:
-                model_input = self._map_openai_to_bedrock_params(
-                    openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
-                    model=model_for_transform,
-                    provider=provider,
-                )
+                try:
+                    model_input = self._map_openai_to_bedrock_params(
+                        openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
+                        model=model_for_transform,
+                        provider=provider,
+                    )
+                except _S3MediaInBatchRecord as e:
+                    raise _batch_line_error(idx + 1, str(e)) from e
 
             # Create Bedrock batch record
             record_id = _openai_jsonl_content.get("custom_id", f"CALL{str(idx).zfill(7)}")
