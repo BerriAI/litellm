@@ -825,7 +825,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         non_default_params: dict,
         prompt_id: str | None,
         prompt_variables: dict | None,
@@ -874,10 +874,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 model_info,
             )
         )
-        processed_messages = copy.deepcopy(
-            [without_prompt_cache_breakpoints(message) for message in messages]
-            if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
-            else messages
+        processed_messages = list(
+            copy.deepcopy(
+                [without_prompt_cache_breakpoints(message) for message in messages]
+                if not openai_dialect
+                and message_points
+                and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
+                else messages
+            )
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
@@ -1079,7 +1083,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _apply_message_injections(
         points: Sequence[CacheControlMessageInjectionPoint],
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         max_blocks: int,
         openai_dialect: bool = False,
         answered_tool_ids: frozenset[str] | None = None,
@@ -1093,13 +1097,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         ``max_blocks`` is reached. Injection points are honored in config order,
         so earlier points win when slots are scarce.
         """
+        mutable_messages: Final = list(messages)
         client_answers: Final = (
-            _client_tool_call_ids_when_a_server_tool_call_is_marked(messages)
+            _client_tool_call_ids_when_a_server_tool_call_is_marked(mutable_messages)
             if answered_tool_ids is None
             else answered_tool_ids
         )
         used_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints(
-            messages, answered_tool_ids=client_answers
+            mutable_messages, answered_tool_ids=client_answers
         )
 
         limit_reached = False
@@ -1112,19 +1117,21 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 type="ephemeral"
             )
 
-            for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(
+                point=point, messages=mutable_messages
+            ):
                 if used_blocks >= max_blocks:
                     limit_reached = True
                     break
 
-                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
+                if AnthropicCacheControlHook._message_has_cache_control(mutable_messages[target_index], client_answers):
                     # Client already marked this message; don't overwrite it.
                     continue
 
-                messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                    messages[target_index], control, openai_dialect
+                mutable_messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                    mutable_messages[target_index], control, openai_dialect
                 )
-                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
+                if AnthropicCacheControlHook._message_has_cache_control(mutable_messages[target_index], client_answers):
                     used_blocks += 1
 
             if limit_reached:
@@ -1136,11 +1143,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 MAX_CACHE_CONTROL_BLOCKS,
             )
 
-        return messages
+        return mutable_messages
 
     @staticmethod
     def _resolve_target_indices(
-        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
+        point: CacheControlMessageInjectionPoint, messages: Sequence[AllMessageValues]
     ) -> list[int]:
         """Resolve which message indices an injection point targets."""
         _targetted_index: Final[int | str | None] = point.get("index", None)
@@ -1402,7 +1409,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return messages, system, []
 
-        processed_messages: list[dict] = copy.deepcopy(messages)
+        processed_messages: list[dict] = list(copy.deepcopy(messages))
         processed_system = copy.deepcopy(system) if system is not None else None
 
         role_points: Final = tuple(
@@ -1543,7 +1550,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _request_has_cache_control(
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         system: str | list | None,
         tools: list | None = None,
         cache_control: object = None,
@@ -1569,7 +1576,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def get_default_injection_points(
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         system: str | list | None,
         model: str,
         custom_llm_provider: str | None,
@@ -1618,7 +1625,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def messages_with_default_injections(
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         models: Iterable[str],
         tools: list[AllToolParamValues] | None = None,
         enable_prompt_caching: bool | None = None,
@@ -1656,7 +1663,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             None,
         )
         if not points:
-            return messages
+            return messages if isinstance(messages, list) else list(messages)
         return AnthropicCacheControlHook._apply_message_injections(
             points=cast(  # cast-ok: the default points are all message-location points
                 list[CacheControlMessageInjectionPoint], points
@@ -1668,7 +1675,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def maybe_seed_default_injection_points(
         non_default_params: dict[str, object],
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         model: str,
         custom_llm_provider: str | None,
         tools: list | None = None,
@@ -1924,7 +1931,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     async def async_get_chat_completion_prompt(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         non_default_params: dict,
         prompt_id: str | None,
         prompt_variables: dict | None,
