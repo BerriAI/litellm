@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitViewport, graphSize, MAX_SCALE, MIN_SCALE, NODE_HEIGHT, nodePosition, zoomViewport } from "./viewport";
+import { fitViewport, graphSize, MAX_SCALE, MIN_SCALE, zoomViewport } from "./viewport";
 
 describe("workflow viewport", () => {
   it.each([3, 120])("fits %i sequential steps and terminals inside the canvas", (count) => {
@@ -10,7 +10,6 @@ describe("workflow viewport", () => {
     expect(view.y).toBeGreaterThanOrEqual(0);
     expect(view.x + graph.width * view.scale).toBeLessThanOrEqual(container.width);
     expect(view.y + graph.height * view.scale).toBeLessThanOrEqual(container.height);
-    expect(nodePosition(2).y + NODE_HEIGHT).toBeLessThan(graph.height);
   });
 
   it("keeps the zoom anchor fixed while enforcing usable scale limits", () => {

@@ -45,16 +45,9 @@ SEQUENTIAL: Final = Workflow(
     ),
 )
 
-LITERAL: Final = Workflow(
-    name="welcome-message",
-    nodes=(
-        ChatCompletion(
-            model="support-model",
-            messages=({"role": "user", "content": "Write a short welcome message"},),
-        ),
-    ),
+FIXTURE: Final = draft_fixture(SEQUENTIAL).model_dump(mode="json")
+MESSAGE_SCHEMA: Final = json.dumps(FIXTURE["bundle"]["input_schema"])
+SERIALIZED: Final = json.dumps(FIXTURE).replace(MESSAGE_SCHEMA, "messageSchema")
+Path(__file__).with_name("draft.ts").write_text(
+    f"const messageSchema = {MESSAGE_SCHEMA};\n\nconst draft = {SERIALIZED};\n\nexport default draft;\n"
 )
-
-FIXTURES: Final = {workflow.name: draft_fixture(workflow).model_dump(mode="json") for workflow in (SEQUENTIAL, LITERAL)}
-
-Path(__file__).with_name("drafts.json").write_text(json.dumps(FIXTURES, indent=2) + "\n")

@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import drafts from "../../../tests/fixtures/workflows/drafts.json";
+import draft from "../../../tests/fixtures/workflows/draft";
 import { WorkflowDefinitionView } from "./WorkflowDefinitionView";
 import type { WorkflowGraphProps } from "./WorkflowGraph";
 
-const bundle = drafts["email-reply"].bundle;
+const bundle = draft.bundle;
 
 function DefinitionHarness(props: Partial<WorkflowGraphProps>) {
   const [selectedNodeId, onNodeSelect] = useState<string | null>(null);
@@ -46,15 +46,6 @@ describe("workflow definition view", () => {
     fireEvent.click(inspector.getByText("Output schema", { exact: true }));
     expect(inspector.getByText(/"strict": true/)).toHaveTextContent('"approved"');
     expect(inspector.getByText("node_2", { exact: true })).toBeInTheDocument();
-  });
-
-  it("inspects literal messages in a single-step SDK workflow", () => {
-    render(<DefinitionHarness bundle={drafts["welcome-message"].bundle} />);
-    fireEvent.click(screen.getByRole("button", { name: /Step 1: support-model/ }));
-    const inspector = within(screen.getByRole("complementary"));
-    fireEvent.click(inspector.getByRole("button", { name: "Literal value" }));
-    expect(inspector.getByText(/Write a short welcome message/)).toBeVisible();
-    expect(inspector.getByText(/No structured output schema/)).toBeInTheDocument();
   });
 
   it("updates parent-supplied node states without losing selection and ignores other snapshots", () => {

@@ -4,9 +4,8 @@ import { useState } from "react";
 import { GitBranch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WorkflowDefinitionView, type WorkflowExecutionOverlay } from "@/components/workflows";
-import drafts from "./drafts.json";
+import draft from "./draft";
 
-const draft = drafts["email-reply"];
 const definitionKey = `${draft.workflow_id}:${draft.etag}`;
 const examples = ["Definition", "Running", "Failed", "Completed", "Loading", "Empty", "Unsupported"] as const;
 type Example = (typeof examples)[number];
