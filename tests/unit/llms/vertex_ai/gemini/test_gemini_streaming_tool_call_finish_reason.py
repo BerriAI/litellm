@@ -338,3 +338,109 @@ def test_streaming_metadata_only_chunk_does_not_yield_empty_choices():
     assert len(response.choices) == 1
     assert response.choices[0].finish_reason is None
     assert response.choices[0].delta.content is None
+
+def test_streaming_tool_call_max_tokens_finish_reason_is_tool_calls():
+    """
+    When Gemini streams a tool call then ends with finishReason="MAX_TOKENS"
+    in a later chunk (with empty text), finish_reason must be "tool_calls",
+    matching the non-streaming path where tool_calls win over MAX_TOKENS.
+
+    Previously only finishReason="STOP"→"stop" was overridden; "MAX_TOKENS"
+    →"length" was left as "length", so stream and non-stream disagreed.
+
+    Ref: https://github.com/BerriAI/litellm/issues/48715
+    """
+    logging_obj = _make_logging_obj()
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    chunk_with_tool_calls = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_weather",
+                                "args": {},
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "index": 0,
+            }
+        ],
+    }
+
+    chunk_with_max_tokens = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": ""}],
+                    "role": "model",
+                },
+                "finishReason": "MAX_TOKENS",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 10,
+        },
+    }
+
+    response1 = iterator.chunk_parser(chunk_with_tool_calls)
+    assert response1 is not None
+    assert response1.choices[0].delta.tool_calls is not None
+    assert iterator.has_seen_tool_calls is True
+
+    response2 = iterator.chunk_parser(chunk_with_max_tokens)
+    assert response2 is not None
+    assert len(response2.choices) == 1
+    # Must be "tool_calls", NOT "length"
+    assert response2.choices[0].finish_reason == "tool_calls"
+
+
+def test_streaming_max_tokens_without_tool_calls_stays_length():
+    """MAX_TOKENS with no prior tool calls must still map to "length"."""
+    logging_obj = _make_logging_obj()
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    chunk_text = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": "partial answer"}],
+                    "role": "model",
+                },
+                "index": 0,
+            }
+        ],
+    }
+    chunk_max_tokens = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"text": ""}],
+                    "role": "model",
+                },
+                "finishReason": "MAX_TOKENS",
+                "index": 0,
+            }
+        ],
+    }
+
+    iterator.chunk_parser(chunk_text)
+    assert iterator.has_seen_tool_calls is False
+    response = iterator.chunk_parser(chunk_max_tokens)
+    assert response is not None
+    assert response.choices[0].finish_reason == "length"
