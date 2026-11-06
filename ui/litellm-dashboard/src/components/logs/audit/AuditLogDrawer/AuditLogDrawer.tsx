@@ -118,7 +118,7 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
           <div className="flex items-center border-b border-border bg-muted px-3 py-2">
             <span className="text-xs font-semibold text-muted-foreground">{label}</span>
           </div>
-          <p className="m-0 px-3 py-3 text-xs text-muted-foreground italic">N/A</p>
+          <p className="m-0 px-3 py-3 text-xs text-muted-foreground italic">{t("logs.audit.drawer.notAvailable")}</p>
         </div>
       );
     }
@@ -136,7 +136,8 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
             <div className="space-y-1 px-3 py-3 text-xs">
               {value.token !== undefined && (
                 <p>
-                  <span className="text-muted-foreground">{t("logs.audit.drawer.token")}</span> {value.token ?? "N/A"}
+                  <span className="text-muted-foreground">{t("logs.audit.drawer.token")}</span>{" "}
+                  {value.token ?? t("logs.audit.drawer.notAvailable")}
                 </p>
               )}
               {value.spend !== undefined && (
