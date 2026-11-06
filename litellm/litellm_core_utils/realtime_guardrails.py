@@ -80,8 +80,6 @@ def realtime_guarded_item(client_event: Mapping[str, object]) -> RealtimeGuarded
         return None
     if item.get("type") == "function_call_output":
         return _tool_output(client_event, item)
-    if item.get("role") != "user":
-        return None
     text: Final = " ".join(_input_texts(item.get("content")))
     return RealtimeUserText(text=text) if text else None
 

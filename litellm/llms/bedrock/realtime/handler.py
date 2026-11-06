@@ -272,11 +272,11 @@ def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseExc
     raise error from failure
 
 
-def _parse_client_message(message: str) -> Mapping[str, JsonValue]:
+def _parse_client_message(message: str) -> Mapping[str, JsonValue] | None:
     try:
         return _json_dict(_CLIENT_MESSAGE_ADAPTER.validate_json(message))
     except ValueError:
-        return _EMPTY_JSON_OBJECT
+        return None
 
 
 async def _send_opening_message(
@@ -379,9 +379,8 @@ class _ClientEventRoute(Enum):
 class BedrockRealtimeGuardrails:
     """One Bedrock realtime session's guardrail checks, shared by both bridge directions.
 
-    Nova Sonic has no way to cancel a response, so a blocked user transcript hides that turn's
-    ``response.*`` events from the client (they are still logged) until a ``response.done`` that
-    follows new assistant output.
+    Nova Sonic has no way to cancel a response or remove a turn, so a blocked user transcript ends
+    the session before that turn's answer reaches the client.
     """
 
     def __init__(
@@ -395,8 +394,6 @@ class BedrockRealtimeGuardrails:
         self._callbacks: Final = callbacks
         self._violation_count = 0
         self._drop_next_response_create = False
-        self._hiding_response = False
-        self._hidden_response_has_output = False
 
     async def _block(self, text: str, hook: "GuardrailEventHooks") -> RealtimeGuardrailBlock | None:
         return await realtime_guardrail_block(
@@ -438,17 +435,6 @@ class BedrockRealtimeGuardrails:
         self._drop_next_response_create = True
         return _ClientEventRoute.DROP
 
-    def hides(self, provider_event: Mapping[str, object]) -> bool:
-        event_type: Final = provider_event.get("type")
-        if not self._hiding_response or not isinstance(event_type, str) or not event_type.startswith("response."):
-            return False
-        if event_type == "response.output_item.added":
-            self._hidden_response_has_output = True
-        if event_type == "response.done" and self._hidden_response_has_output:
-            self._hiding_response = False
-            self._hidden_response_has_output = False
-        return True
-
     async def continues_after(
         self, provider_event: Mapping[str, object], client_ws: RealtimeClientWebSocket, client_audio_streamed: bool
     ) -> bool:
@@ -465,13 +451,9 @@ class BedrockRealtimeGuardrails:
         block: Final = await self._block(transcript, GuardrailEventHooks.realtime_input_transcription)
         if block is None:
             return True
-        self._hiding_response = True
-        if not await _send_guardrail_violation(client_ws, block):
-            return False
-        if self._ends_session(block):
+        if await _send_guardrail_violation(client_ws, block):
             await _end_guarded_session(client_ws)
-            return False
-        return True
+        return False
 
 
 async def _close_bedrock_input(
@@ -819,6 +801,9 @@ class BedrockRealtime(BaseAWSLLM):
             async for message in _client_messages(client_ws, initial_message):
                 verbose_proxy_logger.debug("Bedrock Realtime: Received from client: %s", message[:200])
                 parsed_client_message = _parse_client_message(message)
+                if parsed_client_message is None:
+                    verbose_proxy_logger.warning("Bedrock Realtime: dropped a client message that is not valid JSON")
+                    continue
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
                     rejection = transformation_config.session_update_rejection(parsed_client_message)
@@ -929,9 +914,7 @@ class BedrockRealtime(BaseAWSLLM):
                 response_value = transformed_response["response"]
                 openai_messages = response_value if isinstance(response_value, list) else (response_value,)
                 for openai_message in openai_messages:
-                    if not session_guardrails.hides(openai_message) and not await send_to_client(
-                        json.dumps(openai_message)
-                    ):
+                    if not await send_to_client(json.dumps(openai_message)):
                         return
                     if _should_log_event(openai_message):
                         yield openai_message

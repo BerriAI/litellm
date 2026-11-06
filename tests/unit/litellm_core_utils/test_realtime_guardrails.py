@@ -25,11 +25,12 @@ def _item_create(item: object) -> dict:
     return {"type": "conversation.item.create", "item": item}
 
 
-def test_only_the_typed_text_of_a_user_message_is_screened():
+@pytest.mark.parametrize("role", ["user", "assistant", "system"])
+def test_only_the_typed_text_of_a_message_is_screened_whatever_its_role(role):
     client_event: Final = _item_create(
         {
             "type": "message",
-            "role": "user",
+            "role": role,
             "content": [{"type": "input_audio", "audio": "AAAA"}, {"type": "input_text", "text": "hello"}],
         }
     )
@@ -43,12 +44,6 @@ def test_only_the_typed_text_of_a_user_message_is_screened():
         pytest.param(
             _item_create({"type": "message", "role": "user", "content": [{"type": "input_audio", "audio": "AAAA"}]}),
             id="audio-only user message",
-        ),
-        pytest.param(
-            _item_create(
-                {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "hello"}]}
-            ),
-            id="assistant message",
         ),
         pytest.param(
             _item_create({"type": "function_call_output", "call_id": "call_1", "output": ""}), id="empty tool output"
