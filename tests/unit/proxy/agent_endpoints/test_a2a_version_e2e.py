@@ -27,6 +27,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 UPSTREAM_BASE = "http://testserver"
 
 _UPSTREAM_CALLS: List[Dict[str, Any]] = []
+_UPSTREAM_HEADERS: List[Dict[str, str]] = []
 
 
 def _upstream_card_payload() -> Dict[str, Any]:
@@ -83,6 +84,7 @@ async def _serve_upstream_agent_card(request: Any) -> JSONResponse:
 async def _upstream_jsonrpc(request: Any) -> JSONResponse | StreamingResponse:
     body = await request.json()
     _UPSTREAM_CALLS.append(body)
+    _UPSTREAM_HEADERS.append(dict(request.headers))
     request_id = body.get("id", "req-1")
     method = body.get("method")
 
@@ -90,6 +92,20 @@ async def _upstream_jsonrpc(request: Any) -> JSONResponse | StreamingResponse:
         return StreamingResponse(
             _sse_stream(request_id),
             media_type="text/event-stream",
+        )
+
+    if method in ("GetTask", "tasks/get"):
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "contextId": "c1",
+                    "status": {"state": "completed"},
+                },
+            }
         )
 
     return JSONResponse(_message_result(request_id))
@@ -118,6 +134,28 @@ def _fake_get_async_httpx_client(
         base_url=UPSTREAM_BASE,
     )
     return handler
+
+
+def _fake_forward_httpx_client(
+    llm_provider: Any = None, params: Optional[Dict[str, Any]] = None
+) -> Any:
+    class _Handler:
+        def __init__(self) -> None:
+            self.client = httpx.AsyncClient(
+                transport=ASGITransport(_build_upstream_app()),
+                base_url=UPSTREAM_BASE,
+            )
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: Any = None,
+            headers: Optional[Dict[str, str]] = None,
+        ) -> httpx.Response:
+            return await self.client.post(url, json=json, headers=headers)
+
+    return _Handler()
 
 
 def _make_agent(*, protocol_version: str) -> MagicMock:
@@ -215,6 +253,7 @@ def _a2a10_send_params() -> Dict[str, Any]:
 @pytest.fixture(autouse=True)
 def _clear_upstream_calls() -> None:
     _UPSTREAM_CALLS.clear()
+    _UPSTREAM_HEADERS.clear()
 
 
 @pytest.mark.asyncio
@@ -325,3 +364,41 @@ async def test_proxy_streaming_serves_1_0_envelopes():
     assert message_events[-1]["result"]["message"]["parts"][0]["text"] == "pong"
     assert _UPSTREAM_CALLS, "expected upstream streaming call"
     assert _UPSTREAM_CALLS[0]["method"] == "message/stream"
+
+
+@pytest.mark.asyncio
+async def test_proxy_forwards_pascal_method_and_a2a_version_to_1_0_agent():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+    agent = _make_agent(protocol_version="1.0")
+    request = _make_request(
+        "GetTask",
+        {"id": "t1"},
+        headers={"a2a-version": "1.0"},
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test", user_id="test-user", team_id="test-team"
+    )
+
+    with ExitStack() as stack:
+        for item in _proxy_patches(agent):
+            stack.enter_context(item)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                side_effect=_fake_forward_httpx_client,
+            )
+        )
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "error" not in body, body
+    assert _UPSTREAM_CALLS, "expected upstream to receive a JSON-RPC call"
+    assert _UPSTREAM_CALLS[0]["method"] == "GetTask"
+    assert _UPSTREAM_HEADERS[0].get("a2a-version") == "1.0"
