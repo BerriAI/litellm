@@ -59,7 +59,16 @@ pub trait LegacyCallbacks {
 
     fn defers_async_logging(&self, py: Python<'_>) -> bool;
 
-    fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()>;
+    fn claim_async_success_log(&self, py: Python<'_>) -> PyResult<bool>;
+
+    fn defer_success(
+        &self,
+        py: Python<'_>,
+        pending: &Bound<'_, PyAny>,
+        response: &Option<Py<PyAny>>,
+        start: &Py<PyAny>,
+        end: &Option<Py<PyAny>>,
+    ) -> PyResult<()>;
 
     fn sync_success_for_async_call(
         &self,
@@ -203,8 +212,21 @@ impl LegacyCallbacks for PythonLogger {
             .unwrap_or(false)
     }
 
-    fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()> {
-        Logging::DeferSuccess.call(py, (self.object(py), pending))?;
+    fn claim_async_success_log(&self, py: Python<'_>) -> PyResult<bool> {
+        Logging::ClaimAsyncSuccess
+            .call(py, (self.object(py),))?
+            .extract()
+    }
+
+    fn defer_success(
+        &self,
+        py: Python<'_>,
+        pending: &Bound<'_, PyAny>,
+        response: &Option<Py<PyAny>>,
+        start: &Py<PyAny>,
+        end: &Option<Py<PyAny>>,
+    ) -> PyResult<()> {
+        Logging::DeferSuccess.call(py, (self.object(py), pending, response, start, end))?;
         Ok(())
     }
 
