@@ -4679,23 +4679,15 @@ _WEATHER_TOOL: Final = {
 _BATCH_MODELS: Final = ("bedrock/us.amazon.nova-pro-v1:0", "bedrock/us.anthropic.claude-sonnet-4-6")
 
 
-def _uploaded_hosted_mcp_row(
-    model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+def _uploaded_row(
+    model: str, url: str, body: Mapping[str, object], deployment_drop_params: bool | None
 ) -> Mapping[str, object]:
-    body: Final = {
-        "model": model,
-        "max_tokens": 10,
-        "messages": [{"role": "user", "content": "hi"}],
-        "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
-        "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
-        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
-    }
     upload: Final = BedrockFilesConfig().transform_create_file_request(
         model="",
         create_file_data={
             "file": (
                 "batch.jsonl",
-                json.dumps({"custom_id": "row-1", "method": "POST", "url": "/v1/chat/completions", "body": body}).encode(),
+                json.dumps({"custom_id": "row-1", "method": "POST", "url": url, "body": body}).encode(),
                 "application/jsonl",
             ),
             "purpose": "batch",
@@ -4712,6 +4704,20 @@ def _uploaded_hosted_mcp_row(
         },
     )
     return json.loads(upload["data"])["modelInput"]
+
+
+def _uploaded_hosted_mcp_row(
+    model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+) -> Mapping[str, object]:
+    body: Final = {
+        "model": model,
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
+        "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+    }
+    return _uploaded_row(model, "/v1/chat/completions", body, deployment_drop_params)
 
 
 @pytest.mark.parametrize("model", _BATCH_MODELS)
@@ -4746,3 +4752,27 @@ def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can
     assert "`deepwiki`" in exc_info.value.message
     assert HOSTED_MCP_BATCH_ROW_REMEDY in exc_info.value.message
     assert "litellm_proxy/mcp" not in exc_info.value.message
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_mcp_server(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = {
+        "model": model,
+        "input": "hi",
+        "max_output_tokens": 10,
+        "tools": [
+            _HOSTED_MCP_TOOL,
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        ],
+        "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+    }
+
+    model_input: Final = json.dumps(_uploaded_row(model, "/v1/responses", body, deployment_drop_params=True))
+
+    assert "get_weather" in model_input
+    assert "deepwiki" not in model_input
+    assert "toolChoice" not in model_input
+    assert "tool_choice" not in model_input

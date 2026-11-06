@@ -326,8 +326,11 @@ def _labeled_mcp_server(tool: object) -> str | None:
 def _forces_a_dropped_mcp_tool(
     tool_choice: object, sent_tools: Sequence[object], kept_tools: Sequence[object], functions: object
 ) -> bool:
+    dropped_servers: Final = frozenset(label for label in map(_labeled_mcp_server, sent_tools) if label is not None)
+    if _labeled_mcp_server(tool_choice) in dropped_servers:
+        return True
     forced: Final = _forced_function_name(tool_choice)
-    if forced is None or forced not in map(_labeled_mcp_server, sent_tools):
+    if forced not in dropped_servers:
         return False
     legacy_functions: Final = _TOOLS.validate_python(functions) if isinstance(functions, list) else []
     return forced not in map(declared_function_name, (*kept_tools, *legacy_functions))

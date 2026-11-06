@@ -246,15 +246,22 @@ _FORCED_DEEPWIKI: Final = {"type": "function", "function": {"name": "deepwiki"}}
 
 
 @pytest.mark.parametrize(
+    "tool_choice",
+    [_FORCED_DEEPWIKI, {"type": "mcp", "server_label": "deepwiki"}],
+    ids=["function_choice", "responses_mcp_choice"],
+)
+@pytest.mark.parametrize(
     "functions",
     [None, [{"name": "get_weather", "parameters": {"type": "object"}}]],
     ids=["tools_kept", "legacy_functions_kept"],
 )
-def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(functions: object) -> None:
+def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(
+    functions: object, tool_choice: Mapping[str, object]
+) -> None:
     sent_tools: Final = [_HOSTED_MCP_TOOL, _GOOD_TOOL] if functions is None else [_HOSTED_MCP_TOOL]
     legacy: Final = {} if functions is None else {"functions": functions}
     params: Final = tool_params_without_hosted_mcp(
-        {"tools": sent_tools, "tool_choice": _FORCED_DEEPWIKI, "parallel_tool_calls": False, **legacy},
+        {"tools": sent_tools, "tool_choice": tool_choice, "parallel_tool_calls": False, **legacy},
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
