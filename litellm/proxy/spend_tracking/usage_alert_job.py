@@ -223,10 +223,10 @@ class UsageAlertJob:
         )
         if self._performance_projection is None:
             await self._notify(deadline)
-        elif work := await self._store.pending_projection_work():
-            # Source eligibility is per completed rule/day, never a global all-rules gate.
-            if await self._performance_projection.run_pending(now, work, self._store, deadline):
-                await self._store.finish_projection_work(work)
+        elif (
+            work := await self._store.pending_projection_work()
+        ) is not None and await self._performance_projection.run_pending(now, work, self._store, deadline):
+            await self._store.finish_projection_work(work)
         await self._store.prune()
 
     @staticmethod
@@ -237,13 +237,18 @@ class UsageAlertJob:
 
     async def _evaluate(self, target: date, deadline: float) -> None:
         cursor = await self._store.work_cursor()  # rebind-ok: durable round-robin position
-        idle_phases = 0  # rebind-ok: stop once every phase has no remaining usable work
+        exhausted: Final[set[int]] = set()  # mutable-ok: at most the 10 scope/config phases in this invocation
         phase_progress = False  # rebind-ok: whether a page advanced in the current phase
-        while asyncio.get_running_loop().time() < deadline and idle_phases < 10:
+        while asyncio.get_running_loop().time() < deadline and len(exhausted) < 10:
+            if cursor.phase in exhausted:
+                cursor = UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10)
+                continue
+            phase: Final = cursor.phase
             cursor, advanced, finished = await self._evaluation_page(cursor, target)
             phase_progress = phase_progress or advanced
             if finished:
-                idle_phases = 0 if phase_progress else idle_phases + 1
+                if not phase_progress:
+                    exhausted.add(phase)
                 phase_progress = False
             await self._store.save_work_cursor(cursor)
             await asyncio.sleep(0.01)
@@ -253,9 +258,8 @@ class UsageAlertJob:
     ) -> tuple[UsageAlertWorkCursor, bool, bool]:
         scope: Final = USAGE_ALERT_SCOPES[cursor.phase // 2]
         wildcard: Final = cursor.phase % 2 == 0
-        rules: Final = await self._store.enabled_rule_page(
-            scope, wildcard, cursor.after_id, limit=8 if wildcard else 10
-        )
+        limit: Final = 8 if wildcard else 10
+        rules: Final = await self._store.enabled_rule_page(scope, wildcard, cursor.after_id, limit=limit)
         if not rules:
             return UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10), False, True
         # Keep one date/cursor per page. A newly edited rule cannot rewind another rule.
@@ -275,6 +279,8 @@ class UsageAlertJob:
         complete: Final = await self._store.completed_rule_ids(selected, position.day)
         due: Final = tuple(rule for rule in selected if rule.id not in complete)
         advanced: Final = bool(due) and await self._attempt_scope_page(due, position.day, wildcard)
+        if len(rules) < limit and len(selected) == len(rules):
+            return UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10), advanced, True
         return UsageAlertWorkCursor(phase=cursor.phase, after_id=selected[-1].id), advanced, False
 
     async def _attempt_scope_page(self, rules: tuple[UsageAlertRule, ...], target: date, wildcard: bool) -> bool:
