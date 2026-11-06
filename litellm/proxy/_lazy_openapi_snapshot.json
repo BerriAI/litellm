@@ -16540,6 +16540,22 @@
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
             },
+            "mcp_block_behavior": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tool_result",
+                    "raise"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.",
+              "title": "Mcp Block Behavior"
+            },
             "model": {
               "anyOf": [
                 {
@@ -19115,6 +19131,22 @@
               ],
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
+            },
+            "mcp_block_behavior": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tool_result",
+                    "raise"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.",
+              "title": "Mcp Block Behavior"
             },
             "metadata": {
               "anyOf": [
