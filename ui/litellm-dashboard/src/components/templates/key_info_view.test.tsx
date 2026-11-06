@@ -5,7 +5,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyDeleteCall, keyUpdateCall, teamInfoCall } from "../networking";
+import { dailyActivityAggregatedCall, keyDeleteCall, keyUpdateCall, teamInfoCall } from "../networking";
+import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "../UsagePage/dailyActivityApi";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
@@ -92,6 +93,7 @@ vi.mock("../networking", () => ({
   serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
+  dailyActivityAggregatedCall: vi.fn(),
   teamInfoCall: vi.fn(),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
@@ -115,6 +117,7 @@ vi.mock("@/utils/dataUtils", () => ({
 
 describe("KeyInfoView", () => {
   beforeEach(() => {
+    vi.mocked(dailyActivityAggregatedCall).mockReset().mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);
     vi.mocked(teamInfoCall).mockReset();
     vi.mocked(useTeams).mockReturnValue({
       teams: [],
@@ -226,6 +229,25 @@ describe("KeyInfoView", () => {
   const openMoreKeyActions = async () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
   };
+
+  it("loads key activity only after opening its tab", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(dailyActivityAggregatedCall).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await screen.findByText("No activity in this date range.");
+    expect(dailyActivityAggregatedCall).toHaveBeenCalledExactlyOnceWith(
+      "user",
+      expect.objectContaining({ apiKey: "test-key-id", bounded: true, includeModelBreakdown: true }),
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.queryByText("No activity in this date range.")).not.toBeInTheDocument();
+    expect(dailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+  });
 
   it("shows key-scoped auto-router usage as its own admin tab", async () => {
     vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });

@@ -25,7 +25,7 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
   };
 });
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), usePathname: () => "/virtual-keys" }));
 
 vi.mock("../networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../networking")>()),
