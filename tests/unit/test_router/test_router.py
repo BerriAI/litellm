@@ -4377,6 +4377,51 @@ async def test_aembedding_skips_the_context_window_check_when_token_counting_is_
 
 
 @pytest.mark.asyncio
+async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches():
+    from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+    window: Final = {"max_input_tokens": 10000}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1],
+                },
+                "model_info": window,
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+                "model_info": window,
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+    batch: Final = ["word " * 2100] * 76
+    batches: Final = tuple(
+        asyncio.create_task(router.aembedding(model="embed", input=batch))
+        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    )
+    await asyncio.sleep(0.05)
+    chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
+
+    first_done, _ = await asyncio.wait((chat, *batches), return_when=asyncio.FIRST_COMPLETED)
+    await asyncio.gather(chat, *batches)
+
+    assert first_done == {chat}
+
+
+def test_a_routing_plugin_counts_an_embedding_text_batch_by_its_longest_text():
+    long_text: Final = "word " * 4000
+    context: Final = RouterContext(_embedding_router(max_input_tokens=10))
+
+    assert context.count_pre_call_check_tokens(None, ["one", long_text]) == litellm.token_counter(text=long_text)
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
 @pytest.mark.parametrize(
     "prompt_kwargs",
