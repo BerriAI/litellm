@@ -12,6 +12,7 @@ from litellm._auth.decision import (
     MalformedKey,
     MasterKeyOnlyRoute,
     MissingKey,
+    ModelBudgetExceeded,
     NoDatabase,
     NotAVirtualKey,
     OwnerDeactivated,
@@ -126,6 +127,20 @@ def denial_exception(
         case KeyWithoutToken():
             return HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key, no token associated"
+            )
+        case ModelBudgetExceeded(
+            message=message,
+            current_cost=current_cost,
+            max_budget=max_budget,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        ):
+            return litellm.BudgetExceededError(
+                current_cost=current_cost,
+                max_budget=max_budget,
+                message=message,
+                entity_type=entity_type,
+                entity_id=entity_id,
             )
         case _:
             assert_never(denial)

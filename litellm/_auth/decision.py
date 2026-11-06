@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, TypeAlias
@@ -45,7 +45,12 @@ class VirtualKey:
     budget_throttle_pct: float | None
 
 
-Grant: TypeAlias = NoMasterKey | UserAuthRoute | MasterKey | CachedAdminKey | VirtualKey
+@dataclass(frozen=True, slots=True)
+class WithinModelBudgets:
+    pass
+
+
+Grant: TypeAlias = NoMasterKey | UserAuthRoute | MasterKey | CachedAdminKey | VirtualKey | WithinModelBudgets
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +119,15 @@ class KeyWithoutToken:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class ModelBudgetExceeded:
+    message: str
+    current_cost: float
+    max_budget: float
+    entity_type: str | None
+    entity_id: str | None
+
+
 Denial: TypeAlias = (
     MissingKey
     | MalformedKey
@@ -127,6 +141,7 @@ Denial: TypeAlias = (
     | TeamMemberBudgetExceeded
     | KeyBudgetExceeded
     | KeyWithoutToken
+    | ModelBudgetExceeded
 )
 
 
@@ -179,6 +194,15 @@ class OwnerFacts:
 class TeamMemberBudget:
     spend: float
     max_budget: float
+
+
+@dataclass(frozen=True, slots=True)
+class ModelBudgetScope:
+    models: tuple[str, ...]
+    rewritable_model: str | None
+    key_has_model_budgets: bool
+    key_budget_fallbacks: Mapping[str, tuple[str, ...]]
+    user_has_model_budgets: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,11 +294,6 @@ class AlertKeySoftBudget:
 
 
 @dataclass(frozen=True, slots=True)
-class EnforceModelBudgets:
-    resume: "Callable[[], Step]"
-
-
-@dataclass(frozen=True, slots=True)
 class LoadKeyContext:
     resume: "Callable[[], Step]"
 
@@ -288,6 +307,35 @@ class ReadProxySpend:
 class AlertProxyBudget:
     spend: float
     resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadModelBudgetScope:
+    resume: "Callable[[ModelBudgetScope], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckKeyModelBudget:
+    model: str
+    resume: "Callable[[ModelBudgetExceeded | None], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizeBudgetFallback:
+    model: str
+    resume: "Callable[[bool], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class RewriteRequestModel:
+    model: str
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckUserModelBudget:
+    model: str
+    resume: "Callable[[ModelBudgetExceeded | None], Step]"
 
 
 IdentityEffect: TypeAlias = (
@@ -309,11 +357,13 @@ BudgetEffect: TypeAlias = (
     | ReadKeySpend
     | AlertKeyBudget
     | AlertKeySoftBudget
-    | EnforceModelBudgets
     | ReadProxySpend
     | AlertProxyBudget
 )
-Effect: TypeAlias = IdentityEffect | BudgetEffect
+ModelBudgetEffect: TypeAlias = (
+    ReadModelBudgetScope | CheckKeyModelBudget | AuthorizeBudgetFallback | RewriteRequestModel | CheckUserModelBudget
+)
+Effect: TypeAlias = IdentityEffect | BudgetEffect | ModelBudgetEffect
 Step: TypeAlias = Outcome | Effect
 
 
@@ -321,3 +371,7 @@ class AuthCore(Protocol):
     def start(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step: ...
 
     def start_resolved_key(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step: ...
+
+    def check_model_budgets(self) -> Step: ...
+
+    def check_user_model_budgets(self) -> Step: ...

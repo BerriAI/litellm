@@ -6,12 +6,14 @@ from litellm._auth.decision import (
     AlertProxyBudget,
     AlertTeamMemberBudget,
     Allow,
+    AuthorizeBudgetFallback,
     BudgetEffect,
     CheckBudgetExemption,
+    CheckKeyModelBudget,
+    CheckUserModelBudget,
     Deny,
     Effect,
     EnforceModelAccess,
-    EnforceModelBudgets,
     EvictPresentedKey,
     IdentityEffect,
     InspectKey,
@@ -19,22 +21,39 @@ from litellm._auth.decision import (
     LoadKey,
     LoadKeyContext,
     LoadKeyOwner,
+    ModelBudgetEffect,
+    ModelBudgetExceeded,
+    ModelBudgetScope,
     Outcome,
     OwnerFacts,
     PrepareKey,
     PresentedKey,
     ReadKeySpend,
+    ReadModelBudgetScope,
     ReadProxySpend,
     ReadTeamMemberBudget,
     ResolveEndUser,
     ResolvePresentedKey,
+    RewriteRequestModel,
     SendKeyBudgetAlerts,
     Step,
     TeamMemberBudget,
 )
 
 
-class EffectHandler(Protocol):
+class ModelBudgetHandler(Protocol):
+    async def read_model_budget_scope(self) -> ModelBudgetScope: ...
+
+    async def check_key_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+
+    async def authorize_budget_fallback(self, model: str) -> bool: ...
+
+    async def rewrite_request_model(self, model: str) -> None: ...
+
+    async def check_user_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+
+
+class EffectHandler(ModelBudgetHandler, Protocol):
     async def resolve_end_user(self, prefetch_key: bool) -> None: ...
 
     async def resolve_presented_key(self, hashed_token: str) -> PresentedKey | None: ...
@@ -65,8 +84,6 @@ class EffectHandler(Protocol):
 
     async def alert_key_soft_budget(self) -> None: ...
 
-    async def enforce_model_budgets(self) -> None: ...
-
     async def load_key_context(self) -> None: ...
 
     async def read_proxy_spend(self) -> float | None: ...
@@ -89,6 +106,14 @@ async def _answer(step: Effect, handler: EffectHandler) -> Step:
             | LoadKeyContext()
         ):
             return await _answer_identity(step, handler)
+        case (
+            ReadModelBudgetScope()
+            | CheckKeyModelBudget()
+            | AuthorizeBudgetFallback()
+            | RewriteRequestModel()
+            | CheckUserModelBudget()
+        ):
+            return await _answer_model_budget(step, handler)
         case _:
             return await _answer_budget(step, handler)
 
@@ -143,9 +168,6 @@ async def _answer_budget(step: BudgetEffect, handler: EffectHandler) -> Step:
         case AlertKeySoftBudget(resume=resume):
             await handler.alert_key_soft_budget()
             return resume()
-        case EnforceModelBudgets(resume=resume):
-            await handler.enforce_model_budgets()
-            return resume()
         case ReadProxySpend(resume=resume):
             return resume(await handler.read_proxy_spend())
         case AlertProxyBudget(spend=spend, resume=resume):
@@ -153,6 +175,39 @@ async def _answer_budget(step: BudgetEffect, handler: EffectHandler) -> Step:
             return resume()
         case _:
             assert_never(step)
+
+
+async def _answer_model_budget(step: ModelBudgetEffect, handler: ModelBudgetHandler) -> Step:
+    match step:
+        case ReadModelBudgetScope(resume=resume):
+            return resume(await handler.read_model_budget_scope())
+        case CheckKeyModelBudget(model=model, resume=resume):
+            return resume(await handler.check_key_model_budget(model))
+        case AuthorizeBudgetFallback(model=model, resume=resume):
+            return resume(await handler.authorize_budget_fallback(model))
+        case RewriteRequestModel(model=model, resume=resume):
+            await handler.rewrite_request_model(model)
+            return resume()
+        case CheckUserModelBudget(model=model, resume=resume):
+            return resume(await handler.check_user_model_budget(model))
+        case _:
+            assert_never(step)
+
+
+async def drive_model_budgets(step: Step, handler: ModelBudgetHandler) -> Outcome:
+    match step:
+        case Allow() | Deny():
+            return step
+        case (
+            ReadModelBudgetScope()
+            | CheckKeyModelBudget()
+            | AuthorizeBudgetFallback()
+            | RewriteRequestModel()
+            | CheckUserModelBudget()
+        ):
+            return await drive_model_budgets(await _answer_model_budget(step, handler), handler)
+        case _:
+            raise RuntimeError(f"{type(step).__name__} is not a model budget effect")
 
 
 async def drive(step: Step, handler: EffectHandler) -> Outcome:

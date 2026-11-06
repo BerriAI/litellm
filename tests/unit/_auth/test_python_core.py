@@ -14,6 +14,8 @@ from litellm._auth.decision import (
     KeyBlocked,
     KeyBudgetExceeded,
     KeyFacts,
+    ModelBudgetExceeded,
+    ModelBudgetScope,
     KeyWithoutToken,
     MalformedKey,
     MasterKey,
@@ -67,8 +69,16 @@ CHECKED: Final = (
     "enforce_model_access",
     "check_budget_exemption",
     "send_key_budget_alerts",
-    "enforce_model_budgets",
+    "read_model_budget_scope",
     "load_key_context",
+)
+
+NO_MODEL_BUDGETS: Final = ModelBudgetScope(
+    models=(),
+    rewritable_model=None,
+    key_has_model_budgets=False,
+    key_budget_fallbacks={},
+    user_has_model_budgets=False,
 )
 
 Call = tuple[str, object]
@@ -83,6 +93,8 @@ class RecordingHandler:
     team_member_budget: TeamMemberBudget | None = None
     key_spend: float = 0.0
     proxy_spend: float | None = None
+    model_budget_scope: ModelBudgetScope = NO_MODEL_BUDGETS
+    user_model_budget_exceeded: ModelBudgetExceeded | None = None
     calls: tuple[Call, ...] = ()
 
     def _record(self, name: str, payload: object = None) -> None:
@@ -139,8 +151,24 @@ class RecordingHandler:
     async def alert_key_soft_budget(self) -> None:
         self._record("alert_key_soft_budget")
 
-    async def enforce_model_budgets(self) -> None:
-        self._record("enforce_model_budgets")
+    async def read_model_budget_scope(self) -> ModelBudgetScope:
+        self._record("read_model_budget_scope")
+        return self.model_budget_scope
+
+    async def check_key_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+        self._record("check_key_model_budget", model)
+        return None
+
+    async def authorize_budget_fallback(self, model: str) -> bool:
+        self._record("authorize_budget_fallback", model)
+        return True
+
+    async def rewrite_request_model(self, model: str) -> None:
+        self._record("rewrite_request_model", model)
+
+    async def check_user_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+        self._record("check_user_model_budget", model)
+        return self.user_model_budget_exceeded
 
     async def load_key_context(self) -> None:
         self._record("load_key_context")
@@ -411,7 +439,7 @@ async def test_key_budget_denies_or_throttles_at_the_limit(
     assert outcome == expected
     assert calls[3:6] == ("send_key_budget_alerts", "read_key_spend", "alert_key_budget")
     assert handler.calls[5] == ("alert_key_budget", spend)
-    assert ("enforce_model_budgets" in calls) == isinstance(expected, Allow)
+    assert ("read_model_budget_scope" in calls) == isinstance(expected, Allow)
 
 
 @pytest.mark.asyncio
@@ -420,7 +448,7 @@ async def test_key_budget_is_enforced_only_on_llm_routes():
     outcome, calls = await _check(key, is_llm_api_route=False, key_spend=2.0)
     assert outcome == _allowed()
     assert "read_key_spend" not in calls
-    assert "enforce_model_budgets" in calls
+    assert "read_model_budget_scope" in calls
 
 
 @pytest.mark.asyncio
@@ -441,7 +469,7 @@ async def test_soft_budget_alerts_at_the_threshold_before_model_budgets(
     outcome, calls = await _check(replace(PLAIN_KEY, spend=spend, soft_budget=soft_budget))
     assert outcome == _allowed()
     soft_alert: Final = ("alert_key_soft_budget",) if alerted else ()
-    assert calls[3:] == ("send_key_budget_alerts", *soft_alert, "enforce_model_budgets", "load_key_context")
+    assert calls[3:] == ("send_key_budget_alerts", *soft_alert, "read_model_budget_scope", "load_key_context")
 
 
 @pytest.mark.asyncio
@@ -449,7 +477,7 @@ async def test_throttled_key_still_gets_soft_and_model_budget_checks():
     key: Final = replace(PLAIN_KEY, max_budget=5.0, budget_throttle_pct=0.5, spend=6.0, soft_budget=1.0)
     outcome, calls = await _check(key, key_spend=6.0)
     assert outcome == _allowed(budget_throttle_pct=0.5)
-    assert calls[-4:] == ("alert_key_budget", "alert_key_soft_budget", "enforce_model_budgets", "load_key_context")
+    assert calls[-4:] == ("alert_key_budget", "alert_key_soft_budget", "read_model_budget_scope", "load_key_context")
 
 
 @pytest.mark.asyncio
@@ -488,3 +516,16 @@ async def test_key_without_token_is_denied_after_its_context_loads(exempt: bool)
     outcome, calls = await _run(PythonCore().start_resolved_key(_facts("hash"), settings, NOW), handler)
     assert outcome == Deny(KeyWithoutToken())
     assert calls[-3:] == ("load_key_context", "read_proxy_spend", "alert_proxy_budget")
+
+
+@pytest.mark.asyncio
+async def test_a_model_budget_denial_stops_the_key_chain_before_its_context_loads():
+    exceeded: Final = ModelBudgetExceeded(
+        message="over", current_cost=2.0, max_budget=1.0, entity_type="user", entity_id="u-1"
+    )
+    scope: Final = replace(NO_MODEL_BUDGETS, models=("gpt-4o",), user_has_model_budgets=True)
+    handler: Final = RecordingHandler(model_budget_scope=scope, user_model_budget_exceeded=exceeded)
+    outcome, calls = await _run(PythonCore().start_resolved_key(_facts("hash"), SETTINGS, NOW), handler)
+    assert outcome == Deny(exceeded)
+    assert calls[-2:] == ("read_model_budget_scope", "check_user_model_budget")
+

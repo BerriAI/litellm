@@ -14,7 +14,6 @@ from litellm._auth.decision import (
     CheckBudgetExemption,
     Deny,
     EnforceModelAccess,
-    EnforceModelBudgets,
     EvictPresentedKey,
     ExpiredKey,
     InspectKey,
@@ -51,8 +50,10 @@ from litellm._auth.decision import (
     UserAuthDisabled,
     UserAuthRoute,
     VirtualKey,
+    WithinModelBudgets,
 )
 from litellm._auth.key import hash_token, is_master_key
+from litellm._auth.model_budgets import check_model_budgets, check_user_model_budgets
 
 _USER_AUTH_ROUTE: Final = "/user/auth"
 _VIRTUAL_KEY_PREFIX: Final = "sk-"
@@ -90,6 +91,12 @@ class PythonCore:
 
     def start_resolved_key(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step:
         return _check_key(_KeyCheck(settings, now, facts.is_llm_api_route, key_label=facts.token or ""))
+
+    def check_model_budgets(self) -> Step:
+        return check_model_budgets(then=lambda: Allow(WithinModelBudgets()))
+
+    def check_user_model_budgets(self) -> Step:
+        return check_user_model_budgets(then=lambda: Allow(WithinModelBudgets()))
 
 
 def _after_presented_key(
@@ -211,7 +218,7 @@ def _after_key_spend(check: _KeyCheck, key: KeyFacts, spend: float, max_budget: 
 
 def _check_soft_budget(check: _KeyCheck, key: KeyFacts, budget_throttle_pct: float | None) -> Step:
     def model_budgets() -> Step:
-        return EnforceModelBudgets(resume=lambda: _load_context(check, key, budget_throttle_pct))
+        return check_model_budgets(then=lambda: _load_context(check, key, budget_throttle_pct))
 
     if key.soft_budget and key.spend >= key.soft_budget:
         return AlertKeySoftBudget(resume=model_budgets)
