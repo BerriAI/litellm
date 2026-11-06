@@ -1,8 +1,8 @@
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -3495,6 +3495,89 @@ def test_update_default_team_settings_without_organization_skips_lookup(
 
     assert resp.status_code == 200, resp.text
     mock_organization_lookup["find_unique"].assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
+
+
+@pytest.fixture
+def mock_access_group_lookup(monkeypatch: pytest.MonkeyPatch) -> Callable[[frozenset[str]], AsyncMock]:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    def _install(existing_access_group_ids: frozenset[str]) -> AsyncMock:
+        async def _find_many(where: dict[str, dict[str, list[str]]]) -> list[MagicMock]:
+            return [
+                MagicMock(access_group_id=access_group_id)
+                for access_group_id in where["access_group_id"]["in"]
+                if access_group_id in existing_access_group_ids
+            ]
+
+        find_many: Final = AsyncMock(side_effect=_find_many)
+        fake_prisma: Final = MagicMock()
+        fake_prisma.writer_db.litellm_accessgrouptable.find_many = find_many
+
+        monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+        return find_many
+
+    return _install
+
+
+def test_update_default_team_settings_rejects_unknown_access_group(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "ghost-group"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-group" in resp.json()["detail"]["error"]
+    assert "real-group" not in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+    assert litellm.default_team_params == {}
+
+
+def test_update_default_team_settings_saves_existing_access_groups(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group", "other-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "other-group"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["access_group_ids"] == ["real-group", "other-group"]
+    assert mock_proxy_config["save_call_count"]() == 1
+    assert litellm.default_team_params["access_group_ids"] == ["real-group", "other-group"]
+
+
+def test_update_default_team_settings_with_empty_access_groups_skips_lookup(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    find_many: Final = mock_access_group_lookup(frozenset())
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": []},
+    )
+
+    assert resp.status_code == 200, resp.text
+    find_many.assert_not_awaited()
     assert mock_proxy_config["save_call_count"]() == 1
 
 

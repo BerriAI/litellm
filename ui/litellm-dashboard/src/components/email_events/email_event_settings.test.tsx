@@ -39,15 +39,15 @@ describe("EmailEventSettings", () => {
     expect(screen.getByText("Select which events should trigger email notifications.")).toBeInTheDocument();
   });
 
-  it("renders one checkbox per event, reflecting the persisted enabled state", async () => {
+  it("should render one toggle per event, reflecting the persisted enabled state", async () => {
     renderWithProviders(<EmailEventSettings accessToken="sk-test" />);
 
     await screen.findByText("Virtual Key Created");
-    const checkboxes = screen.getAllByRole("checkbox");
+    const toggles = screen.getAllByRole("switch");
 
-    expect(checkboxes).toHaveLength(2);
-    expect(checkboxes[0]).toBeChecked();
-    expect(checkboxes[1]).not.toBeChecked();
+    expect(toggles).toHaveLength(2);
+    expect(toggles[0]).toBeChecked();
+    expect(toggles[1]).not.toBeChecked();
   });
 
   it("renders a per-event description", async () => {
@@ -66,7 +66,7 @@ describe("EmailEventSettings", () => {
     renderWithProviders(<EmailEventSettings accessToken="sk-test" />);
 
     await screen.findByText("Virtual Key Created");
-    await user.click(screen.getAllByRole("checkbox")[1]);
+    await user.click(screen.getAllByRole("switch")[1]);
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -84,7 +84,7 @@ describe("EmailEventSettings", () => {
     renderWithProviders(<EmailEventSettings accessToken="sk-test" />);
 
     await screen.findByText("Virtual Key Created");
-    await user.click(screen.getAllByRole("checkbox")[0]);
+    await user.click(screen.getAllByRole("switch")[0]);
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -118,7 +118,7 @@ describe("EmailEventSettings", () => {
     getEmailEventSettings.mockReturnValue(new Promise(() => {}));
     renderWithProviders(<EmailEventSettings accessToken="sk-test" />);
 
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
   });
 
@@ -128,5 +128,21 @@ describe("EmailEventSettings", () => {
     await waitFor(() => {
       expect(getEmailEventSettings).not.toHaveBeenCalled();
     });
+  });
+  it("should show model deprecation reminders off and save explicit opt-in", async () => {
+    const user = userEvent.setup();
+    getEmailEventSettings.mockResolvedValue({ settings: [{ event: "Model Deprecations", enabled: false }] });
+    renderWithProviders(<EmailEventSettings accessToken="test-access" />);
+    const toggle = await screen.findByRole("switch", { name: "Model Deprecations" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/30 days and 1 day before model deprecation/)).toBeInTheDocument();
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() =>
+      expect(updateEmailEventSettings).toHaveBeenCalledWith("test-access", {
+        settings: [{ event: "Model Deprecations", enabled: true }],
+      }),
+    );
   });
 });
