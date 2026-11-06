@@ -4,7 +4,7 @@ import datetime
 import json
 from collections.abc import AsyncIterable, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
+from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, TypeAlias
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -220,15 +220,27 @@ def _anthropic_image(uri: str) -> dict[str, object]:
     }
 
 
+def _gemini_snake_case_image(uri: str) -> dict[str, object]:
+    return {"contents": [{"role": "user", "parts": [{"file_data": {"mime_type": "image/png", "file_uri": uri}}]}]}
+
+
+def _gemini_camel_case_image(uri: str) -> dict[str, object]:
+    return {"contents": [{"role": "user", "parts": [{"fileData": {"mimeType": "image/png", "fileUri": uri}}]}]}
+
+
+_S3MediaRoute: TypeAlias = Literal["acompletion", "aresponses", "anthropic_messages", "agenerate_content"]
+_GEMINI_GENERATE_CONTENT_PATH: Final = "/v1beta/models/nova:generateContent"
 _S3_MEDIA_SURFACES: Final = (
     pytest.param("acompletion", "/v1/chat/completions", _chat_image, id="chat-completions"),
     pytest.param("aresponses", "/v1/responses", _responses_image, id="responses"),
     pytest.param("anthropic_messages", "/v1/messages", _anthropic_image, id="anthropic-messages"),
+    pytest.param("agenerate_content", _GEMINI_GENERATE_CONTENT_PATH, _gemini_snake_case_image, id="gemini-snake-case"),
+    pytest.param("agenerate_content", _GEMINI_GENERATE_CONTENT_PATH, _gemini_camel_case_image, id="gemini-camel-case"),
 )
 
 
 async def _send_s3_media(
-    route_type: Literal["acompletion", "aresponses", "anthropic_messages"],
+    route_type: _S3MediaRoute,
     path: str,
     body: dict[str, object],
     user_role: LitellmUserRoles,
@@ -596,7 +608,7 @@ class TestProxyBaseLLMRequestProcessing:
     )
     async def test_non_admin_s3_media_is_refused_while_a_proxy_admin_key_passes(
         self,
-        route_type: Literal["acompletion", "aresponses", "anthropic_messages"],
+        route_type: _S3MediaRoute,
         path: str,
         body_for: Callable[[str], dict[str, object]],
         uri: str,
@@ -623,13 +635,17 @@ class TestProxyBaseLLMRequestProcessing:
     )
     async def test_non_admin_s3_media_passes_in_a_bucket_the_admin_allowed(
         self,
-        route_type: Literal["acompletion", "aresponses", "anthropic_messages"],
+        route_type: _S3MediaRoute,
         path: str,
         body_for: Callable[[str], dict[str, object]],
         general_settings: dict[str, object],
     ) -> None:
         response: Final = await _send_s3_media(
-            route_type, path, body_for("s3://media-bucket/dir/cat.png"), LitellmUserRoles.INTERNAL_USER, general_settings
+            route_type,
+            path,
+            body_for("s3://media-bucket/dir/cat.png"),
+            LitellmUserRoles.INTERNAL_USER,
+            general_settings,
         )
 
         assert "a cat" in str(response)

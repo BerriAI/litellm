@@ -44,8 +44,7 @@ def is_managed_cloud_storage_uri(file_id: str) -> bool:
 
 _S3_SCHEME: Final = "s3://"
 _FIRST_CHARACTERS_THAT_CAN_DECODE_TO_S3: Final = ("s", "%")
-_CLIENT_MEDIA_FIELDS: Final = ("messages", "input", "system")
-_MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "file_data"})
+_MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "file_data", "file_uri", "fileUri"})
 
 
 def _media_uris(value: object, key: str | None = None) -> Iterator[str]:
@@ -89,8 +88,7 @@ def _is_s3_uri(uri: str) -> bool:
 
 
 def s3_media_uris(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    media_uris: Final = chain.from_iterable(_media_uris(request_body.get(field)) for field in _CLIENT_MEDIA_FIELDS)
-    return tuple(filter(_is_s3_uri, media_uris))
+    return tuple(filter(_is_s3_uri, _media_uris(request_body)))
 
 
 def is_managed_s3_uri(uri: str) -> bool:

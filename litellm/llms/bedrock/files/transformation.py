@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
+    s3_media_uris,
     sanitize_cloud_object_component,
     should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
@@ -321,8 +322,7 @@ def _validate_file_id_against_configured_buckets(
 _REJECTED_FILE_ID_REQUEST_URL: Final = "https://litellm.ai"
 
 
-def _rejected_file_id(reason: ValueError) -> BedrockError:
-    message: Final = str(reason)
+def _rejected_request(message: str) -> BedrockError:
     return BedrockError(
         status_code=400,
         message=message,
@@ -331,6 +331,29 @@ def _rejected_file_id(reason: ValueError) -> BedrockError:
             text=message,
             request=httpx.Request(method="GET", url=_REJECTED_FILE_ID_REQUEST_URL),
         ),
+    )
+
+
+def _rejected_file_id(reason: ValueError) -> BedrockError:
+    return _rejected_request(str(reason))
+
+
+def _batch_line_error(line_number: int, problem: str) -> BedrockError:
+    return _rejected_request(f"Batch input file line {line_number} {problem}")
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _batch_body_problem(body: object) -> str | None:
+    json_body: Final = _json_object(body)
+    s3_uris: Final = s3_media_uris(json_body) if json_body is not None else ()
+    if not s3_uris:
+        return None
+    return (
+        f"has s3:// media URLs ({', '.join(s3_uris)}). "
+        "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
     )
 
 
@@ -1083,6 +1106,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         for idx, _openai_jsonl_content in enumerate(openai_jsonl_content):
             # Extract the request body from OpenAI format
             openai_body = _openai_jsonl_content.get("body", {})
+            if (body_problem := _batch_body_problem(openai_body)) is not None:
+                raise _batch_line_error(idx + 1, body_problem)
             record_model = openai_body.get("model", "")
             resolved_model = litellm.model_alias_map.get(record_model, record_model)
             model_for_transform, provider = self._resolve_batch_record_model_and_provider(

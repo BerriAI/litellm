@@ -22,6 +22,7 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
@@ -4334,3 +4335,74 @@ async def test_async_create_file(
         "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
     )
     assert file_obj.filename.endswith(".jsonl")
+
+
+_VALID_BATCH_LINE: Final = json.dumps(
+    {
+        "custom_id": "req-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+        },
+    }
+)
+_BATCH_S3_IMAGE: Final = "s3://media-bucket/dir/cat.png"
+_BATCH_S3_MEDIA_REFUSAL: Final = (
+    f"Batch input file line 2 has s3:// media URLs ({_BATCH_S3_IMAGE}). "
+    "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+)
+_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE: Final = json.dumps(
+    {
+        "custom_id": "req-2",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}]}],
+        },
+    }
+)
+_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE: Final = json.dumps(
+    {
+        "custom_id": "req-2",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _BATCH_S3_IMAGE}]}],
+        },
+    }
+)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "s3_media_line",
+    (
+        pytest.param(_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE, id="chat-s3-image"),
+        pytest.param(_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE, id="responses-s3-image"),
+    ),
+)
+async def test_create_file_refuses_a_batch_line_with_s3_media_with_a_400_before_uploading(
+    respx_mock: respx.MockRouter, s3_media_line: str
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await litellm.acreate_file(
+            file=("batch.jsonl", f"{_VALID_BATCH_LINE}\n{s3_media_line}\n".encode(), "application/jsonl"),
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-batch-bucket",
+            aws_region_name="us-west-2",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.message == _BATCH_S3_MEDIA_REFUSAL
+    assert not put_route.called
