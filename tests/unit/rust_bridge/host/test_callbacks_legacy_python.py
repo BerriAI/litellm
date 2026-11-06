@@ -322,3 +322,27 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
     assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}
     assert head["litellm_call_id"] == "messages"
     assert "_response_ms" in head
+
+
+@pytest.mark.asyncio
+async def test_a_native_stream_failure_logs_like_the_python_chunk_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+
+    logged: Final[list[tuple[object, ...]]] = []
+    scheduled: Final[list[Mapping[str, object]]] = []
+
+    async def schedule(**kwargs: object) -> None:
+        scheduled.append(MappingProxyType(dict(kwargs)))
+
+    monkeypatch.setattr(verbose_proxy_logger, "error", lambda *args: logged.append(args))
+    monkeypatch.setattr(PassThroughStreamingHandler, "schedule_stream_failure_logging", schedule)
+    logger: Final = _supplied_logger()
+    logger.model_call_details["cache_hit"] = False
+    cut: Final = httpx.ReadError("cut")
+
+    await legacy.stream_failure(logger, "anthropic", {}, [b"event: ping\n\n"], cut)
+
+    assert logged == [("Error in chunk_processor: %s", cut)]
+    assert "cache_hit" not in logger.model_call_details
+    assert scheduled[0]["exception"] is cut

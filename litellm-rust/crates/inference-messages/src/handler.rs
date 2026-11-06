@@ -389,13 +389,20 @@ fn timed_chunks(
     response: reqwest::Response,
     timeout: Duration,
 ) -> impl futures_util::Stream<Item = Result<Bytes, litellm_http::Error>> + Send + 'static {
-    futures_util::stream::try_unfold(response, move |mut response| async move {
-        let chunk = tokio::time::timeout(timeout, response.chunk())
-            .await
-            .map_err(litellm_http::Error::body_read_timeout)?
-            .map_err(litellm_http::Error::from)?;
-        Ok(chunk.map(|chunk| (chunk, response)))
-    })
+    let expected = response.content_length();
+    futures_util::stream::try_unfold(
+        (response, 0_u64),
+        move |(mut response, received)| async move {
+            let chunk = tokio::time::timeout(timeout, response.chunk())
+                .await
+                .map_err(litellm_http::Error::body_read_timeout)?
+                .map_err(|error| litellm_http::Error::body_read(error, received, expected))?;
+            Ok(chunk.map(|chunk| {
+                let received = received + chunk.len() as u64;
+                (chunk, (response, received))
+            }))
+        },
+    )
 }
 
 /// The provider's error, its body read under `timeout`: a stream has no overall deadline once
