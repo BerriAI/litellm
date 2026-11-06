@@ -245,6 +245,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     def supports_native_file_search(self) -> bool:
         return False
 
+    def supports_encrypted_agent_messages(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
@@ -358,7 +361,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
     ) -> dict:  # mutable-ok: same
-        normalized_input, rewritten_types = normalize_codex_input_items(input)
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
         if rewritten_types:
             verbose_logger.warning(
                 "Bedrock Runtime Responses API: rewrote Codex input item type(s) %s that the endpoint rejects.",
