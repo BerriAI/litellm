@@ -1,7 +1,7 @@
 # Lens gateway boundary
 
 - Lens owns trace normalization, schemas, storage, graph assembly and querying in `BerriAI/lens`
-- This package owns the HTTP client, gateway response validation and asynchronous gateway spend export. Keep the trace reader remote-only
+- This package owns the HTTP client, gateway response validation, asynchronous gateway spend export and the trace reader. Trace reads always come from Postgres spend logs in `spend_logs.py`, even when a Lens service is configured, so traces have one source of truth
 - Gateway endpoints preserve authenticated user/team scope, trace references, pagination and public error categories
 - `generated/` comes from `scripts/generate_trace_types.py` using the Lens schemas pinned in `scripts/lens_assets/source.json`. Update the canonical Lens Rust contracts and import their schema outputs before regenerating. Never edit generated Python
 - Keep the pinned schema and fixture checksums current. CI verifies assets and regenerated Python without a Rust trace implementation in this repository
