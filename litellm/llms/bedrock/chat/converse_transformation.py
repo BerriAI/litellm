@@ -38,24 +38,26 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    drop_lookaround_regex_patterns,
-    is_object_schema,
-    native_redacted_thinking_data,
-    parse_content_for_reasoning,
-    tool_with_sanitized_parameters,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_lookaround_regex_patterns,
+    is_object_schema,
+    tool_with_sanitized_parameters,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     is_system_message,
     message_field,
     parts_of,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    native_redacted_thinking_data,
+    parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
@@ -958,7 +960,8 @@ class AmazonConverseConfig(BaseConfig):
     ) -> bool:
         """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
 
-        ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
+        ``supports_native_structured_output`` or ``supports_bedrock_native_structured_output_by_default`` in
+        ``litellm.model_cost`` turns it on for every request, and
         ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) also when Claude
         will think, which the json tool path would drop. When the request does not ask for thinking, a model
         that cannot force the json tool gets it unless that key is false.

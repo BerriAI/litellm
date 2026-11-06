@@ -41,17 +41,20 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
-    responses_reasoning_items_from_thinking_blocks,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -422,6 +425,17 @@ def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
 
 def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
+
+
+def _top_level_namespaces(request: object) -> Iterator[object]:
+    tools: Final = _json_list(_json_field(request, "tools")) or ()
+    return (tool for tool in tools if _json_field(tool, "type") == "namespace")
+
+
+def nested_tool_member_names(request: object) -> tuple[str, ...]:
+    tools: Final = (*_top_level_namespaces(request), *additional_tools_in_input(_json_field(request, "input")))
+    members: Final = chain.from_iterable(_namespace_members(tool) for tool in tools)
+    return tuple(chain.from_iterable(_tool_definition_name(member) for member in members))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:

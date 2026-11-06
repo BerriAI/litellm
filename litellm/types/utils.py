@@ -217,6 +217,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
     supports_bedrock_native_structured_output: ReadOnly[bool | None]
+    supports_bedrock_native_structured_output_by_default: ReadOnly[bool | None]
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
@@ -226,6 +227,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     thinking_always_on: ReadOnly[bool | None]
     thinking_on_by_default: ReadOnly[bool | None]
     supports_tool_search: bool | None
+    supports_per_turn_control: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_continuation: ReadOnly[bool | None]
@@ -2989,6 +2991,8 @@ _DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ..
 
 
 class TranscriptionResponse(OpenAIObject):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
     languages: Sequence[TranscriptionDetectedLanguage] | None = None
@@ -4300,6 +4304,8 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_regex_lookaround",
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
+        "supports_bedrock_native_structured_output_by_default",
+        "supports_per_turn_control",
         "supports_pdf_input",
         "supports_continuation",
         "reasoning_modes",

@@ -22,7 +22,7 @@ import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
 const budgetShape = {
-  budget_id: z.string().min(1, "Enter a budget ID"),
+  budget_id: z.string().min(1, { error: () => i18n.t("budgets.form.errors.budgetIdRequired") }),
   tpm_limit: z.number().nullish(),
   rpm_limit: z.number().nullish(),
   tpd_limit: z.number().nullish(),
