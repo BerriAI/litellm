@@ -1,14 +1,17 @@
 import asyncio
 import hashlib
 import os
-import signal
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
+import psutil
 import pytest
 import pytest_asyncio
+from openai.types.chat import ChatCompletionMessageParam
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.proxy.workflows.monty.compiler import compile_program
 from litellm.proxy.workflows.monty.models import (
@@ -21,6 +24,7 @@ from litellm.proxy.workflows.monty.models import (
     PythonProgram,
 )
 from litellm.proxy.workflows.monty.runtime import BinaryArtifact, MontyRuntime, installed_binary
+from tests.integration._support.process import stop_processes
 
 pytest.importorskip("pydantic_monty")
 
@@ -53,7 +57,7 @@ def _compile(
 
 @pytest_asyncio.fixture
 async def runtime() -> AsyncIterator[MontyRuntime]:
-    instance: Final = MontyRuntime(MontyLimits(max_concurrent_workers=1, max_queued_waiters=0))
+    instance: Final = MontyRuntime(MontyLimits(max_concurrent_workers=1, max_queued_waiters=1))
     assert await instance.start() is None
     try:
         yield instance
@@ -256,7 +260,7 @@ async def test_expired_deadline(runtime: MontyRuntime) -> None:
 
 
 @pytest.mark.asyncio
-async def test_binary_digest_mismatch_fails_closed(tmp_path: Path) -> None:
+async def test_binary_digest_mismatch_fails_closed() -> None:
     artifact: Final = installed_binary()
     assert isinstance(artifact, BinaryArtifact)
     runtime: Final = MontyRuntime(MontyLimits(), binary=BinaryArtifact(artifact.path, "0" * 64))
@@ -266,8 +270,132 @@ async def test_binary_digest_mismatch_fails_closed(tmp_path: Path) -> None:
     assert "SHA-256" in result.message
 
 
+class Finding(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    summary: str
+
+
+class EmailAnalyses(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    urgency: Finding
+    intent: Finding
+    sentiment: Finding
+
+
+@pytest.mark.asyncio
+async def test_multi_argument_email_draft_preserves_chat_messages(runtime: MontyRuntime) -> None:
+    analyses_schema: Final = EmailAnalyses.model_json_schema()
+    messages_schema: Final = TypeAdapter(list[ChatCompletionMessageParam]).json_schema()
+    definitions: Final[JsonSchema] = {
+        **messages_schema.pop("$defs", {}),
+        "Finding": {**analyses_schema["$defs"]["Finding"], "x-liteflow-record": True, "additionalProperties": False},
+        "EmailAnalyses": {
+            **{key: value for key, value in analyses_schema.items() if key != "$defs"},
+            "x-liteflow-record": True,
+            "additionalProperties": False,
+        },
+    }
+    source: Final = """def prepare_draft(analyses: EmailAnalyses, messages: list[ChatMessage]) -> list[ChatMessage]:
+    instruction = (
+        "Draft a customer-service reply using the original messages. "
+        "Treat these analyses as fallible guidance, not additional facts.\\n"
+        f"Urgency: {analyses.urgency.summary}\\n"
+        f"Intent: {analyses.intent.summary}\\n"
+        f"Sentiment: {analyses.sentiment.summary}"
+    )
+    return [{"role": "system", "content": instruction}] + messages
+"""
+    program: Final = PythonProgram(
+        contract_version="1",
+        source=source,
+        function_name="prepare_draft",
+        parameter_names=("analyses", "messages"),
+        input_schema={
+            "type": "object",
+            "properties": {"analyses": {"$ref": "#/$defs/EmailAnalyses"}, "messages": messages_schema},
+            "required": ["analyses", "messages"],
+            "additionalProperties": False,
+            "$defs": definitions,
+        },
+        output_schema={**messages_schema, "$defs": definitions},
+        source_sha256=hashlib.sha256(source.encode()).hexdigest(),
+    )
+    compiled: Final = compile_program(program, MontyLimits())
+    assert isinstance(compiled, CompiledProgram), compiled
+    messages: Final = [{"role": "user", "content": "Please reply", "name": "requester"}]
+    result: Final = await runtime.run_program(
+        compiled,
+        {
+            "analyses": {
+                "urgency": {"summary": "soon"},
+                "intent": {"summary": "reply"},
+                "sentiment": {"summary": "neutral"},
+            },
+            "messages": messages,
+        },
+        deadline_monotonic=time.monotonic() + 10,
+    )
+    assert isinstance(result, MontySuccess), result
+    assert result.output == [
+        {
+            "role": "system",
+            "content": "Draft a customer-service reply using the original messages. "
+            "Treat these analyses as fallible guidance, not additional facts.\n"
+            "Urgency: soon\nIntent: reply\nSentiment: neutral",
+        },
+        *messages,
+    ]
+
+
+def _nested(depth: int) -> object:
+    return [_nested(depth - 1)] if depth else 1
+
+
+@pytest.mark.asyncio
+async def test_too_deep_input_and_output_are_rejected(runtime: MontyRuntime) -> None:
+    input_result: Final = await _run(runtime, _compile("def transform(value): return value"), _nested(66))
+    assert isinstance(input_result, MontyFailure), input_result
+    assert input_result.kind == MontyErrorKind.INPUT_TOO_LARGE
+    output_result: Final = await _run(
+        runtime, _compile("def transform(value):\n for i in range(66): value = [value]\n return value"), 1
+    )
+    assert isinstance(output_result, MontyFailure), output_result
+    assert output_result.kind == MontyErrorKind.OUTPUT_TOO_LARGE
+
+
+@pytest.mark.asyncio
+async def test_invalid_bound_input_is_rejected(runtime: MontyRuntime) -> None:
+    result: Final = await _run(
+        runtime, _compile("def transform(value): return value", argument={"type": "integer"}), "wrong"
+    )
+    assert isinstance(result, MontyFailure)
+    assert result.kind == MontyErrorKind.INPUT_INVALID
+
+
+@pytest.mark.asyncio
+async def test_sandbox_denies_file_access_even_if_compiler_is_bypassed(runtime: MontyRuntime) -> None:
+    compiled: Final = _compile("def transform(value): return 42")
+    unfiltered: Final = replace(compiled, sandbox_source="open('/etc/passwd').read()")
+    result: Final = await _run(runtime, unfiltered, None)
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.RUNTIME_ERROR
+
+
+@pytest.mark.asyncio
+async def test_host_deadline_cancels_running_worker_and_releases_slot(runtime: MontyRuntime) -> None:
+    compiled: Final = _compile("def transform(value):\n while True: pass")
+    result: Final = await runtime.run_program(compiled, {"value": None}, deadline_monotonic=time.monotonic() + 0.05)
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.TIMEOUT
+    next_result: Final = await _run(runtime, _compile("def transform(value): return value"), 4)
+    assert isinstance(next_result, MontySuccess), next_result
+    assert next_result.output == 4
+
+
 def _worker_pids() -> frozenset[int]:
-    children: Final = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+    children: Final = " ".join(
+        path.read_text() for path in Path(f"/proc/{os.getpid()}/task").glob("*/children")
+    ).split()
     return frozenset(int(pid) for pid in children if Path(f"/proc/{pid}/comm").read_text().strip() == "monty")
 
 
@@ -285,9 +413,14 @@ async def test_cancellation_kills_worker_releases_slot_and_queue_is_bounded(runt
     previous: Final = _worker_pids()
     task: Final = asyncio.create_task(_run(runtime, _compile("def transform(value):\n while True: pass"), None))
     pid: Final = await _active_worker(previous)
+    waiter: Final = asyncio.create_task(_run(runtime, _compile("def transform(value): return value"), 1))
+    await asyncio.sleep(0)
     full: Final = await _run(runtime, _compile("def transform(value): return value"), 1)
     assert isinstance(full, MontyFailure)
     assert full.kind == MontyErrorKind.QUEUE_FULL
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -302,7 +435,7 @@ async def test_killed_worker_fails_and_next_run_succeeds(runtime: MontyRuntime) 
     previous: Final = _worker_pids()
     task: Final = asyncio.create_task(_run(runtime, _compile("def transform(value):\n while True: pass"), None))
     pid: Final = await _active_worker(previous)
-    os.kill(pid, signal.SIGKILL)
+    await asyncio.to_thread(stop_processes, (psutil.Process(pid),), 0.1)
     result: Final = await task
     assert isinstance(result, MontyFailure), result
     assert result.kind == MontyErrorKind.WORKER_CRASHED

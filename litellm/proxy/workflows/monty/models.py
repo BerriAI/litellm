@@ -1,22 +1,32 @@
+import keyword
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, JsonValue, StringConstraints
 
-JsonSchema = dict[str, JsonValue]
+JsonSchema: TypeAlias = dict[str, JsonValue]
+
+
+def _identifier(value: str) -> str:
+    if not value.isidentifier() or keyword.iskeyword(value):
+        raise ValueError("must be a Python identifier")
+    return value
+
+
+ProgramName: TypeAlias = Annotated[str, StringConstraints(min_length=1, max_length=128), AfterValidator(_identifier)]
 
 
 class PythonProgram(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     contract_version: Literal["1"]
     source: str
-    function_name: str
-    parameter_names: Annotated[tuple[str, ...], Field(min_length=1)]
+    function_name: ProgramName
+    parameter_names: Annotated[tuple[ProgramName, ...], Field(min_length=1, max_length=32)]
     input_schema: JsonSchema
     output_schema: JsonSchema
-    source_sha256: str
+    source_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
 class MontyErrorKind(StrEnum):
@@ -60,17 +70,17 @@ class CompiledProgram:
 
 
 class MontyLimits(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    max_source_bytes: int = Field(default=64 * 1024, gt=0)
-    max_input_bytes: int = Field(default=1024 * 1024, gt=0)
-    max_output_bytes: int = Field(default=1024 * 1024, gt=0)
-    max_input_depth: int = Field(default=64, gt=0)
-    max_output_depth: int = Field(default=64, gt=0)
-    max_memory: int = Field(default=64 * 1024 * 1024, gt=0)
-    worker_address_space_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
-    feed_seconds: float = Field(default=5, gt=0)
-    max_recursion_depth: int = Field(default=200, gt=0)
-    max_stdout_bytes: int = Field(default=64 * 1024, gt=0)
-    max_concurrent_workers: int = Field(default=4, gt=0)
-    max_queued_waiters: int = Field(default=16, ge=0)
+    max_source_bytes: int = Field(default=64 * 1024, gt=0, le=1024 * 1024)
+    max_input_bytes: int = Field(default=1024 * 1024, gt=0, le=16 * 1024 * 1024)
+    max_output_bytes: int = Field(default=1024 * 1024, gt=0, le=16 * 1024 * 1024)
+    max_input_depth: int = Field(default=64, gt=0, le=128)
+    max_output_depth: int = Field(default=64, gt=0, le=128)
+    max_memory: int = Field(default=64 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
+    worker_address_space_bytes: int = Field(default=512 * 1024 * 1024, gt=0, le=8 * 1024 * 1024 * 1024)
+    feed_seconds: float = Field(default=5, gt=0, le=60)
+    max_recursion_depth: int = Field(default=200, gt=0, le=1000)
+    max_stdout_bytes: int = Field(default=64 * 1024, gt=0, le=1024 * 1024)
+    max_concurrent_workers: int = Field(default=4, gt=0, le=64)
+    max_queued_waiters: int = Field(default=16, gt=0, le=1024)

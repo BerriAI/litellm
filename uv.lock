@@ -5261,6 +5261,7 @@ proxy-dev = [
     { name = "opentelemetry-sdk" },
     { name = "prisma" },
     { name = "prometheus-client" },
+    { name = "pydantic-monty" },
     { name = "semver" },
     { name = "sentry-sdk" },
 ]
@@ -5496,6 +5497,7 @@ proxy-dev = [
     { name = "opentelemetry-sdk", specifier = "==1.45.1" },
     { name = "prisma", specifier = "==0.11.0" },
     { name = "prometheus-client", specifier = "==0.20.0" },
+    { name = "pydantic-monty", specifier = "==1.4.0" },
     { name = "semver", specifier = ">=3.0.4,<4" },
     { name = "sentry-sdk", specifier = "==2.21.0" },
 ]

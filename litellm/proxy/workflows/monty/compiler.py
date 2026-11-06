@@ -2,6 +2,7 @@ import ast
 import hashlib
 import keyword
 import re
+from itertools import chain
 from typing import Final
 
 from jsonschema import Draft202012Validator
@@ -49,18 +50,48 @@ def _safe_name(name: str) -> bool:
     return name.isidentifier() and not keyword.iskeyword(name) and "__" not in name and not name.startswith(_PREFIX)
 
 
+def _module_statement_allowed(statement: ast.stmt) -> bool:
+    if isinstance(statement, ast.FunctionDef):
+        return True
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
+        return isinstance(statement.value.value, str)
+    return (
+        isinstance(statement, ast.ImportFrom)
+        and statement.module == "__future__"
+        and statement.level == 0
+        and all(alias.name == "annotations" and alias.asname is None for alias in statement.names)
+    )
+
+
+def _function_error(node: ast.FunctionDef, functions: tuple[ast.FunctionDef, ...]) -> MontyFailure | None:
+    if node not in functions:
+        return _invalid("nested functions and closures are forbidden", node)
+    if node.decorator_list:
+        return _invalid("decorators are forbidden", node)
+    if not _safe_name(node.name) or node.name in _GENERATED_GLOBALS:
+        return _invalid("reserved function name", node)
+    return None
+
+
+def _node_error(node: ast.AST, tree: ast.Module, functions: tuple[ast.FunctionDef, ...]) -> MontyFailure | None:
+    if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda, ast.Global, ast.Nonlocal)):
+        return _invalid(f"forbidden {type(node).__name__}", node)
+    if isinstance(node, ast.FunctionDef):
+        return _function_error(node, functions)
+    if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in tree.body:
+        return _invalid("imports inside functions are forbidden", node)
+    if isinstance(node, ast.Name) and (not _safe_name(node.id) or node.id in _FORBIDDEN):
+        return _invalid("forbidden builtin or reserved name", node)
+    if isinstance(node, ast.arg) and not _safe_name(node.arg):
+        return _invalid("reserved parameter name", node)
+    if isinstance(node, ast.Attribute) and not _safe_name(node.attr):
+        return _invalid("dunder or reserved attribute access", node)
+    return None
+
+
 def _source_error(tree: ast.Module, program: PythonProgram) -> MontyFailure | None:
     for statement in tree.body:
-        if (
-            isinstance(statement, ast.Expr)
-            and isinstance(statement.value, ast.Constant)
-            and isinstance(statement.value.value, str)
-        ):
-            continue
-        if isinstance(statement, ast.ImportFrom) and statement.module == "__future__" and statement.level == 0:
-            if all(alias.name == "annotations" and alias.asname is None for alias in statement.names):
-                continue
-        if not isinstance(statement, ast.FunctionDef):
+        if not _module_statement_allowed(statement):
             return _invalid("module body permits only function definitions and future annotations", statement)
     functions: Final = tuple(node for node in tree.body if isinstance(node, ast.FunctionDef))
     if len({node.name for node in functions}) != len(functions):
@@ -73,27 +104,9 @@ def _source_error(tree: ast.Module, program: PythonProgram) -> MontyFailure | No
         return _invalid("entry parameters must be positional without defaults or variadics", entries[0])
     if tuple(arg.arg for arg in args.args) != program.parameter_names:
         return _invalid("entry parameter order must match parameter_names", entries[0])
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda, ast.Global, ast.Nonlocal)):
-            return _invalid(f"forbidden {type(node).__name__}", node)
-        if isinstance(node, ast.FunctionDef):
-            if node not in functions:
-                return _invalid("nested functions and closures are forbidden", node)
-            if node.decorator_list:
-                return _invalid("decorators are forbidden", node)
-            if not _safe_name(node.name) or node.name in _GENERATED_GLOBALS:
-                return _invalid("reserved function name", node)
-            if node.args.defaults or any(default is not None for default in node.args.kw_defaults):
-                return _invalid("function defaults are forbidden", node)
-        if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in tree.body:
-            return _invalid("imports inside functions are forbidden", node)
-        if isinstance(node, ast.Name) and (not _safe_name(node.id) or node.id in _FORBIDDEN):
-            return _invalid("forbidden builtin or reserved name", node)
-        if isinstance(node, ast.arg) and not _safe_name(node.arg):
-            return _invalid("reserved parameter name", node)
-        if isinstance(node, ast.Attribute) and not _safe_name(node.attr):
-            return _invalid("dunder or reserved attribute access", node)
-    return None
+    return next(
+        (failure for node in ast.walk(tree) if (failure := _node_error(node, tree, functions)) is not None), None
+    )
 
 
 def _mapping(value: JsonValue) -> JsonSchema:
@@ -117,9 +130,20 @@ def _resolve(schema: JsonSchema, root: JsonSchema) -> JsonSchema:
     return descend(root, tuple(ref[2:].split("/")))
 
 
-def _schema_error(value: JsonValue) -> str | None:
+def _reference_exists(root: JsonValue, parts: tuple[str, ...]) -> bool:
+    if not parts:
+        return isinstance(root, (dict, bool))
+    part: Final = parts[0].replace("~1", "/").replace("~0", "~")
+    if isinstance(root, dict) and part in root:
+        return _reference_exists(root[part], parts[1:])
+    if isinstance(root, list) and part.isdigit() and int(part) < len(root):
+        return _reference_exists(root[int(part)], parts[1:])
+    return False
+
+
+def _schema_error(value: JsonValue, root: JsonSchema) -> str | None:
     if isinstance(value, list):
-        return next((error for item in value if (error := _schema_error(item)) is not None), None)
+        return next((error for item in value if (error := _schema_error(item, root)) is not None), None)
     if not isinstance(value, dict):
         return None
     for key, item in value.items():
@@ -127,9 +151,37 @@ def _schema_error(value: JsonValue) -> str | None:
             return f"unsupported schema keyword {key}"
         if key == "$ref" and (not isinstance(item, str) or not item.startswith("#/")):
             return "only local #/ JSON references are supported"
-        if key not in {"const", "enum", "default", "examples"}:
-            if (error := _schema_error(item)) is not None:
-                return error
+        if key == "$ref" and isinstance(item, str) and not _reference_exists(root, tuple(item[2:].split("/"))):
+            return "local JSON reference target does not exist"
+        if key not in {"const", "enum", "default", "examples"} and (error := _schema_error(item, root)) is not None:
+            return error
+    return None
+
+
+def _record_shape_error(schema: JsonSchema, root: JsonSchema) -> str | None:
+    if schema.get("x-liteflow-record") is not True:
+        return None
+    if schema not in tuple(record for _, record in _records(root)):
+        return "records must be defined in root $defs"
+    if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
+        return "records require fixed object properties"
+    if schema.get("additionalProperties") is not False:
+        return "records require additionalProperties false"
+    if any(not _safe_name(name) for name in _mapping(schema.get("properties"))):
+        return "record field names must be safe identifiers"
+    return None
+
+
+def _record_union_error(schema: JsonSchema, root: JsonSchema, seen: frozenset[str]) -> str | None:
+    for keyword_name in ("anyOf", "oneOf", "allOf"):
+        if not isinstance(alternatives := schema.get(keyword_name), list):
+            continue
+        if not any(_contains_record(_mapping(item), root, seen) for item in alternatives):
+            continue
+        if keyword_name != "anyOf" or len(alternatives) != 2:
+            return "records in unions are supported only as Optional X"
+        if sum(_mapping(item).get("type") == "null" for item in alternatives) != 1:
+            return "records in unions are supported only as Optional X"
     return None
 
 
@@ -139,34 +191,11 @@ def _record_error(schema: JsonSchema, root: JsonSchema, seen: frozenset[str] = f
         if ref in seen:
             return "recursive schema references are unsupported"
         return _record_error(_resolve(schema, root), root, seen | {ref})
-    if schema.get("x-liteflow-record") is True:
-        if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
-            return "records require fixed object properties"
-        if schema.get("additionalProperties") is not False:
-            return "records require additionalProperties false"
-        if any(not _safe_name(name) for name in _mapping(schema.get("properties"))):
-            return "record field names must be safe identifiers"
-    for keyword_name in ("anyOf", "oneOf", "allOf"):
-        alternatives: Final = schema.get(keyword_name)
-        if isinstance(alternatives, list):
-            if any(_contains_record(_mapping(item), root, seen) for item in alternatives):
-                if keyword_name != "anyOf" or len(alternatives) != 2:
-                    return "records in unions are supported only as Optional X"
-                if sum(_mapping(item).get("type") == "null" for item in alternatives) != 1:
-                    return "records in unions are supported only as Optional X"
-    for key, value in schema.items():
-        if key in {"properties", "$defs"} and isinstance(value, dict):
-            for child in value.values():
-                if (error := _record_error(_mapping(child), root, seen)) is not None:
-                    return error
-        if key in {"anyOf", "oneOf", "allOf", "prefixItems"} and isinstance(value, list):
-            for child_schema in value:
-                if (error := _record_error(_mapping(child_schema), root, seen)) is not None:
-                    return error
-        if key in {"items", "additionalProperties"} and isinstance(value, dict):
-            if (error := _record_error(value, root, seen)) is not None:
-                return error
-    return None
+    if (shape_error := _record_shape_error(schema, root)) is not None:
+        return shape_error
+    if (union_error := _record_union_error(schema, root, seen)) is not None:
+        return union_error
+    return next((error for child in _children(schema) if (error := _record_error(child, root, seen)) is not None), None)
 
 
 def _contains_record(schema: JsonSchema, root: JsonSchema, seen: frozenset[str]) -> bool:
@@ -188,7 +217,7 @@ def _children(schema: JsonSchema) -> tuple[JsonSchema, ...]:
             return (value,)
         return ()
 
-    return tuple(child for group in (children_of(key, value) for key, value in schema.items()) for child in group)
+    return tuple(chain.from_iterable(children_of(key, value) for key, value in schema.items()))
 
 
 def _records(root: JsonSchema) -> tuple[tuple[str, JsonSchema], ...]:
@@ -306,6 +335,39 @@ def _source(program: PythonProgram) -> str:
     )
 
 
+def _schemas_error(program: PythonProgram, tree: ast.Module) -> MontyFailure | None:
+    function_names: Final = frozenset(node.name for node in tree.body if isinstance(node, ast.FunctionDef))
+    for schema in (program.input_schema, program.output_schema):
+        if (error := _schema_error(schema, schema)) is not None:
+            return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, escape_diagnostics(error))
+        Draft202012Validator.check_schema(schema)
+        if (record_error := _record_error(schema, schema)) is not None:
+            return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, escape_diagnostics(record_error))
+        for name, _ in _records(schema):
+            if not _safe_name(name) or name in _GENERATED_GLOBALS or name in function_names:
+                return MontyFailure(
+                    MontyErrorKind.UNSUPPORTED_SCHEMA, "record class name must be a distinct safe identifier"
+                )
+    input_records: Final = dict(_records(program.input_schema))
+    if any(name in input_records and input_records[name] != schema for name, schema in _records(program.output_schema)):
+        return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, "conflicting record definitions")
+    return _input_schema_error(program)
+
+
+def _input_schema_error(program: PythonProgram) -> MontyFailure | None:
+    inputs: Final = program.input_schema
+    required: Final = inputs.get("required")
+    if (
+        inputs.get("type") != "object"
+        or set(_mapping(inputs.get("properties"))) != set(program.parameter_names)
+        or inputs.get("additionalProperties") is not False
+        or not isinstance(required, list)
+        or set(required) != set(program.parameter_names)
+    ):
+        return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, "input schema must require exactly the named parameters")
+    return None
+
+
 def compile_program(program: PythonProgram, limits: MontyLimits) -> CompiledProgram | MontyFailure:
     try:
         encoded: Final = program.source.encode("utf-8")
@@ -318,37 +380,8 @@ def compile_program(program: PythonProgram, limits: MontyLimits) -> CompiledProg
         tree: Final = ast.parse(program.source)
         if (failure := _source_error(tree, program)) is not None:
             return failure
-        for schema in (program.input_schema, program.output_schema):
-            if (error := _schema_error(schema)) is not None:
-                return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, escape_diagnostics(error))
-            Draft202012Validator.check_schema(schema)
-            if (record_error := _record_error(schema, schema)) is not None:
-                return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, escape_diagnostics(record_error))
-            for name, record in _records(schema):
-                if (
-                    not _safe_name(name)
-                    or name in _GENERATED_GLOBALS
-                    or name in {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
-                ):
-                    return MontyFailure(
-                        MontyErrorKind.UNSUPPORTED_SCHEMA, "record class name must be a distinct safe identifier"
-                    )
-        input_records: Final = dict(_records(program.input_schema))
-        if any(
-            name in input_records and input_records[name] != schema for name, schema in _records(program.output_schema)
-        ):
-            return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, "conflicting record definitions")
-        inputs: Final = program.input_schema
-        if (
-            inputs.get("type") != "object"
-            or set(_mapping(inputs.get("properties"))) != set(program.parameter_names)
-            or inputs.get("additionalProperties") is not False
-            or not isinstance(inputs.get("required"), list)
-            or set(inputs["required"]) != set(program.parameter_names)
-        ):
-            return MontyFailure(
-                MontyErrorKind.UNSUPPORTED_SCHEMA, "input schema must require exactly the named parameters"
-            )
+        if (schema_failure := _schemas_error(program, tree)) is not None:
+            return schema_failure
         return CompiledProgram(program, _source(program), program.input_schema, program.output_schema)
     except SyntaxError as exc:
         return MontyFailure(

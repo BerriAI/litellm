@@ -17,14 +17,15 @@ from typing import TYPE_CHECKING, Final
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 from pydantic import JsonValue, TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 
 from .compiler import escape_diagnostics
 from .models import CompiledProgram, JsonSchema, MontyErrorKind, MontyFailure, MontyLimits, MontySuccess
 
 if TYPE_CHECKING:
-    from pydantic_monty import AsyncMonty, AsyncMontySession
+    from pydantic_monty import AsyncMonty, AsyncMontySession, CollectString, MontyRuntimeError
 
-_JSON: Final = TypeAdapter(JsonValue)
+_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,12 +44,12 @@ def installed_binary() -> BinaryArtifact | MontyFailure:
         if file.hash is None or file.hash.mode != "sha256":
             return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, "runtime binary has no SHA-256 RECORD hash")
         digest: Final = base64.urlsafe_b64decode(file.hash.value + "=" * (-len(file.hash.value) % 4)).hex()
-        return BinaryArtifact(Path(distribution.locate_file(file)).resolve(), digest)
+        return BinaryArtifact(Path(str(distribution.locate_file(file))).resolve(), digest)
     except (importlib.metadata.PackageNotFoundError, OSError, ValueError) as exc:
         return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
 
 
-def _json_issue(value: object, depth: int, max_depth: int) -> MontyErrorKind | None:
+def _json_issue(value: JsonValue, depth: int, max_depth: int) -> MontyErrorKind | None:
     if depth > max_depth:
         return MontyErrorKind.INPUT_TOO_LARGE
     if value is None or type(value) in (str, int, bool):
@@ -61,7 +62,12 @@ def _json_issue(value: object, depth: int, max_depth: int) -> MontyErrorKind | N
         if any(type(key) is not str for key in value):
             return MontyErrorKind.INPUT_INVALID
         return next(
-            (issue for item in value.values() if (issue := _json_issue(item, depth + 1, max_depth)) is not None), None
+            (
+                child_issue
+                for item in value.values()
+                if (child_issue := _json_issue(item, depth + 1, max_depth)) is not None
+            ),
+            None,
         )
     return MontyErrorKind.INPUT_INVALID
 
@@ -71,20 +77,26 @@ def validate_json(
 ) -> JsonValue | MontyFailure:
     invalid: Final = MontyErrorKind.OUTPUT_INVALID if output else MontyErrorKind.INPUT_INVALID
     too_large: Final = MontyErrorKind.OUTPUT_TOO_LARGE if output else MontyErrorKind.INPUT_TOO_LARGE
-    issue: Final = _json_issue(value, 0, max_depth)
-    if issue is not None:
-        return MontyFailure(
-            too_large if issue == MontyErrorKind.INPUT_TOO_LARGE else invalid, "JSON depth or type invalid"
-        )
     try:
-        encoded: Final = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        parsed: Final = _JSON.validate_python(value, strict=True)
+        issue: Final = _json_issue(parsed, 0, max_depth)
+        if issue is not None:
+            return MontyFailure(
+                too_large if issue == MontyErrorKind.INPUT_TOO_LARGE else invalid, "JSON depth or type invalid"
+            )
+        encoded: Final = json.dumps(parsed, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > max_bytes:
             return MontyFailure(too_large, "JSON byte limit exceeded")
-        parsed: Final = _JSON.validate_python(value, strict=True)
-        Draft202012Validator(schema).validate(parsed)
-        return parsed
+        validator: Final = Draft202012Validator(schema)
+        validator.validate(parsed)  # pyright: ignore[reportUnknownMemberType]  # upstream kwargs are untyped
+    except PydanticValidationError as exc:
+        if '"type":"recursion_loop"' in exc.json():
+            return MontyFailure(too_large, "JSON depth limit exceeded")
+        return MontyFailure(invalid, escape_diagnostics(str(exc))[:4096])
     except (ValidationError, ValueError, OverflowError, RecursionError) as exc:
         return MontyFailure(invalid, escape_diagnostics(str(exc))[:4096])
+    else:
+        return parsed
 
 
 def _kill(session: AsyncMontySession) -> None:
@@ -95,6 +107,40 @@ def _kill(session: AsyncMontySession) -> None:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         return
+
+
+def _worker_limit(session: AsyncMontySession, limits: MontyLimits) -> MontyFailure | None:
+    if sys.platform != "linux":
+        return None
+    import resource
+
+    pid: Final = session.worker_pid
+    if pid is None:
+        return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, "worker PID unavailable")
+    try:
+        resource.prlimit(
+            pid, resource.RLIMIT_AS, (limits.worker_address_space_bytes, limits.worker_address_space_bytes)
+        )
+    except (OSError, ValueError) as exc:
+        return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
+    return None
+
+
+def _runtime_failure(exc: MontyRuntimeError, collector: CollectString, limits: MontyLimits) -> MontyFailure:
+    error: Final = exc.exception()
+    message: Final = escape_diagnostics(exc.display())[:4096]
+    if isinstance(error, TimeoutError):
+        return MontyFailure(MontyErrorKind.TIMEOUT, message)
+    if isinstance(error, MemoryError):
+        kind: Final = (
+            MontyErrorKind.STDOUT_LIMIT
+            if len(collector.output.encode("utf-8")) >= limits.max_stdout_bytes and not exc.traceback()
+            else MontyErrorKind.MEMORY_LIMIT
+        )
+        return MontyFailure(kind, message)
+    if isinstance(error, RecursionError):
+        return MontyFailure(MontyErrorKind.RECURSION_LIMIT, message)
+    return MontyFailure(MontyErrorKind.RUNTIME_ERROR, message)
 
 
 class MontyRuntime:
@@ -127,9 +173,10 @@ class MontyRuntime:
             )
             await pool.__aenter__()
             self._pool = pool
-            return None
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
+        else:
+            return None
 
     async def close(self) -> None:
         pool: Final = self._pool
@@ -189,51 +236,22 @@ class MontyRuntime:
         try:
             async with session:
                 try:
-                    if sys.platform == "linux":
-                        import resource
-
-                        pid: Final = session.worker_pid
-                        if pid is None:
-                            return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, "worker PID unavailable")
-                        try:
-                            resource.prlimit(pid, resource.RLIMIT_AS, (self.limits.worker_address_space_bytes,) * 2)
-                        except (OSError, ValueError) as exc:
-                            return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
-                    result: Final[object] = await session.feed_run(
-                        compiled.sandbox_source,
-                        inputs={"_liteflow_input": input},
-                        print_callback=collector,
+                    if (limit_failure := _worker_limit(session, self.limits)) is not None:
+                        return limit_failure
+                    result: Final = _JSON.validate_python(
+                        await session.feed_run(
+                            compiled.sandbox_source,
+                            inputs={"_liteflow_input": input},
+                            print_callback=collector,
+                        ),
+                        strict=True,
                     )
-                    if not isinstance(result, list) or len(result) != 2 or result[0] is not True:
-                        return MontyFailure(MontyErrorKind.OUTPUT_INVALID, "return value is not strict JSON")
-                    output: Final = validate_json(
-                        result[1],
-                        compiled.output_schema,
-                        max_bytes=self.limits.max_output_bytes,
-                        max_depth=self.limits.max_output_depth,
-                        output=True,
-                    )
-                    if isinstance(output, MontyFailure):
-                        return output
-                    if time.monotonic() >= deadline:
-                        return MontyFailure(MontyErrorKind.TIMEOUT, "node deadline expired during validation")
-                    return MontySuccess(
-                        output, escape_diagnostics(collector.output), int((time.monotonic() - started) * 1000)
-                    )
+                    return self._output(result, compiled, collector.output, deadline, started)
                 except asyncio.CancelledError:
                     _kill(session)
                     raise
         except MontyRuntimeError as exc:
-            error: Final = exc.exception()
-            message: Final = escape_diagnostics(exc.display())[:4096]
-            if isinstance(error, TimeoutError):
-                return MontyFailure(MontyErrorKind.TIMEOUT, message)
-            if isinstance(error, MemoryError):
-                kind: Final = MontyErrorKind.STDOUT_LIMIT if "bytes >" in str(error) else MontyErrorKind.MEMORY_LIMIT
-                return MontyFailure(kind, message)
-            if isinstance(error, RecursionError):
-                return MontyFailure(MontyErrorKind.RECURSION_LIMIT, message)
-            return MontyFailure(MontyErrorKind.RUNTIME_ERROR, message)
+            return _runtime_failure(exc, collector, self.limits)
         except MontyCrashedError as exc:
             return MontyFailure(
                 MontyErrorKind.TIMEOUT if exc.timed_out else MontyErrorKind.WORKER_CRASHED,
@@ -243,6 +261,28 @@ class MontyRuntime:
             return MontyFailure(MontyErrorKind.INVALID_PROGRAM, escape_diagnostics(str(exc))[:4096])
         except (ValueError, OSError) as exc:
             return MontyFailure(MontyErrorKind.RUNTIME_ERROR, escape_diagnostics(str(exc))[:4096])
+
+    def _output(
+        self, result: object, compiled: CompiledProgram, stdout: str, deadline: float, started: float
+    ) -> MontySuccess | MontyFailure:
+        try:
+            envelope: Final = _JSON.validate_python(result, strict=True)
+        except ValueError:
+            return MontyFailure(MontyErrorKind.OUTPUT_INVALID, "return value is not strict JSON")
+        if not isinstance(envelope, list) or len(envelope) != 2 or envelope[0] is not True:
+            return MontyFailure(MontyErrorKind.OUTPUT_INVALID, "return value is not strict JSON")
+        output: Final = validate_json(
+            envelope[1],
+            compiled.output_schema,
+            max_bytes=self.limits.max_output_bytes,
+            max_depth=self.limits.max_output_depth,
+            output=True,
+        )
+        if isinstance(output, MontyFailure):
+            return output
+        if time.monotonic() >= deadline:
+            return MontyFailure(MontyErrorKind.TIMEOUT, "node deadline expired during validation")
+        return MontySuccess(output, escape_diagnostics(stdout), int((time.monotonic() - started) * 1000))
 
     async def evaluate_predicate(
         self, compiled: CompiledProgram, input: object, *, deadline_monotonic: float

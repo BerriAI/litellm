@@ -55,16 +55,12 @@ def _program(source: str, *, output: JsonSchema | None = None) -> PythonProgram:
         "def transform(*, value): return value",
         "def transform(value, /): return value",
         "def transform(value):\n import json\n return value",
-        "def transform(value): return",
         "def transform(value): return value\ndef isinstance(x,y): return True",
     ],
 )
 def test_rejects_unsupported_source_without_running_it(source: str) -> None:
     program: Final = _program(source)
     result: Final = compile_program(program, MontyLimits())
-    if source == "def transform(value): return":
-        assert isinstance(result, CompiledProgram)
-        return
     assert isinstance(result, MontyFailure)
     assert result.kind == MontyErrorKind.INVALID_PROGRAM
     assert "line" in result.message
@@ -103,6 +99,7 @@ def test_rejects_dangerous_builtin_references(builtin: str) -> None:
         {"$id": "https://example.invalid/schema"},
         {"$dynamicRef": "#/x"},
         {"$schema": "https://example.invalid/schema"},
+        {"$ref": "#/$defs/Missing"},
         {"type": "not-a-json-type"},
         {"$defs": {"Bad": {"type": "object", "x-liteflow-record": True, "properties": {}}}},
         {
