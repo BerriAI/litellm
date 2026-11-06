@@ -10,11 +10,13 @@ from litellm._auth.decision import (
     BudgetEffect,
     CheckBudgetExemption,
     CheckKeyModelBudget,
+    CheckTeamMemberModelBudget,
     CheckUserModelBudget,
     Deny,
     Effect,
     EnforceModelAccess,
     EvictPresentedKey,
+    FallbackTarget,
     IdentityEffect,
     InspectKey,
     KeyFacts,
@@ -32,12 +34,19 @@ from litellm._auth.decision import (
     ReadModelBudgetScope,
     ReadProxySpend,
     ReadTeamMemberBudget,
+    ReadTeamMemberFallbacks,
+    ReadTeamMemberModelBudgetScope,
+    RerouteTeamMemberRequest,
     ResolveEndUser,
     ResolvePresentedKey,
     RewriteRequestModel,
     SendKeyBudgetAlerts,
     Step,
     TeamMemberBudget,
+    TeamMemberEffect,
+    TeamMemberModelBudgetScope,
+    TeamMemberStep,
+    VetTeamMemberFallback,
 )
 
 
@@ -51,6 +60,18 @@ class ModelBudgetHandler(Protocol):
     async def rewrite_request_model(self, model: str) -> None: ...
 
     async def check_user_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+
+
+class TeamMemberModelBudgetHandler(Protocol):
+    async def read_team_member_model_budget_scope(self) -> TeamMemberModelBudgetScope: ...
+
+    async def check_team_member_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+
+    async def read_team_member_fallbacks(self, model: str) -> tuple[FallbackTarget, ...]: ...
+
+    async def vet_team_member_fallback(self, target: FallbackTarget) -> bool: ...
+
+    async def reroute_team_member_request(self, model: str) -> None: ...
 
 
 class EffectHandler(ModelBudgetHandler, Protocol):
@@ -216,3 +237,28 @@ async def drive(step: Step, handler: EffectHandler) -> Outcome:
             return step
         case _:
             return await drive(await _answer(step, handler), handler)
+
+
+async def _answer_team_member(step: TeamMemberEffect, handler: TeamMemberModelBudgetHandler) -> TeamMemberStep:
+    match step:
+        case ReadTeamMemberModelBudgetScope(resume=resume):
+            return resume(await handler.read_team_member_model_budget_scope())
+        case CheckTeamMemberModelBudget(model=model, resume=resume):
+            return resume(await handler.check_team_member_model_budget(model))
+        case ReadTeamMemberFallbacks(model=model, resume=resume):
+            return resume(await handler.read_team_member_fallbacks(model))
+        case VetTeamMemberFallback(target=target, resume=resume):
+            return resume(await handler.vet_team_member_fallback(target))
+        case RerouteTeamMemberRequest(model=model, resume=resume):
+            await handler.reroute_team_member_request(model)
+            return resume()
+        case _:
+            assert_never(step)
+
+
+async def drive_team_member_model_budgets(step: TeamMemberStep, handler: TeamMemberModelBudgetHandler) -> Outcome:
+    match step:
+        case Allow() | Deny():
+            return step
+        case _:
+            return await drive_team_member_model_budgets(await _answer_team_member(step, handler), handler)

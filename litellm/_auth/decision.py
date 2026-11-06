@@ -206,6 +206,21 @@ class ModelBudgetScope:
 
 
 @dataclass(frozen=True, slots=True)
+class TeamMemberModelBudgetScope:
+    models: tuple[str, ...]
+    rewritable_model: str | None
+    has_model_budgets: bool
+    can_fall_back: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FallbackTarget:
+    requested: str
+    model: str
+    served_model: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResolveEndUser:
     prefetch_key: bool
     resume: "Callable[[], Step]"
@@ -367,6 +382,45 @@ Effect: TypeAlias = IdentityEffect | BudgetEffect | ModelBudgetEffect
 Step: TypeAlias = Outcome | Effect
 
 
+@dataclass(frozen=True, slots=True)
+class ReadTeamMemberModelBudgetScope:
+    resume: "Callable[[TeamMemberModelBudgetScope], TeamMemberStep]"
+
+
+@dataclass(frozen=True, slots=True)
+class CheckTeamMemberModelBudget:
+    model: str
+    resume: "Callable[[ModelBudgetExceeded | None], TeamMemberStep]"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadTeamMemberFallbacks:
+    model: str
+    resume: "Callable[[tuple[FallbackTarget, ...]], TeamMemberStep]"
+
+
+@dataclass(frozen=True, slots=True)
+class VetTeamMemberFallback:
+    target: FallbackTarget
+    resume: "Callable[[bool], TeamMemberStep]"
+
+
+@dataclass(frozen=True, slots=True)
+class RerouteTeamMemberRequest:
+    model: str
+    resume: "Callable[[], TeamMemberStep]"
+
+
+TeamMemberEffect: TypeAlias = (
+    ReadTeamMemberModelBudgetScope
+    | CheckTeamMemberModelBudget
+    | ReadTeamMemberFallbacks
+    | VetTeamMemberFallback
+    | RerouteTeamMemberRequest
+)
+TeamMemberStep: TypeAlias = Outcome | TeamMemberEffect
+
+
 class AuthCore(Protocol):
     def start(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step: ...
 
@@ -375,3 +429,5 @@ class AuthCore(Protocol):
     def check_model_budgets(self) -> Step: ...
 
     def check_user_model_budgets(self) -> Step: ...
+
+    def check_team_member_model_budgets(self) -> TeamMemberStep: ...

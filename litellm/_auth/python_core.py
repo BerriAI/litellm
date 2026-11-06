@@ -47,13 +47,18 @@ from litellm._auth.decision import (
     Step,
     TeamMemberBudget,
     TeamMemberBudgetExceeded,
+    TeamMemberStep,
     UserAuthDisabled,
     UserAuthRoute,
     VirtualKey,
     WithinModelBudgets,
 )
 from litellm._auth.key import hash_token, is_master_key
-from litellm._auth.model_budgets import check_model_budgets, check_user_model_budgets
+from litellm._auth.model_budgets import (
+    check_model_budgets,
+    check_team_member_model_budgets,
+    check_user_model_budgets,
+)
 
 _USER_AUTH_ROUTE: Final = "/user/auth"
 _VIRTUAL_KEY_PREFIX: Final = "sk-"
@@ -97,6 +102,9 @@ class PythonCore:
 
     def check_user_model_budgets(self) -> Step:
         return check_user_model_budgets(then=lambda: Allow(WithinModelBudgets()))
+
+    def check_team_member_model_budgets(self) -> TeamMemberStep:
+        return check_team_member_model_budgets()
 
 
 def _after_presented_key(

@@ -2,15 +2,25 @@ from collections.abc import Callable
 from typing import Final
 
 from litellm._auth.decision import (
+    Allow,
     AuthorizeBudgetFallback,
     CheckKeyModelBudget,
+    CheckTeamMemberModelBudget,
     CheckUserModelBudget,
     Deny,
+    FallbackTarget,
     ModelBudgetExceeded,
     ModelBudgetScope,
     ReadModelBudgetScope,
+    ReadTeamMemberFallbacks,
+    ReadTeamMemberModelBudgetScope,
+    RerouteTeamMemberRequest,
     RewriteRequestModel,
     Step,
+    TeamMemberModelBudgetScope,
+    TeamMemberStep,
+    VetTeamMemberFallback,
+    WithinModelBudgets,
 )
 
 
@@ -84,4 +94,58 @@ def _check_user_budgets(scope: ModelBudgetScope, models: tuple[str, ...], then: 
     return CheckUserModelBudget(
         model=models[0],
         resume=lambda exceeded: _check_user_budgets(scope, models[1:], then) if exceeded is None else Deny(exceeded),
+    )
+
+
+def check_team_member_model_budgets() -> TeamMemberStep:
+    return ReadTeamMemberModelBudgetScope(
+        resume=lambda scope: (
+            _check_team_member_budget_of(scope, scope.models, scope.rewritable_model)
+            if scope.has_model_budgets
+            else Allow(WithinModelBudgets())
+        )
+    )
+
+
+def _check_team_member_budget_of(
+    scope: TeamMemberModelBudgetScope, models: tuple[str, ...], rewritable_model: str | None
+) -> TeamMemberStep:
+    if not models:
+        return Allow(WithinModelBudgets())
+    model: Final = models[0]
+    rest: Final = models[1:]
+
+    def reroute(target: FallbackTarget) -> TeamMemberStep:
+        return RerouteTeamMemberRequest(
+            model=target.model, resume=lambda: _check_team_member_budget_of(scope, rest, target.model)
+        )
+
+    def after(exceeded: ModelBudgetExceeded | None) -> TeamMemberStep:
+        if exceeded is None:
+            return _check_team_member_budget_of(scope, rest, rewritable_model)
+        if model != rewritable_model or not scope.can_fall_back:
+            return Deny(exceeded)
+        return ReadTeamMemberFallbacks(
+            model=model,
+            resume=lambda targets: _first_usable_fallback(
+                tuple(target for target in targets if target.model != model),
+                found=reroute,
+                exhausted=lambda: Deny(exceeded),
+            ),
+        )
+
+    return CheckTeamMemberModelBudget(model=model, resume=after)
+
+
+def _first_usable_fallback(
+    targets: tuple[FallbackTarget, ...],
+    found: Callable[[FallbackTarget], TeamMemberStep],
+    exhausted: Callable[[], TeamMemberStep],
+) -> TeamMemberStep:
+    if not targets:
+        return exhausted()
+    target: Final = targets[0]
+    return VetTeamMemberFallback(
+        target=target,
+        resume=lambda usable: found(target) if usable else _first_usable_fallback(targets[1:], found, exhausted),
     )
