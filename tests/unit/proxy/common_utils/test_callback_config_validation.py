@@ -659,3 +659,31 @@ def test_logging_entry_keys_change_with_every_field_a_caller_could_edit() -> Non
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_name": "arize"}])
     assert logging_entry_keys([entry]) != logging_entry_keys([entry, entry])
     assert logging_entry_keys(None) == logging_entry_keys("not-a-list") == ()
+
+
+@pytest.mark.parametrize("callback_type", [[], "bogus", 1, {"success": True}])
+def test_a_logging_entry_with_a_malformed_callback_type_is_rejected_at_write_time(callback_type: object) -> None:
+    """Stored as sent, such an entry fails model validation at request time and its logger silently never runs."""
+    error: Final = logging_metadata_config_error(
+        {"logging": [{"callback_name": "langfuse", "callback_type": callback_type, "callback_vars": {}}]}
+    )
+    assert error is not None and "callback_type" in error
+    reference_error: Final = logging_metadata_config_error(
+        {"logging": [{"callback_name": "arize_space_a", "callback_type": callback_type}]}
+    )
+    assert reference_error is not None and "callback_type" in reference_error
+
+
+@pytest.mark.parametrize("callback_type", [None, "success", "failure", "success_and_failure"])
+def test_a_logging_entry_with_a_valid_or_absent_callback_type_passes(callback_type: str | None) -> None:
+    entry: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}
+    with_type: Final = {**entry, "callback_type": callback_type}
+    assert logging_metadata_config_error({"logging": [with_type]}) is None
+    assert logging_metadata_config_error({"logging": [entry]}) is None
+
+
+def test_logging_entry_keys_keep_a_malformed_callback_type_distinct_from_a_missing_one() -> None:
+    entry: Final = {"callback_name": "arize_space_a", "callback_vars": {}}
+    assert logging_entry_keys([entry]) == logging_entry_keys([{**entry, "callback_type": None}])
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": []}])
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": "success"}])

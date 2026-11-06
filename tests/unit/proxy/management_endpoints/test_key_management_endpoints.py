@@ -24300,6 +24300,8 @@ class TestCallbackReferenceWriteGate:
             {"note": "edited"},
             {"logging": []},
             {"logging": [{**_REFERENCE_ENTRY, "callback_type": "failure"}]},
+            {"logging": [{**_REFERENCE_ENTRY, "callback_type": []}]},
+            {"logging": [{"callback_name": "arize_space_a", "callback_type": []}]},
             {"logging": [{**_REFERENCE_ENTRY, "callback_name": "arize"}]},
             {"logging": [_REFERENCE_ENTRY, _LANGFUSE_ENTRY]},
             {"logging": [{**_LANGFUSE_ENTRY, "callback_vars": {"langfuse_host": "https://attacker.example"}}]},
@@ -24308,11 +24310,11 @@ class TestCallbackReferenceWriteGate:
     def test_a_non_admin_cannot_change_the_logging_of_a_key_holding_a_reference(
         self, metadata: Mapping[str, object]
     ) -> None:
-        with pytest.raises(HTTPException) as exc:
-            raise_on_unauthorized_callback_reference(
-                metadata, _non_admin(), existing_metadata={"logging": [_REFERENCE_ENTRY]}
-            )
-        assert exc.value.status_code == 403
+        """The stored entry is compared with and without an explicit event type, since an admin may have omitted it."""
+        for stored in ({"logging": [_REFERENCE_ENTRY]}, {"logging": [{"callback_name": "arize_space_a"}]}):
+            with pytest.raises(HTTPException) as exc:
+                raise_on_unauthorized_callback_reference(metadata, _non_admin(), existing_metadata=stored)
+            assert exc.value.status_code == 403
 
     def test_a_non_admin_may_edit_the_rest_of_the_metadata_when_the_logging_is_sent_back_unchanged(self) -> None:
         stored: Final = encrypt_callback_vars({"note": "original", "logging": [_REFERENCE_ENTRY, _LANGFUSE_ENTRY]})

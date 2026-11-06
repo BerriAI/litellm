@@ -28,6 +28,7 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
 _GENERIC_API_CALLBACK_TYPE: Final = "generic_api"
 _CALLBACK_TYPE_FIELD: Final = "callback_type"
 _SECRET_REFERENCE_PREFIX: Final = "os.environ/"
+_CALLBACK_TYPES: Final[frozenset[str]] = frozenset({"success", "failure", "success_and_failure"})
 _STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 LoggingEntryKey: TypeAlias = tuple[str | None, str | None, tuple[tuple[str, str], ...]]
@@ -468,11 +469,23 @@ def _entry_callback_name(entry: object) -> str | None:
 
 
 def _entry_callback_type(entry: object) -> str | None:
+    """The entry's event type, with a malformed value kept distinct from a missing one so the two never compare equal."""
     match entry:
         case {"callback_type": str() as callback_type}:
             return callback_type
+        case {"callback_type": None}:
+            return None
+        case {"callback_type": object() as malformed}:
+            return repr(malformed)
         case _:
             return None
+
+
+def _callback_type_error(entry: Mapping[object, object]) -> str | None:
+    callback_type: Final = entry.get("callback_type")
+    if callback_type is None or (isinstance(callback_type, str) and callback_type in _CALLBACK_TYPES):
+        return None
+    return f"callback_type must be one of {sorted(_CALLBACK_TYPES)}, got {callback_type!r}"
 
 
 def _conflicting_entry_setting_error(
@@ -507,6 +520,9 @@ def _logging_entry_error(entry: object) -> str | None:
             Mapping[object, object], entry
         )
     )
+    callback_type_error: Final = _callback_type_error(typed_entry)
+    if callback_type_error is not None:
+        return callback_type_error
     callback_name: Final = typed_entry.get("callback_name")
     callback_vars_raw: Final = typed_entry.get("callback_vars")
     if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
