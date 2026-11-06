@@ -207,7 +207,7 @@ from litellm.router_rust.surface.settings import (
 from litellm.router_strategy.least_busy import CALL_IDENTITY, call_id_of, owning_picks, pick_reserves, picks_reserve
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, usage_twins
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, note_served_from_cache, usage_twins
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
@@ -5030,6 +5030,9 @@ class _Driver:
             for _ in range(self._fallback_depth):
                 verbose_router_logger.info("Successful fallback b/w models.")
         tokens: Final = total_tokens(response)
+        note_served_from_cache(
+            (as_str_mapping(getattr(response, "_hidden_params", None)) or {}).get("cache_hit") is True
+        )
         # A wrapped stream reports its success or failure when it ends; the attempt counts the
         # request and the tokens read so far, which the end's report leaves out.
         # A realtime attempt counts its session's success itself (`attempt`), when it ended cleanly.

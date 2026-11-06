@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -42,6 +42,13 @@ class UsageCharge:
 
 
 _ADMITTED: Final[ContextVar[UsageCharge | None]] = ContextVar("deployment_usage_charge", default=None)
+_SERVED_FROM_CACHE: Final[ContextVar[bool]] = ContextVar("deployment_usage_served_from_cache", default=False)
+
+
+def note_served_from_cache(cache_hit: bool) -> None:
+    """A response the cache answered used no deployment tokens; the usage write that follows in this
+    attempt's context leaves the enforcement counters alone (``usage_twins``)."""
+    _SERVED_FROM_CACHE.set(cache_hit)
 
 
 def charged_rpm(rpm_key: str) -> int | None:
@@ -62,10 +69,17 @@ def reads_deployment_usage(callbacks: Iterable[object]) -> bool:
     return any(getattr(callback, "reads_deployment_usage", False) is True for callback in callbacks)
 
 
+def _fields(value: object) -> Mapping[str, object]:
+    """A deployment section as a mapping, whether it came as a dict or as its pydantic model."""
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    return _STR_MAP.validate_python(value or {})
+
+
 def usage_counter_keys(deployment: Mapping[str, object], minute: str) -> tuple[str, str]:
     """The ``(tpm_key, rpm_key)`` a deployment's usage is counted under this minute."""
-    model_id: Final = _STR_MAP.validate_python(deployment.get("model_info") or {}).get("id")
-    model: Final = _STR_MAP.validate_python(deployment.get("litellm_params") or {}).get("model")
+    model_id: Final = _fields(deployment.get("model_info")).get("id")
+    model: Final = _fields(deployment.get("litellm_params")).get("model")
     return f"{model_id}:{model}:tpm:{minute}", f"{model_id}:{model}:rpm:{minute}"
 
 
@@ -83,8 +97,9 @@ def enforcement_tpm_operation(operation: RedisPipelineIncrementOperation) -> Red
 def usage_twins(
     operations: Iterable[RedisPipelineIncrementOperation], counted: bool
 ) -> tuple[RedisPipelineIncrementOperation, ...]:
-    """The enforcement increments that ride the router's usage write, none when nothing reads them."""
-    if not counted:
+    """The enforcement increments that ride the router's usage write, none when nothing reads them or
+    when the cache answered the call."""
+    if not counted or _SERVED_FROM_CACHE.get():
         return ()
     return tuple(twin for twin in map(enforcement_tpm_operation, operations) if twin is not None)
 
@@ -172,6 +187,7 @@ __all__ = [
     "charged_rpm",
     "end_attempt",
     "enforcement_tpm_operation",
+    "note_served_from_cache",
     "reads_deployment_usage",
     "usage_counter_keys",
     "usage_twins",

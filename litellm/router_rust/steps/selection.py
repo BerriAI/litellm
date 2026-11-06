@@ -357,9 +357,10 @@ async def routing_pre_call_checks(
     fails the attempt; the core records that failure like any other."""
     checks: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
     charge: Final = await counter.charge_request(deployment) if reads_deployment_usage(checks) else None
+    handed: Final = deployment if isinstance(deployment, dict) else dict(deployment)
     try:
         for callback in checks:
-            await callback.async_pre_call_check(dict(deployment), None)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
+            await callback.async_pre_call_check(handed, None)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
     except Exception:
         if charge is not None:
             await counter.refund_request(charge)
@@ -375,9 +376,10 @@ def routing_pre_call_checks_sync(
     """``routing_strategy_pre_call_checks``: the sync twin, with the sync check of each ``CustomLogger``."""
     checks: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
     charge: Final = counter.charge_request_sync(deployment) if reads_deployment_usage(checks) else None
+    handed: Final = deployment if isinstance(deployment, dict) else dict(deployment)
     try:
         for callback in checks:
-            callback.pre_call_check(dict(deployment))  # pyright: ignore[reportUnknownMemberType]  # see above
+            callback.pre_call_check(handed)  # pyright: ignore[reportUnknownMemberType]  # see above
     except Exception:
         if charge is not None:
             counter.refund_request_sync(charge)
