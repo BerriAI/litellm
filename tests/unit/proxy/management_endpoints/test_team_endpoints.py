@@ -105,6 +105,7 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
 )
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 # Setup TestClient
@@ -16583,7 +16584,7 @@ async def test_reset_team_member_spend_fn_success(monkeypatch):
     await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
     await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
     real_spend_counter_cache = DualCache()
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 999.0)
 
     membership_row = LiteLLM_TeamMembership(
@@ -16638,7 +16639,7 @@ async def test_reset_team_member_spend_fn_stale_spend_returns_409_and_keeps_cach
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="cached-membership")
     real_spend_counter_cache = DualCache()
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 999.0)
 
     membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", spend=10.0)
@@ -17054,7 +17055,7 @@ async def test_team_member_update_invalidates_team_member_spend_state_when_budge
     await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
     await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
     real_spend_counter_cache = DualCache()
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 999.0)
 
     team_row = LiteLLM_TeamTable(team_id="team-1", metadata={}, members_with_roles=[])
@@ -17109,7 +17110,7 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_member-1", value="still-fresh-membership")
     real_spend_counter_cache = DualCache()
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:member-1:team-1", 1.5)
 
     team_row = LiteLLM_TeamTable(team_id="team-1", metadata={}, members_with_roles=[])

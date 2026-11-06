@@ -34,6 +34,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 TOKEN_COUNTING_ROUTES: Final = (
@@ -108,7 +109,7 @@ TINY_BUDGET_KEY_TOKEN: Final = "hashed-count-tokens-key"
 
 @pytest.fixture
 def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
-    store: Final = SpendCounterStore(None)
+    store: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     return store

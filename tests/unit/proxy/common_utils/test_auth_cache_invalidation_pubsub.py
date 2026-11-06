@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
 )
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
 
@@ -328,7 +329,7 @@ async def test_subscriber_writes_and_drops_the_native_spend_counter_copies_a_bro
     """The spend counters' memory tier lives in the native store, not in a Python InMemoryCache, so a broadcast
     has to reach it there: a SET carries the reset value into it, a delete drops it, and keys outside the spend
     counter keyspace leave it alone."""
-    store = SpendCounterStore(None)
+    store = SpendCounterStore(connect(None).spend_counters())
     store.set_local("spend:team_member:u-1:t-1", 999.0)
     store.set_local("spend:key:k-1", 7.0)
     pubsub = _QueuePubSub(

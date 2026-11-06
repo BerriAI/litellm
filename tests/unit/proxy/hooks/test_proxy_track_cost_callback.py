@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 import httpx
 import pytest
 
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from fastapi import HTTPException
 
@@ -2698,7 +2699,7 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
 @pytest.fixture()
 def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
-    counters: Final = SpendCounterStore(None)
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", counters)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)

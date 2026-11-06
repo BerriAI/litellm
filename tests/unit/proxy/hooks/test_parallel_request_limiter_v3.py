@@ -7495,7 +7495,7 @@ async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired(
     assert redis.released_slots == [
         (
             [
-                scope_key((gauge.descriptor_key, gauge.descriptor_value), "max_parallel_requests")
+                scope_key(gauge, "max_parallel_requests")
                 for gauge in acquired["gauges"]
             ],
             [acquired["slot_id"]],

@@ -22,6 +22,7 @@ import fastapi
 import orjson
 import pytest
 
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from fastapi import HTTPException, Request, status
@@ -6986,7 +6987,7 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
     )
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     attrs["spend_counter_store"] = counter_cache
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:

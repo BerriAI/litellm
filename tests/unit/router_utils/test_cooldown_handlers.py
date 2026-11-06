@@ -20,6 +20,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
 from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
@@ -75,7 +76,7 @@ def _ctx_double(
     ctx.settings.return_value.allowed_fails_policy = None
     ctx.settings.return_value.allowed_fails_for.return_value = None
     ctx.health.return_value.store = store if store is not None else DualCache(in_memory_cache=InMemoryCache())
-    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(None), cooldown_time)
+    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
     return ctx
 
 
@@ -364,7 +365,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
     def _make_router(self, cooldown_time: float = 60.0, store: RouterCooldowns | None = None) -> MagicMock:
         ctx: Final = _ctx_double(cooldown_time=cooldown_time, allowed_fails=0)
-        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(None), cooldown_time)
+        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
         return ctx
 
     def test_cooldown_time_override_zero_is_not_falsy(self):
@@ -378,7 +379,7 @@ class TestShouldCooldownBasedOnAllowedFailsPolicy:
         store.increment_allowed_fails.assert_called_once_with("dep-1", None, 0.0)
 
     def test_fail_counter_is_shared_across_router_instances(self):
-        shared: Final = RouterCooldownStore(None)
+        shared: Final = RouterCooldownStore(connect(None).router_cooldowns())
         workers: Final = tuple(self._make_router(store=shared) for _ in range(2))
         exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
         results: Final = [
@@ -826,7 +827,7 @@ class TestCooldownCacheTTLCorrection:
     @pytest.mark.parametrize("asynchronous", (False, True))
     @pytest.mark.asyncio
     async def test_only_unexpired_cooldowns_are_returned(self, age: float, active: bool, asynchronous: bool):
-        store: Final = RouterCooldownStore(None)
+        store: Final = RouterCooldownStore(connect(None).router_cooldowns())
         cc: Final = CooldownCache(store, default_cooldown_time=60.0)
         value: Final = CooldownCacheValue(
             exception_received="Rate limit", status_code="429", timestamp=time.time() - age, cooldown_time=60.0

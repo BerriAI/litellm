@@ -105,6 +105,7 @@ from litellm.utils import get_utc_datetime
 from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
@@ -9742,7 +9743,7 @@ async def test_project_max_budget_check_blocks_when_live_spend_reaches_the_budge
 ):
     from litellm.proxy.auth.auth_checks import _project_max_budget_check
 
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     if counter_spend is not None:
         real_spend_counter_store.set_local("spend:project:p-budget", counter_spend)
     valid_token = UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget", team_id="t-1", user_id="u-1")
@@ -10589,7 +10590,7 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
     real_spend_counter_cache.in_memory_cache.set_cache(
         key="spend_db_floor:spend:team_member:user-1:team-1", value=999.0
     )
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
     with (
@@ -10627,7 +10628,7 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
 
-    real_spend_counter_store = SpendCounterStore(None)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
     with patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
@@ -10760,7 +10761,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
     remote_user_api_key_cache = UserApiKeyCache()
     remote_spend_counter_in_memory_cache = InMemoryCache()
     remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
-    remote_spend_counter_store = SpendCounterStore(None)
+    remote_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     remote_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
     with (
@@ -10768,7 +10769,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
             "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
         ),
         patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
-            "litellm.proxy.proxy_server.spend_counter_store", SpendCounterStore(None)
+            "litellm.proxy.proxy_server.spend_counter_store", SpendCounterStore(connect(None).spend_counters())
         ),
         patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -10835,7 +10836,7 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
-    local_spend_counter_store = SpendCounterStore(None)
+    local_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     local_user_api_key_cache = UserApiKeyCache()
 
     with (

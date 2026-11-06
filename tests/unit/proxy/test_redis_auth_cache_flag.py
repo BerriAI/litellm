@@ -56,7 +56,7 @@ class _FakeRedisCache(RedisCache):
 
 
 def _spend_counter_store() -> SpendCounterStore:
-    return SpendCounterStore(None, handle=lambda client: FakeSpendCounters(redis=None if client is None else {}))
+    return FakeSpendCounters(redis=None).store()
 
 
 @contextmanager

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from pydantic import TypeAdapter
 
@@ -756,7 +757,7 @@ async def test_completed_passthrough_cancellation_preserves_accounting(
     )
     monkeypatch.setattr(litellm, "apply_search_free_tier", True)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    counters: Final = SpendCounterStore(None)
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
     for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
         counters.set_local(key, 1.9)
     monkeypatch.setattr(proxy_server, "spend_counter_store", counters)

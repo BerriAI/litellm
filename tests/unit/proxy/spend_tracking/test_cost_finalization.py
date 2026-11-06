@@ -11,6 +11,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.spend_tracking.cost_finalization import finalize_response_cost
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 NOW: Final = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
@@ -482,7 +483,7 @@ async def test_completed_call_keeps_its_charge_when_post_call_processing_fails(
     }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
-    counters: Final = SpendCounterStore(None)
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
     for key in ("spend:key:completed-key", "spend:team:completed-team"):
         counters.set_local(key, 1.5 + reserved_cost)
     counters.set_local("spend:tag:User-Agent: budget-client", 1.5)

@@ -36,6 +36,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.utils import Rules, function_setup
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 KEY_TOKEN: Final = "hashed-release-middleware-key"
@@ -45,7 +46,7 @@ CHAT_BODY: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": 
 
 @pytest.fixture
 def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
-    store: Final = SpendCounterStore(None)
+    store: Final = SpendCounterStore(connect(None).spend_counters())
     monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     return store

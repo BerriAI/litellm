@@ -161,7 +161,7 @@ class TestUserApiKeyCache:
     async def test_a_value_the_bridge_refuses_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture):
         cache = UserApiKeyCache(
             redis_cache=MagicMock(spec=RedisCache),
-            auth_cache=lambda _redis, settings: AuthCacheStore(None, settings, handle=lambda _c, _s: _refusing()),
+            auth_cache=lambda _redis, _settings: AuthCacheStore(_refusing()),
         )
 
         await cache.async_set_cache("team_id:t1", {"team_id": "t1"})
@@ -173,9 +173,7 @@ class TestUserApiKeyCache:
     async def test_a_model_holding_a_datetime_is_cached_as_its_json_dump(self):
         cache = UserApiKeyCache(
             redis_cache=MagicMock(spec=RedisCache),
-            auth_cache=lambda _redis, settings: AuthCacheStore(
-                None, settings, handle=lambda _c, s: NativeAuthCache(None, memory_entries=s.memory_entries)
-            ),
+            auth_cache=lambda _redis, settings: AuthCacheStore(NativeAuthCache(None, memory_entries=settings.memory_entries)),
         )
         key_obj = UserAPIKeyAuth(token="abc", expires=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
 

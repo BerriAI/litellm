@@ -52,7 +52,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.redis.stores.rate_limits import AtomicCounter, CounterIncrement, RateLimitScope
-from litellm.redis.stores.rate_limits.types import NativeIncrement
 from litellm.types.llms.openai import (
     InputTokensDetails,
     ResponseAPIUsage,
@@ -75,12 +74,9 @@ class PipelineRecordingRateLimits(FakeRateLimits):
     connected: bool = False
     pipelined: list[CounterIncrement] = field(default_factory=list)
 
-    async def increment_many(self, increments_: Sequence[NativeIncrement]) -> None:
-        self.pipelined.extend(
-            CounterIncrement(RateLimitScope(key, value).counter(kind), amount, ttl)
-            for (key, value, kind), amount, ttl in increments_
-        )
-        await super().increment_many(increments_)
+    async def increment_many(self, increments: Sequence[CounterIncrement]) -> None:
+        self.pipelined.extend(increments)
+        await super().increment_many(increments)
 
 
 @pytest.fixture

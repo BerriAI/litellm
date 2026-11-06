@@ -21,6 +21,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -292,7 +293,7 @@ async def test_window_from_db_without_a_duration_skips_the_row_lookup():
 @pytest.mark.asyncio
 async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
     prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=100.0)
-    cache = SpendCounterStore(None)
+    cache = SpendCounterStore(connect(None).spend_counters())
     counter_key = "spend:key:tok-1:window:30d"
 
     result = await SpendCounterReseed.coalesced_window(
@@ -317,7 +318,7 @@ async def test_cold_reseed_does_not_add_database_spend_to_concurrent_cache(
     window: bool,
     concurrent_spend: float,
 ) -> None:
-    cache: Final = SpendCounterStore(None)
+    cache: Final = SpendCounterStore(connect(None).spend_counters())
     counter_key: Final = "spend:team:team-1:window:1d" if window else "spend:user:user-1"
     db_spend: Final = 989.01459411
     table: Final = _PausedSpendTable(db_spend)
@@ -342,7 +343,7 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
 ) -> None:
     from litellm.proxy import proxy_server
 
-    cache: Final = SpendCounterStore(None)
+    cache: Final = SpendCounterStore(connect(None).spend_counters())
     counter_key: Final = (
         f"spend:team:concurrent-{batch}-{increment}:window:1d"
         if window

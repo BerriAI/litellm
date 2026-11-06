@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
 
@@ -10,7 +11,7 @@ from litellm.router_utils.cooldown_cache import CooldownCache
 @pytest.mark.parametrize("ttl", (None, 5.5, 30.0))
 def test_cooldown_masks_exception_and_preserves_status_timestamp_and_ttl(message: str, ttl: float | None) -> None:
     now: Final = time.time()
-    store: Final = RouterCooldownStore(None)
+    store: Final = RouterCooldownStore(connect(None).router_cooldowns())
     cache: Final = CooldownCache(store, default_cooldown_time=60.0, clock=lambda: now)
     cache.add_deployment_to_cooldown("dep", Exception(message), 429, ttl)
     expected_ttl: Final = 60.0 if ttl is None else ttl
@@ -31,7 +32,7 @@ def test_cooldown_masks_exception_and_preserves_status_timestamp_and_ttl(message
 @pytest.mark.asyncio
 async def test_sync_and_async_router_cooldown_surfaces_share_active_state() -> None:
     now: Final = time.time()
-    store: Final = RouterCooldownStore(None)
+    store: Final = RouterCooldownStore(connect(None).router_cooldowns())
     cache: Final = CooldownCache(store, default_cooldown_time=60.0, clock=lambda: now)
     cache.add_deployment_to_cooldown("dep", Exception("unavailable"), 503, 30.0)
     expected: Final = [

@@ -1444,7 +1444,7 @@ async def test_saturation_check_cache_ttl_configuration(monkeypatch):
 
         # Verify the read-through get was called with the configured TTL
         assert len(get_cache_calls) == 1, "Expected 1 cache call"
-        assert get_cache_calls[0]["entry"] == ("requests", "model_saturation_check", model)
+        assert get_cache_calls[0]["entry"] == counter
         assert get_cache_calls[0]["ttl"] == 5, f"Expected TTL of 5 seconds, got {get_cache_calls[0]['ttl']}"
 
         # Test with different TTL value

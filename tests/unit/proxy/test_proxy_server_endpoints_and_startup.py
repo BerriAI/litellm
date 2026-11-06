@@ -57,6 +57,7 @@ from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, in
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from tests._master_key import MASTER_KEY
+from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge._native import NativeRedisStoreError
@@ -8880,7 +8881,7 @@ async def test_get_current_spend_reads_redis_first(monkeypatch):
 async def test_get_current_spend_fallback_to_in_memory():
     """When Redis is not configured, get_current_spend uses in-memory."""
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_cache.set_local("spend:key:test", 0.50)
 
     import litellm.proxy.proxy_server as ps
@@ -8911,7 +8912,7 @@ async def test_increment_spend_counters_initializes_and_increments():
     from litellm.proxy._types import LiteLLM_VerificationTokenView, hash_token
 
     key_cache = DualCache()
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
 
     # In production, the auth flow hashes the raw key before it reaches
     # the cost callback. Simulate that by passing the hashed token.
@@ -8969,7 +8970,7 @@ async def test_increment_spend_counters_team_and_member():
     from litellm.proxy._types import LiteLLM_TeamTable
 
     key_cache = DualCache()
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
 
     # Cached team object
     team_obj = LiteLLM_TeamTable(team_id="team-1", spend=2.0)
@@ -9167,7 +9168,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
         _prepare_window_spend_counter_increment,
     )
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
@@ -9311,7 +9312,7 @@ async def test_window_spend_counter_seed_asks_the_store_to_increment_a_lost_seed
 async def test_window_spend_counter_skips_invalid_window_start():
     from litellm.proxy.proxy_server import _prepare_window_spend_counter_increment
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
 
     import litellm.proxy.proxy_server as ps
 
@@ -9337,7 +9338,7 @@ async def test_window_spend_counter_skips_invalid_window_start():
 async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
     from litellm.proxy.proxy_server import ensure_window_spend_counter_initialized
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_key = "spend:key:key-window-db-unavailable:window:1h"
 
     import litellm.proxy.proxy_server as ps
@@ -9366,7 +9367,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
     import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_cache.set_local("spend:key:key-finalize-after-increments", 0.5)
     budget_reservation = {
         "reserved_cost": 0.5,
@@ -9411,7 +9412,7 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments(mo
 async def test_increment_spend_counters_finalizes_none_cost_reservation(monkeypatch):
     import litellm.proxy.proxy_server as ps
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_cache.set_local("spend:key:key-finalize-none-cost", 0.5)
     budget_reservation = {
         "reserved_cost": 0.5,
@@ -9450,7 +9451,7 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
     from litellm.proxy.proxy_server import increment_spend_counters
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     budget_reservation = {
         "reserved_cost": 0.5,
         "entries": [
@@ -9537,7 +9538,7 @@ async def test_get_current_spend_uses_fallback_when_db_unavailable():
     """
     from litellm.proxy.proxy_server import get_current_spend
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     counter_cache.redis_cache = fake_redis
@@ -9569,7 +9570,7 @@ async def test_get_current_spend_coalesces_concurrent_reseeds():
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_key = "spend:team_member:user-1:team-coalesce"
 
     # Track DB query calls and inject a small delay so the concurrent
@@ -9634,7 +9635,7 @@ async def test_get_current_spend_uses_db_zero_over_stale_fallback():
     """
     from litellm.proxy.proxy_server import get_current_spend
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=None)
     counter_cache.redis_cache = fake_redis
@@ -9677,7 +9678,7 @@ async def test_concurrent_read_and_write_paths_share_one_db_query():
         get_current_spend,
     )
 
-    counter_cache = SpendCounterStore(None)
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
     counter_key = "spend:team_member:user-1:team-cross-path"
 
     db_call_count = 0
@@ -13225,7 +13226,7 @@ def _patched_coordination_redis_module_state(
         patch.object(
             proxy_server_module,
             "spend_counter_store",
-            SpendCounterStore(None, handle=lambda client: FakeSpendCounters(redis=None if client is None else {})),
+            FakeSpendCounters(redis=None).store(),
         ),
         patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
         patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),

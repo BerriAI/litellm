@@ -228,10 +228,7 @@ def test_the_native_client_reads_redis_secrets_through_the_secret_manager(monkey
     configured: Final = settings.secret_manager
     monkeypatch.setattr(settings, "secret_manager", lambda: replace(configured(), native=False))
 
-    redis: Final = RedisCache(host="127.0.0.1", port=1, namespace=f"secret-manager-test-{uuid.uuid4()}")
-    manager.asked = ()
-
-    _ = connect(redis)
+    _ = connect(RedisCache(host="127.0.0.1", port=1, namespace=f"secret-manager-test-{uuid.uuid4()}"))
 
     assert "REDIS_PASSWORD" in manager.asked
 
