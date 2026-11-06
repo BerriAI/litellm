@@ -85,8 +85,6 @@ def _make_error_chunk(error_type: str, code: str, message: str = "err") -> Error
     ),
 )
 def test_streamed_flex_unavailable_maps_to_429(error_type: str | None, error_code: str | None) -> None:
-    # OpenAI returns 429 for flex-capacity exhaustion on non-streamed requests; the streamed
-    # /v1/responses error event must map to 429 as well, not fall through to 500 (#49736).
     assert _status_code_for_error_fields(error_type, error_code) == 429
 
 
