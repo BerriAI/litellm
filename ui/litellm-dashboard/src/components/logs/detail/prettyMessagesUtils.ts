@@ -10,6 +10,7 @@ import {
   ResponsePayload,
   ToolCall,
 } from "./prettyMessagesTypes";
+import i18n from "@/i18n/i18n";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -155,11 +156,11 @@ const parseContentPart = (part: unknown): string => {
       return asString(part.refusal);
     case "image_url":
     case "input_image":
-      return "[Image]";
+      return i18n.t("logs.detail.prettyMessages.imagePlaceholder");
     case "input_file":
-      return "[File]";
+      return i18n.t("logs.detail.prettyMessages.filePlaceholder");
     case "input_audio":
-      return "[Audio]";
+      return i18n.t("logs.detail.prettyMessages.audioPlaceholder");
     default:
       return JSON.stringify(part);
   }

@@ -44,6 +44,15 @@ from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpush
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
+
+@pytest.fixture(autouse=True)
+def legacy_spend_writers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests cover the legacy writers, still reachable as the rollback path with use_spend_logs_ledger off."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
+
+
 @pytest.mark.asyncio
 async def test_daily_spend_tracking_with_disabled_spend_logs():
     """
@@ -3714,11 +3723,12 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
-    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
-    assert restored["user_list_transactions"] is None
-    assert restored["team_list_transactions"] == {"team-1": 1.5}
-    assert restored["key_list_transactions"] == ({"key-1": 1.5} if safe_to_resend else None)
+    restores = mock_redis_update_buffer.restore_transactions_to_redis.await_args_list
+    assert [
+        {name: rows for name, rows in call.kwargs["db_spend_update_transactions"].items() if rows}
+        for call in restores
+    ] == ([{"key_list_transactions": {"key-1": 1.5}}] if safe_to_resend else [])
+    mock_batcher.litellm_teamtable.update_many.assert_called_once()
     mock_batcher.litellm_usertable.update_many.assert_called_once()
 
 
@@ -3892,13 +3902,13 @@ async def test_commit_spend_updates_to_db_reports_each_completed_table():
     )
 
     assert on_table_committed.call_args_list == [
-        call("user_list_transactions"),
-        call("end_user_list_transactions"),
-        call("key_list_transactions"),
-        call("team_list_transactions"),
-        call("team_member_list_transactions"),
         call("org_list_transactions"),
         call("org_member_list_transactions"),
+        call("team_list_transactions"),
+        call("user_list_transactions"),
+        call("end_user_list_transactions"),
+        call("team_member_list_transactions"),
+        call("key_list_transactions"),
         call("project_list_transactions"),
         call("tag_list_transactions"),
         call("model_access_group_list_transactions"),
@@ -5808,7 +5818,9 @@ async def test_completed_spend_survives_error_log_suppression(
     prisma.get_request_status.return_value = status
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
-    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_error_logs})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"disable_error_logs": disable_error_logs, "use_spend_logs_ledger": False}
+    )
     now: Final = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
     result: Final = ModelResponse(
         model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)

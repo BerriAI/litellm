@@ -2288,8 +2288,8 @@ class TestTeamModelSiblingRouting:
     async def test_router_finds_all_sibling_team_deployments(self):
         """
         When two team deployments share team_public_model_name="gpt-4.1-mini",
-        the router's _common_checks_available_deployment must return BOTH as
-        healthy_deployments (not collapse to one).
+        routing that public name for the team must reach BOTH deployments
+        (not collapse to one).
         """
         import litellm
 
@@ -2338,14 +2338,16 @@ class TestTeamModelSiblingRouting:
         result = router.map_team_model(public_name, team_id)
         assert result == public_name
 
-        # _common_checks_available_deployment should return both deployments
-        model, healthy = router._common_checks_available_deployment(
-            model=public_name,
-            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
-        )
-        assert isinstance(healthy, list)
-        assert len(healthy) == 2
-        api_bases = {d["litellm_params"]["api_base"] for d in healthy}
+        # routing the public name for the team must reach both siblings
+        api_bases = set()
+        for _ in range(30):
+            response = await router.acompletion(
+                model=public_name,
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="ok",
+                metadata={"user_api_key_team_id": team_id},
+            )
+            api_bases.add(response._hidden_params["api_base"])
         assert api_bases == {
             "https://eastus.openai.azure.com",
             "https://westus.openai.azure.com",
@@ -8567,12 +8569,19 @@ class TestAccessGroupModelSync:
                 return [{"deployment_count": deployment_count}]
             if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
                 return [{"access_group_id": "ag-1"}]
+            if sql.startswith(("SELECT 1 AS locked FROM", 'SELECT team_id FROM "LiteLLM_TeamTable"')):
+                return []
             assert sql.startswith("WITH ")
             return TestAccessGroupModelSync._ALLOWLIST_ROWS
+
+        @contextlib.asynccontextmanager
+        async def transaction():
+            yield mock_prisma.db
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+        mock_prisma.db.tx = MagicMock(side_effect=transaction)
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=row)
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=row)
@@ -11512,3 +11521,46 @@ def test_self_routing_is_caught_when_the_stored_model_is_encrypted(monkeypatch: 
             model_name="route",
         )
     assert exc_info.value.code == "400"
+
+
+@pytest.mark.asyncio
+async def test_rename_rewrites_only_in_a_transaction_holding_every_locked_teams_advisory_lock():
+    """A team that starts listing the old name between the advisory snapshot and the row lock must not be
+    rewritten without its advisory lock, or a roster change on that team can still deadlock with the rename."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
+
+    snapshots = iter(([{"team_id": "team-1"}], [{"team_id": "team-1"}, {"team_id": "team-2"}]))
+    transactions: list[list[tuple[str, tuple[str, ...]]]] = []
+
+    async def query_raw(sql: str, *params: str) -> list[dict[str, object]]:
+        if transactions:
+            transactions[-1].append((sql, params))
+        if sql.startswith("SELECT COUNT(*)"):
+            return [{"deployment_count": 0}]
+        if sql.startswith('SELECT team_id FROM "LiteLLM_TeamTable"') and not sql.endswith("FOR UPDATE"):
+            return next(snapshots)
+        if sql.startswith('SELECT team_id FROM "LiteLLM_TeamTable"'):
+            return [{"team_id": "team-1"}, {"team_id": "team-2"}]
+        return []
+
+    @contextlib.asynccontextmanager
+    async def transaction():
+        transactions.append([])
+        yield db
+
+    db = SimpleNamespace(query_raw=query_raw, tx=transaction)
+    with patch("litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast", AsyncMock()):
+        await sync_model_allowlists_for_renamed_model(
+            SimpleNamespace(db=db),
+            model_id="deployment",
+            old_name="old-model",
+            new_name="new-model",
+            llm_router=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+
+    rewrites = [calls for calls in transactions if any(sql.startswith("WITH ") for sql, _ in calls)]
+    assert len(rewrites) == 1
+    advisory = [params[0] for sql, params in rewrites[0] if "pg_advisory_xact_lock" in sql]
+    assert advisory == ["team-1", "team-2"]

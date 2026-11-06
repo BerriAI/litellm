@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { serializeCustomDimensions, type CustomDimensionRow } from "./custom_dimensions";
 import { heuristicScoringRoleFor, type ClassifierFallback } from "./ComplexityRouterConfig";
@@ -43,17 +44,18 @@ export const scorerKnobPayload = (knobs: ScorerKnobInputs) => {
  * shipped weights come from the proxy (GET /public/complexity_router/scorer_defaults), so a dimension
  * added backend-side still renders, under its raw key until it is given a label here.
  */
-export const DIMENSION_LABELS: Record<string, string> = {
-  codePresence: "Code presence",
-  reasoningMarkers: "Reasoning markers",
-  technicalTerms: "Technical terms",
-  tokenCount: "Token count",
-  simpleIndicators: "Simple indicators",
-  multiStepPatterns: "Multi-step patterns",
-  questionComplexity: "Question complexity",
+export const DIMENSION_LABELS: Record<string, ParseKeys> = {
+  codePresence: "addModel.heuristicScoringKnobs.dimensions.codePresence",
+  reasoningMarkers: "addModel.heuristicScoringKnobs.dimensions.reasoningMarkers",
+  technicalTerms: "addModel.heuristicScoringKnobs.dimensions.technicalTerms",
+  tokenCount: "addModel.heuristicScoringKnobs.dimensions.tokenCount",
+  simpleIndicators: "addModel.heuristicScoringKnobs.dimensions.simpleIndicators",
+  multiStepPatterns: "addModel.heuristicScoringKnobs.dimensions.multiStepPatterns",
+  questionComplexity: "addModel.heuristicScoringKnobs.dimensions.questionComplexity",
 };
 
-export const dimensionLabel = (key: string): string => DIMENSION_LABELS[key] ?? key;
+export const dimensionLabel = (key: string): string =>
+  Object.hasOwn(DIMENSION_LABELS, key) ? i18n.t(DIMENSION_LABELS[key]) : key;
 
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
   typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;

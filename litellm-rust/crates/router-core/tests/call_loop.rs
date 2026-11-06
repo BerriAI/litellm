@@ -1755,3 +1755,57 @@ async fn a_listed_pass_through_pick_names_the_group_an_alias_resolves_to(config:
         Error::NoPassThroughDeployments { model } if model == "primary"
     ));
 }
+
+struct StoppedClock(u64);
+
+impl litellm_router_core::health::Clock for StoppedClock {
+    fn now(&self) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + Duration::from_secs(self.0)
+    }
+}
+
+fn utc_hour(hour: u64) -> u64 {
+    1_767_225_600 + hour * 3_600
+}
+
+#[rstest]
+#[case::inside_the_window(utc_hour(10), vec!["open"])]
+#[case::outside_the_window(utc_hour(20), vec!["open", "reserved"])]
+#[tokio::test]
+async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expected: Vec<&str>) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "chat", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "open"}},
+            {"model_name": "chat", "litellm_params": {"model": "openai/b"}, "model_info": {
+                "id": "reserved",
+                "access_windows": [{"start": "09:00", "end": "17:00", "timezone": "UTC", "team_ids": ["batch"]}],
+            }},
+        ]
+    }))
+    .unwrap();
+    let router = Router::builder(
+        config,
+        RouterDynamicConfig::default(),
+        Arc::new(ScriptedHost::default()),
+    )
+    .randomness(Arc::new(SeededRandomness::new(7)))
+    .clock(Arc::new(StoppedClock(now)))
+    .build()
+    .unwrap();
+    let mut picked = std::collections::BTreeSet::new();
+    for _ in 0..40 {
+        let deployment = router
+            .select(&Op::from("acompletion"), &request_for("chat"))
+            .await
+            .unwrap();
+        picked.insert(deployment.id.clone());
+    }
+    assert_eq!(picked.into_iter().collect::<Vec<_>>(), expected);
+}
+
+fn request_for(model: &str) -> RouterRequest {
+    RouterRequest {
+        model: model.to_owned(),
+        ..RouterRequest::default()
+    }
+}
