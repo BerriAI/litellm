@@ -6843,32 +6843,39 @@ async def virtual_key_soft_budget_check(
     """
 
     if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
-        verbose_proxy_logger.debug(
-            "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
-            valid_token.token,
-            valid_token.spend,
-            valid_token.soft_budget,
-        )
-        call_info: Final = CallInfo(
-            token=valid_token.token,
-            spend=valid_token.spend,
-            max_budget=valid_token.max_budget,
-            soft_budget=valid_token.soft_budget,
-            user_id=valid_token.user_id,
-            team_id=valid_token.team_id,
-            team_alias=valid_token.team_alias,
-            organization_id=valid_token.org_id,
-            user_email=user_obj.user_email if user_obj else None,
-            key_alias=valid_token.key_alias,
-            event_group=Litellm_EntityType.KEY,
-        )
+        send_soft_budget_alert(valid_token, proxy_logging_obj, user_obj)
 
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="soft_budget",
-                user_info=call_info,
-            )
+
+def send_soft_budget_alert(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: LiteLLM_UserTable | None,
+) -> None:
+    verbose_proxy_logger.debug(
+        "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+        valid_token.token,
+        valid_token.spend,
+        valid_token.soft_budget,
+    )
+    call_info: Final = CallInfo(
+        token=valid_token.token,
+        spend=valid_token.spend,
+        max_budget=valid_token.max_budget,
+        soft_budget=valid_token.soft_budget,
+        user_id=valid_token.user_id,
+        team_id=valid_token.team_id,
+        team_alias=valid_token.team_alias,
+        organization_id=valid_token.org_id,
+        user_email=user_obj.user_email if user_obj else None,
+        key_alias=valid_token.key_alias,
+        event_group=Litellm_EntityType.KEY,
+    )
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="soft_budget",
+            user_info=call_info,
         )
+    )
 
 
 _virtual_key_soft_budget_check: Final = virtual_key_soft_budget_check

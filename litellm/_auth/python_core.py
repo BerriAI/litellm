@@ -6,19 +6,24 @@ from typing import Final
 from litellm._auth.decision import (
     AdminKey,
     AlertKeyBudget,
+    AlertKeySoftBudget,
+    AlertProxyBudget,
     AlertTeamMemberBudget,
     Allow,
     CachedAdminKey,
     CheckBudgetExemption,
     Deny,
     EnforceModelAccess,
+    EnforceModelBudgets,
     EvictPresentedKey,
     ExpiredKey,
     InspectKey,
     KeyBlocked,
     KeyBudgetExceeded,
     KeyFacts,
+    KeyWithoutToken,
     LoadKey,
+    LoadKeyContext,
     LoadKeyOwner,
     MalformedKey,
     MasterKey,
@@ -33,6 +38,7 @@ from litellm._auth.decision import (
     PrepareKey,
     PresentedKey,
     ReadKeySpend,
+    ReadProxySpend,
     ReadTeamMemberBudget,
     RequestFacts,
     ResolveEndUser,
@@ -50,6 +56,14 @@ from litellm._auth.key import hash_token, is_master_key
 
 _USER_AUTH_ROUTE: Final = "/user/auth"
 _VIRTUAL_KEY_PREFIX: Final = "sk-"
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyCheck:
+    settings: Settings
+    now: datetime
+    is_llm_api_route: bool
+    key_label: str
 
 
 class PythonCore:
@@ -75,9 +89,7 @@ class PythonCore:
         )
 
     def start_resolved_key(self, facts: RequestFacts, settings: Settings, now: datetime) -> Step:
-        return _check_key(
-            _KeyCheck(facts=facts, settings=settings, now=now, loaded_from_db=True, key_label=facts.token or "")
-        )
+        return _check_key(_KeyCheck(settings, now, facts.is_llm_api_route, key_label=facts.token or ""))
 
 
 def _after_presented_key(
@@ -103,33 +115,14 @@ def _after_presented_key(
     if not settings.has_db:
         return Deny(NoDatabase())
     if presented is not None:
-        cached: Final = _KeyCheck(facts=facts, settings=settings, now=now, loaded_from_db=False, key_label=token)
+        cached: Final = _KeyCheck(settings, now, facts.is_llm_api_route, key_label=token)
         return PrepareKey(loaded_from_db=False, resume=lambda: _check_key(cached))
     if not token.startswith(_VIRTUAL_KEY_PREFIX):
         return Deny(NotAVirtualKey())
-    loaded: Final = _KeyCheck(facts=facts, settings=settings, now=now, loaded_from_db=True, key_label=hashed_token)
+    loaded: Final = _KeyCheck(settings, now, facts.is_llm_api_route, key_label=hashed_token)
     return LoadKey(
         hashed_token=hashed_token,
         resume=lambda: PrepareKey(loaded_from_db=True, resume=lambda: _check_key(loaded)),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _KeyCheck:
-    facts: RequestFacts
-    settings: Settings
-    now: datetime
-    loaded_from_db: bool
-    key_label: str
-
-
-def _allow(check: _KeyCheck, budget_checks_skipped: bool, budget_throttle_pct: float | None) -> Step:
-    return Allow(
-        VirtualKey(
-            loaded_from_db=check.loaded_from_db,
-            budget_checks_skipped=budget_checks_skipped,
-            budget_throttle_pct=budget_throttle_pct,
-        )
     )
 
 
@@ -191,14 +184,14 @@ def _check_expiry(check: _KeyCheck, key: KeyFacts, exempt: bool) -> Step:
     if key.expires is not None and key.expires < check.now:
         return Deny(ExpiredKey(expires=key.expires, now=check.now, key_label=check.key_label))
     if exempt:
-        return _allow(check, budget_checks_skipped=True, budget_throttle_pct=None)
+        return _load_context(check, key, budget_throttle_pct=None)
     return SendKeyBudgetAlerts(resume=lambda: _check_key_budget(check, key))
 
 
 def _check_key_budget(check: _KeyCheck, key: KeyFacts) -> Step:
     max_budget: Final = key.max_budget
-    if not check.facts.is_llm_api_route or max_budget is None:
-        return _allow(check, budget_checks_skipped=False, budget_throttle_pct=None)
+    if not check.is_llm_api_route or max_budget is None:
+        return _check_soft_budget(check, key, budget_throttle_pct=None)
     return ReadKeySpend(
         max_budget=max_budget,
         resume=lambda spend: AlertKeyBudget(
@@ -210,7 +203,38 @@ def _check_key_budget(check: _KeyCheck, key: KeyFacts) -> Step:
 def _after_key_spend(check: _KeyCheck, key: KeyFacts, spend: float, max_budget: float) -> Step:
     # A NaN max_budget compares false against any spend, so a non-finite budget means no limit, never a bypass.
     if not math.isfinite(max_budget) or spend < max_budget:
-        return _allow(check, budget_checks_skipped=False, budget_throttle_pct=None)
+        return _check_soft_budget(check, key, budget_throttle_pct=None)
     if key.budget_throttle_pct is not None:
-        return _allow(check, budget_checks_skipped=False, budget_throttle_pct=key.budget_throttle_pct)
+        return _check_soft_budget(check, key, budget_throttle_pct=key.budget_throttle_pct)
     return Deny(KeyBudgetExceeded(spend=spend, max_budget=max_budget))
+
+
+def _check_soft_budget(check: _KeyCheck, key: KeyFacts, budget_throttle_pct: float | None) -> Step:
+    def model_budgets() -> Step:
+        return EnforceModelBudgets(resume=lambda: _load_context(check, key, budget_throttle_pct))
+
+    if key.soft_budget and key.spend >= key.soft_budget:
+        return AlertKeySoftBudget(resume=model_budgets)
+    return model_budgets()
+
+
+def _load_context(check: _KeyCheck, key: KeyFacts, budget_throttle_pct: float | None) -> Step:
+    return LoadKeyContext(resume=lambda: _check_proxy_budget(check, key, budget_throttle_pct))
+
+
+def _check_proxy_budget(check: _KeyCheck, key: KeyFacts, budget_throttle_pct: float | None) -> Step:
+    if not (check.settings.proxy_max_budget > 0 and check.settings.has_db):
+        return _grant(key, budget_throttle_pct)
+    return ReadProxySpend(
+        resume=lambda spend: (
+            _grant(key, budget_throttle_pct)
+            if spend is None
+            else AlertProxyBudget(spend=spend, resume=lambda: _grant(key, budget_throttle_pct))
+        )
+    )
+
+
+def _grant(key: KeyFacts, budget_throttle_pct: float | None) -> Step:
+    if not key.has_token:
+        return Deny(KeyWithoutToken())
+    return Allow(VirtualKey(budget_throttle_pct=budget_throttle_pct))

@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, NamedTuple, Protocol, Union, cast
+from typing import Final, NamedTuple, Protocol, Union, assert_never, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -36,10 +36,12 @@ from litellm._auth.decision import (
     AuthCore,
     CachedAdminKey,
     Deny,
+    Grant,
     KeyFacts,
     MasterKey,
     NoMasterKey,
     NonAdminKey,
+    Outcome,
     OwnerFacts,
     PresentedKey,
     RequestFacts,
@@ -117,12 +119,13 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
+    send_soft_budget_alert,
     send_token_budget_alert,
     stamp_matched_model_access_groups,
     team_member_max_budget_alert_check,
     virtual_key_max_budget_alert_check,
     virtual_key_max_budget_check,
-    virtual_key_soft_budget_check,
+    virtual_key_soft_budget_check,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.auth.auth_denial import denial_exception
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
@@ -2255,44 +2258,6 @@ async def _resolve_end_user(
         return _ResolvedEndUser(end_user_id=end_user_id, end_user_object=None, budget=None)
 
 
-async def _master_key_auth(
-    token: str,
-    end_user: _ResolvedEndUser,
-    admin_user_id: str,
-    parent_otel_span: Span | None,
-    route: str,
-    start_time: datetime,
-    user_api_key_cache: UserApiKeyCache,
-    proxy_logging_obj: ProxyLogging,
-) -> UserAPIKeyAuth:
-    # A stable alias replaces the raw master key so neither the key nor its hash reaches spend logs,
-    # metrics labels, audit trails or rate-limit buckets.
-    master_key_auth: Final = await _return_user_api_key_auth_obj(
-        user_obj=None,
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
-        parent_otel_span=parent_otel_span,
-        valid_token_dict={**end_user.params, "user_id": admin_user_id},
-        route=route,
-        start_time=start_time,
-    )
-    asyncio.create_task(
-        cache_key_object(
-            hashed_token=hash_token(token),
-            user_api_key_obj=master_key_auth,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    with_end_user: Final = update_valid_token_with_end_user_params(
-        valid_token=master_key_auth, end_user_params=end_user.params
-    )
-    with_end_user.via_virtual_key = True
-    if end_user.end_user_object is not None:
-        with_end_user.end_user_object_permission = end_user.end_user_object.object_permission
-    return with_end_user
-
-
 def _proxy_model_list() -> list[object] | None:
     from litellm.proxy.proxy_server import llm_model_list
 
@@ -2308,6 +2273,7 @@ def _core_settings(master_key: str | None, allow_user_auth: bool, prisma_client:
         allow_user_auth=allow_user_auth,
         has_db=prisma_client is not None,
         master_key_only_routes=_MASTER_KEY_ONLY_ROUTES,
+        proxy_max_budget=litellm.max_budget,
     )
 
 
@@ -2406,6 +2372,22 @@ class _BuilderEffects:
         self.owner: LiteLLM_UserTable | None = None
 
     @property
+    def token(self) -> str:
+        return self._token
+
+    @property
+    def parent_otel_span(self) -> Span | None:
+        return self._parent_otel_span
+
+    @property
+    def user_api_key_cache(self) -> UserApiKeyCache:
+        return self._user_api_key_cache
+
+    @property
+    def proxy_logging_obj(self) -> ProxyLogging:
+        return self._proxy_logging_obj
+
+    @property
     def key(self) -> UserAPIKeyAuth:
         if self.resolved_key is None:
             raise RuntimeError("the auth core granted a key it never resolved")
@@ -2500,8 +2482,11 @@ class _BuilderEffects:
         key: Final = _update_key_budget_with_temp_budget_increase(self.key)
         self.resolved_key = key
         return KeyFacts(
+            has_token=key.token is not None,
             blocked=key.blocked is True,
             expires=None if key.expires is None else _aware_expiry(key.expires),
+            spend=key.spend,
+            soft_budget=key.soft_budget,
             max_budget=key.max_budget,
             team_member_spend=key.team_member_spend,
             user_id=key.user_id,
@@ -2633,6 +2618,47 @@ class _BuilderEffects:
 
     async def alert_key_budget(self, spend: float) -> None:
         send_token_budget_alert(self.key, spend, self._proxy_logging_obj, self.owner)
+
+    async def alert_key_soft_budget(self) -> None:
+        send_soft_budget_alert(self.key, self._proxy_logging_obj, self.owner)
+
+    async def enforce_model_budgets(self) -> None:
+        with tracer.trace("litellm.proxy.auth.budget_checks"):
+            await _check_model_budgets(
+                request=self._request, request_data=self._request_data, valid_token=self.key, route=self._route
+            )
+
+    async def load_key_context(self) -> None:
+        await _load_team_and_project(
+            valid_token=self.key,
+            prisma_client=self._prisma_client,
+            user_api_key_cache=self._user_api_key_cache,
+            parent_otel_span=self._parent_otel_span,
+            proxy_logging_obj=self._proxy_logging_obj,
+        )
+
+    async def read_proxy_spend(self) -> float | None:
+        if self._prisma_client is None:
+            return None
+        with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
+            return await fetch_global_spend_with_event_coordination(
+                cache_key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+                user_api_key_cache=self._user_api_key_cache,
+                prisma_client=self._prisma_client,
+            )
+
+    async def alert_proxy_budget(self, spend: float) -> None:
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+        call_info: Final = CallInfo(
+            token=self.key.token,
+            spend=spend,
+            max_budget=litellm.max_budget,
+            user_id=litellm_proxy_admin_name,
+            team_id=self.key.team_id,
+            event_group=Litellm_EntityType.PROXY,
+        )
+        asyncio.create_task(self._proxy_logging_obj.budget_alerts(type="proxy_budget", user_info=call_info))
 
 
 async def user_api_key_auth_builder(
@@ -3073,48 +3099,14 @@ async def user_api_key_auth_builder(
             )
         finally:
             valid_token = effects.resolved_key  # rebind-ok: the exception handler below reports the resolved identity
-        match outcome:
-            case Deny(denial=denial):
-                raise denial_exception(
-                    denial, token=api_key, route=route, jwt_auth_enabled=enable_jwt_auth, key=effects.resolved_key
-                )
-            case Allow(grant=grant):
-                match grant:
-                    case NoMasterKey(token=token):
-                        return UserAPIKeyAuth(
-                            api_key=token,
-                            user_role=LitellmUserRoles.INTERNAL_USER,
-                            parent_otel_span=parent_otel_span,
-                        )
-                    case UserAuthRoute():
-                        return UserAPIKeyAuth()
-                    case MasterKey():
-                        return await _master_key_auth(
-                            token=api_key,
-                            end_user=effects.end_user,
-                            admin_user_id=litellm_proxy_admin_name,
-                            parent_otel_span=parent_otel_span,
-                            route=route,
-                            start_time=start_time,
-                            user_api_key_cache=user_api_key_cache,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                    case CachedAdminKey():
-                        return _with_end_user(effects.key, effects.end_user, parent_otel_span)
-                    case VirtualKey(budget_checks_skipped=budget_checks_skipped, budget_throttle_pct=throttle_pct):
-                        if throttle_pct is not None:
-                            effects.key.budget_throttle_pct = throttle_pct
-                        return await _finish_virtual_key_auth(
-                            request=request,
-                            request_data=request_data,
-                            valid_token=effects.key,
-                            route=route,
-                            start_time=start_time,
-                            parent_otel_span=parent_otel_span,
-                            end_user=effects.end_user,
-                            user_obj=effects.owner,
-                            skip_budget_checks=budget_checks_skipped,
-                        )
+        return await _authenticated(
+            outcome,
+            effects,
+            admin_user_id=litellm_proxy_admin_name,
+            route=route,
+            start_time=start_time,
+            jwt_auth_enabled=enable_jwt_auth,
+        )
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
             e=e,
@@ -3130,198 +3122,233 @@ async def user_api_key_auth_builder(
 _user_api_key_auth_builder: Final = user_api_key_auth_builder
 
 
-async def _check_soft_and_model_budgets(
+async def _check_model_budgets(
     request: Request,
     request_data: dict[str, object],  # mutable-ok: per-model budget fallbacks rewrite the request model in place
     valid_token: UserAPIKeyAuth,
     route: str,
-    user_obj: LiteLLM_UserTable | None,
 ) -> None:
-    from litellm.proxy.proxy_server import llm_router, model_max_budget_limiter, prisma_client, proxy_logging_obj
+    from litellm.proxy.proxy_server import llm_router, model_max_budget_limiter, prisma_client
 
-    # Check 6. Soft Budget Check
-    await virtual_key_soft_budget_check(
-        valid_token=valid_token,
-        proxy_logging_obj=proxy_logging_obj,
-        user_obj=user_obj,
-    )
-
-    # Check 5. Token Model Spend is under Model budget
-    max_budget_per_model: Final = valid_token.model_max_budget
-    current_model = _get_model_from_request_context(
-        request_data=request_data,
-        route=route,
-        request=request,
-        llm_router=llm_router,
-        team_id=valid_token.team_id,
-    )
-    current_models = _get_model_names_for_budget_checks(model=current_model)
-
-    if max_budget_per_model and prisma_client is not None and current_models and valid_token.token is not None:
-        ## GET THE SPEND FOR THIS MODEL
-        for model_name in current_models:
-            await _check_key_model_budget_with_fallback(
-                valid_token=valid_token,
-                model_max_budget_limiter=model_max_budget_limiter,
-                model_name=model_name,
+    def requested_models() -> list[str]:
+        return _get_model_names_for_budget_checks(
+            model=_get_model_from_request_context(
                 request_data=request_data,
+                route=route,
                 request=request,
-                llm_model_list=cast(  # cast-ok: router model lists are deployment sequences
-                    Sequence[object] | None, _proxy_model_list()
-                ),
                 llm_router=llm_router,
+                team_id=valid_token.team_id,
             )
-
-        # Recompute after a potential budget-fallback rewrite so
-        # the user check below validates the final model
-        current_model = _get_model_from_request_context(
-            request_data=request_data,
-            route=route,
-            request=request,
-            llm_router=llm_router,
-            team_id=valid_token.team_id,
         )
-        current_models = _get_model_names_for_budget_checks(model=current_model)
 
-    # Check 5a. Internal user model_max_budget
-    if current_models:
-        await _check_user_model_budget(
+    models: Final = requested_models()
+    checks_key_budgets: Final = (
+        bool(valid_token.model_max_budget)
+        and prisma_client is not None
+        and bool(models)
+        and valid_token.token is not None
+    )
+    for model_name in models if checks_key_budgets else ():
+        await _check_key_model_budget_with_fallback(
             valid_token=valid_token,
             model_max_budget_limiter=model_max_budget_limiter,
-            models=current_models,
+            model_name=model_name,
+            request_data=request_data,
+            request=request,
+            llm_model_list=cast(  # cast-ok: router model lists are deployment sequences
+                Sequence[object] | None, _proxy_model_list()
+            ),
+            llm_router=llm_router,
         )
-
-
-async def _finish_virtual_key_auth(
-    request: Request,
-    request_data: dict[str, object],  # mutable-ok: per-model budget fallbacks rewrite the request model in place
-    valid_token: UserAPIKeyAuth,
-    route: str,
-    start_time: datetime,
-    parent_otel_span: Span | None,
-    end_user: _ResolvedEndUser,
-    user_obj: LiteLLM_UserTable | None,
-    skip_budget_checks: bool,
-) -> UserAPIKeyAuth:
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_admin_name,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
+    # A budget fallback may have rewritten the request model, so the user check validates the final one.
+    await _check_user_model_budget(
+        valid_token=valid_token,
+        model_max_budget_limiter=model_max_budget_limiter,
+        models=requested_models() if checks_key_budgets else models,
     )
 
-    if not skip_budget_checks:
-        with tracer.trace("litellm.proxy.auth.budget_checks"):
-            await _check_soft_and_model_budgets(
-                request=request, request_data=request_data, valid_token=valid_token, route=route, user_obj=user_obj
-            )
 
-    # Check 6: Additional Common Checks across jwt + key auth
-    if valid_token.team_id is not None:
-        try:
-            if valid_token.team_id == UI_TEAM_ID:
-                raise TeamNotFoundError(team_id=UI_TEAM_ID)
-            with tracer.trace("litellm.proxy.auth.get_team_object"):
-                _team_obj = await get_team_object(
-                    team_id=valid_token.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-        except HTTPException:
-            token_team_models: Final = _token_team_models(valid_token)
-            _team_obj = LiteLLM_TeamTableCachedObj(
-                team_id=valid_token.team_id,
-                max_budget=valid_token.team_max_budget,
-                soft_budget=valid_token.team_soft_budget,
-                model_max_budget=valid_token.team_model_max_budget,
-                spend=valid_token.team_spend,
-                tpm_limit=valid_token.team_tpm_limit,
-                rpm_limit=valid_token.team_rpm_limit,
-                tpd_limit=valid_token.team_tpd_limit,
-                blocked=valid_token.team_blocked,
-                models=token_team_models,
-                metadata=valid_token.team_metadata,
-                object_permission_id=valid_token.team_object_permission_id,
-                object_permission=await _resolve_object_permission_for_unresolvable_team(
-                    object_permission_id=valid_token.team_object_permission_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                ),
-            )
-    else:
-        _team_obj = None
+async def _load_team_and_project(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    team_obj: Final = (
+        None
+        if valid_token.team_id is None
+        else await _key_team_object(
+            valid_token, valid_token.team_id, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
+        )
+    )
+    valid_token.team_object_permission = team_obj.object_permission if team_obj is not None else None
+    if team_obj is not None:
+        # Guardrails or other metadata added after the key was cached apply without a cache eviction.
+        valid_token.team_metadata = team_obj.metadata
+    if valid_token.project_id is None:
+        return
+    project_obj: Final = await get_project_object(
+        project_id=valid_token.project_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if project_obj is not None:
+        valid_token.project_metadata = project_obj.metadata
+        valid_token.project_alias = project_obj.project_alias
 
-    if _team_obj is not None:
-        valid_token.team_object_permission = _team_obj.object_permission
-        # Keep team_metadata in sync with the freshly fetched team so that
-        # guardrails (or any other metadata) added after the key was cached
-        # are picked up on subsequent requests without a cache eviction.
-        valid_token.team_metadata = _team_obj.metadata
-    else:
-        valid_token.team_object_permission = None
 
-    # Fetch project object if key belongs to a project
-    _project_obj = None
-    if valid_token.project_id is not None:
-        _project_obj = await get_project_object(
-            project_id=valid_token.project_id,
+async def _key_team_object(
+    valid_token: UserAPIKeyAuth,
+    team_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_TeamTableCachedObj:
+    fetched: Final = (
+        None
+        if team_id == UI_TEAM_ID
+        else await _team_object_or_none(team_id, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj)
+    )
+    if fetched is not None:
+        return fetched
+    return LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        max_budget=valid_token.team_max_budget,
+        soft_budget=valid_token.team_soft_budget,
+        model_max_budget=valid_token.team_model_max_budget,
+        spend=valid_token.team_spend,
+        tpm_limit=valid_token.team_tpm_limit,
+        rpm_limit=valid_token.team_rpm_limit,
+        tpd_limit=valid_token.team_tpd_limit,
+        blocked=valid_token.team_blocked,
+        models=_token_team_models(valid_token),
+        metadata=valid_token.team_metadata,
+        object_permission_id=valid_token.team_object_permission_id,
+        object_permission=await _resolve_object_permission_for_unresolvable_team(
+            object_permission_id=valid_token.team_object_permission_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
-        )
-        if _project_obj is not None:
-            valid_token.project_metadata = _project_obj.metadata
-            valid_token.project_alias = _project_obj.project_alias
+        ),
+    )
 
-    global_proxy_spend = None
-    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
-        cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
-        with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
-            global_proxy_spend = await fetch_global_spend_with_event_coordination(  # rebind-ok: pre-existing rebinding on a rename-only line
-                cache_key=cache_key,
-                user_api_key_cache=user_api_key_cache,
+
+async def _team_object_or_none(
+    team_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_TeamTableCachedObj | None:
+    try:
+        with tracer.trace("litellm.proxy.auth.get_team_object"):
+            return await get_team_object(
+                team_id=team_id,
                 prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
+    except HTTPException:
+        return None
 
-        if global_proxy_spend is not None:
-            call_info: Final = CallInfo(
-                token=valid_token.token,
-                spend=global_proxy_spend,
-                max_budget=litellm.max_budget,
-                user_id=litellm_proxy_admin_name,
-                team_id=valid_token.team_id,
-                event_group=Litellm_EntityType.PROXY,
+
+async def _master_key_auth(
+    effects: _BuilderEffects, admin_user_id: str, route: str, start_time: datetime
+) -> UserAPIKeyAuth:
+    # A stable alias replaces the raw master key so neither the key nor its hash reaches spend logs,
+    # metrics labels, audit trails or rate-limit buckets.
+    master_key_auth: Final = await _return_user_api_key_auth_obj(
+        user_obj=None,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        parent_otel_span=effects.parent_otel_span,
+        valid_token_dict={**effects.end_user.params, "user_id": admin_user_id},
+        route=route,
+        start_time=start_time,
+    )
+    asyncio.create_task(
+        cache_key_object(
+            hashed_token=hash_token(effects.token),
+            user_api_key_obj=master_key_auth,
+            user_api_key_cache=effects.user_api_key_cache,
+            proxy_logging_obj=effects.proxy_logging_obj,
+        )
+    )
+    with_end_user: Final = _with_end_user(master_key_auth, effects.end_user, effects.parent_otel_span)
+    with_end_user.via_virtual_key = True
+    return with_end_user
+
+
+async def _authenticated(
+    outcome: Outcome,
+    effects: _BuilderEffects,
+    admin_user_id: str,
+    route: str,
+    start_time: datetime,
+    jwt_auth_enabled: bool,
+) -> UserAPIKeyAuth:
+    match outcome:
+        case Deny(denial=denial):
+            raise denial_exception(
+                denial, token=effects.token, route=route, jwt_auth_enabled=jwt_auth_enabled, key=effects.resolved_key
             )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="proxy_budget",
-                    user_info=call_info,
-                )
+        case Allow(grant=grant):
+            return await _granted(grant, effects, admin_user_id, route, start_time)
+
+
+async def _granted(
+    grant: Grant, effects: _BuilderEffects, admin_user_id: str, route: str, start_time: datetime
+) -> UserAPIKeyAuth:
+    match grant:
+        case NoMasterKey(token=token):
+            return UserAPIKeyAuth(
+                api_key=token, user_role=LitellmUserRoles.INTERNAL_USER, parent_otel_span=effects.parent_otel_span
             )
-    if valid_token.token is None:
-        raise HTTPException(401, detail="Invalid API key, no token associated")
+        case UserAuthRoute():
+            return UserAPIKeyAuth()
+        case MasterKey():
+            return await _master_key_auth(effects, admin_user_id, route, start_time)
+        case CachedAdminKey():
+            return _with_end_user(effects.key, effects.end_user, effects.parent_otel_span)
+        case VirtualKey(budget_throttle_pct=budget_throttle_pct):
+            return await _virtual_key_auth(effects, budget_throttle_pct, route, start_time)
+        case _:
+            assert_never(grant)
 
-    valid_token_dict: Final = valid_token.model_dump(exclude_none=True)
-    valid_token_dict.pop("token", None)
-    # budget_throttle_pct is excluded from model_dump (it must not leak
-    # into serialized responses), so carry the request-scoped decision
-    # forward by hand to the auth object the rate limiter receives.
-    if valid_token.budget_throttle_pct is not None:
-        valid_token_dict["budget_throttle_pct"] = valid_token.budget_throttle_pct
-    if end_user.end_user_object is not None or litellm.max_end_user_budget_id is not None:
-        valid_token_dict.update(end_user.params)
-    if end_user.end_user_object is not None:
-        valid_token_dict["end_user_object_permission"] = end_user.end_user_object.object_permission
 
+async def _virtual_key_auth(
+    effects: _BuilderEffects, budget_throttle_pct: float | None, route: str, start_time: datetime
+) -> UserAPIKeyAuth:
+    key: Final = effects.key
+    token: Final = key.token
+    if token is None:
+        raise RuntimeError("the auth core granted a virtual key without a token")
+    end_user: Final = effects.end_user
+    # budget_throttle_pct is excluded from model_dump so it never leaks into serialized responses.
+    throttle: Final = {} if budget_throttle_pct is None else {"budget_throttle_pct": budget_throttle_pct}
+    end_user_params: Final = (
+        end_user.params if end_user.end_user_object is not None or litellm.max_end_user_budget_id is not None else {}
+    )
+    end_user_permission: Final = (
+        {}
+        if end_user.end_user_object is None
+        else {"end_user_object_permission": end_user.end_user_object.object_permission}
+    )
     virtual_key_auth_obj: Final = await _return_user_api_key_auth_obj(
-        user_obj=user_obj,
-        api_key=valid_token.token,
-        parent_otel_span=parent_otel_span,
-        valid_token_dict=valid_token_dict,
+        user_obj=effects.owner,
+        api_key=token,
+        parent_otel_span=effects.parent_otel_span,
+        valid_token_dict={
+            **{k: v for k, v in key.model_dump(exclude_none=True).items() if k != "token"},
+            **throttle,
+            **end_user_params,
+            **end_user_permission,
+        },
         route=route,
         start_time=start_time,
     )
@@ -4793,6 +4820,7 @@ async def _authorize_resolved_key(
     route: str,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
         master_key,
         prisma_client,
         proxy_logging_obj,
@@ -4819,25 +4847,14 @@ async def _authorize_resolved_key(
         ),
         effects,
     )
-    match outcome:
-        case Allow(grant=VirtualKey(budget_checks_skipped=budget_checks_skipped, budget_throttle_pct=throttle_pct)):
-            if throttle_pct is not None:
-                effects.key.budget_throttle_pct = throttle_pct
-            return await _finish_virtual_key_auth(
-                request=request,
-                request_data=request_data,
-                valid_token=effects.key,
-                route=route,
-                start_time=start_time,
-                parent_otel_span=None,
-                end_user=effects.end_user,
-                user_obj=effects.owner,
-                skip_budget_checks=budget_checks_skipped,
-            )
-        case Allow(grant=grant):
-            raise RuntimeError(f"a resolved key check granted {grant}")
-        case Deny(denial=denial):
-            raise denial_exception(denial, token=key_hash, route=route, jwt_auth_enabled=False, key=effects.key)
+    return await _authenticated(
+        outcome,
+        effects,
+        admin_user_id=litellm_proxy_admin_name,
+        route=route,
+        start_time=start_time,
+        jwt_auth_enabled=False,
+    )
 
 
 async def authorize_internal_virtual_key(

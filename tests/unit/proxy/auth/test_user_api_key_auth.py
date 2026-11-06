@@ -1600,8 +1600,6 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
-        + "\n"
         + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
@@ -1646,8 +1644,6 @@ def test_every_jwt_branch_carries_the_user_model_budget():
 
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
         + "\n"
         + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
@@ -1774,8 +1770,10 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     whether the caller used a JWT or a virtual key, and makes that log a lie.
 
     Structural rather than behavioural on purpose: the defect is a call site
-    sitting outside a guard, and driving both auth paths to a zero-cost model
-    would prove it for the two requests exercised rather than for every site.
+    sitting outside a guard, and driving the JWT path to a zero-cost model
+    would prove it for the request exercised rather than for every site. The
+    virtual-key path's exemption is decided by the auth core and covered in
+    tests/unit/_auth/test_python_core.py.
     """
     import ast
     import inspect
@@ -1783,13 +1781,7 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
-    )
+    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
 
     def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
         for parent in ast.walk(node):
@@ -1809,11 +1801,9 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     calls = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in {"_check_user_model_budget", "_check_soft_and_model_budgets"}
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_check_user_model_budget"
     ]
-    assert len(calls) == 2, f"expected the JWT and virtual-key call sites, found {len(calls)}"
+    assert len(calls) == 1, f"expected the JWT call site, found {len(calls)}"
 
     unguarded = [c for c in calls if not guarded_by_skip(tree, c)]
     assert not unguarded, (
@@ -1934,8 +1924,6 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
 
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._finish_virtual_key_auth))
         + "\n"
         + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )

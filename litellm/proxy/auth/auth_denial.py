@@ -8,6 +8,7 @@ from litellm._auth.decision import (
     ExpiredKey,
     KeyBlocked,
     KeyBudgetExceeded,
+    KeyWithoutToken,
     MalformedKey,
     MasterKeyOnlyRoute,
     MissingKey,
@@ -122,5 +123,9 @@ def denial_exception(
             )
         case KeyBudgetExceeded(spend=spend, max_budget=max_budget):
             return key_budget_exceeded_error(key or UserAPIKeyAuth(), spend, max_budget)
+        case KeyWithoutToken():
+            return HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key, no token associated"
+            )
         case _:
             assert_never(denial)

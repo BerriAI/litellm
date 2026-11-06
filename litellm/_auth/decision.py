@@ -17,6 +17,7 @@ class Settings:
     allow_user_auth: bool
     has_db: bool
     master_key_only_routes: frozenset[str]
+    proxy_max_budget: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +42,6 @@ class CachedAdminKey:
 
 @dataclass(frozen=True, slots=True)
 class VirtualKey:
-    loaded_from_db: bool
-    budget_checks_skipped: bool
     budget_throttle_pct: float | None
 
 
@@ -110,6 +109,11 @@ class KeyBudgetExceeded:
     max_budget: float
 
 
+@dataclass(frozen=True, slots=True)
+class KeyWithoutToken:
+    pass
+
+
 Denial: TypeAlias = (
     MissingKey
     | MalformedKey
@@ -122,6 +126,7 @@ Denial: TypeAlias = (
     | OwnerDeactivated
     | TeamMemberBudgetExceeded
     | KeyBudgetExceeded
+    | KeyWithoutToken
 )
 
 
@@ -153,8 +158,11 @@ PresentedKey: TypeAlias = AdminKey | NonAdminKey
 
 @dataclass(frozen=True, slots=True)
 class KeyFacts:
+    has_token: bool
     blocked: bool
     expires: datetime | None
+    spend: float
+    soft_budget: float | None
     max_budget: float | None
     team_member_spend: float | None
     user_id: str | None
@@ -256,7 +264,33 @@ class AlertKeyBudget:
     resume: "Callable[[], Step]"
 
 
-Effect: TypeAlias = (
+@dataclass(frozen=True, slots=True)
+class AlertKeySoftBudget:
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class EnforceModelBudgets:
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class LoadKeyContext:
+    resume: "Callable[[], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class ReadProxySpend:
+    resume: "Callable[[float | None], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class AlertProxyBudget:
+    spend: float
+    resume: "Callable[[], Step]"
+
+
+IdentityEffect: TypeAlias = (
     ResolveEndUser
     | ResolvePresentedKey
     | EvictPresentedKey
@@ -266,12 +300,20 @@ Effect: TypeAlias = (
     | EnforceModelAccess
     | LoadKeyOwner
     | CheckBudgetExemption
-    | ReadTeamMemberBudget
+    | LoadKeyContext
+)
+BudgetEffect: TypeAlias = (
+    ReadTeamMemberBudget
     | AlertTeamMemberBudget
     | SendKeyBudgetAlerts
     | ReadKeySpend
     | AlertKeyBudget
+    | AlertKeySoftBudget
+    | EnforceModelBudgets
+    | ReadProxySpend
+    | AlertProxyBudget
 )
+Effect: TypeAlias = IdentityEffect | BudgetEffect
 Step: TypeAlias = Outcome | Effect
 
 
