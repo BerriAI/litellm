@@ -20,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -182,8 +183,8 @@ class QualifireGuardrail(CustomGuardrail):
                 api_message["tool_call_id"] = tool_call_id
 
             # Handle tool calls if present
-            tool_calls = msg.get("tool_calls")
-            if tool_calls and isinstance(tool_calls, list):
+            tool_calls = [*anthropic_server_tool_call_params(msg), *(msg.get("tool_calls") or [])]
+            if tool_calls:
                 api_tool_calls = []
                 for tc in tool_calls:
                     if isinstance(tc, dict):

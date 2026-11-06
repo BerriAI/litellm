@@ -1,5 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -12,6 +13,11 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.llms.anthropic.common_utils import (
+    message_dict_with_server_tool_calls,
+    message_dict_with_server_tool_calls_split_out,
+    validated_object_mapping,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -32,6 +38,13 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _choice_with_message(choice: object, rewrite: Callable[[object], object]) -> object:
+    mapping: Final = validated_object_mapping(choice)
+    if mapping is None or "message" not in mapping:
+        return choice
+    return {**mapping, "message": rewrite(mapping["message"])}
 
 
 class PangeaGuardrailMissingSecrets(Exception):
@@ -250,9 +263,13 @@ class PangeaHandler(CustomGuardrail):
                 for c in choices:
                     if isinstance(c, Choices):
                         try:
-                            serialized_choices.append(c.model_dump())
+                            serialized_choices.append(
+                                _choice_with_message(c.model_dump(), message_dict_with_server_tool_calls)
+                            )
                         except Exception:
-                            serialized_choices.append(c.dict())
+                            serialized_choices.append(
+                                _choice_with_message(c.dict(), message_dict_with_server_tool_calls)
+                            )
                     else:
                         serialized_choices.append(c)
                 choices = serialized_choices
@@ -277,7 +294,9 @@ class PangeaHandler(CustomGuardrail):
             return
 
         output: Final = ai_guard_response.get("result", {}).get("output", {})
-        response.choices = output["choices"]
+        response.choices = [  # pyright: ignore[reportAttributeAccessIssue]  # Pangea returns untyped choice dicts
+            _choice_with_message(choice, message_dict_with_server_tool_calls_split_out) for choice in output["choices"]
+        ]
         return response
 
     @log_guardrail_information

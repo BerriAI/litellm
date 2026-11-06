@@ -2798,6 +2798,16 @@ def test_regional_uplift_accepts_every_value_float_converts(model_info: ModelInf
     assert get_regional_uplift_multiplier(model_info, "us") == 1.25
 
 
+class _IndexOnly:
+    def __index__(self) -> int:
+        return 2
+
+
+@pytest.mark.parametrize("model_info", [{"regional_processing_uplift_multiplier_us": _IndexOnly()}])
+def test_regional_uplift_accepts_an_index_only_value(model_info: ModelInfo):
+    assert get_regional_uplift_multiplier(model_info, "us") == 2.0
+
+
 @pytest.mark.parametrize(
     "model_info, data_residency",
     [
