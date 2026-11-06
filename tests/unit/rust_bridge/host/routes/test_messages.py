@@ -299,3 +299,79 @@ def test_a_stream_body_cut_reaches_the_caller_as_the_transport_raised_it(
 
     assert type(mapped) is getattr(httpx, error_class)
     assert str(mapped) == text
+
+
+_TRANSPORT: Final = "error sending request: client error"
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "native", "text"),
+    (
+        (
+            True,
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Connect call failed ('127.0.0.1', 9)]",
+        ),
+        (
+            True,
+            f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+            "failed to lookup address information: Name or service not known",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [Name or service not known]",
+        ),
+        (
+            True,
+            f"could not reach the provider: {_TRANSPORT} (Connect): tls handshake eof",
+            "Cannot connect to host 127.0.0.1:9 ssl:<ssl> [None]",
+        ),
+        (
+            True,
+            f"upstream network error: {_TRANSPORT} (SendRequest): connection error: Connection reset by peer (os error 104)",
+            "[Errno 104] Connection reset by peer",
+        ),
+        (
+            True,
+            f"upstream network error: {_TRANSPORT} (SendRequest): connection closed before message completed",
+            "Server disconnected",
+        ),
+        (
+            False,
+            f"could not reach the provider: {_TRANSPORT} (Connect): tcp connect error: Connection refused (os error 111)",
+            "All connection attempts failed",
+        ),
+        (
+            False,
+            f"could not reach the provider: {_TRANSPORT} (Connect): dns error: error resolving DNS: "
+            "failed to lookup address information: Name or service not known",
+            "[Errno -2] Name or service not known",
+        ),
+        (False, f"could not reach the provider: {_TRANSPORT} (Connect): tls handshake eof", ""),
+        (
+            False,
+            f"upstream network error: {_TRANSPORT} (SendRequest): connection error: Connection reset by peer (os error 104)",
+            "",
+        ),
+        (
+            False,
+            f"upstream network error: {_TRANSPORT} (SendRequest): connection closed before message completed",
+            "Server disconnected without sending a response.",
+        ),
+    ),
+)
+def test_a_failure_before_any_response_maps_like_the_python_transport_error(
+    monkeypatch: pytest.MonkeyPatch, aiohttp: bool, native: str, text: str
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    monkeypatch.setattr(messages_host, "get_ssl_configuration", lambda _ssl_verify: "<ssl>")
+
+    mapped: Final = messages_host.map_failure(
+        RuntimeError(native), {"model": _ADAPTIVE_OPUS, "api_base": "http://127.0.0.1:9"}, "anthropic"
+    )
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.status_code == 500
+    assert mapped.message == (
+        f"litellm.InternalServerError: AnthropicException - {text}. Handle with `litellm.InternalServerError`."
+    )
+    assert "This looks like a bug in LiteLLM" not in str(mapped)
