@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable,
 from contextvars import ContextVar
 from datetime import date, datetime, time
 from functools import partial
-from time import perf_counter
+from time import monotonic, perf_counter
 from time import time as unix_time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, TypeVar, final, overload
@@ -75,6 +75,7 @@ from litellm.router_api import (
 from litellm.router_attempt import for_requested_model, request_from_call
 from litellm.router_config import RouterConfig, RouterDynamicConfig, detached
 from litellm.router_python_host import PythonHost
+from litellm.router_rust.invoke.deadline import outlives_deadline, with_request_deadline
 from litellm.router_rust.invoke.endpoints import (
     AttemptCall,
     Plan,
@@ -2568,7 +2569,11 @@ class RustCore(
         field: Final = plan.prepare_field or "metadata"
         if request.get(field) is not None and not isinstance(request.get(field), Mapping):
             raise TypeError(f"{field} must be a mapping")
-        prepared: Final = dict(request) if prepared_already else self._endpoints.prepare(plan, request, model)  # pyright: ignore[reportArgumentType]  # the name as given, which the metadata keeps
+        prepared: Final = (
+            dict(request)
+            if prepared_already
+            else with_request_deadline(self._endpoints.prepare(plan, request, model), monotonic())  # pyright: ignore[reportArgumentType]  # the name as given, which the metadata keeps
+        )
         if not prepared_already:
             # `async_function_with_fallbacks`: a selection the caller sent is not one the router made,
             # so it never exempts a fallback target from the access gate.
@@ -2885,8 +2890,10 @@ class RustCore(
                 await await_all(driver.outcomes.take_pending())
             match step["kind"]:
                 case "attempt":
+                    driver.refuse_past_deadline()
                     outcome = await driver.attempt(step)
                 case "sleep":
+                    driver.refuse_past_deadline(_sleep_seconds(step))
                     await self._host.sleep(_sleep_seconds(step))
                     outcome = None
                 case "allow_fallback":
@@ -2936,8 +2943,10 @@ class RustCore(
                 driver.log_outcomes_sync()
             match step["kind"]:
                 case "attempt":
+                    driver.refuse_past_deadline()
                     outcome = driver.attempt_sync(step)
                 case "sleep":
+                    driver.refuse_past_deadline(_sleep_seconds(step))
                     self._host.sleep_sync(_sleep_seconds(step))
                     outcome = None
                 case "allow_fallback":
@@ -4918,6 +4927,12 @@ class _Driver:
     @property
     def last_error(self) -> BaseException | None:
         return self._last_error
+
+    def refuse_past_deadline(self, wait: float = 0.0) -> None:
+        """An attempt, or a backoff of ``wait`` seconds, that would end past the caller's budget
+        raises the error the last attempt ended on instead of starting."""
+        if self._last_error is not None and outlives_deadline(self._request, monotonic(), wait):
+            raise self._last_error
 
     def _stream_attempt(
         self, step: Mapping[str, object], kwargs: Mapping[str, object], slot: "contextlib.ExitStack | None" = None

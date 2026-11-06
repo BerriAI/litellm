@@ -452,6 +452,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     # protection on a real deployment failure or force a false "not caller-controlled"
     # reading that lets its own bad timeout cool down deployments other tenants rely on.
     "client_side_timeout",
+    # Pinned by the router from the sources above; a client-forged instant would cut every attempt short.
+    "request_deadline",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (

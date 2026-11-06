@@ -59,6 +59,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "azure_scope",
             "timeout",
             "client_side_timeout",
+            "request_deadline",
             "gcs_bucket_name",
             "bucket_name",
             "s3_endpoint_url",

@@ -414,6 +414,7 @@ class ProxyRequestState:
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
     stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None
+    request_deadline: float | None = None
     model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None
 
 

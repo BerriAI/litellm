@@ -1770,10 +1770,17 @@ async def test_add_litellm_data_to_request_marks_body_timeout_as_client_side(tim
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
+@pytest.mark.parametrize(
+    "forged_field, forged_value",
+    [("client_side_timeout", True), ("request_deadline", 1.0)],
+    ids=["client_side_timeout", "request_deadline"],
+)
+async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout(forged_field, forged_value):
     """The client_side_timeout marker itself must never be trusted verbatim from the
     request body: a caller forging client_side_timeout=True without a real timeout
-    override could dodge cooldown protection on an actual deployment failure."""
+    override could dodge cooldown protection on an actual deployment failure. The
+    request_deadline the router pins from it is as router-only: a forged instant in the
+    past would cut every attempt short."""
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
     request_mock.url = MagicMock()
@@ -1788,7 +1795,7 @@ async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
         data={
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "hi"}],
-            "client_side_timeout": True,
+            forged_field: forged_value,
         },
         request=request_mock,
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
@@ -1797,7 +1804,7 @@ async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
         version="test-version",
     )
 
-    assert not updated.get("client_side_timeout")
+    assert forged_field not in updated
 
 
 @pytest.mark.asyncio

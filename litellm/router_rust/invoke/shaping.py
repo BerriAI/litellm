@@ -10,6 +10,7 @@ the same precedence and the same oddities. Nothing here reads a Python router.
 import dataclasses
 from collections.abc import Mapping, MutableMapping, Sequence
 from functools import partial
+from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -36,6 +37,7 @@ from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import deployment_id as generate_deployment_id
+from litellm.router_rust.invoke.deadline import capped_to_deadline
 from litellm.router_strategy.tag_based_routing import (
     baggage_stamp_for_serving_deployment,
     get_tags_from_request_kwargs,
@@ -575,6 +577,9 @@ def _set_timeouts(
         kwargs["timeout"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
             call_timeout(shaping, kwargs, deployment_params)
         )
+    kwargs["timeout"] = (  # rebind-ok: the attempt's timeout, cut to what is left of the caller's budget
+        capped_to_deadline(kwargs.get("timeout"), kwargs, monotonic())
+    )
 
 
 def stamp_deployment_num_retries(error: BaseException, deployment: Mapping[str, object]) -> None:
