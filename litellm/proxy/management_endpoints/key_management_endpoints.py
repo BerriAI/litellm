@@ -76,6 +76,7 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
     named_callback_resolution_error,
+    prefetch_named_callback_secrets,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
@@ -971,18 +972,39 @@ def raise_on_unauthorized_callback_reference(
         if overridden is not None:
             raise HTTPException(status_code=400, detail={"error": overridden})
         return
-    stored: Final = _callback_references(existing_metadata or {})
-    if _reference_keys(references) == _reference_keys(stored):
+    stored: Final = _admin_only_entry_keys(existing_metadata or {})
+    if _admin_only_entry_keys(metadata) == stored:
         return
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "error": (
-                "Only a proxy admin can point a key at a callback_settings definition"
-                if not stored
-                else "Only a proxy admin can change or remove a key's callback_settings reference"
-            )
-        },
+    unknown: Final = next(iter(_unknown_callback_names(metadata)), None)
+    raise HTTPException(status_code=403, detail={"error": _callback_reference_denied(unknown, stored=bool(stored))})
+
+
+def _callback_reference_denied(unknown_callback_name: str | None, *, stored: bool) -> str:
+    if stored:
+        return "Only a proxy admin can change or remove a key's callback_settings reference"
+    if unknown_callback_name is None:
+        return "Only a proxy admin can point a key at a callback_settings definition"
+    return (
+        f"Only a proxy admin can store a logging entry for {unknown_callback_name!r}, a callback the proxy does not "
+        f"know, since a later callback_settings.{unknown_callback_name} definition would hand the key its secrets"
+    )
+
+
+def _admin_only_entry_keys(metadata: Mapping[str, object]) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """References to a definition, plus names no callback owns yet, which a later definition would turn into one."""
+    return (
+        *_reference_keys(_callback_references(metadata)),
+        *((callback_name, ()) for callback_name in _unknown_callback_names(metadata)),
+    )
+
+
+def _unknown_callback_names(metadata: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        callback_name
+        for callback_name, _ in stored_callback_entries(metadata.get("logging"))
+        if callback_name is not None
+        and callback_name not in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the registry of callback names has no public accessor
+        and named_callback_definition(callback_name) is None
     )
 
 
@@ -8437,6 +8459,7 @@ async def key_health(
         # Check if logging is configured in metadata
         if key_metadata and "logging" in key_metadata:
             key_logging: Final = decrypt_callback_vars(key_metadata)["logging"]
+            await prefetch_named_callback_secrets(key_logging)
             resolution_error: Final = named_callback_resolution_error(key_logging)
             logging_statuses: Final = (
                 await test_key_logging(user_api_key_dict=user_api_key_dict, request=request, key_logging=key_logging)

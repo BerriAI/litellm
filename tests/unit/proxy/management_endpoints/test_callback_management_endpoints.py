@@ -554,6 +554,46 @@ class TestCallbackReferenceKeyWrites:
             is_otel_v2_enabled.cache_clear()
 
 
+class TestUnknownCallbackNamesOnKeys:
+    """A name no callback owns is admin-only, since a later ``callback_settings`` definition under it would hand the key its secrets."""
+
+    _UNKNOWN: Final = {
+        "logging": [{"callback_name": "arize_space_b", "callback_type": "success", "callback_vars": {}}],
+    }
+
+    @pytest.fixture(autouse=True)
+    def definitions(self, monkeypatch) -> None:
+        monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+
+    @staticmethod
+    def _check(metadata, role: str, existing_metadata=None):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_unauthorized_callback_reference,
+        )
+
+        return raise_on_unauthorized_callback_reference(
+            metadata, UserAPIKeyAuth(user_role=role), existing_metadata=existing_metadata
+        )
+
+    @pytest.mark.parametrize("role", ["internal_user", "team", None])
+    def test_a_non_admin_cannot_store_a_name_no_callback_owns(self, role):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            self._check(self._UNKNOWN, role)
+        assert exc.value.status_code == 403
+        assert "arize_space_b" in str(exc.value.detail)
+
+    def test_a_proxy_admin_can_store_a_name_no_callback_owns(self):
+        assert self._check(self._UNKNOWN, "proxy_admin") is None
+
+    def test_a_non_admin_can_resend_a_stored_unknown_name_unchanged(self):
+        assert (
+            self._check({**self._UNKNOWN, "note": "edited"}, "internal_user", existing_metadata=self._UNKNOWN) is None
+        )
+
+
 class TestCallbackReferenceKeyUpdates:
     """A non-admin may edit a referencing key only by sending its stored reference back unchanged."""
 

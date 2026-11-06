@@ -1,6 +1,7 @@
 import copy
 import json
 import sys
+import threading
 from types import ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -23,6 +24,7 @@ from litellm.proxy.common_utils.callback_utils import (
     initialize_callbacks_on_proxy,
     named_callback_resolution_error,
     normalize_callback_names,
+    prefetch_named_callback_secrets,
     process_callback,
     resolve_named_callback,
     sanitize_openai_provider_metadata,
@@ -790,6 +792,48 @@ def test_callback_settings_without_a_backend_are_not_references(monkeypatch, cal
     callback: Final = AddTeamCallback(callback_name=callback_name, callback_vars={})
 
     assert resolve_named_callback(callback) is callback
+
+
+async def test_prefetched_definition_secrets_are_read_in_a_thread_once_and_reused_by_the_sync_path(monkeypatch):
+    """The auth phase prefetches off the event loop, so request-time resolution never blocks on the secret manager."""
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setattr("litellm.proxy.common_utils.callback_utils.CALLBACK_SETTINGS_SECRET_CACHE_TTL_SECONDS", 0)
+    reads: Final[list[tuple[str, int]]] = []
+
+    def fake_get_secret(secret_name, default_value=None):
+        reads.append((secret_name, threading.get_ident()))
+        return {"os.environ/LIT10061_ARIZE_API_KEY": "key-a", "os.environ/LIT10061_ARIZE_SPACE_ID": "space-a"}[
+            secret_name
+        ]
+
+    monkeypatch.setattr("litellm.proxy.common_utils.callback_utils.get_secret", fake_get_secret)
+
+    await prefetch_named_callback_secrets([_REFERENCE_ENTRY])
+    resolved: Final = resolve_named_callback(AddTeamCallback.model_validate(_REFERENCE_ENTRY))
+
+    assert resolved.callback_vars == {"arize_api_key": "key-a", "arize_space_id": "space-a"}
+    assert sorted(name for name, _ in reads) == [
+        "os.environ/LIT10061_ARIZE_API_KEY",
+        "os.environ/LIT10061_ARIZE_SPACE_ID",
+    ], "the sync path must reuse the prefetched values instead of reading again"
+    assert all(thread != threading.get_ident() for _, thread in reads), (
+        "prefetch reads must leave the event loop thread"
+    )
+
+
+def test_a_key_cannot_override_a_definition_value_at_request_time(monkeypatch):
+    """A stored entry that pins its own value for a definition field is refused, so a key written before the definition existed cannot redirect it."""
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setattr("litellm.proxy.common_utils.callback_utils.get_secret", lambda name, default_value=None: "x")
+
+    with pytest.raises(
+        ValueError, match=r"callback_vars\.arize_space_id is set by callback_settings\.arize_space_a"
+    ) as exc:
+        resolve_named_callback(
+            AddTeamCallback(callback_name="arize_space_a", callback_vars={"arize_space_id": "attacker-space"})
+        )
+
+    assert "attacker-space" not in str(exc.value)
 
 
 def test_literal_definition_values_never_reach_the_secret_manager(monkeypatch):

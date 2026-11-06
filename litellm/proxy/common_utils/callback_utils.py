@@ -1,9 +1,12 @@
+import asyncio
 import copy
 import json
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from itertools import accumulate
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -30,7 +33,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import AddTeamCallback, CommonProxyErrors, LiteLLMPromptInjectionParams
-from litellm.proxy.common_utils.callback_config_validation import named_callback_definition
+from litellm.proxy.common_utils.callback_config_validation import named_callback_definition, stored_callback_entries
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -827,16 +830,68 @@ def _secret_cache() -> _SecretCache:
     return _SECRET_CACHE
 
 
+_REQUEST_SECRETS: Final[ContextVar[Mapping[str, str | bool]]] = ContextVar(
+    "callback_settings_request_secrets", default=MappingProxyType({})
+)
+
+
+async def prefetch_named_callback_secrets(logging_entries: object) -> None:
+    """Read the secrets a key's ``callback_settings`` references need before the request's synchronous path does.
+
+    Each read runs in a worker thread, so a slow secret manager delays only this
+    request and never the event loop. The values land in a ``ContextVar`` that the
+    resolution on this request task consults before it falls back to a blocking read.
+    """
+    references: Final = tuple(
+        reference for reference in _definition_secret_references(logging_entries) if _known_secret(reference) is None
+    )
+    if not references:
+        return
+    secrets: Final = await asyncio.gather(
+        *(asyncio.to_thread(_read_secret_manager_value, reference) for reference in references)
+    )
+    _REQUEST_SECRETS.set(
+        MappingProxyType(
+            {
+                **_REQUEST_SECRETS.get(),
+                **{
+                    reference: secret
+                    for reference, secret in zip(references, secrets, strict=True)
+                    if secret is not None
+                },
+            }
+        )
+    )
+
+
+def _definition_secret_references(logging_entries: object) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            value
+            for callback_name, _ in stored_callback_entries(logging_entries)
+            if callback_name is not None and (definition := named_callback_definition(callback_name)) is not None
+            for key, value in definition.items()
+            if key != "callback_type" and isinstance(value, str) and value.startswith(_SECRET_REFERENCE_PREFIX)
+        )
+    )
+
+
 def resolve_named_callback(callback: AddTeamCallback) -> AddTeamCallback:
     """Swap a reference to a ``callback_settings`` definition for the backend it names.
 
     The definition's values go through the secret manager on every call, so a rotated
     secret is picked up by the next request. The key keeps only the reference name
-    and may add values the definition does not set.
+    and may add values the definition does not set, never replace one it does.
     """
     definition: Final = named_callback_definition(callback.callback_name)
     if definition is None:
         return callback
+    overridden: Final = next((key for key in callback.callback_vars if key in definition), None)
+    if overridden is not None:
+        raise ValueError(
+            f"callback_vars.{overridden} is set by callback_settings.{callback.callback_name} "
+            "and cannot be overridden on the key"
+        )
     backend: Final = str(definition["callback_type"])
     callback_vars: Final = {
         **{
@@ -904,17 +959,28 @@ def _resolved_definition_value(definition_name: str, key: str, value: object) ->
 
 
 def _secret_manager_value(reference: str) -> str | bool | None:
-    """One secret-manager read per reference per TTL per worker, so a slow manager does not stall every request.
+    """The value a reference resolves to, read from the secret manager only when nothing on hand already has it."""
+    known: Final = _known_secret(reference)
+    return known if known is not None else _read_secret_manager_value(reference)
+
+
+def _known_secret(reference: str) -> str | bool | None:
+    """What this request prefetched, else what this worker read within the TTL.
 
     Misses are not cached, so a secret created after the first read is picked up on the next request.
     """
+    prefetched: Final = _REQUEST_SECRETS.get().get(reference)
+    if prefetched is not None:
+        return prefetched
     cache: Final = _secret_cache() if CALLBACK_SETTINGS_SECRET_CACHE_TTL_SECONDS > 0 else None
     cached: Final = cache.get_cache(reference) if cache is not None else None
-    if isinstance(cached, _CachedSecret):
-        return cached.value
+    return cached.value if isinstance(cached, _CachedSecret) else None
+
+
+def _read_secret_manager_value(reference: str) -> str | bool | None:
     secret: Final = _SECRET_VALUE.validate_python(get_secret(reference, default_value=reference))
     if secret is None or secret in ("", reference):
         return None
-    if cache is not None:
-        cache.set_cache(reference, _CachedSecret(secret))
+    if CALLBACK_SETTINGS_SECRET_CACHE_TTL_SECONDS > 0:
+        _secret_cache().set_cache(reference, _CachedSecret(secret))
     return secret

@@ -4303,6 +4303,14 @@ async def _prefetch_referenced_auth_objects(
     )
 
 
+async def _prefetch_callback_settings_secrets(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Read the secrets this key's ``callback_settings`` references need in a thread, before the sync path resolves them."""
+    from litellm.proxy.common_utils.callback_utils import prefetch_named_callback_secrets
+    from litellm.proxy.litellm_pre_call_utils import KeyAndTeamLoggingSettings
+
+    await prefetch_named_callback_secrets(KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict))
+
+
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:
     """Anchor the OTLP destinations this key or team overrides its traces to.
 
@@ -4396,6 +4404,7 @@ async def user_api_key_auth(
         user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
             safe_get_request_headers(request), user_api_key_auth_obj
         )
+        await _prefetch_callback_settings_secrets(user_api_key_auth_obj)
         _seed_request_destinations(user_api_key_auth_obj, request)
 
         # A body that never parsed is authenticated (so the trace carries identity
@@ -4884,6 +4893,7 @@ async def authorize_internal_virtual_key(
     )
     if recovered is not None:
         return recovered
+    await _prefetch_callback_settings_secrets(auth)
     _seed_request_destinations(auth, request)
     auth.request_route = route
     request.state.principal = _resolve_request_principal(request, auth)

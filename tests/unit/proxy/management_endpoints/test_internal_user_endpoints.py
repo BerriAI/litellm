@@ -1200,6 +1200,73 @@ async def test_new_user_non_admin_omits_permissions_succeeds(mocker):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_role", "expected_status"),
+    [(LitellmUserRoles.ORG_ADMIN, 403), (LitellmUserRoles.INTERNAL_USER, 403), (LitellmUserRoles.PROXY_ADMIN, None)],
+)
+async def test_new_user_gates_the_auto_created_key_callback_settings_reference_like_key_generate(
+    mocker, monkeypatch, caller_role, expected_status
+):
+    """``/user/new`` copies ``metadata`` onto the key it creates, so pointing it at a definition is admin-only there too."""
+    import litellm
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"arize_space_a": {"callback_type": "arize", "arize_api_key": "os.environ/LIT10061_ARIZE_API_KEY"}},
+    )
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_check(*_args, **_kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check,
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    helper_calls: list[dict] = []
+
+    async def stub_helper(**kwargs):
+        helper_calls.append(kwargs)
+        return {"user_id": "alice", "key": "sk-alice", "expires": None}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        stub_helper,
+    )
+    data = NewUserRequest(
+        user_email="alice@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        metadata={"logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]},
+    )
+    caller = UserAPIKeyAuth(user_id="caller", user_role=caller_role)
+
+    if expected_status is None:
+        assert await new_user(data=data, user_api_key_dict=caller) is not None
+        assert len(helper_calls) == 1
+        return
+    with pytest.raises(ProxyException) as exc:
+        await new_user(data=data, user_api_key_dict=caller)
+    assert exc.value.code == str(expected_status)
+    assert "callback_settings" in str(exc.value.message)
+    assert helper_calls == [], "nothing may be persisted once the reference is refused"
+
+
+@pytest.mark.asyncio
 async def test_new_user_admin_can_set_permissions(mocker):
     """`new_user` accepts a PROXY_ADMIN caller for any shape of
     `permissions` in the request body."""
