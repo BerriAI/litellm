@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
 from litellm.types.llms.anthropic import AnthropicMessagesTextParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType
@@ -14,7 +15,7 @@ from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.exceptions import APIError
-    from litellm.llms.anthropic.pass_through.context_management.result import PolyfillResult
+    from litellm.llms.anthropic.messages.context_management.inference_view import InferenceRequestViewError
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,7 @@ class VertexGeminiCountContext:
 @dataclass(frozen=True, slots=True)
 class VertexGeminiCountContextError:
     error_message: str
+    status_code: int = 400
 
 
 _SYSTEM_BLOCKS: Final = TypeAdapter(tuple[AnthropicMessagesTextParam, ...])
@@ -39,6 +41,11 @@ _VERTEX_TOOL_KEYS: Final = MappingProxyType(
 )
 
 
+_INVALID_SYSTEM: Final = VertexGeminiCountContextError(
+    error_message="Gemini system instructions only support text blocks."
+)
+
+
 def _system_parts(
     system: object | None,
 ) -> tuple[Mapping[str, JsonValue], ...] | VertexGeminiCountContextError:
@@ -49,7 +56,7 @@ def _system_parts(
     try:
         blocks: Final = _SYSTEM_BLOCKS.validate_python(system)
     except ValidationError:
-        return VertexGeminiCountContextError(error_message="Gemini system instructions only support text blocks.")
+        return _INVALID_SYSTEM
     return tuple({"text": block["text"]} for block in blocks)
 
 
@@ -70,29 +77,9 @@ def _is_function_tool(tool: Mapping[str, JsonValue]) -> bool:
     return isinstance(tool.get("name"), str) or "input_schema" in tool or "function" in tool
 
 
-def _is_responses_function_tool(tool: Mapping[str, JsonValue]) -> bool:
-    return tool.get("type") == "function" and "function" not in tool and "input_schema" not in tool
-
-
-def _chat_tool(tool: Mapping[str, JsonValue]) -> tuple[Mapping[str, object], ...]:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
-    from litellm.responses.litellm_completion_transformation.transformation import (
-        LiteLLMCompletionResponsesConfig,
-    )
-
-    if _is_responses_function_tool(tool):
-        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            [dict(tool)]  # pyright: ignore[reportArgumentType]  # validated JSON dict in the Responses function tool shape
-        )
-        return tuple(chat_tools)
-    anthropic_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(
-        [dict(tool)]  # pyright: ignore[reportArgumentType]  # validated JSON dict in an Anthropic or chat tool shape
-    )
-    return tuple(anthropic_tools)
-
-
 def _map_function_tools(
     tools: object | None,
+    model: str,
 ) -> tuple[Mapping[str, object], ...] | None | VertexGeminiCountContextError:
     try:
         tool_values: Final = _TOOLS.validate_python(tools or ())
@@ -104,15 +91,21 @@ def _map_function_tools(
     if not all(_has_object_schema(tool) for tool in function_tools):
         return _INVALID_TOOLS
 
+    from litellm.llms.vertex_ai.common_utils import with_integer_enums_that_fit
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     chat_tools: Final = tuple(
-        chat_tool for tool in function_tools for chat_tool in _chat_tool(tool)
+        chat_tool for tool in function_tools for chat_tool in chat_completion_tools_for(tool)
     )  # comprehension-ok: flattens each tool's translation
+    config: Final = VertexGeminiConfig()
     try:
-        mapped_tools: Final = VertexGeminiConfig().map_function(
-            value=[dict(tool) for tool in chat_tools],
-            optional_params={},
+        mapped_tools: Final = with_integer_enums_that_fit(
+            lambda send_integer_enums: config.map_function(
+                value=[dict(tool) for tool in chat_tools],
+                optional_params={},
+                send_integer_enums=send_integer_enums,
+            ),
+            VertexGeminiConfig.is_gemini_3_or_newer(model),
         )
     except (AttributeError, TypeError, ValueError):
         return _INVALID_TOOLS
@@ -125,11 +118,12 @@ def _map_function_tools(
 def vertex_gemini_count_context(
     system: object | None,
     tools: object | None,
+    model: str,
 ) -> VertexGeminiCountContext | VertexGeminiCountContextError:
     system_parts: Final = _system_parts(system)
     if isinstance(system_parts, VertexGeminiCountContextError):
         return system_parts
-    function_tools: Final = _map_function_tools(tools)
+    function_tools: Final = _map_function_tools(tools, model)
     if isinstance(function_tools, VertexGeminiCountContextError):
         return function_tools
     return VertexGeminiCountContext(
@@ -141,14 +135,25 @@ def vertex_gemini_count_context(
 def unconvertible_messages_error(
     messages: Sequence[Mapping[str, object]] | None, messages_format: TokenCountMessagesFormat
 ) -> VertexGeminiCountContextError | None:
-    from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+    from litellm.llms.anthropic.messages.convertible_blocks import unconvertible_blocks_error
 
     error_message: Final = unconvertible_blocks_error(messages, messages_format)
     return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
 
 
+def malformed_tool_result_text_count_error(
+    messages: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> VertexGeminiCountContextError | None:
+    from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_count_error
+
+    error_message: Final = malformed_tool_result_count_error(messages, messages_format, deployment)
+    return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
+
+
 def count_context_error_response(
-    error: VertexGeminiCountContextError, request_model: str, model_used: str
+    error: "VertexGeminiCountContextError | InferenceRequestViewError", request_model: str, model_used: str
 ) -> TokenCountResponse:
     return TokenCountResponse(
         total_tokens=0,
@@ -157,7 +162,8 @@ def count_context_error_response(
         tokenizer_type="gemini",
         error=True,
         error_message=error.error_message,
-        status_code=400,
+        status_code=error.status_code,
+        rejected_before_provider_call=True,
     )
 
 
@@ -173,53 +179,13 @@ def provider_error_response(error: "APIError", request_model: str, model_used: s
     )
 
 
-@dataclass(frozen=True, slots=True)
-class InferenceRequestView:
-    messages: Sequence[Mapping[str, object]]
-    system: object | None
-
-
-def _client_compaction(messages: Sequence[Mapping[str, object]], system: object | None) -> "PolyfillResult | None":
-    from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
-        apply_client_compaction_block_history,
-    )
-
-    chat_messages: Final = [dict(message) for message in messages]
-    if system is None or isinstance(system, str):
-        return apply_client_compaction_block_history(messages=chat_messages, system=system)
-    try:
-        blocks: Final = _SYSTEM_BLOCKS.validate_python(system)
-    except ValidationError:
-        return None
-    return apply_client_compaction_block_history(messages=chat_messages, system=[dict(block) for block in blocks])
-
-
-def inference_request_view(
-    messages: Sequence[Mapping[str, object]], system: object | None, messages_format: TokenCountMessagesFormat
-) -> InferenceRequestView:
-    """Apply the history rewrites /v1/messages runs before it converts a body for Gemini."""
-    from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
-
-    match messages_format:
-        case "openai":
-            return InferenceRequestView(messages=messages, system=system)
-        case "anthropic":
-            normalized: Final = normalize_native_messages(messages)
-            compacted: Final = _client_compaction(normalized, system)
-            if compacted is None:
-                return InferenceRequestView(messages=normalized, system=system)
-            return InferenceRequestView(messages=compacted.messages, system=compacted.system)
-        case _:
-            assert_never(messages_format)
-
-
 def _chat_messages(
     messages: Sequence[Mapping[str, object]],
     messages_format: TokenCountMessagesFormat,
     model: str,
     custom_llm_provider: Literal["vertex_ai", "gemini"],
 ) -> Sequence[AllMessageValues]:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 
     match messages_format:
         case "anthropic":

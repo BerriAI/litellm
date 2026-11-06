@@ -6,8 +6,6 @@ Tests the model-based routing ID encoding/decoding used by the batch
 and file proxy endpoints.
 """
 
-from types import MappingProxyType
-
 from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_file_id_with_model,
@@ -54,39 +52,23 @@ class TestEncodeFileIdWithModel:
 
 
 class TestPrepareDataWithCredentials:
-    def test_preserves_trusted_internal_credentials_snapshot(self):
-        data = {"file_id": "file-abc"}
+    def test_deployment_bucket_settings_override_the_request_and_reach_the_sdk_as_kwargs(self):
+        data = {"file_id": "file-abc", "s3_bucket_name": "request-bucket"}
         credentials = {
             "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "safe-bucket",
+            "s3_bucket_name": "deployment-bucket",
+            "s3_output_bucket_name": "deployment-output-bucket",
+            "allow_legacy_cloud_file_ids": True,
         }
 
-        prepare_data_with_credentials(
-            data=data,
-            credentials=credentials,
-            include_internal_credentials=True,
-        )
+        prepare_data_with_credentials(data=data, credentials=credentials, file_id="decoded-file-id")
 
-        assert data["s3_bucket_name"] == "safe-bucket"
-        assert "custom_llm_provider" not in data
-        assert isinstance(
-            data["_litellm_internal_model_credentials"], type(MappingProxyType({}))
-        )
-        assert (
-            data["_litellm_internal_model_credentials"]["s3_bucket_name"]
-            == "safe-bucket"
-        )
-
-    def test_does_not_add_internal_credentials_by_default(self):
-        data = {"file_id": "file-abc"}
-        credentials = {
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "safe-bucket",
+        assert data == {
+            "file_id": "decoded-file-id",
+            "s3_bucket_name": "deployment-bucket",
+            "s3_output_bucket_name": "deployment-output-bucket",
+            "allow_legacy_cloud_file_ids": True,
         }
-
-        prepare_data_with_credentials(data=data, credentials=credentials)
-
-        assert "_litellm_internal_model_credentials" not in data
 
 
 class TestRoundTrip:

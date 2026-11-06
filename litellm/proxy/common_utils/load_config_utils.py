@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 
 _BUCKET_CONFIG_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_YAML: Final = TypeAdapter(object)
 
 
 class BucketObjectFetcher(Protocol):
@@ -31,7 +32,7 @@ class SyncBucketObjectReader(Protocol):
 
 def _parsed_config(object_key: str, file_contents: str) -> object | None:
     try:
-        parsed: Final = yaml.safe_load(file_contents)
+        parsed: Final = _DECODED_YAML.validate_python(yaml.safe_load(file_contents))
     except yaml.YAMLError as e:
         verbose_proxy_logger.error("Config object %s is not valid YAML: %s", object_key, e)
         return None

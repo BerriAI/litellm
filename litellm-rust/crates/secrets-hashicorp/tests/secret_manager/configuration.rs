@@ -32,7 +32,7 @@ fn invalid_refresh_intervals_are_rejected(#[case] value: &str) {
 
     assert!(matches!(
         HashicorpVaultConfig::from_environment(environment.as_ref()),
-        Err(Error::RefreshInterval)
+        Err(Error::RefreshInterval(_))
     ));
 }
 
@@ -77,6 +77,39 @@ async fn approle_login_uses_namespace_and_reuses_the_token() {
 
     assert!(manager.async_read_secret("name").await.unwrap().is_some());
     assert!(manager.async_read_secret("name-2").await.unwrap().is_none());
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_unreadable_client_certificate_keeps_its_io_cause() {
+    let server: MockServer = MockServer::start().await;
+    let directory: tempfile::TempDir = tempfile::tempdir().unwrap();
+    let cert_path = directory.path().join("missing.crt");
+    let values: HashMap<String, String> = HashMap::from([
+        ("HCP_VAULT_ADDR".to_owned(), server.uri()),
+        (
+            "HCP_VAULT_CLIENT_CERT".to_owned(),
+            cert_path.to_str().unwrap().to_owned(),
+        ),
+        (
+            "HCP_VAULT_CLIENT_KEY".to_owned(),
+            cert_path.to_str().unwrap().to_owned(),
+        ),
+    ]);
+    let environment: Arc<dyn Lookup + Send + Sync> =
+        Arc::new(move |name: &str| values.get(name).cloned());
+    let manager: HashicorpVault = HashicorpVault::new(environment, true).unwrap();
+
+    let error = manager.async_read_secret("name").await.unwrap_err();
+
+    let cause = std::error::Error::source(&error)
+        .and_then(|cause| cause.downcast_ref::<litellm_error::Source>())
+        .and_then(|cause| cause.downcast_ref::<std::io::Error>())
+        .expect("io cause");
+    assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
+    let report = litellm_error::Report::new(&error).to_string();
+    assert_eq!(report.matches(cert_path.to_str().unwrap()).count(), 1);
+    assert!(report.ends_with(&cause.to_string()));
 }
 
 #[rstest]

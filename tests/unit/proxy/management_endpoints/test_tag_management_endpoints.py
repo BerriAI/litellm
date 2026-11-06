@@ -16,6 +16,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import PrismaClient
 from litellm.types.tag_management import TagNewRequest
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
 
@@ -231,6 +232,138 @@ async def test_update_tag():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("spend_fields", [{"spend": 0}, {}, {"spend": None}])
+async def test_update_tag_changes_spend_and_counter_only_when_provided(
+    spend_fields: Mapping[str, float | None],
+) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    updated_tag: Final = SimpleNamespace(
+        tag_name="reset-tag",
+        description=None,
+        models=[],
+        budget_id=None,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    update_row: Final = AsyncMock(return_value=updated_tag)
+    spend: Final = FakeSpendCounters(redis=None)
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=update_row
+            ),
+            litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        )
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        _tag_cache_doubles(),
+        patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+        patch("litellm.proxy.proxy_server.spend_counter_cache") as counter_cache,
+        patch("litellm.proxy.proxy_server.spend_counter_store", spend.store()),
+    ):
+        counter_cache.redis_cache = None
+        response: Final = await update_tag(
+            tag=TagUpdateRequest.model_validate({"name": "reset-tag", **spend_fields}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response["message"] == "Tag reset-tag updated successfully"
+    update_row.assert_awaited_once_with(
+        where={"tag_name": "reset-tag"},
+        data={
+            "description": None,
+            "models": [],
+            "model_info": "{}",
+            **({"spend": spend_fields["spend"]} if spend_fields.get("spend") is not None else {}),
+        },
+    )
+    if spend_fields.get("spend") is not None:
+        assert spend.memory["spend:tag:reset-tag"] == 0
+    else:
+        assert "spend:tag:reset-tag" not in spend.memory
+        counter_cache.in_memory_cache.set_cache.assert_not_called()
+    invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [float("nan"), float("inf"), float("-inf")])
+async def test_update_tag_rejects_non_finite_spend_before_writing(spend: float) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    update_row: Final = AsyncMock()
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_tagtable=SimpleNamespace(update=update_row))
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+        pytest.raises(HTTPException) as error,
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="reset-tag", spend=spend),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.status_code == 400
+    assert "spend must be a finite number" in str(error.value.detail)
+    update_row.assert_not_awaited()
+    invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis_state", ["available", "absent", "error"])
+async def test_update_tag_overwrites_stale_counter_repopulated_during_tag_cache_eviction(redis_state: str) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    counter_key: Final = "spend:tag:overlap-reset-tag"
+    spend: Final = FakeSpendCounters(redis=None if redis_state == "absent" else {}, fail=redis_state == "error")
+    updated_tag: Final = SimpleNamespace(
+        tag_name="overlap-reset-tag",
+        description=None,
+        models=[],
+        budget_id=None,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=AsyncMock(return_value=updated_tag)
+            ),
+            litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        )
+    )
+
+    async def overlapping_completion(cache_keys: Sequence[str]) -> None:
+        spend.set_local(counter_key, 1.5, ttl_seconds=60)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.spend_counter_store", spend.store(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys",
+            overlapping_completion,
+        ),
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="overlap-reset-tag", spend=0),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert spend.memory[counter_key] == 0
+    if redis_state == "available":
+        assert spend.redis is not None
+        assert spend.redis[counter_key] == 0
+
+
+@pytest.mark.asyncio
 async def test_new_tag_persists_a_budget():
     from datetime import datetime
 
@@ -281,6 +414,66 @@ async def test_new_tag_persists_a_budget():
 
     assert budget_state.get("max_budget") == 25.0
     assert created_tag.budget_id == "budget-1"
+
+
+@pytest.mark.asyncio
+async def test_new_tag_budget_reads_the_row_spend_not_spend_from_before_the_tag_existed():
+    """Spend on an unbudgeted request tag must not count against a budget created later.
+
+    The new row starts at the spend it persists, and a restart reloads only that row, so the
+    counter the budget check reads has to agree with it from the moment the tag is created.
+    """
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+    from litellm.proxy.proxy_server import get_current_spend, increment_spend_counter_cache
+
+    counter_key: Final = "spend:tag:spent-before-budget-tag"
+    await increment_spend_counter_cache(counter_key=counter_key, increment=5.0)
+
+    created_tag: Final = SimpleNamespace(
+        tag_name="spent-before-budget-tag",
+        description=None,
+        models=[],
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+
+    async def create_tag(data, **_):
+        created_tag.spend = data["spend"]
+        return created_tag
+
+    mock_db: Final = Mock()
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_budgettable.create = AsyncMock(return_value=SimpleNamespace(budget_id="budget-1"))
+    mock_db.litellm_tagtable.create = create_tag
+    with (
+        patch(  # test-quality-ok: endpoint resolves the fake database through proxy_server
+            "litellm.proxy.proxy_server.prisma_client",
+            SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data)),
+        ),
+        patch(  # test-quality-ok: endpoint reads the audit actor from proxy_server
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: endpoint requires a router before the budget write
+            "litellm.proxy.proxy_server.llm_router", object()
+        ),
+        patch(  # test-quality-ok: auth object cache invalidation is outside this counter contract
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys", new=AsyncMock()
+        ),
+    ):
+        await new_tag(
+            tag=TagNewRequest(name="spent-before-budget-tag", max_budget=25.0),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    budget_check_spend: Final = await get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=created_tag.spend,
+        max_budget=25.0,
+        fallback_authoritative=True,
+    )
+    assert budget_check_spend == created_tag.spend
 
 
 @pytest.mark.asyncio
@@ -998,7 +1191,8 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
 
 @pytest.mark.asyncio
-async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter():
+@pytest.mark.parametrize("api_key", ["unowned-key", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
+async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter(api_key: str):
     """
     If an internal user filters tag usage by an API key they do not own, the
     endpoint should return an empty scoped filter instead of exposing that key's
@@ -1032,7 +1226,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
-            api_key="unowned-key",
+            api_key=api_key,
             user_api_key_dict=mock_user_auth,
         )
 
@@ -1249,13 +1443,13 @@ async def test_get_deployments_by_model_id():
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
-    mock_router.get_deployment.return_value = mock_deployment
+    mock_router.registry.return_value.deployment.return_value = mock_deployment
 
     result = await get_deployments_by_model("model-123", mock_router)
 
     assert len(result) == 1
     assert result[0] == mock_deployment
-    mock_router.get_deployment.assert_called_once_with(model_id="model-123")
+    mock_router.registry.return_value.deployment.assert_called_once_with("model-123")
 
 
 @pytest.mark.asyncio
@@ -1274,8 +1468,8 @@ async def test_get_deployments_by_model_name():
     mock_router = Mock()
 
     # Setup mock to not find by model_id but find by model_name
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = [
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = [
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-key"},
@@ -1288,8 +1482,8 @@ async def test_get_deployments_by_model_name():
     assert len(result) == 1
     assert result[0].model_name == "gpt-3.5-turbo"
     assert isinstance(result[0], Deployment)
-    mock_router.get_deployment.assert_called_once_with(model_id="gpt-3.5-turbo")
-    mock_router.get_model_list.assert_called_once_with(model_name="gpt-3.5-turbo")
+    mock_router.registry.return_value.deployment.assert_called_once_with("gpt-3.5-turbo")
+    mock_router.registry.return_value.deployments.assert_called_once_with("gpt-3.5-turbo")
 
 
 @pytest.mark.asyncio
@@ -1307,15 +1501,15 @@ async def test_get_deployments_by_model_not_found():
     mock_router = Mock()
 
     # Setup mock to not find model by either method
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = None
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = None
 
     result = await get_deployments_by_model("nonexistent-model", mock_router)
 
     assert len(result) == 0
     assert result == []
-    mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
-    mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")
+    mock_router.registry.return_value.deployment.assert_called_once_with("nonexistent-model")
+    mock_router.registry.return_value.deployments.assert_called_once_with("nonexistent-model")
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ pub mod outbound;
 pub mod provider;
 pub mod resources;
 
-pub use error::RouteError;
+pub use error::Error;
 
 #[derive(Clone, Default)]
 pub struct CallOptions {

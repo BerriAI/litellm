@@ -22,7 +22,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2AStreamingContext,
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
-from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
+from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS, A2A_COMPLETION_BRIDGE_WORKING_MESSAGE
 from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse
@@ -80,7 +80,7 @@ class A2ACompletionBridgeHandler:
     @staticmethod
     def _build_completion_params(
         params: dict[str, Any],
-        litellm_params: Mapping[str, Any],
+        litellm_params: Mapping[str, object],
         api_base: str | None,
         agent_extra_headers: Mapping[str, str] | None,
         *,
@@ -268,7 +268,7 @@ class A2ACompletionBridgeHandler:
             ctx=ctx,
             state="working",
             final=False,
-            message_text="Processing request...",
+            message_text=A2A_COMPLETION_BRIDGE_WORKING_MESSAGE,
         )
         yield working_event
 

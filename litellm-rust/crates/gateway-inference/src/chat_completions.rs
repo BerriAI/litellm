@@ -3,13 +3,16 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::State,
     response::{IntoResponse, Response},
 };
 use litellm_inference_chat::types::ChatCompletionsCall;
 use serde_json::{Map, Value};
 
-use crate::{Error, Gateway, JsonObject, request};
+use crate::{
+    Error, Gateway, JsonObject,
+    request::{self, Path},
+};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -40,7 +43,7 @@ async fn handle(
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, "/chat/completions", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.chat_completions.clone();

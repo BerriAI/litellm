@@ -48,14 +48,8 @@ mod tests {
         Err(PyErr::from_value(error.clone()))
     }
 
-    #[rstest::rstest]
-    fn only_ordinary_exceptions_are_reported_under_the_template() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
+    const FAILURES: &std::ffi::CStr = pyo3::ffi::c_str!(
+        r#"
 class CallerError(Exception):
     def __format__(self, specification):
         return 'unavailable'
@@ -63,12 +57,19 @@ ordinary = CallerError('must use __format__')
 type_error = TypeError('signature')
 abort = KeyboardInterrupt('cancelled')
 "#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
+    );
 
+    fn failures(py: Python<'_>) -> Bound<'_, PyDict> {
+        let locals = PyDict::new(py);
+        py.run(FAILURES, Some(&locals), Some(&locals)).unwrap();
+        locals
+    }
+
+    #[test]
+    fn ordinary_exceptions_are_reported_under_the_template() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = failures(py);
             let original = raised(&locals, "ordinary");
             let wrapped = wrap_failure(py, TEMPLATE, failure(&original)).unwrap_err();
             assert!(wrapped.is_instance_of::<PyRuntimeError>(py));
@@ -78,12 +79,19 @@ abort = KeyboardInterrupt('cancelled')
                 wrapped.value(py).str().unwrap().to_str().unwrap(),
                 "Failed to reach the caller: unavailable"
             );
+        });
+    }
 
-            for name in ["type_error", "abort"] {
-                let original = raised(&locals, name);
-                let error = wrap_failure(py, TEMPLATE, failure(&original)).unwrap_err();
-                assert!(error.value(py).is(&original));
-            }
+    #[rstest::rstest]
+    #[case::type_error("type_error")]
+    #[case::keyboard_interrupt("abort")]
+    fn other_exceptions_pass_through_unwrapped(#[case] name: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = failures(py);
+            let original = raised(&locals, name);
+            let error = wrap_failure(py, TEMPLATE, failure(&original)).unwrap_err();
+            assert!(error.value(py).is(&original));
         });
     }
 

@@ -145,6 +145,21 @@ class TestExtractRequestToolNames:
         data = {"tools": [{"type": "function", "function": {"name": "x"}}]}
         assert extract_request_tool_names("/v1/embeddings", data) == []
 
+    @pytest.mark.parametrize(
+        ("route", "data"),
+        [
+            ("/v1/chat/completions", {"tools": 5}),
+            ("/v1/chat/completions", {"functions": 5}),
+            ("/v1/responses", {"tools": 5}),
+            ("/v1/messages", {"tools": 5}),
+            ("/generate_content", {"tools": 5}),
+            ("/generate_content", {"tools": [{"functionDeclarations": 5}]}),
+        ],
+        ids=["chat_tools", "chat_functions", "responses", "messages", "generate_content", "function_declarations"],
+    )
+    def test_malformed_tool_lists_yield_no_names(self, route: str, data: dict[str, object]) -> None:
+        assert extract_request_tool_names(route, data) == []
+
 
 class TestCheckToolsAllowlist:
     """Test allowlist enforcement in auth (no DB in hot path)."""
@@ -226,6 +241,42 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("allowed_tools", "denied"),
+        [
+            pytest.param(["get_weather"], True, id="forbidden"),
+            pytest.param(["get_weather", "delete_user"], False, id="allowed"),
+        ],
+    )
+    async def test_tool_defined_in_an_additional_tools_input_item_is_checked_on_responses_route(
+        self, allowed_tools: list[str], denied: bool
+    ) -> None:
+        body = {
+            "model": "fireworks_ai/glm-5p3",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [{"type": "function", "name": "delete_user", "parameters": {"type": "object"}}],
+                },
+                {"type": "message", "role": "user", "content": "Delete user 42"},
+            ],
+        }
+        check = check_tools_allowlist(
+            request_body=body,
+            valid_token=_token(metadata={"allowed_tools": allowed_tools}),
+            team_object=None,
+            route="/v1/responses",
+        )
+        if not denied:
+            await check
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await check
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "delete_user" in str(exc_info.value.message)
 
     @pytest.mark.parametrize(
         "loaded_tool",

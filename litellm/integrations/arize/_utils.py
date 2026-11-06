@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall, StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -663,12 +664,11 @@ def _to_plain_dict(value):
 
 
 def _get_tool_calls(message) -> list | None:
-    """Return ``message.tool_calls`` only when it's a non-empty list.
-
-    Works for dicts and Pydantic message objects via ``_safe_get``.
+    """Return the message's tool calls, Claude's server tool calls first, or
+    ``None`` when there are none. Works for dicts and Pydantic message objects.
     """
-    tool_calls: Final = _safe_get(message, "tool_calls")
-    return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    return list(tool_calls) if tool_calls else None
 
 
 class _NormalizedToolCallFunction(TypedDict):
@@ -884,7 +884,7 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
         safe_set_attribute(span, "litellm.key_alias", str(key_alias))
 
 
-def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
+def _set_response_cost_attr(span: "Span", standard_logging_payload: Mapping[str, object] | None) -> None:
     """Emit cost attributes from the StandardLoggingPayload when present.
 
     Uses the OpenInference `llm.cost.total` key so Arize / Phoenix can
@@ -892,15 +892,22 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
     single total in `StandardLoggingPayload.response_cost`, so we cannot
     split it into prompt/completion. We also keep the legacy
     `llm.response.cost` key for back-compat with any consumer querying it.
+    When the price lookup failed, the call's total is unknown, so no cost is
+    emitted and the backend does not record the call as free. A guardrail fee
+    in `response_cost` stays on the guardrail span, as in OTel v2.
     """
     if not isinstance(standard_logging_payload, dict):
         return
     cost: Final = standard_logging_payload.get("response_cost")
-    if cost is None:
+    cost_lookup_failed: Final = (
+        standard_logging_payload.get("response_cost_failure_debug_info") is not None
+        and standard_logging_payload.get("cache_hit") is not True
+    )
+    if not isinstance(cost, (int, float, str)) or cost_lookup_failed:
         return
     try:
         cost_value: Final = float(cost)
-    except (TypeError, ValueError):
+    except ValueError:
         return
     safe_set_attribute(span, "llm.cost.total", cost_value)
     safe_set_attribute(span, "llm.response.cost", cost_value)

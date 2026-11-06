@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 import litellm
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 from litellm.vector_store_files.main import acreate as vector_store_file_acreate
 from litellm.vector_stores.main import acreate as vector_store_acreate
 
@@ -87,7 +87,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         api_base: Final = self.vector_store_config.get("api_base")
 
         if existing_file_id and not vector_store_id:
-            raise ValueError("vector_store_id is required when ingesting an existing file_id")
+            raise RAGIngestBadRequestError("vector_store_id is required when ingesting an existing file_id")
 
         # Create vector store if not provided
         if not vector_store_id:

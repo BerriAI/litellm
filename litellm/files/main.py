@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 import time
 import uuid as uuid_module
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from functools import partial
 from typing import Final, Literal, cast
 
@@ -38,7 +38,6 @@ import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
-from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -259,6 +258,7 @@ def create_file(
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
                 create_file_data=_create_file_request,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -290,6 +290,14 @@ def create_file(
         return response
     except Exception as e:
         raise e
+
+
+async def _await_retrieved_file(pending: Awaitable[FileObject | OpenAIFileObject]) -> FileObject | OpenAIFileObject:
+    return await pending
+
+
+async def _await_deleted_file(pending: Awaitable[object]) -> object:
+    return await pending
 
 
 @client
@@ -324,7 +332,7 @@ async def afile_retrieve(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = await _await_retrieved_file(init_response)
         else:
             response = init_response
 
@@ -388,6 +396,7 @@ def file_retrieve(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -412,10 +421,6 @@ def file_retrieve(
             )
             if provider_config is not None:
                 litellm_params_dict: Final = get_litellm_params(**kwargs)
-                add_trusted_model_credentials_to_litellm_params(
-                    litellm_params_dict=litellm_params_dict,
-                    kwargs=kwargs,
-                )
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
@@ -503,7 +508,7 @@ async def afile_delete(
         func_with_context: Final = partial(ctx.run, func)
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = await _await_deleted_file(init_response)
         else:
             response = init_response
 
@@ -534,10 +539,6 @@ def file_delete(
             pass
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        add_trusted_model_credentials_to_litellm_params(
-            litellm_params_dict=litellm_params_dict,
-            kwargs=kwargs,
-        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         # set timeout for 10 minutes by default
@@ -569,6 +570,7 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -726,10 +728,6 @@ def file_list(
         )
         if provider_config is not None:
             litellm_params_dict: Final = get_litellm_params(**kwargs)
-            add_trusted_model_credentials_to_litellm_params(
-                litellm_params_dict=litellm_params_dict,
-                kwargs=kwargs,
-            )
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
 
@@ -775,6 +773,7 @@ def file_list(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -878,10 +877,6 @@ def file_content(
     try:
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        add_trusted_model_credentials_to_litellm_params(
-            litellm_params_dict=litellm_params_dict,
-            kwargs=kwargs,
-        )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         client: Final = kwargs.get("client")
@@ -972,6 +967,7 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -1093,6 +1089,7 @@ def file_content_streaming(
             organization=openai_creds.organization,
             chunk_size=chunk_size,
             client=client if isinstance(client, (OpenAI, AsyncOpenAI)) else None,
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
     elif custom_llm_provider == LlmProviders.VERTEX_AI.value:
         if not _is_async:

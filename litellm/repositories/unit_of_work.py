@@ -15,11 +15,11 @@ instead of full-model writes, which trip ``prisma.errors.DataError`` on rows
 carrying fields the update input type rejects (see #27730).
 """
 
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 from litellm.repositories.prisma_protocols import BatchTable, PrismaBatch
 
@@ -62,6 +62,13 @@ class TeamSpendResetWrites:
         )
 
 
+@runtime_checkable
+class SpendResetWrites(Protocol):
+    def queue_spend_zero(self, where: Mapping[str, object]) -> None: ...
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class LinkedSpendResetWrites:
     table: BatchTable
@@ -76,6 +83,70 @@ class LinkedSpendResetWrites:
             where=where,
             data={"spend": {"decrement": amount}},
         )
+
+
+# Membership rows written before total_spend existed (migration 20260421135425, default 0) hold their
+# history only in spend. Zeroing spend would erase it, so the floor lands in the same batch, ahead of the reset.
+_TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL: Final = """
+UPDATE "LiteLLM_TeamMembership"
+SET total_spend = spend
+WHERE budget_id = ANY($1::text[]) AND spend > total_spend
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMembershipSpendResetWrites:
+    resets: LinkedSpendResetWrites
+    batch: PrismaBatch
+
+    def queue_spend_zero(self, where: Mapping[str, object]) -> None:
+        self.resets.queue_spend_zero(where)
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None:
+        self.resets.queue_spend_decrement(where, amount)
+
+    def queue_total_spend_repair(self, budget_ids: Sequence[str]) -> None:
+        self.batch.execute_raw(_TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL, list(budget_ids))
+
+
+_LOCK_BUDGET_ORGS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_OrganizationTable" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY organization_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_BUDGET_MEMBERSHIPS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamMembership" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY team_id COLLATE "C", user_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_BUDGET_KEYS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_BUDGET_PROJECTS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_ProjectTable" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY project_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_BUDGET_TAGS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TagTable" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY tag_name COLLATE "C" FOR UPDATE'
+)
+_LOCK_BUDGET_ACCESS_GROUPS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_ModelAccessGroupBudgetTable" WHERE budget_id = ANY($1::text[]) '
+    'ORDER BY access_group_name COLLATE "C" FOR UPDATE'
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetLinkedRowLocks:
+    batch: PrismaBatch
+
+    def queue_row_locks(self, budget_ids: Sequence[str]) -> None:
+        """Locks every row a cascade may reset, in the shared row lock order, before the filtered resets run."""
+        self.batch.execute_raw(_LOCK_BUDGET_ORGS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_MEMBERSHIPS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_KEYS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_PROJECTS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_TAGS_SQL, list(budget_ids))
+        self.batch.execute_raw(_LOCK_BUDGET_ACCESS_GROUPS_SQL, list(budget_ids))
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +177,8 @@ class BudgetCascadeUnitOfWork:
     ``enduser_spend_reset_unit_of_work`` because one tier can gate millions.
     """
 
-    team_memberships: LinkedSpendResetWrites
+    row_locks: BudgetLinkedRowLocks
+    team_memberships: TeamMembershipSpendResetWrites
     keys: LinkedSpendResetWrites
     organizations: LinkedSpendResetWrites
     tags: LinkedSpendResetWrites
@@ -132,7 +204,10 @@ async def budget_cascade_unit_of_work(
 ) -> AsyncGenerator[BudgetCascadeUnitOfWork, None]:
     batch = new_batch()
     yield BudgetCascadeUnitOfWork(
-        team_memberships=LinkedSpendResetWrites(table=batch.litellm_teammembership),
+        row_locks=BudgetLinkedRowLocks(batch=batch),
+        team_memberships=TeamMembershipSpendResetWrites(
+            resets=LinkedSpendResetWrites(table=batch.litellm_teammembership), batch=batch
+        ),
         keys=LinkedSpendResetWrites(table=batch.litellm_verificationtoken),
         organizations=LinkedSpendResetWrites(table=batch.litellm_organizationtable),
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),

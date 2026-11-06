@@ -38,12 +38,13 @@ env    = "stage"
 
 # Images. Cloud Run rejects ghcr.io, so a real deploy must point
 # image_registry at an Artifact Registry remote repo (see README "Image
-# pulls"); image_tag is applied to all four litellm-* images. Per-component
-# *_image overrides are NOT exposed here — set them directly on the
-# `module "litellm"` block in main.tf (see ../../variables.tf) if you need
-# to mix-and-match versions.
+# pulls"); image_tag is applied to all four litellm-* images. A published
+# module version ships with it stamped to its own release tag, a checkout of
+# the monorepo has no default and needs it set. Per-component *_image overrides are
+# NOT exposed here. Set them directly on the `module "litellm"` block in
+# main.tf (see ../../variables.tf) if you need to mix-and-match versions.
 # image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
-# image_tag      = "v1.86.0-dev"
+# image_tag      = "<litellm release tag>"
 
 # ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
 # proxy_config = {

@@ -121,7 +121,9 @@ PROVIDER_EXTENSIONS: Final = MappingProxyType(
             ("provider_specific_fields", "reasoning_content", "thinking_blocks", "reasoning_items", "images")
         ),
         "choices[].message.tool_calls[]": frozenset(("index", "caller", "provider_specific_fields")),
-        "usage": frozenset(("cache_creation_input_tokens", "cache_read_input_tokens", "inference_geo", "service_tier")),
+        "usage": frozenset(
+            ("cache_creation_input_tokens", "cache_read_input_tokens", "inference_geo", "service_tier", "speed")
+        ),
     }
 )
 
