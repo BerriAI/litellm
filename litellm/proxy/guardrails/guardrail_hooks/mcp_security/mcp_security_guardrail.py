@@ -18,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
+    saved_toolset_exists,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -106,7 +107,9 @@ class MCPSecurityGuardrail(CustomGuardrail):
         )
 
         async with global_mcp_server_manager.catalog.operation():
-            registry: Final = global_mcp_server_manager.get_registry()
-            registered_names: Final = set(registry.keys())
-
-            return frozenset(requested_servers - registered_names)
+            not_servers: Final = frozenset(
+                name
+                for name in requested_servers
+                if global_mcp_server_manager.get_mcp_server_by_identifier(name) is None
+            )
+            return frozenset([name for name in not_servers if not await saved_toolset_exists(name)])
