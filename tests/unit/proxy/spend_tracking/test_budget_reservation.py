@@ -34,6 +34,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -106,11 +107,11 @@ TINY_BUDGET_KEY_TOKEN: Final = "hashed-count-tokens-key"
 
 
 @pytest.fixture
-def spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
-    cache: Final = DualCache()
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
+    store: Final = SpendCounterStore(None)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    return cache
+    return store
 
 
 async def _reserve_for_tiny_budget_key(route: str, request_body: dict[str, object]) -> dict[str, object] | None:
@@ -130,13 +131,13 @@ async def _reserve_for_tiny_budget_key(route: str, request_body: dict[str, objec
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("route", "request_body"), COUNT_TOKENS_REQUESTS)
 async def test_repeated_token_counting_never_touches_a_tiny_budget(
-    spend_counter_cache: DualCache, route: str, request_body: dict[str, object]
+    spend_counter_store: SpendCounterStore, route: str, request_body: dict[str, object]
 ):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
 
     assert await _reserve_for_tiny_budget_key(route, request_body) is None
     assert await _reserve_for_tiny_budget_key(route, request_body) is None
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    assert spend_counter_store.get_local(counter_key) is None
 
     completion: Final = await _reserve_for_tiny_budget_key(
         "/v1/messages", {"model": "claude-sonnet-5", "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
@@ -145,7 +146,7 @@ async def test_repeated_token_counting_never_touches_a_tiny_budget(
     reserved_cost: Final = completion["reserved_cost"]
     assert isinstance(reserved_cost, float)
     assert reserved_cost > 0
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
+    assert spend_counter_store.get_local(counter_key) == pytest.approx(reserved_cost)
 
 
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"
@@ -320,22 +321,22 @@ async def test_reservation_starts_unbound_to_any_callback():
 
 
 @pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_frees_the_counter(spend_counter_cache: DualCache):
+async def test_release_unbound_budget_reservation_frees_the_counter(spend_counter_store: SpendCounterStore):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
     reservation: Final = await _reserve_for_tiny_budget_key(
         "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
     )
     assert reservation is not None
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+    assert spend_counter_store.get_local(counter_key) == pytest.approx(reservation["reserved_cost"])
 
     await release_unbound_budget_reservation(reservation)
 
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.0)
+    assert spend_counter_store.get_local(counter_key) == pytest.approx(0.0)
     assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
-async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_cache: DualCache):
+async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_callback(spend_counter_store: SpendCounterStore):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
     reservation: Final = await _reserve_for_tiny_budget_key(
         "/v1/chat/completions", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}
@@ -345,12 +346,12 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 
     await release_unbound_budget_reservation(reservation)
 
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
+    assert spend_counter_store.get_local(counter_key) == pytest.approx(reservation["reserved_cost"])
     assert reservation["finalized"] is False
 
 
 @pytest.mark.asyncio
-async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spend_counter_cache: DualCache):
+async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spend_counter_store: SpendCounterStore):
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
         key="org_id:org-budgeted:with_budget",
@@ -404,8 +405,8 @@ async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spe
             "applied_adjustment": 0.0,
         },
     ]
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-budgeted") == pytest.approx(reserved_cost)
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:project:project-budgeted") == pytest.approx(
+    assert spend_counter_store.get_local("spend:org:org-budgeted") == pytest.approx(reserved_cost)
+    assert spend_counter_store.get_local("spend:project:project-budgeted") == pytest.approx(
         reserved_cost
     )
 

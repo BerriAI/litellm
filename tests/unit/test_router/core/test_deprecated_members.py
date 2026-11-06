@@ -13,6 +13,7 @@ import pytest
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router import Router
 from litellm.router_api import SETTING_FIELDS, ChangeSet
 from litellm.router_core import RouterCore
@@ -298,7 +299,7 @@ def test_a_registry_state_write_is_what_the_registry_reads(make_core: MakeCore) 
 def test_a_routing_state_write_is_what_health_reads(make_core: MakeCore) -> None:
     router: Final = as_router(make_core(model_list=[deployment("gpt", "a")]))
     store: Final = DualCache()
-    cooldowns: Final = CooldownCache(cache=store, default_cooldown_time=1)
+    cooldowns: Final = CooldownCache(RouterCooldownStore(None), default_cooldown_time=1)
     latency: Final[dict[str, float]] = {"openai/a": 0.5}
     write(router, "cache", store)
     write(router, "cooldown_cache", cooldowns)

@@ -36,6 +36,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.utils import Rules, function_setup
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 KEY_TOKEN: Final = "hashed-release-middleware-key"
 COUNTER_KEY: Final = f"spend:key:{KEY_TOKEN}"
@@ -43,11 +44,11 @@ CHAT_BODY: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": 
 
 
 @pytest.fixture
-def spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
-    cache: Final = DualCache()
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+def spend_counter_store(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
+    store: Final = SpendCounterStore(None)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    return cache
+    return store
 
 
 @pytest.fixture
@@ -135,14 +136,14 @@ async def _post(app: ASGIApp) -> None:
     await app(scope, receive, send)
 
 
-def _counter(spend_counter_cache: DualCache) -> float | None:
-    return spend_counter_cache.in_memory_cache.get_cache(key=COUNTER_KEY)
+def _counter(spend_counter_store: SpendCounterStore) -> float | None:
+    return spend_counter_store.get_local(COUNTER_KEY)
 
 
 @pytest.mark.asyncio
-async def test_unbound_reservation_is_released_after_the_response(spend_counter_cache: DualCache):
+async def test_unbound_reservation_is_released_after_the_response(spend_counter_store: SpendCounterStore):
     reservation: Final = await _reserve()
-    assert _counter(spend_counter_cache) == pytest.approx(reservation["reserved_cost"])
+    assert _counter(spend_counter_store) == pytest.approx(reservation["reserved_cost"])
 
     async def handler(request: Request) -> Response:
         request.state.budget_reservation = reservation
@@ -150,12 +151,12 @@ async def test_unbound_reservation_is_released_after_the_response(spend_counter_
 
     await _post(_app(handler))
 
-    assert _counter(spend_counter_cache) == pytest.approx(0.0)
+    assert _counter(spend_counter_store) == pytest.approx(0.0)
     assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
-async def test_unbound_reservation_is_released_when_the_handler_raises(spend_counter_cache: DualCache):
+async def test_unbound_reservation_is_released_when_the_handler_raises(spend_counter_store: SpendCounterStore):
     reservation: Final = await _reserve()
 
     async def handler(request: Request) -> Response:
@@ -165,13 +166,13 @@ async def test_unbound_reservation_is_released_when_the_handler_raises(spend_cou
     with pytest.raises(RuntimeError):
         await _post(_app(handler))
 
-    assert _counter(spend_counter_cache) == pytest.approx(0.0)
+    assert _counter(spend_counter_store) == pytest.approx(0.0)
     assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
 async def test_reservation_seen_only_by_the_proxy_pre_call_logging_object_is_released(
-    spend_counter_cache: DualCache, no_callbacks: None
+    spend_counter_store: SpendCounterStore, no_callbacks: None
 ):
     reservation: Final = await _reserve()
 
@@ -185,13 +186,13 @@ async def test_reservation_seen_only_by_the_proxy_pre_call_logging_object_is_rel
 
     await _post(_app(handler))
 
-    assert _counter(spend_counter_cache) == pytest.approx(0.0)
+    assert _counter(spend_counter_store) == pytest.approx(0.0)
     assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
 async def test_reservation_of_a_failed_call_is_released_after_the_error_response(
-    spend_counter_cache: DualCache, no_callbacks: None
+    spend_counter_store: SpendCounterStore, no_callbacks: None
 ):
     reservation: Final = await _reserve()
     refused: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o")
@@ -207,13 +208,13 @@ async def test_reservation_of_a_failed_call_is_released_after_the_error_response
 
     await _post(_app(handler))
 
-    assert _counter(spend_counter_cache) == pytest.approx(0.0)
+    assert _counter(spend_counter_store) == pytest.approx(0.0)
     assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
 async def test_reservation_claimed_by_a_completed_call_is_left_for_the_callback(
-    spend_counter_cache: DualCache, no_callbacks: None
+    spend_counter_store: SpendCounterStore, no_callbacks: None
 ):
     reservation: Final = await _reserve()
     reserved_cost: Final = reservation["reserved_cost"]
@@ -226,13 +227,13 @@ async def test_reservation_claimed_by_a_completed_call_is_left_for_the_callback(
 
     await _post(_app(handler))
 
-    assert _counter(spend_counter_cache) == pytest.approx(reserved_cost)
+    assert _counter(spend_counter_store) == pytest.approx(reserved_cost)
     assert reservation["finalized"] is False
 
 
 @pytest.mark.asyncio
 async def test_reservation_claimed_by_a_streaming_call_is_left_for_the_callback_that_finishes_after_the_response(
-    spend_counter_cache: DualCache, no_callbacks: None
+    spend_counter_store: SpendCounterStore, no_callbacks: None
 ):
     reservation: Final = await _reserve()
     reserved_cost: Final = reservation["reserved_cost"]
@@ -251,19 +252,19 @@ async def test_reservation_claimed_by_a_streaming_call_is_left_for_the_callback_
 
     await _post(_app(handler))
 
-    assert _counter(spend_counter_cache) == pytest.approx(reserved_cost)
+    assert _counter(spend_counter_store) == pytest.approx(reserved_cost)
     assert reservation["finalized"] is False
 
     actual_cost: Final = reserved_cost / 4
     await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=actual_cost)
 
-    assert _counter(spend_counter_cache) == pytest.approx(actual_cost)
+    assert _counter(spend_counter_store) == pytest.approx(actual_cost)
     assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
 async def test_unbound_reservation_of_a_websocket_session_is_released_when_the_socket_closes(
-    spend_counter_cache: DualCache,
+    spend_counter_store: SpendCounterStore,
 ):
     reservation: Final = await _reserve()
 
@@ -283,7 +284,7 @@ async def test_unbound_reservation_of_a_websocket_session_is_released_when_the_s
     )
     await middleware({"type": "websocket", "path": "/deepgram/v1/listen", "headers": []}, receive, send)
 
-    assert _counter(spend_counter_cache) == pytest.approx(0.0)
+    assert _counter(spend_counter_store) == pytest.approx(0.0)
     assert reservation["finalized"] is True
 
 

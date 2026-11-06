@@ -42,7 +42,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
-from litellm.redis.store_settings import RedisStoreSettings
+from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -661,7 +661,7 @@ class RedisCache(BaseCache):
     ):
         from litellm._service_logger import ServiceLogging
 
-        from .._redis import get_redis_client, get_redis_connection_pool
+        from .._redis import get_redis_client, get_redis_connection_pool, merge_redis_kwargs
 
         redis_kwargs: Final = {}
         if host is not None:
@@ -715,9 +715,10 @@ class RedisCache(BaseCache):
         else:
             super().__init__()  # defaults to 60s
         self.store_settings = RedisStoreSettings(
-            redis_kwargs=MappingProxyType(dict(redis_kwargs)),
+            redis_kwargs=MappingProxyType(merge_redis_kwargs(redis_kwargs)),
             namespace=namespace,
             default_ttl=self.default_ttl,
+            breaker=breaker_settings(),
         )
 
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:

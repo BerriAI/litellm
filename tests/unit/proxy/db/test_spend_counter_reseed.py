@@ -21,6 +21,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+from litellm.redis.stores.spend_counters import SpendCounterStore
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
 
@@ -97,13 +98,13 @@ class _PausedSpendTable:
 
 
 async def _reseed_with_paused_table(
-    table: _PausedSpendTable, cache: DualCache, counter_key: str, window: bool
+    table: _PausedSpendTable, cache: SpendCounterStore, counter_key: str, window: bool
 ) -> float | None:
     prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_usertable=table, litellm_budgetwindowspend=table))
     if window:
         return await SpendCounterReseed.coalesced_window(
             prisma_client=prisma,
-            spend_counter_cache=cache,
+            spend_counter_store=cache,
             counter_key=counter_key,
             entity_type="Team",
             entity_id="team-1",
@@ -112,7 +113,7 @@ async def _reseed_with_paused_table(
         )
     return await SpendCounterReseed.coalesced(
         prisma_client=prisma,
-        spend_counter_cache=cache,
+        spend_counter_store=cache,
         counter_key=counter_key,
     )
 
@@ -291,12 +292,12 @@ async def test_window_from_db_without_a_duration_skips_the_row_lookup():
 @pytest.mark.asyncio
 async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
     prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=100.0)
-    cache = DualCache()
+    cache = SpendCounterStore(None)
     counter_key = "spend:key:tok-1:window:30d"
 
     result = await SpendCounterReseed.coalesced_window(
         prisma_client=prisma,
-        spend_counter_cache=cache,
+        spend_counter_store=cache,
         counter_key=counter_key,
         entity_type="Key",
         entity_id="tok-1",
@@ -305,7 +306,7 @@ async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
     )
 
     assert result == 4.5
-    assert cache.in_memory_cache.get_cache(key=counter_key) == 4.5
+    assert cache.get_local(counter_key) == 4.5
     assert prisma.db.litellm_spendlogs.call_count == 0
 
 
@@ -316,19 +317,19 @@ async def test_cold_reseed_does_not_add_database_spend_to_concurrent_cache(
     window: bool,
     concurrent_spend: float,
 ) -> None:
-    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    cache: Final = SpendCounterStore(None)
     counter_key: Final = "spend:team:team-1:window:1d" if window else "spend:user:user-1"
     db_spend: Final = 989.01459411
     table: Final = _PausedSpendTable(db_spend)
     reseed_task: Final = asyncio.create_task(_reseed_with_paused_table(table, cache, counter_key, window))
 
     await asyncio.wait_for(table.read_started.wait(), timeout=5)
-    cache.in_memory_cache.set_cache(key=counter_key, value=concurrent_spend)
+    cache.set_local(counter_key, concurrent_spend)
     table.resume_read.set()
     result: Final = await asyncio.wait_for(reseed_task, timeout=5)
 
     expected: Final = max(db_spend, concurrent_spend)
-    assert cache.in_memory_cache.get_cache(key=counter_key) == expected
+    assert cache.get_local(counter_key) == expected
     assert result == expected
 
 
@@ -341,14 +342,14 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
 ) -> None:
     from litellm.proxy import proxy_server
 
-    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+    cache: Final = SpendCounterStore(None)
     counter_key: Final = (
         f"spend:team:concurrent-{batch}-{increment}:window:1d"
         if window
         else f"spend:user:concurrent-{batch}-{increment}"
     )
     table: Final = _PausedSpendTable(100.0)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", cache)
     reseed_task: Final = asyncio.create_task(_reseed_with_paused_table(table, cache, counter_key, window))
     await asyncio.wait_for(table.read_started.wait(), timeout=5)
 
@@ -363,7 +364,7 @@ async def test_cold_reseed_preserves_concurrent_local_increment(
     table.resume_read.set()
     await asyncio.wait_for(asyncio.gather(reseed_task, increment_task), timeout=5)
 
-    assert cache.in_memory_cache.get_cache(key=counter_key) == 100.0 + increment
+    assert cache.get_local(counter_key) == 100.0 + increment
 
 
 @pytest.mark.asyncio
