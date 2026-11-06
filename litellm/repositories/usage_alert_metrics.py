@@ -388,12 +388,19 @@ class UsageAlertMetricsRepository:
     async def batches(
         self, scope: Scope, target: date, baseline_days: int
     ) -> AsyncIterator[tuple[DailyAlertMetrics, ...]]:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         start: Final = (target - timedelta(days=baseline_days)).isoformat()
         query: Final = _query(scope)
         cursor: str | None = None  # rebind-ok: keyset pagination retains only the current page
-        while rows := _ROWS.validate_python(
-            await self._database.query_raw(query, start, target.isoformat(), cursor, _BATCH_SIZE)
-        ):
+        while True:
+            async with db_span("daily_activity_query", sql_relation(query)):
+                rows = _ROWS.validate_python(  # rebind-ok: only the current bounded page is retained
+                    await self._database.query_raw(query, start, target.isoformat(), cursor, _BATCH_SIZE)
+                )
+            if not rows:
+                return
             yield tuple(_reporting_id(scope, row) for row in rows)
             cursor = rows[-1].entity_id
             if scope == "deployment":

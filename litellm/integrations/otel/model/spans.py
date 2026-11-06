@@ -324,6 +324,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_DailyGatewayRequests",
         "LiteLLM_DailyGatewayFailedRequests",
         "LiteLLM_DailyRequestErrors",
+        "LiteLLM_UsageAlertFlush",
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
@@ -367,6 +368,13 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_SubscriptionAccountTable",
         "LiteLLM_LensSignalConfig",
         "LiteLLM_LensTraceSignal",
+        "LiteLLM_UsageAlertRule",
+        "LiteLLM_UsageAlertIncident",
+        "LiteLLM_UsageAlertCheckpoint",
+        "LiteLLM_Issue",
+        "LiteLLM_IssueSignal",
+        "LiteLLM_IssueDelivery",
+        "LiteLLM_IssueDeliveryRule",
     )
 )
 PRISMA_RELATIONS: Final[frozenset[str]] = _PRISMA_MODELS | _PRISMA_VIEWS
