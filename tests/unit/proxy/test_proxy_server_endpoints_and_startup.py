@@ -5635,6 +5635,13 @@ def _routing_groups_router():
     )
 
 
+def _routing_groups_of(router: litellm.Router) -> dict[str, tuple[list[str], str]]:
+    return {
+        group["group_name"]: (group["models"], group["routing_strategy"])
+        for group in router.settings().as_dict()["routing_groups"] or []
+    }
+
+
 @pytest.mark.asyncio
 async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
     from unittest.mock import AsyncMock, MagicMock
@@ -5656,8 +5663,7 @@ async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
     await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
 
     assert router.num_retries == 7
-    assert router._model_to_group == {"m1": "g1"}
-    assert router._get_routing_context("m1", None)[0] == "latency-based-routing"
+    assert _routing_groups_of(router) == {"g1": (["m1"], "latency-based-routing")}
 
 
 @pytest.mark.asyncio
@@ -5678,8 +5684,7 @@ async def test_valid_db_routing_groups_still_replace_router_groups():
     await ProxyConfig()._add_router_settings_from_db_config(llm_router=router, prisma_client=mock_prisma_client)
 
     assert router.num_retries == 7
-    assert router._model_to_group == {"m2": "g2"}
-    assert router._get_routing_context("m2", None)[0] == "least-busy"
+    assert _routing_groups_of(router) == {"g2": (["m2"], "least-busy")}
 
 
 def _content_policy_router(**router_kwargs: object) -> litellm.Router:

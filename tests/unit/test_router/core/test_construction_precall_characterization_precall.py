@@ -20,7 +20,7 @@ import litellm
 from litellm.router_core import RouterCore
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.construction_precall_helpers import CallbackHost, restoring_model_cost, windowed
-from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, python_core
+from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rust_core
 
 MakeCore = Callable[..., RouterCore]
 PICKS: Final = 60  # three-way shuffles miss a deployment in 20 picks about once in a thousand runs
@@ -326,7 +326,7 @@ async def test_a_deployment_context_window_is_written_into_the_process_cost_map(
         model_list=[deployment("g", "declares-five", model=UNMAPPED_MODEL, model_info={"max_input_tokens": 5})]
     )
     first.retire()
-    other: Final = python_core(
+    other: Final = rust_core(
         CallbackHost(),
         model_list=[deployment("g", "declares-nothing", model=UNMAPPED_MODEL)],
         enable_pre_call_checks=True,
@@ -343,7 +343,7 @@ async def test_a_deployment_context_window_stays_off_a_mapped_models_process_ent
         model_list=[deployment("g", "declares-five", model=NO_JSON_MODE_MODEL, model_info={"max_input_tokens": 5})]
     )
     first.retire()
-    other: Final = python_core(
+    other: Final = rust_core(
         CallbackHost(),
         model_list=[deployment("g", "declares-nothing", model=NO_JSON_MODE_MODEL)],
         enable_pre_call_checks=True,

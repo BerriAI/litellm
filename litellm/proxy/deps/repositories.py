@@ -6,6 +6,7 @@ from litellm.models.deployment_warning import DeploymentWarningIgnoreStore
 from litellm.models.gateway_activity import GatewayActivityStore
 from litellm.models.issues import IssueActivityStore, IssueStore
 from litellm.models.plugin_upload import PluginUploadStore
+from litellm.models.skill_submission import SkillSubmissionStore
 from litellm.models.usage_alerts import UsageAlertStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
@@ -14,6 +15,7 @@ from litellm.repositories.gateway_activity_repository import GatewayActivityRepo
 from litellm.repositories.issue_activity import IssueActivityRepository
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
+from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 
@@ -48,6 +50,15 @@ async def get_plugin_upload_repository(database: DatabaseDep) -> PluginUploadSto
 
 
 PluginUploadRepositoryDep: TypeAlias = Annotated[PluginUploadStore | None, Depends(get_plugin_upload_repository)]
+
+
+async def get_skill_submission_repository(database: DatabaseDep) -> SkillSubmissionStore | None:
+    return None if database is None else SkillSubmissionRepository(database.prisma)
+
+
+SkillSubmissionRepositoryDep: TypeAlias = Annotated[
+    SkillSubmissionStore | None, Depends(get_skill_submission_repository)
+]
 
 
 async def get_usage_alerts_repository(database: DatabaseDep) -> UsageAlertStore | None:

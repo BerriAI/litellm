@@ -24,7 +24,7 @@ export const TransportSelectItems: FC<{ stdioEnabled: boolean }> = ({ stdioEnabl
         const disabled = item.value === TRANSPORT.STDIO && !stdioEnabled;
         return (
           <SelectItem key={item.value} value={item.value} disabled={disabled}>
-            {item.label}
+            {t(item.label)}
             {disabled && <SimpleTooltip content={t(STDIO_DISABLED_MESSAGE_KEY)} className="pointer-events-auto" />}
           </SelectItem>
         );

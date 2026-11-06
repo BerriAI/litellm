@@ -108,6 +108,26 @@ def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, ob
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
 
 
+# The calls on an existing response id. ``compact_responses`` is left out: it sends a model and input,
+# so its 404 can mean a missing model rather than a missing response.
+RESPONSE_ID_CALL_TYPES: Final = frozenset(
+    {
+        "aget_responses",
+        "get_responses",
+        "adelete_responses",
+        "delete_responses",
+        "acancel_responses",
+        "cancel_responses",
+        "alist_input_items",
+    }
+)
+
+
+def is_response_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
+    """Whether a call on an existing response id failed with a provider 404: the response is not on that account."""
+    return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in RESPONSE_ID_CALL_TYPES
+
+
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
     # ContentPolicyViolationError subclasses BadRequestError, so it must be checked first.
     (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),

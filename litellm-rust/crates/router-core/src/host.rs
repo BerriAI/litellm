@@ -83,6 +83,13 @@ pub struct RouterRequest {
     /// A Decisions call carrying audio or videos: the deployments that refuse them are skipped
     /// unless that leaves nothing (`_without_decisions_deployments_refusing_media`).
     pub decisions_media: bool,
+    /// A batch create (`batch_create_routing`): when the caller may use a deployment declared
+    /// `model_info.mode: batch`, the Azure deployments that are not are skipped
+    /// (`without_deployments_that_cannot_batch`).
+    pub batch_create: bool,
+    /// An embedding pick: the host keeps the candidates whose `max_embedding_batch_size` admits
+    /// the input (`deployments_admitting_embedding_batch`).
+    pub embedding_batch: bool,
     /// `f"{provider}/{model}"` for a lookup that cannot ask the host
     /// (`_core_get_routable_deployments`); a pick asks [`Host::provider_request`].
     pub wildcard_request: Option<String>,
@@ -291,6 +298,9 @@ pub struct Attempt {
     pub name: String,
     /// The model group being served, after fallbacks.
     pub model_group: String,
+    /// The group a pre-routing hook selected for `name`, when it differs (the tier stamp the
+    /// fallback lookup keys on first).
+    pub routed: Option<String>,
     /// The `order` level an order fallback targets in the same group.
     pub target_order: Option<i64>,
     /// Every deployment `name` resolved to for this caller, the picked one included.
@@ -383,11 +393,22 @@ pub enum SelectStage {
     /// `_decisions_deployment_refuses_media`: return the candidates that refuse the audio or
     /// videos a Decisions call carries.
     MediaRefusing,
+    /// `deployments_admitting_embedding_batch`: return the candidates that admit the embedding
+    /// input, or what the pick keeps when none does (`deployments_when_none_admits_embedding_batch`).
+    EmbeddingBatch,
+    /// `_async_override_selector_pre_call_check`: a deployment named by id under a per-request
+    /// strategy override still passes that strategy's pre-call check (rpm accounting); return the
+    /// candidates, or raise its refusal.
+    OverrideCheck(RoutingStrategy),
 }
 
 /// Routing events, delivered through [`Host::observe`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterEvent {
+    /// A pick for `model` (the level's group) begins: its route phase opens.
+    PickStarted {
+        model: String,
+    },
     Selected {
         model_group: String,
         deployment_id: String,

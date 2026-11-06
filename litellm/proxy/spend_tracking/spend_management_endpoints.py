@@ -77,9 +77,6 @@ from litellm.proxy.utils import handle_exception_on_proxy, query_raw_within_stat
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
-    VerificationTokenRepository,
-)
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
@@ -292,22 +289,20 @@ class _TeamTable(Protocol):
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
-class _VerificationTokenTable(Protocol):
-    """The subset of the Prisma verification token table API this module uses."""
-
-    async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
-
-
 def _spend_logs_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_SpendLogs"]:
     return SpendLogsRepository(prisma_client).table
 
 
+_LOCK_ALL_TEAMS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE TRUE ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ALL_KEYS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE TRUE ORDER BY token COLLATE "C" FOR UPDATE'
+)
+
+
 def _team_table(prisma_client: PrismaClient) -> _TeamTable:
     return TeamRepository(prisma_client).table
-
-
-def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
-    return VerificationTokenRepository(prisma_client).table
 
 
 def _spend_logs_daily_summary_sql(
@@ -3626,8 +3621,11 @@ async def global_spend_reset():
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
-    await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+    async with prisma_client.tx() as transaction:
+        _ = await transaction.query_raw(_LOCK_ALL_TEAMS_SQL)
+        _ = await transaction.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+        _ = await transaction.query_raw(_LOCK_ALL_KEYS_SQL)
+        _ = await transaction.litellm_verificationtoken.update_many(data={"spend": 0.0}, where={})
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",

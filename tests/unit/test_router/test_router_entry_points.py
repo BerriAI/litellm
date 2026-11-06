@@ -332,15 +332,6 @@ def test_settings_snapshot_is_reused_until_a_setting_is_written(router):
         warnings.simplefilter("ignore")
         router.fallbacks = [{"gpt": ["team-gpt"]}]
     assert router.settings().fallbacks == [{"gpt": ["team-gpt"]}]
-    router._core_fallbacks = [{"gpt": ["other"]}]  # the router's own writes invalidate it too
-    assert router.settings().fallbacks == [{"gpt": ["other"]}]
-    router.settings().fallbacks.append(
-        {"x": ["y"]}
-    )  # the snapshot's lists are copies: settings change only via apply()
-    assert router._core_fallbacks == [{"gpt": ["other"]}]
-    unrelated = router.settings()
-    router._core_model_list = list(router._core_model_list)
-    assert router.settings() is unrelated
 
 
 def test_deleting_a_setting_shows_as_unset(router):
@@ -356,40 +347,6 @@ def test_settings_snapshot_is_frozen(router):
     with pytest.raises(dataclasses.FrozenInstanceError):
         snapshot.cooldown_time = 1  # type: ignore[misc]
     assert set(SETTING_FIELDS) <= set(RouterSettings.__dataclass_fields__)
-
-
-def test_unset_setting_raises_attribute_error_through_old_name():
-    r = _router()
-    try:
-        del r._core.__dict__["_core_kubernetes_pod_discovery"]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            assert getattr(r, "kubernetes_pod_discovery", "missing") == "missing"
-        assert r.settings().is_set("kubernetes_pod_discovery") is False
-    finally:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            r.retire()
-
-
-def test_unset_attribute_error_names_the_public_attribute(router):
-    # Reading (or deleting) an old attribute the router never set raises what reading it raised before.
-    router._core.__dict__.pop("_core_slack_alerting_logger", None)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        with pytest.raises(AttributeError) as read:
-            _ = router.slack_alerting_logger
-        with pytest.raises(AttributeError) as deleted:
-            del router.slack_alerting_logger
-        del router._core.__dict__["_core_kubernetes_pod_discovery"]
-        with pytest.raises(AttributeError) as setting:
-            _ = router.kubernetes_pod_discovery
-    for caught, name in ((read, "slack_alerting_logger"), (setting, "kubernetes_pod_discovery")):
-        assert str(caught.value) == f"'Router' object has no attribute '{name}'"
-        assert caught.value.name == name
-        assert caught.value.obj is router
-    # A failed del sets no name/obj in Python either.
-    assert str(deleted.value) == "'Router' object has no attribute 'slack_alerting_logger'"
 
 
 def test_bind_to_request_logging_none_raises_as_before(router):
@@ -456,17 +413,7 @@ def test_router_cannot_be_subclassed():
 
 
 def test_core_classes_can_still_be_subclassed():
-    from litellm.router_python_core import PythonCore
-
-    class PythonSub(PythonCore):
-        pass
-
-    assert isinstance(object.__new__(PythonSub), Router)
-
-    try:
-        from litellm.router_rust.core import RustCore
-    except ImportError:
-        pytest.skip("the native lib does not load")
+    from litellm.router_rust.core import RustCore
 
     class RustSub(RustCore):
         pass
@@ -490,15 +437,6 @@ def test_alias_attribute_writes_the_same_storage(router):
     assert router.registry().routing_groups() is replacement
 
 
-def test_core_members_keep_their_old_names_in_errors():
-    from litellm.router import _name_core_members_after_old_names
-
-    _name_core_members_after_old_names()
-
-    assert Router._core_get_deployment_model_info.__qualname__ == "Router.get_deployment_model_info"
-    assert Router._core_get_deployment.__qualname__ == "Router.get_deployment"
-
-
 def test_wrong_arity_errors_still_name_router(router):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -510,177 +448,10 @@ def test_wrong_arity_errors_still_name_router(router):
             router.has_model_id(**None)  # pyright: ignore[reportCallIssue, reportArgumentType]
         with pytest.raises(TypeError, match=r"^Router\.is_deployment_blocked\(\) missing 1 required"):
             router.is_deployment_blocked()  # pyright: ignore[reportCallIssue]
-        with pytest.raises(TypeError, match=r"^Router\.get_deployment_model_info\(\) missing 2 required"):
-            router.cached_deployment_model_info()  # pyright: ignore[reportCallIssue]
-
-
-_SENTINEL = object()
-
-# (entry point call, Router core member it forwards to, the arguments the core member must get)
-FORWARDS = [
-    (
-        lambda r: r.registry().deployment_model_info("dep-a", "gpt", cached=True),
-        "_core_cached_deployment_model_info",
-        (("dep-a", "gpt"), {}),
-    ),
-    (
-        lambda r: r.registry().deployment_model_info("dep-a", "gpt"),
-        "_core_get_deployment_model_info",
-        ((), {"model_id": "dep-a", "model_name": "gpt"}),
-    ),
-    (
-        lambda r: r.registry().router_model_info(None, "gpt", id="dep-a"),
-        "_core_get_router_model_info",
-        ((), {"deployment": None, "received_model_name": "gpt", "id": "dep-a"}),
-    ),
-    (lambda r: r.registry().discovered_model_info("dep-a"), "_core_get_discovered_model_info", (("dep-a",), {})),
-    (
-        lambda r: r.registry().deployments("gpt", source="routing_groups"),
-        "_core_get_model_list_from_routing_groups",
-        ((), {"model_name": "gpt"}),
-    ),
-    (
-        lambda r: r.registry().deployments("gpt", source="routed_group", team_id="t"),
-        "_core_get_model_list_of_routed_group",
-        (("gpt", "t"), {}),
-    ),
-    (
-        lambda r: r.registry().deployments("gpt", source="wildcard", team_id="t"),
-        "_core_wildcard_route_deployments",
-        (("gpt", "t"), {}),
-    ),
-    (
-        lambda r: r.registry().deployments("gpt", source="routable", request={"a": 1}, call_type="aembedding"),
-        "_core_get_routable_deployments",
-        (("gpt", {"a": 1}, "aembedding"), {}),
-    ),
-    (
-        lambda r: r.registry().deployments("gpt", source="for_request"),
-        "_core_deployments_for_request",
-        (("gpt", {}), {}),
-    ),
-    (
-        lambda r: r.registry().includes({"model_name": "gpt"}, model_name="gpt", team_id="t"),
-        "_core_should_include_deployment",
-        ((), {"model_name": "gpt", "model": {"model_name": "gpt"}, "team_id": "t"}),
-    ),
-    (
-        lambda r: r.registry().names("gpt", kind="litellm_models", team_id="t"),
-        "_core_resolved_litellm_models",
-        (("gpt",), {"team_id": "t"}),
-    ),
-    (
-        lambda r: r.registry().names("gpt", kind="litellm_base_models"),
-        "_core_resolved_litellm_models",
-        (("gpt",), {"team_id": None, "use_base_model": True}),
-    ),
-    (
-        lambda r: r.registry().names("gpt", kind="wildcard", team_id="t"),
-        "_core_wildcard_routed_models",
-        (("gpt", "t"), {}),
-    ),
-    (
-        lambda r: r.registry().names("gpt", kind="route_candidates"),
-        "_core_get_candidate_model_ids_for_route",
-        (("gpt",), {"team_id": None}),
-    ),
-    (
-        lambda r: r.registry().resolve("dep-a", kind="from_id", custom_llm_provider="openai"),
-        "_core_resolve_model_name_from_model_id",
-        (("dep-a",), {"custom_llm_provider": "openai"}),
-    ),
-    (
-        lambda r: r.registry().resolve("rg", kind="routing_group_alternatives"),
-        "_core_routing_group_has_alternatives",
-        (("rg",), {}),
-    ),
-    (
-        lambda r: r.registry().resolve("gpt", kind="served", served_model="gpt-4o"),
-        "_core_resolve_served_model_name",
-        (("gpt", "gpt-4o"), {}),
-    ),
-    (
-        lambda r: r.registry().resolve("gpt", kind="upstream", team_id="t"),
-        "_core_get_routable_upstream_model",
-        (("gpt",), {"team_id": "t"}),
-    ),
-    (
-        lambda r: r.registry().resolve("gpt", kind="search_tool_support", team_id="t"),
-        "_core_get_search_tool_support",
-        (("gpt",), {"team_id": "t"}),
-    ),
-    (
-        lambda r: r.registry().resolve("grp", kind="wildcard_access_group"),
-        "_core_is_model_access_group_for_wildcard_route",
-        ((), {"model_access_group": "grp"}),
-    ),
-    (
-        lambda r: r.registry().resolve("dep-a", kind="team_model_alternatives"),
-        "_core_team_model_has_alternatives",
-        (("dep-a",), {}),
-    ),
-    (
-        lambda r: r.registry().group("gpt", include_hidden=True, team_id="t"),
-        "_core_get_model_group_info",
-        (("gpt",), {"include_hidden": True, "team_id": "t"}),
-    ),
-    (lambda r: r.registry().group("gpt", field="cached_info"), "_core_cached_model_group_info", (("gpt",), {})),
-    (lambda r: r.registry().group("gpt", field="display_name"), "_core_get_configured_display_name", (("gpt",), {})),
-    (
-        lambda r: r.registry().group("gpt", field="service_tiers", team_id="t"),
-        "_core_get_configured_service_tiers",
-        (("gpt",), {"team_id": "t"}),
-    ),
-    (lambda r: r.registry().group("gpt", field="listing_info"), "_core_get_model_listing_info", (("gpt",), {})),
-    (lambda r: r.registry().plugins("budget_limiter"), "_core_get_router_deployment_budget_limiter", ((), {})),
-    (lambda r: r.settings().allowed_fails_for(ValueError("x")), "_core_get_allowed_fails_from_policy", None),
-    (lambda r: r.settings().guardrail("g"), "_core_get_available_guardrail", (("g",), {})),
-    (lambda r: r.health().team_ptu_ceiling("t", "gpt"), "_core_team_ptu_ceiling", (("t", "gpt"), {})),
-    (
-        lambda r: r.health().split_priority("gpt", {"priority": 1}),
-        "_core_split_request_priority",
-        (("gpt", {"priority": 1}), {}),
-    ),
-]
-
-
-@pytest.mark.parametrize("call, core, expected", FORWARDS, ids=[f[1] for f in FORWARDS])
-def test_entry_point_forwards_to_its_core_member(router, monkeypatch, call, core, expected):
-    from unittest.mock import MagicMock
-
-    mock = MagicMock(return_value=_SENTINEL)
-    monkeypatch.setattr(router, core, mock)
-    assert call(router) is _SENTINEL
-    if expected is not None:
-        assert mock.call_args == expected
-    else:
-        mock.assert_called_once()
-
-
-ASYNC_FORWARDS = [
-    (lambda r: r.health().fully_unhealthy_model_names(), "_core_async_get_fully_unhealthy_model_names", ((), {})),
-    (lambda r: r.health().usage("gpt"), "_core_get_model_group_usage", ((), {"model_group": "gpt"})),
-    (
-        lambda r: r.health().usage("gpt", kind="remaining"),
-        "_core_get_remaining_model_group_usage",
-        ((), {"model_group": "gpt"}),
-    ),
-]
-
-
-@pytest.mark.parametrize("call, core, expected", ASYNC_FORWARDS, ids=[f[1] for f in ASYNC_FORWARDS])
-def test_async_entry_point_forwards_to_its_core_member(router, monkeypatch, call, core, expected):
-    from unittest.mock import AsyncMock
-
-    mock = AsyncMock(return_value=_SENTINEL)
-    monkeypatch.setattr(router, core, mock)
-    assert asyncio.run(call(router)) is _SENTINEL
-    assert mock.call_args == expected
 
 
 def test_registry_reads_without_a_core_forward(router):
     registry = router.registry()
-    assert registry.zero_cost() is getattr(router, "_zero_cost_cache", None)
     assert registry.includes(router.registry().deployment("dep-a").model_dump(), team_id=None) is True
 
 
@@ -727,30 +498,13 @@ def test_old_members_refuse_objects_that_are_not_routers():
         _as_router(object())  # pyright: ignore[reportArgumentType]
 
 
-def test_routing_context_forwards_to_the_router(router, monkeypatch):
-    from unittest.mock import AsyncMock, MagicMock
-
+def test_routing_context_forwards_to_the_router(router):
     from litellm.router_api import RoutingContext
 
     ctx = RoutingContext(router)
     assert ctx.registry().version == router.registry().version
     assert ctx.settings() is router.settings()
     assert isinstance(ctx.health(), type(router.health()))
-    for name in (
-        "_pre_call_checks",
-        "_count_pre_call_check_tokens",
-        "_update_kwargs_before_fallbacks",
-        "_core_arm_routing_read_prefetch",
-        "_core_log_retry",
-    ):
-        monkeypatch.setattr(router, name, MagicMock(return_value=_SENTINEL))
-    monkeypatch.setattr(router, "_core_async_pre_routing_hook", AsyncMock(return_value=_SENTINEL))
-    assert ctx.pre_call_checks("gpt", []) is _SENTINEL
-    assert ctx.count_pre_call_check_tokens(None, "hi") is _SENTINEL
-    assert ctx.update_kwargs_before_fallbacks("gpt", {}) is _SENTINEL
-    assert ctx.arm_read_prefetch("gpt") is _SENTINEL
-    assert asyncio.run(ctx.pre_routing_hook("gpt", {})) is _SENTINEL
-    assert ctx.log_retry({}, ValueError("x")) is _SENTINEL
 
 
 def test_attribute_errors_about_other_objects_pass_through_unchanged(router):

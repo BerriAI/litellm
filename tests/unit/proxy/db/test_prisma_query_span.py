@@ -284,7 +284,10 @@ def _parameters(parents: tuple[ast.AST, ...]) -> frozenset[str]:
 
 
 def _argument_for(call: ast.Call, function: ast.AsyncFunctionDef | ast.FunctionDef, parameter: str) -> ast.expr | None:
-    positional: Final = tuple(arg.arg for arg in function.args.args)
+    bound: Final = (
+        isinstance(call.func, ast.Attribute) and bool(function.args.args) and function.args.args[0].arg == "self"
+    )
+    positional: Final = tuple(arg.arg for arg in function.args.args[1 if bound else 0 :])
     by_keyword: Final = next((k.value for k in call.keywords if k.arg == parameter), None)
     if by_keyword is not None or parameter not in positional:
         return by_keyword
@@ -324,7 +327,16 @@ def _caller_site(
     wrapped: Final = _wrapper_site(call, parents, method, location, module)
     if wrapped is not None:
         return wrapped
-    text: Final = _sql_text(_argument_for(call, function, parameter), _scope(module, parents))
+    argument: Final = _argument_for(call, function, parameter)
+    caller: Final = next((p for p in parents if isinstance(p, (ast.AsyncFunctionDef, ast.FunctionDef))), None)
+    if (
+        caller is not None
+        and caller.name in _RAW_METHODS
+        and isinstance(argument, ast.Name)
+        and argument.id in _parameters(parents)
+    ):
+        return _PrismaCallSite(location, method, "forwarder", f"(callers of {caller.name})")
+    text: Final = _sql_text(argument, _scope(module, parents))
     return _PrismaCallSite(location, method, "engine", _render_statements(method, text) if text is not None else None)
 
 
@@ -447,6 +459,35 @@ def _call_sites(module: _Module) -> Iterator[_PrismaCallSite]:
 
 def prisma_call_sites() -> tuple[_PrismaCallSite, ...]:
     return tuple(site for module in _modules() for site in _call_sites(module))  # comprehension-ok: flatten
+
+
+@pytest.mark.parametrize(
+    ("caller", "expression", "expected"),
+    [
+        ("query_raw", "query", "(callers of query_raw)"),
+        ("query_raw", "query=query", "(callers of query_raw)"),
+        ("run", "'SELECT * FROM LiteLLM_UserTable'", "postgres.select LiteLLM_UserTable"),
+        ("run", "'not a SQL statement'", None),
+        ("run", "query", None),
+    ],
+)
+def test_query_wrapper_keeps_literal_and_forwarded_statements_checked(
+    caller: str, expression: str, expected: str | None
+) -> None:
+    tree: Final = ast.parse(
+        f"""
+class Database:
+    async def {caller}(self, query):
+        return await self._execute({expression})
+
+    async def _execute(self, query):
+        return await engine.query_raw(query)
+"""
+    )
+    module: Final = _Module(_REPO / "litellm" / "query_wrapper.py", tree, _assignments(tree.body))
+    sites: Final = tuple(_call_sites(module))
+    assert len(sites) == 1
+    assert sites[0].rendered == expected
 
 
 def test_every_prisma_call_site_in_the_proxy_renders_a_bounded_postgres_span_name() -> None:
