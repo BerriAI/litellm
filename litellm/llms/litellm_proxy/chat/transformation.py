@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
+import litellm
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, OPENAI_CHAT_COMPLETION_PARAMS
-from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import add_path_to_api_base
@@ -69,7 +69,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         api_base, api_key = self._get_openai_compatible_provider_info(api_base, api_key)
         if api_base is None:
             raise ValueError("api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`")
-        response: Final = get_httpx_client().get(
+        response: Final = litellm.module_level_client.client.get(
             url=add_path_to_api_base(api_base, "/v1/models"),
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=NON_LLM_CONNECTION_TIMEOUT,
