@@ -216,7 +216,9 @@ impl NativeRedisClient {
 
 /// The Redis `spec` names, whatever its namespace, or none when the Rust client cannot reach it.
 pub(crate) fn resolved_target(py: Python<'_>, spec: &RedisSpec) -> PyResult<Option<Target>> {
-    Ok(resolve_spec(py, spec)?.ok().map(|resolution| resolution.target))
+    Ok(resolve_spec(py, spec)?
+        .ok()
+        .map(|resolution| resolution.target))
 }
 
 // A live registry entry's client keeps its provider alive, so no live entry shares its address

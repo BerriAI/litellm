@@ -57,7 +57,12 @@ impl ServiceLoggingEvents {
     const MODULE: &str = "litellm.rust_bridge.host.redis_events";
 
     pub(crate) fn new(py: Python<'_>, runtime: Handle) -> PyResult<Self> {
-        Self::from_module(py, &py.import(Self::MODULE)?, runtime, EventLoop::running(py))
+        Self::from_module(
+            py,
+            &py.import(Self::MODULE)?,
+            runtime,
+            EventLoop::running(py),
+        )
     }
 
     /// For a breaker, whose transitions never run on the caller's loop, so building it never looks one up.

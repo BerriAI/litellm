@@ -62,7 +62,8 @@ pub(crate) struct NativeRedisBreaker(pub(crate) Breaker);
 impl NativeRedisBreaker {
     fn build(py: Python<'_>, settings: &BreakerSettings) -> PyResult<Breaker> {
         let runtime = litellm_host_python::runtime_handle()?;
-        let events: Arc<dyn RedisEvents> = Arc::new(ServiceLoggingEvents::transitions_only(py, runtime)?);
+        let events: Arc<dyn RedisEvents> =
+            Arc::new(ServiceLoggingEvents::transitions_only(py, runtime)?);
         Ok(litellm_redis_connect::breaker(
             settings.config()?,
             Some(events),
@@ -86,7 +87,11 @@ impl NativeRedisBreaker {
     /// The breaker of the Redis `redis_kwargs` name, which every cache and client on that Redis shares whatever
     /// its namespace. The first caller's settings win.
     #[staticmethod]
-    fn shared(py: Python<'_>, redis_kwargs: RedisSpec, settings: BreakerSettings) -> PyResult<Self> {
+    fn shared(
+        py: Python<'_>,
+        redis_kwargs: RedisSpec,
+        settings: BreakerSettings,
+    ) -> PyResult<Self> {
         let Some(target) = resolved_target(py, &redis_kwargs)? else {
             return Self::new(py, settings);
         };
