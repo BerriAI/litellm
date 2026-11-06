@@ -1044,12 +1044,7 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
 @pytest.mark.parametrize(
     "prefix", (WEBSEARCH_INTERCEPTION_PREFIX, CODE_INTERPRETER_INTERCEPTION_PREFIX, HEADROOM_INTERCEPTION_PREFIX)
 )
-async def test_converted_stream_replays_the_original_reply_when_no_tool_is_called(
-    monkeypatch: pytest.MonkeyPatch, prefix: str
-):
-    """A streamed request that was converted to a non-streaming call still gets a
-    stream back when the model answers without a tool call and no callback gates."""
-    monkeypatch.setattr(litellm, "callbacks", [])
+async def test_converted_stream_replays_the_original_reply_when_no_tool_is_called(prefix: str):
     logging_obj: Final = Logging(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hello"}],
