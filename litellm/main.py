@@ -6793,7 +6793,6 @@ def _embedding_headers(param: str, configured: object, model: str, drop_params: 
         )
 
 
-
 def _resolve_vercel_or_cloudflare_embedding_credentials(
     custom_llm_provider: str,
     api_base: str | None,

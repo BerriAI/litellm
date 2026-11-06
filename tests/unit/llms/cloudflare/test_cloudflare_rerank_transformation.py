@@ -23,7 +23,6 @@ class _RecordingHTTPHandler(HTTPHandler):
         return self.response
 
 
-
 def test_provider_config_manager_returns_cloudflare_rerank_config():
     config = ProviderConfigManager.get_provider_rerank_config(
         model="@cf/baai/bge-reranker-base",

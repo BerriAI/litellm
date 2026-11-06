@@ -4,8 +4,8 @@ from unittest.mock import Mock
 import pytest
 
 import litellm
-from litellm.llms.cloudflare.embedding.transformation import CloudflareEmbeddingConfig
 from litellm.llms.cloudflare.chat.transformation import CloudflareError
+from litellm.llms.cloudflare.embedding.transformation import CloudflareEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.utils import ProviderConfigManager
 
@@ -19,7 +19,6 @@ class _RecordingHTTPHandler(HTTPHandler):
     def post(self, url: str, **kwargs):
         self.requests.append({"url": url, **kwargs})
         return self.response
-
 
 
 def test_provider_config_manager_returns_cloudflare_embedding_config():
