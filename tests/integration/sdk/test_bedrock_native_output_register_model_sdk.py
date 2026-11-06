@@ -79,15 +79,24 @@ def _bedrock(request: Request) -> Reply:
     return reply({"city": found.group(1)}, _native(body, invoke))
 
 
-@pytest.fixture
-def opus_4_8_opted_in_for_the_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _opus_4_8_registered_for_the_process(monkeypatch: pytest.MonkeyPatch, bedrock_key: bool) -> Iterator[None]:
     monkeypatch.setattr(litellm, "model_cost", _COST_MAP.validate_python(litellm.model_cost))  # pyright: ignore[reportUnknownMemberType]  # the cost map is untyped
     litellm.register_model(
-        {_OPUS_4_8: {"supports_bedrock_native_structured_output": True}}, persist_across_reloads=False
+        {_OPUS_4_8: {"supports_bedrock_native_structured_output": bedrock_key}}, persist_across_reloads=False
     )
     yield
     monkeypatch.undo()
     _invalidate_model_cost_lowercase_map()
+
+
+@pytest.fixture
+def opus_4_8_opted_in_for_the_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from _opus_4_8_registered_for_the_process(monkeypatch, True)
+
+
+@pytest.fixture
+def opus_4_8_opted_out_for_the_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    yield from _opus_4_8_registered_for_the_process(monkeypatch, False)
 
 
 def _model(route: str) -> str:
@@ -136,4 +145,30 @@ def test_a_register_model_native_output_opt_in_reaches_every_call_but_a_deployme
             wire,
             route,
             lambda messages: litellm.completion(_model(route), messages, **_connection(wire), **_OPTIONS),
+        )
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+@pytest.mark.usefixtures("opus_4_8_opted_out_for_the_process")
+def test_a_register_model_native_output_opt_out_reaches_every_call_but_a_deployment_that_opts_in(route: str) -> None:
+    with wire_server(_bedrock) as wire:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "opted-in",
+                    "litellm_params": {"model": _model(route), **_connection(wire)},
+                    "model_info": {"supports_bedrock_native_structured_output": True},
+                },
+            ],
+            num_retries=0,
+        )
+        assert not _sent_native(
+            wire,
+            route,
+            lambda messages: litellm.completion(_model(route), messages, **_connection(wire), **_OPTIONS),
+        )
+        assert _sent_native(
+            wire,
+            route,
+            lambda messages: router.completion(model="opted-in", messages=messages, **_OPTIONS),  # pyright: ignore[reportUnknownMemberType]  # Router.completion leaves **kwargs untyped
         )

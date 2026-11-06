@@ -506,7 +506,10 @@ def set_native_structured_output(
     def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
         entry: Final = litellm.model_cost[model_cost_key]
         monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
-        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        if native_key == "legacy":
+            monkeypatch.delitem(entry, "supports_bedrock_native_structured_output", raising=False)
+        else:
+            monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
         litellm.get_model_info.cache_clear()
 
     return set_flags

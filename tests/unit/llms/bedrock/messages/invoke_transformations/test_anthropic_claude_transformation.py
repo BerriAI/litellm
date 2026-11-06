@@ -4042,10 +4042,7 @@ _NATIVE_OUTPUT_REJECTION: Final = {
     "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
 }
 _STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
-_OPTED_OUT: Final = {
-    "supports_native_structured_output": False,
-    "supports_bedrock_native_structured_output": False,
-}
+_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
 _CONSTRAINED_SCHEMA: Final = {
     "type": "object",
     "properties": {

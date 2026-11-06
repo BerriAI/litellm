@@ -9,7 +9,10 @@ from litellm.llms.bedrock.common_utils import(
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
+    bedrock_chat_opts_into_native_structured_output,
+    bedrock_model_always_takes_native_output,
     bedrock_native_output_is_opt_in,
+    bedrock_supports_native_structured_output,
     bedrock_strict_tools_fallback,
     bedrock_model_name_without_provider,
     deployment_model_info,
@@ -2406,6 +2409,49 @@ def test_bedrock_native_output_is_opt_in_only_where_the_opt_in_key_turns_native_
     local_model_cost_map, model, model_info, expected
 ):
     assert bedrock_native_output_is_opt_in(model, model_info=model_info) is expected
+
+
+@pytest.mark.parametrize(
+    "model", ["us.anthropic.claude-opus-4-8", "us.anthropic.claude-opus-5", "us.anthropic.claude-sonnet-4-6"]
+)
+@pytest.mark.parametrize(
+    ("model_info", "native"),
+    [
+        (None, True),
+        ({"supports_bedrock_native_structured_output": False}, False),
+        ({"supports_bedrock_native_structured_output": True}, True),
+        ({"supports_native_structured_output": True, "supports_bedrock_native_structured_output": False}, True),
+    ],
+    ids=["no_key", "bedrock_key_false", "bedrock_key_true", "native_key_true_beats_bedrock_key_false"],
+)
+def test_a_deployment_turns_off_the_native_output_a_row_defaults_to_with_the_bedrock_key(
+    local_model_cost_map, model, model_info, native
+):
+    assert bedrock_supports_native_structured_output(model, model_info=model_info) is native
+    assert bedrock_chat_opts_into_native_structured_output(model, True, model_info=model_info) is native
+
+
+def test_a_deployment_setting_only_the_native_key_false_still_opts_in_through_the_rows_bedrock_key(
+    local_model_cost_map,
+):
+    model_info: Final = {"supports_native_structured_output": False}
+
+    assert bedrock_chat_opts_into_native_structured_output("us.anthropic.claude-opus-4-8", True, model_info=model_info)
+    assert not bedrock_chat_opts_into_native_structured_output(
+        "us.anthropic.claude-opus-4-8", False, model_info=model_info
+    )
+
+
+def test_a_registered_bedrock_key_false_turns_off_only_the_registered_rows_native_default(local_model_cost_map):
+    assert bedrock_model_always_takes_native_output("us.anthropic.claude-opus-4-8")
+
+    litellm.register_model(
+        {"us.anthropic.claude-opus-4-8": {"supports_bedrock_native_structured_output": False}},
+        persist_across_reloads=False,
+    )
+
+    assert not bedrock_model_always_takes_native_output("us.anthropic.claude-opus-4-8")
+    assert bedrock_model_always_takes_native_output("us.anthropic.claude-opus-5")
 
 
 def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the_deployment(local_model_cost_map):

@@ -300,7 +300,13 @@ def _bedrock_native_output_enabled(
     deployment_flag: Final = (model_info or {}).get("supports_native_structured_output")
     if isinstance(deployment_flag, bool):
         return deployment_flag
-    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+    return _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) and not _bedrock_native_output_opted_out(model, model_info)
+
+
+def bedrock_model_always_takes_native_output(model: str) -> bool:
+    return _bedrock_native_output_enabled(model, "bedrock", None)
 
 
 _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
