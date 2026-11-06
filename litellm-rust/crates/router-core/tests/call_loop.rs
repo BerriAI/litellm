@@ -1809,3 +1809,39 @@ fn request_for(model: &str) -> RouterRequest {
         ..RouterRequest::default()
     }
 }
+
+#[rstest]
+#[tokio::test]
+async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_name(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429); 3],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 1, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let events = host.events.lock();
+    let tagged: Vec<(String, String)> = events
+        .iter()
+        .map(|event| {
+            let name = format!("{event:?}")
+                .split([' ', '{', '('])
+                .next()
+                .unwrap()
+                .to_owned();
+            let json = serde_json::to_value(event).unwrap();
+            (name, json["event"].as_str().unwrap().to_owned())
+        })
+        .collect();
+    let (names, tags): (Vec<String>, Vec<String>) = tagged.into_iter().unzip();
+    assert_eq!(tags, names);
+    assert!(tags.contains(&"Fallback".to_owned()) && tags.contains(&"Retry".to_owned()));
+}
