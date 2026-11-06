@@ -36,6 +36,7 @@ from litellm.integrations.otel.model.utils import (
     as_str_tuple,
 )
 from litellm.integrations.otel.routing import RoutingAttributeValue, routing_decision_attributes
+from litellm.litellm_core_utils.service_tier_utils import get_requested_service_tier, get_served_service_tier
 
 # ``RequestIdentity`` and the request-metadata translation now live in
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
@@ -450,6 +451,8 @@ class LLMCallSpanData:
     routing_attributes: Mapping[str, RoutingAttributeValue] = field(default_factory=lambda: MappingProxyType({}))
     cache_hit: bool | None = None
     saved_cache_cost: float | None = None
+    requested_service_tier: str | None = None
+    served_service_tier: str | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -531,6 +534,8 @@ class LLMCallSpanData:
             routing_attributes=routing_decision_attributes(decision),
             cache_hit=cache_hit,
             saved_cache_cost=as_float(payload.get("saved_cache_cost")) if cache_hit else None,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            requested_service_tier=get_requested_service_tier(payload),
+            served_service_tier=get_served_service_tier(payload),
         )
 
 

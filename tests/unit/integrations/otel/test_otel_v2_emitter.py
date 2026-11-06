@@ -183,6 +183,64 @@ def test_llm_call_span_golden():
     assert span.status.status_code is StatusCode.UNSET
 
 
+_REQUEST_TIER: Final = "openai.request.service_tier"
+_RESPONSE_TIER: Final = "openai.response.service_tier"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_request_tier", "expected_response_tier"),
+    [
+        pytest.param(
+            {
+                "model_parameters": {"service_tier": "flex"},
+                "response": {"id": "resp_1", "service_tier": "flex", "choices": [{"finish_reason": "stop"}]},
+            },
+            "flex",
+            "flex",
+            id="requested-and-served",
+        ),
+        pytest.param(
+            {
+                "model_parameters": {"service_tier": "auto"},
+                "response": {"id": "resp_1", "service_tier": "priority", "choices": [{"finish_reason": "stop"}]},
+            },
+            "auto",
+            "priority",
+            id="provider-picks-the-tier",
+        ),
+        pytest.param(
+            {"metadata": {"usage_object": {"service_tier": "standard"}}},
+            None,
+            "standard",
+            id="served-tier-on-usage",
+        ),
+        pytest.param(
+            {"model_parameters": {"service_tier": "priority"}},
+            "priority",
+            None,
+            id="requested-only",
+        ),
+        pytest.param(
+            {"model_parameters": {"service_tier": "not-a-tier"}},
+            None,
+            None,
+            id="unknown-requested-tier",
+        ),
+        pytest.param({}, None, None, id="no-tier"),
+    ],
+)
+def test_llm_call_span_service_tier(
+    overrides: Mapping[str, object], expected_request_tier: str | None, expected_response_tier: str | None
+) -> None:
+    engine, exporter = _engine()
+
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload(**overrides)))
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(_REQUEST_TIER) == expected_request_tier
+    assert span.attributes.get(_RESPONSE_TIER) == expected_response_tier
+
+
 def test_legacy_dual_emit_on():
     engine, exporter = _engine(legacy_compat=True)
     engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(_payload()))

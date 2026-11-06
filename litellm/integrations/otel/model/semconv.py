@@ -133,6 +133,14 @@ class GenAI:
     PROMPT_NAME: Final = "gen_ai.prompt.name"
 
 
+class OpenAI:
+    """OpenAI-namespace keys from the GenAI semconv registry. Carries the service tier for every
+    provider, not only OpenAI."""
+
+    REQUEST_SERVICE_TIER: Final = "openai.request.service_tier"
+    RESPONSE_SERVICE_TIER: Final = "openai.response.service_tier"
+
+
 class MCP:
     """OTel GenAI MCP (Model Context Protocol) span-attribute keys.
 
