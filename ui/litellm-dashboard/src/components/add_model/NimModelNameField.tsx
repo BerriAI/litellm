@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { apiClient } from "../networking";
 import { resolveLitellmProviderSlug } from "../provider_info_helpers";
 import type { MountedFormValues } from "../common_components/MountedFormField";
@@ -17,6 +18,7 @@ type Props = ComponentProps<typeof LiteLLMModelNameField> & {
 };
 
 export default function NimModelNameField({ accessToken, canDiscover, ...props }: Props) {
+  const { t } = useTranslation();
   const { control } = useFormContext<MountedFormValues>();
   const credential = useWatch({ control, name: "litellm_credential_name" });
   const apiKey = useWatch({ control, name: "api_key" });
@@ -86,11 +88,9 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
       {enabled && (
         <div className="mb-4 text-sm text-muted-foreground">
           <p role="status">
-            {!current && "Loading models from NVIDIA NIM"}
-            {current?.status === "success" &&
-              "Models listed by your NIM endpoint. Inference access and capabilities may vary"}
-            {current?.status === "unavailable" &&
-              "Could not refresh NIM models. Showing the built-in catalog. You can also enter a custom model"}
+            {!current && t("addModel.nimModelDiscovery.loading")}
+            {current?.status === "success" && t("addModel.nimModelDiscovery.success")}
+            {current?.status === "unavailable" && t("addModel.nimModelDiscovery.unavailable")}
           </p>
           <Button
             type="button"
@@ -99,7 +99,7 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
             disabled={!current}
             onClick={() => setAttempt((value) => value + 1)}
           >
-            Refresh NIM models
+            {t("addModel.nimModelDiscovery.refresh")}
           </Button>
         </div>
       )}

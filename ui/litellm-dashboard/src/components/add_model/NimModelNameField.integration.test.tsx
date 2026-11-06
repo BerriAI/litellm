@@ -7,6 +7,7 @@ import type { MountedFormValues } from "../common_components/MountedFormField";
 import { apiClient } from "../networking";
 import { getPlaceholder, Providers } from "../provider_info_helpers";
 import NimModelNameField from "./NimModelNameField";
+import i18n from "@/i18n/i18n";
 
 vi.mock("../networking", () => ({ apiClient: { post: vi.fn() } }));
 const catalogModel = "nvidia_nim/catalog-model";
@@ -75,6 +76,30 @@ describe("NIM model discovery", () => {
       },
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it("translates discovery status and refresh controls in the selected language", async () => {
+    const previousLanguage = i18n.language;
+    i18n.addResourceBundle("es", "translation", {
+      addModel: {
+        nimModelDiscovery: {
+          loading: "Translated loading",
+          unavailable: "Translated unavailable",
+          refresh: "Translated refresh",
+        },
+      },
+    });
+    try {
+      await act(() => i18n.changeLanguage("es"));
+      vi.mocked(apiClient.post).mockResolvedValue({ status: "unavailable", models: [] });
+      render(<Form />);
+      expect(screen.getByText("Translated loading")).toBeInTheDocument();
+      expect(await screen.findByText("Translated unavailable")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Translated refresh" })).toBeEnabled();
+    } finally {
+      await act(() => i18n.changeLanguage(previousLanguage));
+      i18n.removeResourceBundle("es", "translation");
+    }
   });
 
   it("keeps the catalog usable when upstream discovery is unavailable", async () => {
