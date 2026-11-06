@@ -2085,3 +2085,13 @@ async def test_responses_continuation_turn_goes_to_the_deployment_that_answered_
     )
 
     assert pinned == expected_deployments
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_tool", ["get_time", None, 42], ids=["string", "null", "number"])
+async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(bad_tool: object):
+    request: dict[str, object] = {"input": _marked_responses_input(), "tools": [bad_tool], "litellm_metadata": {}}
+
+    pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
+
+    assert pinned == ("dep-1", "dep-2")

@@ -68,19 +68,19 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
     if request_data.get("previous_response_id") is not None or not isinstance(request_input, str | list):
         return None
     listed_tools: Final = (
-        cast(ResponseTools, request_tools)  # cast-ok: a bad tool raises in the transform and is caught
+        cast(ResponseTools, request_tools)  # cast-ok: a bad tool raises inside the guard below and is caught
         if isinstance(request_tools, list)
         else None
     )
-    tools_kept_as_sent: Final = tuple(
-        tool for tool in listed_tools or () if tool.get("type") in _RESPONSES_TOOL_TYPES_KEPT_AS_SENT
-    )
-    convertible_tools: Final = (
-        [tool for tool in listed_tools if tool.get("type") not in _RESPONSES_TOOL_TYPES_KEPT_AS_SENT]
-        if listed_tools is not None
-        else None
-    )
     try:
+        tools_kept_as_sent: Final = tuple(
+            tool for tool in listed_tools or () if tool.get("type") in _RESPONSES_TOOL_TYPES_KEPT_AS_SENT
+        )
+        convertible_tools: Final = (
+            [tool for tool in listed_tools if tool.get("type") not in _RESPONSES_TOOL_TYPES_KEPT_AS_SENT]
+            if listed_tools is not None
+            else None
+        )
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
             input=cast(str | ResponseInputParam, request_input),  # cast-ok: a bad item raises and is caught here
             responses_api_request={"instructions": request_data.get("instructions")},
