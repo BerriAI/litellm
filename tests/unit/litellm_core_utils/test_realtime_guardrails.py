@@ -15,7 +15,7 @@ from litellm.litellm_core_utils.realtime_guardrails import (
     realtime_guardrail_verdict,
     rewritten_item,
 )
-from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, ContentFilterPattern, GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -104,7 +104,9 @@ def test_items_without_client_text_are_not_screened(client_event: dict) -> None:
 async def test_a_plain_string_block_reason_becomes_the_violation_message() -> None:
     guardrail: Final = RaisingGuardrail(HTTPException(status_code=400, detail="hello is not allowed"))
 
-    block: Final = await realtime_guardrail_verdict(("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
+    block: Final = await realtime_guardrail_verdict(
+        ("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,)
+    )
 
     assert isinstance(block, RealtimeGuardrailBlock)
     assert block.message == "hello is not allowed"
@@ -117,7 +119,9 @@ async def test_a_configured_violation_message_replaces_the_block_reason() -> Non
         HTTPException(status_code=400, detail="hello is not allowed"), realtime_violation_message="Please rephrase"
     )
 
-    block: Final = await realtime_guardrail_verdict(("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
+    block: Final = await realtime_guardrail_verdict(
+        ("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,)
+    )
     configured_block: Final = await realtime_guardrail_verdict(
         ("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (configured,)
     )
@@ -218,6 +222,38 @@ async def test_a_mask_across_parts_replaces_them_with_the_masked_text_the_model_
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED] is here",))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parts",
+    [
+        pytest.param(("abc", "123-45-6789 hunter2"), id="masks inside one part"),
+        pytest.param(("abc", "123-45-6789 hunt", "er2"), id="a mask inside a part and one across parts"),
+    ],
+)
+async def test_no_mask_one_text_part_gets_is_lost_when_its_joined_text_masks_differently(
+    parts: tuple[str, ...],
+) -> None:
+    content_filter: Final = ContentFilterGuardrail(
+        guardrail_name="ssn-and-keyword-mask",
+        patterns=[
+            ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=ContentFilterAction.MASK)
+        ],
+        blocked_words=[BlockedWord(keyword="hunter2", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    verdict: Final = await realtime_guardrail_verdict(
+        parts, "user", (GuardrailEventHooks.pre_call,), {}, None, (content_filter,)
+    )
+
+    assert isinstance(verdict, RealtimeGuardrailRewrite)
+    forwarded: Final = "".join(verdict.texts)
+    assert "123-45-6789" not in forwarded
+    assert "hunter2" not in forwarded
+    assert forwarded.startswith("abc")
 
 
 class ScopedGuardrail(RaisingGuardrail):
