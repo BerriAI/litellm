@@ -1,6 +1,6 @@
-//! Health-check-driven routing: the background health checks' results, kept in the shared
-//! [`RouterCache`](crate::cache::RouterCache) under one key as Python's `DeploymentHealthCache`
-//! writes them, and the filter `_async_filter_health_check_unhealthy_deployments` /
+//! Health-check-driven routing: the background health checks' results, read from the host's
+//! [`RouterCache`](crate::cache::RouterCache) as Python's `DeploymentHealthCache` writes them, and
+//! the filter `_async_filter_health_check_unhealthy_deployments` /
 //! `_filter_health_check_unhealthy_deployments` run before the cooldown filter.
 
 use std::{collections::BTreeSet, sync::Arc, time::UNIX_EPOCH};
@@ -8,9 +8,6 @@ use std::{collections::BTreeSet, sync::Arc, time::UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::{health::Health, registry::Deployment, settings::Settings};
-
-/// `DeploymentHealthCache.CACHE_KEY`.
-pub const HEALTH_STATE_KEY: &str = "litellm:health_check:deployment_health_state";
 
 /// `_extract_unhealthy_ids`: the ids marked unhealthy whose result is younger than `staleness`.
 pub fn unhealthy_ids(raw: Option<&Value>, now: f64, staleness: f64) -> BTreeSet<String> {
@@ -71,12 +68,7 @@ impl Health {
             return deployments;
         }
         // A read that fails counts as no health state.
-        let raw = self
-            .cache()
-            .async_get_cache(HEALTH_STATE_KEY)
-            .await
-            .ok()
-            .flatten();
+        let raw = self.cache().health_states().await.ok().flatten();
         let now = self
             .now_time()
             .duration_since(UNIX_EPOCH)

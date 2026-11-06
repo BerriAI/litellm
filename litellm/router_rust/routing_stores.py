@@ -2,24 +2,36 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
-from litellm._internal_context import service_target, with_service_target
-from litellm.caching.redis_batch import Batch
+from litellm._logging import verbose_router_logger
+from litellm.constants import HEALTH_CHECKS_TARGET
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
+from litellm.redis.stores.router_usage.types import CounterKind
 from litellm.router_utils import routing_prefetch
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 
-__all__ = ("AllowedFailsKey", "CooldownKey", "Handled", "RoutingStores", "UsageKey", "parse_key")
+__all__ = (
+    "CACHE_STEP",
+    "CacheStep",
+    "CooldownsStep",
+    "GetLocalStep",
+    "IncrementLocalStep",
+    "LocalStep",
+    "RoutingStores",
+    "StoreStep",
+    "service_target_of",
+)
 
 _COOLDOWN_VALUE: Final = TypeAdapter(CooldownCacheValue)
 
 
-def _cooldown_value(value: object) -> CooldownCacheValue:
+def _cooldown_value(value: JsonValue) -> CooldownCacheValue:
     """The cooldown router-core wrote, its whole-second ``cooldown_time`` kept an ``int`` as it serialized it."""
     validated: Final = _COOLDOWN_VALUE.validate_python(value)
     written: Final = as_str_mapping(value)
@@ -29,82 +41,102 @@ def _cooldown_value(value: object) -> CooldownCacheValue:
     return validated
 
 
-@dataclass(frozen=True, slots=True)
-class CooldownKey:
-    model_id: str
+class _Step(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
 
-@dataclass(frozen=True, slots=True)
-class AllowedFailsKey:
-    model_id: str
+class UsageWindow(_Step):
+    deployment_id: str
+    model: str
+    minute: str
+
+    def counter(self, kind: CounterKind) -> UsageCounter:
+        return UsageCounter(self.deployment_id, self.model, self.minute, kind)
+
+
+class CooldownsStep(_Step):
+    op: Literal["cooldowns"]
+    ids: tuple[str, ...]
+
+
+class PutCooldownStep(_Step):
+    op: Literal["put_cooldown"]
+    id: str
+    cooldown: JsonValue
+    ttl: float
+
+
+class IncrementAllowedFailsStep(_Step):
+    op: Literal["increment_allowed_fails"]
+    id: str
     suffix: str | None
+    ttl: float
 
 
-@dataclass(frozen=True, slots=True)
-class UsageKey:
-    counter: UsageCounter
+class AddUsageStep(_Step):
+    op: Literal["add_usage"]
+    window: UsageWindow
+    tokens: int | float
+    requests: int | float
 
 
-RoutingKey: TypeAlias = CooldownKey | AllowedFailsKey | UsageKey
+class AddRequestStep(_Step):
+    op: Literal["add_request"]
+    window: UsageWindow
+    ttl: float
 
 
-@dataclass(frozen=True, slots=True)
-class Handled:
-    value: object
+class UsageStep(_Step):
+    op: Literal["usage"]
+    window: UsageWindow
 
 
-def _deployment_key(rest: str) -> RoutingKey | None:
-    if rest.endswith(":cooldown"):
-        return CooldownKey(rest.removesuffix(":cooldown"))
-    model_id, marker, suffix = rest.partition(":allowed_fails")
-    if not marker or (suffix and not suffix.startswith(":")):
-        return None
-    return AllowedFailsKey(model_id, suffix.removeprefix(":") or None)
+class HealthStatesStep(_Step):
+    op: Literal["health_states"]
 
 
-def _usage_key(rest: str) -> UsageKey | None:
-    parts: Final = rest.rsplit(":", 2)
-    if len(parts) != 3:
-        return None
-    head, kind, minute = parts
-    model_id, separator, model = head.partition(":")
-    if not separator:
-        return None
-    match kind:
-        case "tpm" | "rpm":
-            return UsageKey(UsageCounter(model_id, model, minute, kind))
+class GetLocalStep(_Step):
+    op: Literal["get_local"]
+    key: str
+
+
+class IncrementLocalStep(_Step):
+    op: Literal["increment_local"]
+    key: str
+    amount: int | float
+    ttl: float | None
+
+
+StoreStep: TypeAlias = (
+    CooldownsStep
+    | PutCooldownStep
+    | IncrementAllowedFailsStep
+    | AddUsageStep
+    | AddRequestStep
+    | UsageStep
+    | HealthStatesStep
+)
+LocalStep: TypeAlias = GetLocalStep | IncrementLocalStep
+CacheStep: TypeAlias = Annotated[StoreStep | LocalStep, Field(discriminator="op")]
+CACHE_STEP: Final[TypeAdapter[CacheStep]] = TypeAdapter(CacheStep)
+
+
+def service_target_of(step: StoreStep | LocalStep) -> str:
+    """The service target a cache step is attributed to, as the Python core's."""
+    match step:
+        case CooldownsStep() | PutCooldownStep() | IncrementAllowedFailsStep():
+            return ROUTER_COOLDOWNS_TARGET
+        case HealthStatesStep():
+            return HEALTH_CHECKS_TARGET
+        case AddUsageStep() | AddRequestStep() | UsageStep() | GetLocalStep() | IncrementLocalStep():
+            return ROUTER_USAGE_TARGET
         case _:
-            return None
+            assert_never(step)
 
 
-def parse_key(key: str) -> RoutingKey | None:
-    """The store family a router-core key belongs to. Each store rebuilds the same key from what is parsed
-    here, so an id or model holding a ``:`` still names the key router-core asked for."""
-    if key.startswith("deployment:"):
-        return _deployment_key(key.removeprefix("deployment:"))
-    if key.startswith("global_router:"):
-        return _usage_key(key.removeprefix("global_router:"))
-    return None
-
-
-def _service_target(key: RoutingKey | None) -> str | None:
-    if isinstance(key, CooldownKey | AllowedFailsKey):
-        return ROUTER_COOLDOWNS_TARGET
-    if isinstance(key, UsageKey):
-        return ROUTER_USAGE_TARGET
-    return None
-
-
-def _cooldown_ids(keys: Sequence[str]) -> tuple[str, ...] | None:
-    ids: Final = tuple(parsed.model_id for parsed in map(parse_key, keys) if isinstance(parsed, CooldownKey))
-    return ids if keys and len(ids) == len(keys) else None
-
-
-def _usage_counters(keys: Sequence[object]) -> tuple[UsageCounter, ...] | None:
-    counters: Final = tuple(
-        parsed.counter for parsed in (parse_key(str(key)) for key in keys) if isinstance(parsed, UsageKey)
-    )
-    return counters if keys and len(counters) == len(keys) else None
+class HealthStates(Protocol):
+    async def async_get_states(self) -> object: ...
+    def get_states(self) -> object: ...
 
 
 def _aligned(model_ids: Sequence[str], active: Sequence[tuple[str, CooldownCacheValue]]) -> tuple[object, ...]:
@@ -112,119 +144,67 @@ def _aligned(model_ids: Sequence[str], active: Sequence[tuple[str, CooldownCache
     return tuple(found.get(model_id) for model_id in model_ids)
 
 
-def _one_deployment(tpm: UsageCounter, rpm: UsageCounter) -> bool:
-    return (tpm.kind, rpm.kind) == ("tpm", "rpm") and (tpm.deployment_id, tpm.model, tpm.minute) == (
-        rpm.deployment_id,
-        rpm.model,
-        rpm.minute,
-    )
+def _usage_counters(window: UsageWindow) -> tuple[UsageCounter, UsageCounter]:
+    return window.counter("tpm"), window.counter("rpm")
 
 
-def _deployment_increment(keys: Sequence[object], amounts: Sequence[object]) -> tuple[UsageCounter, float, int] | None:
-    """``_increment_deployment_usage``'s tpm then rpm increment of one deployment."""
-    counters: Final = _usage_counters(keys)
-    if counters is None or len(counters) != 2 or len(amounts) != 2:
-        return None
-    tpm, rpm = counters
-    tokens, requests = amounts
-    if not _one_deployment(tpm, rpm) or not isinstance(tokens, int | float) or not isinstance(requests, int | float):
-        return None
-    return tpm, tokens, int(requests)
-
-
-def _by(value: object) -> float:
-    return value if isinstance(value, int | float) and not isinstance(value, bool) else 1
-
-
+@dataclass(frozen=True, slots=True)
 class RoutingStores:
-    """Router-core's cache steps for cooldowns, allowed fails and tpm/rpm usage, answered by the native stores
-    the Python core uses. ``None`` leaves the step to the routing cache."""
+    """Router-core's cache steps answered by the stores the Python core uses. The stores own every key."""
 
-    def __init__(self, cooldowns: CooldownCache, usage: RouterUsage) -> None:
-        self._cooldowns: Final = cooldowns
-        self._usage: Final = usage
+    cooldowns: CooldownCache
+    usage: RouterUsage
+    health: HealthStates
 
-    def answer_sync(self, op: object, key: str, value: object, ttl: float | None) -> Handled | None:
-        store: Final = self._cooldowns.cooldown_store
-        parsed: Final = parse_key(key)
-        target: Final = _service_target(parsed)
-        if target is None:
-            return None
-        with service_target(target):
-            match op, parsed:
-                case "get", CooldownKey(model_id):
-                    return Handled(_aligned((model_id,), store.active_sync((model_id,)))[0])
-                case "set", CooldownKey(model_id):
-                    store.put(model_id, _cooldown_value(value), ttl or 0.0)
-                    return Handled(None)
-                case "delete", CooldownKey(model_id):
-                    store.evict_local(model_id)
-                    return Handled(None)
-                case "increment", AllowedFailsKey(model_id, suffix):
-                    return Handled(store.increment_allowed_fails(model_id, suffix, ttl or 0.0))
-                case "increment", UsageKey(counter):
-                    return Handled(self._usage.increment_sync(counter, _by(value), int(ttl or 0)))
-                case _:
-                    return None
+    async def answer(self, step: StoreStep) -> object:
+        store: Final = self.cooldowns.cooldown_store
+        match step:
+            case CooldownsStep(ids=ids):
+                return _aligned(ids, await routing_prefetch.read_cooldowns(store, ids, None))
+            case PutCooldownStep(id=model_id, cooldown=cooldown, ttl=ttl):
+                await store.async_put(model_id, _cooldown_value(cooldown), ttl)
+                return None
+            case IncrementAllowedFailsStep(id=model_id, suffix=suffix, ttl=ttl):
+                return await store.async_increment_allowed_fails(model_id, suffix, ttl)
+            case AddUsageStep(window=window, tokens=tokens, requests=requests):
+                try:
+                    await self.usage.increment_deployment(
+                        window.deployment_id, window.model, window.minute, tokens, int(requests)
+                    )
+                except Exception as e:  # noqa: BLE001  # usage that cannot be written never fails the call, as on the Python router
+                    verbose_router_logger.debug("_increment_deployment_usage: usage was not recorded. Got - %s", e)
+                return None
+            case AddRequestStep(window=window, ttl=ttl):
+                await self.usage.increment(window.counter("rpm"), 1, int(ttl))
+                return None
+            case UsageStep(window=window):
+                return tuple(await self.usage.get_many(_usage_counters(window)))
+            case HealthStatesStep():
+                return await self.health.async_get_states()
+            case _:
+                assert_never(step)
 
-    async def answer(self, op: object, key: str, value: object, ttl: float | None) -> Handled | None:
-        parsed: Final = parse_key(key)
-        target: Final = _service_target(parsed)
-        if target is None:
-            return None
-        store: Final = self._cooldowns.cooldown_store
-        with service_target(target):
-            match op, parsed:
-                case "get", CooldownKey(model_id):
-                    return Handled(_aligned((model_id,), await store.active((model_id,), batch=Batch.NONE))[0])
-                case "set", CooldownKey(model_id):
-                    await store.async_put(model_id, _cooldown_value(value), ttl or 0.0)
-                    return Handled(None)
-                case "increment", AllowedFailsKey(model_id, suffix):
-                    return Handled(await store.async_increment_allowed_fails(model_id, suffix, ttl or 0.0))
-                case "increment", UsageKey(counter):
-                    by: Final = _by(value)
-                    return Handled(await self._usage.increment(counter, by, int(ttl or 0)))
-                case _:
-                    return self.answer_sync(op, key, value, ttl)
-
-    def batch_get_sync(self, keys: Sequence[str]) -> tuple[object, ...] | None:
-        model_ids: Final = _cooldown_ids(keys)
-        if model_ids is not None:
-            with service_target(ROUTER_COOLDOWNS_TARGET):
-                return _aligned(model_ids, self._cooldowns.cooldown_store.active_sync(model_ids))
-        counters: Final = _usage_counters(keys)
-        if counters is None:
-            return None
-        with service_target(ROUTER_USAGE_TARGET):
-            return tuple(self._usage.get_many_sync(counters))
-
-    async def batch_get(self, keys: Sequence[str]) -> tuple[object, ...] | None:
-        model_ids: Final = _cooldown_ids(keys)
-        if model_ids is not None:
-            store: Final = self._cooldowns.cooldown_store
-            with service_target(ROUTER_COOLDOWNS_TARGET):
-                return _aligned(model_ids, await routing_prefetch.read_cooldowns(store, model_ids, None))
-        counters: Final = _usage_counters(keys)
-        if counters is None:
-            return None
-        with service_target(ROUTER_USAGE_TARGET):
-            return tuple(await self._usage.get_many(counters))
-
-    @with_service_target(ROUTER_USAGE_TARGET)
-    def increment_usage_sync(self, keys: Sequence[object], amounts: Sequence[object]) -> bool:
-        found: Final = _deployment_increment(keys, amounts)
-        if found is None:
-            return False
-        tpm, tokens, requests = found
-        self._usage.increment_deployment_sync(tpm.deployment_id, tpm.model, tpm.minute, tokens, requests)
-        return True
-
-    @with_service_target(ROUTER_USAGE_TARGET)
-    async def increment_usage(self, keys: Sequence[object], amounts: Sequence[object]) -> bool:
-        found: Final = _deployment_increment(keys, amounts)
-        if found is None:
-            return False
-        tpm, tokens, requests = found
-        await self._usage.increment_deployment(tpm.deployment_id, tpm.model, tpm.minute, tokens, requests)
-        return True
+    def answer_sync(self, step: StoreStep) -> object:
+        store: Final = self.cooldowns.cooldown_store
+        match step:
+            case CooldownsStep(ids=ids):
+                return _aligned(ids, store.active_sync(ids))
+            case PutCooldownStep(id=model_id, cooldown=cooldown, ttl=ttl):
+                store.put(model_id, _cooldown_value(cooldown), ttl)
+                return None
+            case IncrementAllowedFailsStep(id=model_id, suffix=suffix, ttl=ttl):
+                return store.increment_allowed_fails(model_id, suffix, ttl)
+            case AddUsageStep(window=window, tokens=tokens, requests=requests):
+                self.usage.increment_deployment_sync(
+                    window.deployment_id, window.model, window.minute, tokens, int(requests)
+                )
+                return None
+            case AddRequestStep(window=window, ttl=ttl):
+                self.usage.increment_sync(window.counter("rpm"), 1, int(ttl))
+                return None
+            case UsageStep(window=window):
+                return tuple(self.usage.get_many_sync(_usage_counters(window)))
+            case HealthStatesStep():
+                return self.health.get_states()
+            case _:
+                assert_never(step)
