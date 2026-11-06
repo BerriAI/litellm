@@ -321,8 +321,8 @@ def drop_unsupported_classifier_reasoning_effort(
 
 
 def stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
-    """``_get_stream_timeout``."""
-    return (
+    """``_get_stream_timeout``, cut to what is left of the caller's budget."""
+    configured: Final = (
         kwargs.get("stream_timeout", None)
         or get_service_tier_timeout(kwargs.get("service_tier"), data, "stream_timeout_by_service_tier")
         or data.get("stream_timeout", None)
@@ -330,11 +330,12 @@ def stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping
         or shaping.request_timeout
         or shaping.default_litellm_params.get("stream_timeout", None)
     )
+    return capped_to_deadline(configured, kwargs, monotonic())
 
 
 def non_stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
-    """``_get_non_stream_timeout``."""
-    return (
+    """``_get_non_stream_timeout``, cut to what is left of the caller's budget."""
+    configured: Final = (
         kwargs.get("timeout", None)
         or kwargs.get("request_timeout", None)
         or get_service_tier_timeout(kwargs.get("service_tier"), data, "timeout_by_service_tier")
@@ -344,6 +345,7 @@ def non_stream_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Map
         or shaping.timeout
         or shaping.default_litellm_params.get("timeout", None)
     )
+    return capped_to_deadline(configured, kwargs, monotonic())
 
 
 def call_timeout(shaping: Shaping, kwargs: Mapping[str, object], data: Mapping[str, object]) -> object:
@@ -577,9 +579,6 @@ def _set_timeouts(
         kwargs["timeout"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
             call_timeout(shaping, kwargs, deployment_params)
         )
-    kwargs["timeout"] = (  # rebind-ok: the attempt's timeout, cut to what is left of the caller's budget
-        capped_to_deadline(kwargs.get("timeout"), kwargs, monotonic())
-    )
 
 
 def stamp_deployment_num_retries(error: BaseException, deployment: Mapping[str, object]) -> None:

@@ -24,11 +24,25 @@ def test_request_timeout_counts_as_the_callers_budget_too() -> None:
     assert seconds_left(prepared, NOW + 1) == 3.0
 
 
+def test_a_numeric_string_timeout_pins_the_deadline_like_the_entrypoint_reads_it() -> None:
+    prepared = with_request_deadline({"model": "m", "timeout": "4", "client_side_timeout": True}, NOW)
+
+    assert seconds_left(prepared, NOW + 1) == 3.0
+
+
+def test_a_call_that_already_carries_a_deadline_keeps_it() -> None:
+    pinned = with_request_deadline({"model": "m", "timeout": 10, "client_side_timeout": True}, NOW)
+
+    again = with_request_deadline(pinned, NOW + 7)
+
+    assert seconds_left(again, NOW + 7) == 3.0
+
+
 @pytest.mark.parametrize(
     "request_kwargs",
     [
         {"model": "m", "timeout": 10},
-        {"model": "m", "timeout": "10", "client_side_timeout": True},
+        {"model": "m", "timeout": "ten", "client_side_timeout": True},
         {"model": "m", "timeout": True, "client_side_timeout": True},
         {"model": "m", "client_side_timeout": True},
         {"model": "m", "timeout": 10, "client_side_timeout": "yes"},

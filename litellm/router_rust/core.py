@@ -2569,10 +2569,9 @@ class RustCore(
         field: Final = plan.prepare_field or "metadata"
         if request.get(field) is not None and not isinstance(request.get(field), Mapping):
             raise TypeError(f"{field} must be a mapping")
-        prepared: Final = (
-            dict(request)
-            if prepared_already
-            else with_request_deadline(self._endpoints.prepare(plan, request, model), monotonic())  # pyright: ignore[reportArgumentType]  # the name as given, which the metadata keeps
+        prepared: Final = with_request_deadline(
+            request if prepared_already else self._endpoints.prepare(plan, request, model),  # pyright: ignore[reportArgumentType]  # the name as given, which the metadata keeps
+            monotonic(),
         )
         if not prepared_already:
             # `async_function_with_fallbacks`: a selection the caller sent is not one the router made,

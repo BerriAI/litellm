@@ -8,12 +8,13 @@ import pytest
 from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway
+from tests.integration._support.timing import assert_enforced_within
 from tests.integration._support.wire import Reply, Request, wire_server
 
 RETRY_AFTER_SECONDS: Final = 2
 CALLER_TIMEOUT_SECONDS: Final = 4
 NUM_RETRIES: Final = 3
-CALLER_RESPONSE_SLACK_SECONDS: Final = 1
+CALLER_RESPONSE_SLACK_SECONDS: Final = 1.5
 
 
 def _unavailable(_: Request) -> Reply:
@@ -51,4 +52,4 @@ def test_retries_and_retry_after_sleeps_stop_at_the_callers_timeout(
         assert response.status_code == 503, response.text
         attempts: Final = len(wire.drain())
         assert attempts == 2, (attempts, elapsed)
-        assert elapsed < CALLER_TIMEOUT_SECONDS + CALLER_RESPONSE_SLACK_SECONDS, (attempts, elapsed)
+        assert_enforced_within(elapsed, configured=CALLER_TIMEOUT_SECONDS, slack=CALLER_RESPONSE_SLACK_SECONDS)

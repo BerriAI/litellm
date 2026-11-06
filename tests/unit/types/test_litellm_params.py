@@ -274,6 +274,7 @@ INTERNAL_STATE_NAMES: Final = (
     "_litellm_strip_stream_usage",
     "_litellm_stream_usage_injected",
     "client_side_timeout",
+    "request_deadline",
     "model_file_id_mapping",
     "acompletion",
     "aembedding",
