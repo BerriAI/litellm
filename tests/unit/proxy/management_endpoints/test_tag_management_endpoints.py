@@ -261,11 +261,12 @@ async def test_update_tag_changes_spend_and_invalidates_counter_only_when_provid
         _tag_cache_doubles(),
         patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
     ):
-        await update_tag(
+        response: Final = await update_tag(
             tag=TagUpdateRequest.model_validate({"name": "reset-tag", **spend_fields}),
             user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
+    assert response["message"] == "Tag reset-tag updated successfully"
     update_row.assert_awaited_once_with(
         where={"tag_name": "reset-tag"},
         data={
