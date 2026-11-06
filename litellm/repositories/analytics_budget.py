@@ -40,6 +40,9 @@ SELECT
     set_config('lock_timeout', LEAST(NULLIF(
         EXTRACT(epoch FROM current_setting('lock_timeout')::interval)*1000,0),100,$2::int)::text,true),
     set_config('work_mem', LEAST(pg_size_bytes(current_setting('work_mem')),1048576)::text || 'B',true),
+    CASE WHEN current_setting('hash_mem_multiplier',true) IS NOT NULL
+         THEN set_config('hash_mem_multiplier','1',true) END,
+    set_config('jit','off',true),
     set_config('max_parallel_workers_per_gather','0',true),
     CASE WHEN $1::boolean THEN pg_try_advisory_xact_lock(1876539401,2)
          WHEN pg_try_advisory_xact_lock(1876539401,0) THEN true
