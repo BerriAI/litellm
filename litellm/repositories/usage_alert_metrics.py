@@ -338,7 +338,7 @@ class UsageAlertMetricsRepository:
         if not models:
             return ()
         if len(models) > _BATCH_SIZE or not 0 <= (end - start).days < 30:
-            raise ValueError("Deprecation usage accepts at most 500 models and 30 consecutive dates")
+            raise ValueError("Deprecation usage accepts at most 10 models and 30 consecutive dates")
         return _DEPRECATION_USAGE.validate_python(
             await self._database.query_raw(_DEPRECATION_USAGE_QUERY, start.isoformat(), end.isoformat(), models)
         )
@@ -352,6 +352,9 @@ class UsageAlertMetricsRepository:
         cursor: str | None = None,
         entity_ids: tuple[str, ...] | None = None,
     ) -> DailyMetricsPage:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         if entity_ids is not None and len(entity_ids) > _BATCH_SIZE:
             raise ValueError("Read at most 10 exact entities")
         if entity_ids == ():
@@ -368,8 +371,8 @@ class UsageAlertMetricsRepository:
             + "WITH entities AS MATERIALIZED (SELECT unnest($3::text[]) AS entity_id)"
             + query[query.index("\nSELECT entities") :]
         )
-        raw: Final = _ROWS.validate_python(
-            await self._database.query_raw(
+        async with db_span("daily_activity_query", sql_relation(query)):
+            result: Final = await self._database.query_raw(
                 exact_query if entity_ids is not None else query,
                 *(
                     arguments[:2]
@@ -378,7 +381,7 @@ class UsageAlertMetricsRepository:
                     else arguments
                 ),
             )
-        )
+        raw: Final = _ROWS.validate_python(result)
         return DailyMetricsPage(
             tuple(_reporting_id(scope, row) for row in raw),
             raw[-1].entity_id if raw else cursor,
@@ -396,7 +399,7 @@ class UsageAlertMetricsRepository:
         cursor: str | None = None  # rebind-ok: keyset pagination retains only the current page
         while True:
             async with db_span("daily_activity_query", sql_relation(query)):
-                rows = _ROWS.validate_python(  # rebind-ok: only the current bounded page is retained
+                rows: tuple[DailyAlertMetrics, ...] = _ROWS.validate_python(
                     await self._database.query_raw(query, start, target.isoformat(), cursor, _BATCH_SIZE)
                 )
             if not rows:

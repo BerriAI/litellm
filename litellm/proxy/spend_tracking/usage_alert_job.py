@@ -243,7 +243,7 @@ class UsageAlertJob:
             if cursor.phase in exhausted:
                 cursor = UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10)
                 continue
-            phase = cursor.phase  # rebind-ok: current round-robin phase
+            phase: int = cursor.phase
             cursor, advanced, finished = await self._evaluation_page(cursor, target)
             phase_progress = phase_progress or advanced
             if finished:
