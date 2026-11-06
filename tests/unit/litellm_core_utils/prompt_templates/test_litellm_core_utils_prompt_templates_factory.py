@@ -1076,15 +1076,27 @@ _HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-i
 
 
 async def _converse_messages(
-    messages: list[dict[str, object]], model: str, base_model: str | None, use_async: bool
+    messages: list[dict[str, object]],
+    model: str,
+    base_model: str | None,
+    use_async: bool,
+    assistant_continue_message: str | None = None,
 ) -> list[dict[str, object]]:
     return (
         await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages, model=model, llm_provider="bedrock", base_model=base_model
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
         )
         if use_async
         else _bedrock_converse_messages_pt(
-            messages=messages, model=model, llm_provider="bedrock", base_model=base_model
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
         )
     )
 
@@ -1136,6 +1148,8 @@ async def test_bedrock_converse_drops_signed_thinking_for_a_known_non_claude_tar
     ("model", "base_model"),
     [
         ("us.anthropic.claude-sonnet-4-6", None),
+        ("ca.anthropic.claude-haiku-5-5", None),
+        ("converse/in.anthropic.claude-sonnet-5", None),
         ("claude-sonnet-4-6", None),
         (_HIDDEN_MODEL_ARN, None),
         (_HIDDEN_MODEL_ARN, "anthropic.claude-sonnet-4-6"),
@@ -1185,7 +1199,24 @@ async def test_bedrock_converse_keeps_the_tool_call_when_dropping_signed_thinkin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
-async def test_bedrock_converse_leaves_no_empty_turn_when_signed_thinking_was_all_it_held(use_async: bool):
+@pytest.mark.parametrize(
+    ("assistant_continue_message", "expected"),
+    [
+        (None, [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]),
+        (
+            "Please continue.",
+            [
+                {"role": "user", "content": [{"text": "hi"}]},
+                {"role": "assistant", "content": [{"text": "Please continue."}]},
+                {"role": "user", "content": [{"text": "again"}]},
+            ],
+        ),
+    ],
+    ids=["merged_into_one_user_turn", "split_by_the_continue_message"],
+)
+async def test_bedrock_converse_drops_a_turn_that_held_only_signed_thinking(
+    use_async: bool, assistant_continue_message: str | None, expected: list[dict[str, object]]
+):
     messages: Final = [
         {"role": "user", "content": "hi"},
         {
@@ -1196,10 +1227,11 @@ async def test_bedrock_converse_leaves_no_empty_turn_when_signed_thinking_was_al
         {"role": "user", "content": "again"},
     ]
 
-    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+    result: Final = await _converse_messages(
+        messages, "converse/us.openai.gpt-6-luna", None, use_async, assistant_continue_message
+    )
 
-    assert all(m["content"] for m in result)
-    assert "private plan" not in str(result)
+    assert result == expected
 
 
 @pytest.mark.parametrize(

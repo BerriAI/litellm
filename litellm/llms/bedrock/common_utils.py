@@ -1514,7 +1514,9 @@ def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None)
 
 
 def _is_claude(model: str) -> bool:
-    return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+    base_model: Final = get_bedrock_base_model(model)
+    after_unlisted_region: Final = base_model.partition(".")[2]
+    return base_model.startswith(("anthropic", "claude")) or after_unlisted_region.startswith("anthropic.")
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
