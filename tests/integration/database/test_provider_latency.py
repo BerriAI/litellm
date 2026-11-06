@@ -10,6 +10,51 @@ from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_provider_pair_pages_skip_oversized_names_and_continue(db: ManagementDatabase) -> None:
+    prefix = f"provider-width-{uuid4()}"
+    day = date(2038, 1, 12)
+    provider = prefix + "-valid"
+    wide_provider = "\U0001f600" * 256
+    wide_model = "\U0001f600" * 1024
+    pairs = (
+        ("a" * 257, "first"),
+        (provider, "a" * 1025),
+        (provider, "valid-model"),
+        (provider, wide_model),
+        (wide_provider, wide_model),
+        ("\U0001f600" * 257, "last"),
+        ("\U0001f600" * 8192, "last-large"),
+        (provider, "\U0001f600" * 8192),
+    )
+    repository = ProviderLatencyRepository(db.prisma.writer_db)
+    try:
+        await db.prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,custom_llm_provider,model,api_requests,timed_requests,updated_at)
+            SELECT $1||n,$1,$2,$1,provider,model,1,1,CURRENT_TIMESTAMP
+            FROM unnest($3::text[],$4::text[]) WITH ORDINALITY AS items(provider,model,n) RETURNING id""",
+            prefix,
+            day.isoformat(),
+            tuple(pair[0] for pair in pairs),
+            tuple(pair[1] for pair in pairs),
+        )
+        expected = tuple(IssueModelPair(provider=p, model=m) for p, m in pairs[2:5])
+        first = await repository.candidate_pairs(day, limit=1)
+        second = await repository.candidate_pairs(day, first[0], limit=1)
+        third = await repository.candidate_pairs(day, second[0], limit=1)
+        assert len(first) == len(second) == len(third) == 1
+        assert frozenset((*first, *second, *third)) == frozenset(expected)
+        assert await repository.candidate_pairs(day, third[0], limit=1) == ()
+        assert frozenset(await repository.provider_pairs(provider, day)) == frozenset(expected[:2])
+        assert await repository.provider_pairs(wide_provider, day) == expected[2:]
+        assert await repository.provider_pairs("a" * 257, day) == ()
+    finally:
+        await db.prisma.writer_db.query_raw(
+            'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id LIKE $1 RETURNING id', prefix + "%"
+        )
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_provider_latency_requires_established_within_model_regressions(db: ManagementDatabase) -> None:
     prefix = f"provider-latency-{uuid4()}"
     day = date(2031, 1, 12)
