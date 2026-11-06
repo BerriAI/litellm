@@ -64,6 +64,9 @@ import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import type { ParseKeys } from "i18next";
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
@@ -198,13 +201,13 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
     items: [
-      { key: "home", page: "home", label: "Home", icon: <House {...ICON} /> },
-      { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
+      { key: "home", page: "home", label: "shell.nav.items.home", icon: <House {...ICON} /> },
+      { key: "api-keys", page: "api-keys", label: "shell.nav.items.virtualKeys", icon: <KeyRound {...ICON} /> },
       {
         key: "llm-playground",
         page: "llm-playground",
         route: "playground",
-        label: "Playground",
+        label: "shell.nav.items.playground",
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
       },
@@ -212,67 +215,77 @@ const menuGroups: MenuGroup[] = [
         key: "models",
         page: "models",
         route: "models-and-endpoints",
-        label: "Models + Endpoints",
+        label: "shell.nav.items.modelsAndEndpoints",
         icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
         key: "agentic",
         page: "agentic",
-        label: "Agentic",
+        label: "shell.nav.items.agentic",
         icon: <Bot {...ICON} />,
         children: [
           {
             key: "agents",
             page: "agents",
-            label: "Agents",
+            label: "shell.nav.items.agents",
             icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
           {
             key: "workflows",
             page: "workflows",
-            label: "Workflow Runs",
+            label: "shell.nav.items.workflowRuns",
             icon: <Workflow {...ICON} />,
             roles: rolesWithCapability("viewWorkflowRuns"),
           },
           {
             key: "memory",
             page: "memory",
-            label: "Memory",
+            label: "shell.nav.items.memory",
             icon: <Database {...ICON} />,
             roles: rolesWithCapability("viewMemory"),
           },
         ],
       },
-      { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
+      { key: "mcp-servers", page: "mcp-servers", label: "shell.nav.items.mcpServers", icon: <Server {...ICON} /> },
       {
         key: "skills",
         page: "skills",
-        label: "Skills",
+        label: "shell.nav.items.skills",
         icon: <Blocks {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles, formatUserRole("org_admin")],
       },
-      { key: "guardrails", page: "guardrails", label: "Guardrails", icon: <Shield {...ICON} /> },
+      { key: "guardrails", page: "guardrails", label: "shell.nav.items.guardrails", icon: <Shield {...ICON} /> },
       {
         key: "policies",
         page: "policies",
-        label: "Policies",
+        label: "shell.nav.items.policies",
         icon: <ScrollText {...ICON} />,
         roles: rolesWithCapability("viewPolicies"),
       },
       {
         key: "tools",
         page: "tools",
-        label: "Tools",
+        label: "shell.nav.items.tools",
         icon: <Wrench {...ICON} />,
         children: [
-          { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
-          { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
+          {
+            key: "search-tools",
+            page: "search-tools",
+            label: "shell.nav.items.searchTools",
+            icon: <Search {...ICON} />,
+          },
+          {
+            key: "vector-stores",
+            page: "vector-stores",
+            label: "shell.nav.items.vectorStores",
+            icon: <Database {...ICON} />,
+          },
           {
             key: "tool-policies",
             page: "tool-policies",
-            label: "Tool Policies",
+            label: "shell.nav.items.toolPolicies",
             icon: <ShieldCheck {...ICON} />,
             roles: rolesWithCapability("viewToolPolicies"),
           },
@@ -289,12 +302,12 @@ const menuGroups: MenuGroup[] = [
         route: "usage",
         icon: <BarChart3 {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Usage",
+        label: "shell.nav.items.usage",
       },
       {
         key: "alerts",
         page: "alerts",
-        label: "Alerts",
+        label: "shell.nav.items.alerts",
         icon: <Bell {...ICON} />,
         roles: rolesWithCapability("viewGlobalSpend"),
       },
@@ -305,7 +318,7 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
         label: (
           <span className="flex items-center gap-2">
-            Model Leaderboard <BetaBadge />
+            <Trans i18nKey="shell.nav.items.modelLeaderboard" /> <BetaBadge />
           </span>
         ),
       },
@@ -314,15 +327,15 @@ const menuGroups: MenuGroup[] = [
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Cost Optimization",
+        label: "shell.nav.items.costOptimization",
       },
-      { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
+      { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
       {
         key: "lens",
         page: "lens",
         label: (
           <span className="flex items-center gap-2">
-            Lens <BetaBadge />
+            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
           </span>
         ),
         icon: <Aperture {...ICON} />,
@@ -330,7 +343,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
-        label: "Guardrails Monitor",
+        label: "shell.nav.items.guardrailsMonitor",
         icon: <HeartPulse {...ICON} />,
         roles: rolesWithCapability("viewGuardrailUsage"),
       },
@@ -339,79 +352,102 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "ACCESS CONTROL",
     items: [
-      { key: "teams", page: "teams", label: "Teams", icon: <Users {...ICON} /> },
+      { key: "teams", page: "teams", label: "shell.nav.items.teams", icon: <Users {...ICON} /> },
       {
         key: "projects",
         page: "projects",
         label: (
           <span className="flex items-center gap-2">
-            Projects <BetaBadge />
+            <Trans i18nKey="shell.nav.items.projects" /> <BetaBadge />
           </span>
         ),
         icon: <Folder {...ICON} />,
         roles: [...projectReaderRoles],
       },
-      { key: "users", page: "users", label: "Internal Users", icon: <User {...ICON} />, roles: all_admin_roles },
+      {
+        key: "users",
+        page: "users",
+        label: "shell.nav.items.internalUsers",
+        icon: <User {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "organizations",
         page: "organizations",
-        label: "Organizations",
+        label: "shell.nav.items.organizations",
         icon: <Building2 {...ICON} />,
         roles: all_admin_roles,
       },
       {
         key: "access-groups",
         page: "access-groups",
-        label: "Access Groups",
+        label: "shell.nav.items.accessGroups",
         icon: <Boxes {...ICON} />,
         roles: all_admin_roles,
       },
-      { key: "budgets", page: "budgets", label: "Budgets", icon: <Wallet {...ICON} />, roles: all_admin_roles },
+      {
+        key: "budgets",
+        page: "budgets",
+        label: "shell.nav.items.budgets",
+        icon: <Wallet {...ICON} />,
+        roles: all_admin_roles,
+      },
     ],
   },
   {
     groupLabel: "DEVELOPER TOOLS",
     items: [
-      { key: "api_ref", page: "api_ref", route: "api-reference", label: "API Reference", icon: <Code2 {...ICON} /> },
-      { key: "model-hub-table", page: "model-hub-table", label: "AI Hub", icon: <LayoutGrid {...ICON} /> },
+      {
+        key: "api_ref",
+        page: "api_ref",
+        route: "api-reference",
+        label: "shell.nav.items.apiReference",
+        icon: <Code2 {...ICON} />,
+      },
+      {
+        key: "model-hub-table",
+        page: "model-hub-table",
+        label: "shell.nav.items.aiHub",
+        icon: <LayoutGrid {...ICON} />,
+      },
       {
         key: "learning-resources",
         page: "learning-resources",
-        label: "Learning Resources",
+        label: "shell.nav.items.learningResources",
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
       {
         key: "caching",
         page: "caching",
-        label: "Response Cache",
+        label: "shell.nav.items.responseCache",
         icon: <Database {...ICON} />,
         roles: all_admin_roles,
       },
       {
         key: "experimental",
         page: "experimental",
-        label: "Experimental",
+        label: "shell.nav.items.experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
           {
             key: "prompts",
             page: "prompts",
-            label: "Prompts",
+            label: "shell.nav.items.prompts",
             icon: <FileText {...ICON} />,
             roles: rolesWithCapability("viewPrompts"),
           },
           {
             key: "transform-request",
             page: "transform-request",
-            label: "API Playground",
+            label: "shell.nav.items.apiPlayground",
             icon: <Terminal {...ICON} />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
           {
             key: "tag-management",
             page: "tag-management",
-            label: "Tag Management",
+            label: "shell.nav.items.tagManagement",
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
@@ -426,43 +462,49 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: "Settings",
+        label: "shell.nav.items.settings",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
           {
             key: "router-settings",
             page: "router-settings",
-            label: "Router Settings",
+            label: "shell.nav.items.routerSettings",
             icon: <Route {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "logging-and-alerts",
             page: "logging-and-alerts",
-            label: "Logging & Alerts",
+            label: "shell.nav.items.loggingAndAlerts",
             icon: <Bell {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: "Admin Settings",
+            label: "shell.nav.items.adminSettings",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "cost-tracking",
             page: "cost-tracking",
-            label: "Cost Tracking",
+            label: "shell.nav.items.costTracking",
             icon: <BarChart3 {...ICON} />,
             roles: all_admin_roles,
           },
-          { key: "ui-theme", page: "ui-theme", label: "UI Theme", icon: <Palette {...ICON} />, roles: all_admin_roles },
+          {
+            key: "ui-theme",
+            page: "ui-theme",
+            label: "shell.nav.items.uiTheme",
+            icon: <Palette {...ICON} />,
+            roles: all_admin_roles,
+          },
           {
             key: "telemetry",
             page: "telemetry",
-            label: "Telemetry",
+            label: "shell.nav.items.telemetry",
             icon: <Activity {...ICON} />,
             roles: proxyAdminTierRoles,
           },
@@ -498,15 +540,27 @@ const findMenuItemKey = (route: string): string => {
   return HOME_ROUTE;
 };
 
-const SECTION_DISPLAY: Record<string, string> = {
-  "AI GATEWAY": "AI Gateway",
-  OBSERVABILITY: "Observability",
-  "ACCESS CONTROL": "Access Control",
-  "DEVELOPER TOOLS": "Developer Tools",
-  SETTINGS: "Settings",
+const GROUP_LABELS: Record<string, ParseKeys> = {
+  "AI GATEWAY": "shell.nav.groups.aiGateway",
+  OBSERVABILITY: "shell.nav.groups.observability",
+  "ACCESS CONTROL": "shell.nav.groups.accessControl",
+  "DEVELOPER TOOLS": "shell.nav.groups.developerTools",
+  SETTINGS: "shell.nav.groups.settings",
 };
 
-export const sectionText = (groupLabel: string): string => SECTION_DISPLAY[groupLabel] ?? groupLabel;
+export const groupText = (groupLabel: string): string =>
+  Object.hasOwn(GROUP_LABELS, groupLabel) ? i18n.t(GROUP_LABELS[groupLabel]) : groupLabel;
+
+const SECTION_DISPLAY: Record<string, ParseKeys> = {
+  "AI GATEWAY": "shell.nav.sections.aiGateway",
+  OBSERVABILITY: "shell.nav.sections.observability",
+  "ACCESS CONTROL": "shell.nav.sections.accessControl",
+  "DEVELOPER TOOLS": "shell.nav.sections.developerTools",
+  SETTINGS: "shell.nav.sections.settings",
+};
+
+export const sectionText = (groupLabel: string): string =>
+  Object.hasOwn(SECTION_DISPLAY, groupLabel) ? i18n.t(SECTION_DISPLAY[groupLabel]) : groupLabel;
 
 const prettify = (key: string): string =>
   key
@@ -514,7 +568,8 @@ const prettify = (key: string): string =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
-export const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
+export const labelText = (item: MenuItem): string =>
+  typeof item.label === "string" ? i18n.t(item.label as ParseKeys) : prettify(item.key);
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
@@ -542,8 +597,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowVectorStoresForTeamAdmins,
 }) => {
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const { t } = useTranslation();
   const term = useTerminology();
-  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(item.label) : item.label);
+  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(labelText(item)) : item.label);
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
@@ -686,7 +742,12 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   return (
     <Sidebar collapsed={collapsed}>
-      <SidebarBrand accessToken={accessToken} collapsed={collapsed} onToggleCollapsed={onToggleCollapsed} />
+      <SidebarBrand
+        accessToken={accessToken}
+        homeLabel={t("shell.nav.homeLink")}
+        collapsed={collapsed}
+        onToggleCollapsed={onToggleCollapsed}
+      />
 
       <div className="space-y-1 px-3 pt-3 pb-1">
         <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
@@ -697,7 +758,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
               {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{term(group.groupLabel)}</SidebarGroupLabel>
+              <SidebarGroupLabel>{term(groupText(group.groupLabel))}</SidebarGroupLabel>
               <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
             </SidebarGroup>
           ))}

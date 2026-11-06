@@ -24,7 +24,9 @@ from litellm.proxy._types import (
     CommonProxyErrors,
 )
 from litellm.proxy.db.health_check_latest import latest_by_model_name
+from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
 from litellm.proxy.utils import get_custom_url
+from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.router_strategy.complexity_router.fuse_presets import FusePresetCatalog, get_fuse_presets
 from litellm.types.agents import AgentCard
@@ -71,6 +73,9 @@ class _EndpointEntry(TypedDict):
 
 
 class _PluginRow(Protocol):
+    @property
+    def created_by(self) -> str | None: ...
+
     @property
     def id(self) -> str: ...
 
@@ -366,7 +371,7 @@ async def get_mcp_servers():
     "/public/skill_hub",
     tags=["public", "Claude Code Marketplace"],
 )
-async def public_skill_hub():
+async def public_skill_hub(uploads: PluginUploadRepositoryDep):
     """Return enabled (public) Claude Code skills, or none when the marketplace requires a key."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
         MANIFEST_FIELDS,
@@ -385,13 +390,22 @@ async def public_skill_hub():
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     try:
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
+        counts: Final[Mapping[str, int]] = (
+            await uploads.download_counts(tuple(plugin.id for plugin in plugins)) if uploads else {}
+        )
         items: Final = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}
             manifest = json.loads(raw) if isinstance(raw, str) else raw
+            review = read_plugin_review(MANIFEST_FIELDS.validate_python(manifest))
             items.append(
                 PluginListItem(
                     id=plugin.id,
+                    download_count=counts.get(plugin.id),
+                    created_by=plugin.created_by,
+                    approved_by=review.approved_by if review else None,
+                    published_by=read_plugin_publisher(MANIFEST_FIELDS.validate_python(manifest)),
+                    security_scan_passed=review.security_scan_passed if review else False,
                     name=plugin.name,
                     enabled=plugin.enabled,
                     created_at=str(plugin.created_at) if plugin.created_at else None,

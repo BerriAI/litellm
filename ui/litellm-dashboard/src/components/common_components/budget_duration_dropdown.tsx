@@ -6,12 +6,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export const NEVER_RESETS_BUDGET_DURATION = "none";
 
-const DURATION_LABELS: Record<string, string> = {
-  [NEVER_RESETS_BUDGET_DURATION]: "Never resets",
-  "1h": "hourly",
-  "24h": "daily",
-  "7d": "weekly",
-  "30d": "monthly",
+const DURATION_LABELS: Record<string, ParseKeys> = {
+  [NEVER_RESETS_BUDGET_DURATION]: "budgetDurationDropdown.neverResets",
+  "1h": "budgetDurationDropdown.periods.hourly",
+  "24h": "budgetDurationDropdown.periods.daily",
+  "7d": "budgetDurationDropdown.periods.weekly",
+  "30d": "budgetDurationDropdown.periods.monthly",
 };
 
 interface BudgetDurationDropdownProps {
@@ -34,8 +34,11 @@ const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
   showNeverResets = false,
 }) => {
   const { t } = useTranslation();
+  const durationItems = Object.fromEntries(
+    Object.entries(DURATION_LABELS).map(([duration, key]) => [duration, t(key)]),
+  );
   return (
-    <Select items={DURATION_LABELS} value={value || null} onValueChange={onChange}>
+    <Select items={durationItems} value={value || null} onValueChange={onChange}>
       <SelectTrigger id={id} className={`w-full ${className}`} style={style}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

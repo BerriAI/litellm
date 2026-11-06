@@ -498,7 +498,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     }
     // Validate selection based on endpoint type
     if (targetComparisons.some((comparison) => !hasValidSelection(comparison, selectedEndpoint))) {
-      toast.fromError(endpointConfig.validationMessage);
+      toast.fromError(t(endpointConfig.validationMessage));
       return;
     }
 
@@ -825,10 +825,10 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 ) : isAnyComparisonLoading ? (
                   <span className="flex items-center gap-2 text-sm text-muted-foreground">
                     <span className="h-2 w-2 rounded-full bg-info animate-pulse" aria-hidden />
-                    {endpointConfig.loadingMessage}
+                    {t(endpointConfig.loadingMessage)}
                   </span>
                 ) : (
-                  <span className="text-sm text-muted-foreground">{endpointConfig.inputPlaceholder}</span>
+                  <span className="text-sm text-muted-foreground">{t(endpointConfig.inputPlaceholder)}</span>
                 )}
               </div>
               {uploadedFile && (

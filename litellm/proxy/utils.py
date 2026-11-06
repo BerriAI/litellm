@@ -313,6 +313,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.errors import UniqueViolationError
     from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig, LiteLLM_VerificationTokenInclude
 
@@ -5545,6 +5546,39 @@ class _StaleReadEngine:
         return self.wrapper is current and self.generation == current.engine_generation
 
 
+_LOCK_KEYS_BY_TOKEN_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE token = ANY($1::text[]) '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_KEYS_BY_TEAM_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE team_id = ANY($1::text[]) '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_TEAMS_BY_ID_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE team_id = ANY($1::text[]) '
+    'ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+
+
+def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
+    match metadata:
+        case {"target": ["user_id"]}:
+            return f"User with id {user_id} already exists"
+        case {"target": ["sso_user_id"]}:
+            return "User with this sso_user_id already exists"
+        case _:
+            return "User conflicts with an existing unique value"
+
+
+def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, *, allow_existing: bool) -> NoReturn:
+    if allow_existing:
+        raise error
+    raise HTTPException(
+        status_code=409,
+        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+    ) from error
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6432,12 +6466,15 @@ class PrismaClient:
         max_tries=3,  # maximum number of retries
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
+        giveup=lambda exc: isinstance(exc, HTTPException) and exc.status_code == 409,
     )
     @log_db_metrics
     async def insert_data(
         self,
         data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
+        *,
+        allow_existing_user: bool = True,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6473,14 +6510,20 @@ class PrismaClient:
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
+                from prisma.errors import UniqueViolationError
+
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    new_user_row: Final = await UserRepository(self).upsert_user(
+                        db_data, allow_existing=allow_existing_user
+                    )
                     if new_user_row is None:
                         raise HTTPException(
                             status_code=403,
                             detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
                         )
+                except UniqueViolationError as e:
+                    _raise_user_unique_conflict(e, db_data["user_id"], allow_existing=allow_existing_user)
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
@@ -6845,24 +6888,26 @@ class PrismaClient:
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
-                filter_query: dict[str, object] = {}
-                if user_id is not None:
-                    filter_query = {"AND": [{"token": {"in": hashed_tokens}}, {"user_id": user_id}]}
-                else:
-                    filter_query = {"token": {"in": hashed_tokens}}
-
-                deleted_tokens: Final[int] = await VerificationTokenRepository(self).table.delete_many(
-                    where=filter_query
-                )
+                async with self.tx() as transaction:
+                    _ = await transaction.query_raw(_LOCK_KEYS_BY_TOKEN_SQL, hashed_tokens)
+                    deleted_tokens: Final[int] = await transaction.litellm_verificationtoken.delete_many(
+                        where={"token": {"in": hashed_tokens}, "user_id": user_id}
+                        if user_id is not None
+                        else {"token": {"in": hashed_tokens}}
+                    )
                 verbose_proxy_logger.debug("deleted_tokens: %s", deleted_tokens)
                 return {"deleted_keys": deleted_tokens}
             elif table_name == "team" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                await TeamRepository(self).table.delete_many(where={"team_id": {"in": team_id_list}})
+                async with self.tx() as transaction:
+                    _ = await transaction.query_raw(_LOCK_TEAMS_BY_ID_SQL, team_id_list)
+                    _ = await transaction.litellm_teamtable.delete_many(where={"team_id": {"in": team_id_list}})
                 return {"deleted_teams": team_id_list}
             elif table_name == "key" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                await VerificationTokenRepository(self).table.delete_many(where={"team_id": {"in": team_id_list}})
+                async with self.tx() as transaction:
+                    _ = await transaction.query_raw(_LOCK_KEYS_BY_TEAM_SQL, team_id_list)
+                    _ = await transaction.litellm_verificationtoken.delete_many(where={"team_id": {"in": team_id_list}})
         except Exception as e:
             import traceback
 

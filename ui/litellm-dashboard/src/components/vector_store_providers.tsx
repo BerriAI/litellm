@@ -55,6 +55,7 @@ export interface VectorStoreFieldConfig {
   label: ParseKeys;
   tooltip: ParseKeys;
   placeholder?: string;
+  placeholderKey?: ParseKeys;
   required: boolean;
   type?: "text" | "password" | "select";
   options?: { value: string; label: string }[];
@@ -189,7 +190,7 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       name: "api_key",
       label: "vectorStores.providerFields.labels.sidecarApiKey",
       tooltip: "vectorStores.providerFields.tooltips.mongodb.apiKey",
-      placeholder: "Enter sidecar API key",
+      placeholderKey: "vectorStores.providerFields.placeholders.sidecarApiKey",
       required: true,
       type: "password",
     },
