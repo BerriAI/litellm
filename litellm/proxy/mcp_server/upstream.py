@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.mcp_client.output_schema_memory import OutputSchemaMemory
 from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
 from litellm.proxy.mcp_server.legacy_callbacks import ElicitationCallback, SamplingCallback
 from litellm.proxy.mcp_server.mcp_debug import record_auth_resolution
@@ -209,6 +210,7 @@ async def prepare_upstream_client(
     elicitation_callback: ElicitationCallback | None = None,
     upstream_transport: httpx2.AsyncBaseTransport | None = None,
     for_tool_listing: bool = False,
+    output_schema_memory: OutputSchemaMemory | None = None,
 ) -> MCPClient:
     transport: Final[MCPTransportType] = server.transport or MCPTransport.sse
     server_spec: Final = None if transport == MCPTransport.stdio else to_server_spec_fail_closed(server)
@@ -232,6 +234,8 @@ async def prepare_upstream_client(
             transport_type=transport,
             protocol_version=protocol_version,
             skip_tool_output_validation=server.skip_tool_output_validation,
+            output_schema_memory=output_schema_memory,
+            output_schema_cache_ttl_seconds=server.output_schema_cache_ttl_seconds,
             auth_type=server.auth_type,
             auth_value=auth_value,
             timeout=timeout,
@@ -267,6 +271,8 @@ async def prepare_upstream_client(
                 transport_type=transport,
                 protocol_version=protocol_version,
                 skip_tool_output_validation=server.skip_tool_output_validation,
+                output_schema_memory=output_schema_memory,
+                output_schema_cache_ttl_seconds=server.output_schema_cache_ttl_seconds,
                 upstream_transport=upstream_transport,
                 auth_type=server.auth_type,
                 timeout=timeout,
@@ -311,6 +317,8 @@ async def prepare_upstream_client(
             transport_type=transport,
             protocol_version=protocol_version,
             skip_tool_output_validation=server.skip_tool_output_validation,
+            output_schema_memory=output_schema_memory,
+            output_schema_cache_ttl_seconds=server.output_schema_cache_ttl_seconds,
             upstream_transport=upstream_transport,
             auth_type=server.auth_type,
             auth_value=auth_value,
