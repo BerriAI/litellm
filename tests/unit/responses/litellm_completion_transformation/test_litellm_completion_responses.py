@@ -1697,7 +1697,7 @@ def _chat_response_with_tool_search_result(result_content: Mapping[str, object])
 
 def _stateless_tool_search_input(
     call_id: str | None, output_status: Literal["completed", "incomplete"]
-) -> list[dict[str, object]]:
+) -> Sequence[Mapping[str, object]]:
     return [
         {"type": "message", "role": "user", "content": "What is the weather in Paris right now?"},
         {
@@ -2356,6 +2356,14 @@ class TestToolTransformation:
                 ["toolu_01Weather"],
                 id="claude_search_off_anthropic",
             ),
+            pytest.param(
+                "anthropic/claude-3-7-sonnet-20250219",
+                "anthropic",
+                "srvtoolu_01Search",
+                "completed",
+                ["toolu_01Weather"],
+                id="claude_search_sent_to_a_claude_without_tool_search",
+            ),
         ],
     )
     def test_stateless_tool_search_items_are_replayed_only_for_a_completed_claude_search_on_anthropic(
@@ -2364,11 +2372,13 @@ class TestToolTransformation:
         custom_llm_provider: str,
         call_id: str | None,
         output_status: Literal["completed", "incomplete"],
-        replayed_call_ids: list[str],
+        replayed_call_ids: Sequence[str],
     ) -> None:
         request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=model,
-            input=cast(ResponseInputParam, _stateless_tool_search_input(call_id, output_status)),
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input(call_id, output_status))
+            ),
             responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
             custom_llm_provider=custom_llm_provider,
         )

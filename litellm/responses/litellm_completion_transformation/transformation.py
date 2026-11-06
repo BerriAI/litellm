@@ -142,6 +142,7 @@ from .tool_search import (
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    route_runs_tool_search,
     tool_search_call_ids,
     without_tool_search_calls,
     without_tool_search_uses,
@@ -701,16 +702,11 @@ class LiteLLMCompletionResponsesConfig:
     def _without_unsupported_tool_search(
         tools: ResponseTools, model: str, custom_llm_provider: str | None
     ) -> ResponseTools:
-        from litellm.utils import supports_tool_search
-
         if not has_server_tool_search(tools):
             return tools
         if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()):
             return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
-        route_runs_tool_search: Final = supports_tool_search(
-            model=model, custom_llm_provider=custom_llm_provider
-        ) and provider_builds_anthropic_request(model, custom_llm_provider)
-        if route_runs_tool_search:
+        if route_runs_tool_search(model, custom_llm_provider):
             return tools
         verbose_logger.warning(
             "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
@@ -873,8 +869,7 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
-            replay_tool_search=holds_tool_search_items(input)
-            and provider_builds_anthropic_request(model, custom_llm_provider),
+            replay_tool_search=holds_tool_search_items(input) and route_runs_tool_search(model, custom_llm_provider),
         )
 
         litellm_completion_request: dict = {
@@ -990,10 +985,10 @@ class LiteLLMCompletionResponsesConfig:
         return messages
 
     @staticmethod
-    def _without_tool_search_uses_off_anthropic(
+    def _without_tool_search_uses_the_route_cannot_run(
         messages: Sequence[SessionMessage], route: CompletionRoute
     ) -> tuple[SessionMessage, ...]:
-        if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
+        if route_runs_tool_search(route.model, route.custom_llm_provider):
             return tuple(messages)
         search_call_ids: Final = tool_search_call_ids(messages)
         return tuple(
@@ -1032,7 +1027,7 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_route_cannot_run(
                 stored_messages, CompletionRoute.model_validate(litellm_completion_request)
             )
             if any(holds_tool_search_use(message) for message in stored_messages)
