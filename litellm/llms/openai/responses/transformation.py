@@ -21,10 +21,12 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    cache_control_as_prompt_cache_breakpoint,
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_for_wire,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
@@ -669,7 +671,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
         validated_input: Final = self._validate_input_param(
-            self._drop_bridge_minted_reasoning_items(input), drops_set_created_by=drops_params(litellm_params)
+            self._drop_bridge_minted_reasoning_items(input), drop_params=drops_params(litellm_params)
         )
         reads_breakpoints: Final = self._reads_prompt_cache_breakpoints(
             model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
@@ -951,7 +953,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
     def _validate_input_param(
-        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+        self, input: str | ResponseInputParam, *, drop_params: bool = False
     ) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
@@ -965,9 +967,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
                     validated_input.append(
-                        replayable_responses_item(
-                            item.model_dump(exclude_none=True), drops_set_created_by=drops_set_created_by
-                        )
+                        replayable_responses_item(item.model_dump(exclude_none=True), drops_set_created_by=drop_params)
                     )
                 elif isinstance(item, dict):
                     validated_input.append(
@@ -975,7 +975,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                             self._handle_reasoning_item(cast(dict[str, object], item))
                             if item.get("type") == "reasoning"
                             else item,
-                            drops_set_created_by=drops_set_created_by,
+                            drops_set_created_by=drop_params,
                         )
                     )
                 else:

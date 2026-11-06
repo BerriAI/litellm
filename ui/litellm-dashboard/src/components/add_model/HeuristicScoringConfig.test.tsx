@@ -5,6 +5,7 @@ import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { ClassifierFallback, ClassifierType, ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import i18n from "@/i18n/i18n";
 import { DIMENSION_LABELS } from "./heuristic_scoring_knobs";
 import { LOADED_SCORER_DEFAULTS_QUERY, SHIPPED_SCORER_DEFAULTS } from "../../../tests/mocks/complexityScorerDefaults";
 
@@ -212,7 +213,7 @@ describe("ClassificationMethodConfig scorer gating", () => {
     await render(BASE);
 
     for (const key of Object.keys(SHIPPED_SCORER_DEFAULTS.dimension_weights)) {
-      expect(screen.getByLabelText(DIMENSION_LABELS[key])).toBeInTheDocument();
+      expect(screen.getByLabelText(i18n.t(DIMENSION_LABELS[key]))).toBeInTheDocument();
     }
   });
 });

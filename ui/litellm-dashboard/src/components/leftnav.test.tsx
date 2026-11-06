@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
@@ -619,6 +620,14 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("links internal users to Skills with read-only=%s", (isViewOnly) => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, isViewOnly });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: "Skills Hub" })).toHaveAttribute("href", "/ui/skills");
+  });
+
   it.each([
     { allowlist: ["teams"], visible: false },
     { allowlist: ["teams", "projects"], visible: true },
@@ -647,6 +656,13 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
 
+  it.each([false, true])("keeps workspace and Chat discovery available with collapsed=%s", async (collapsed) => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar collapsed={collapsed} />);
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    expect(await screen.findByRole("menuitem", { name: /^Chat / })).toBeVisible();
+  });
+
   it("marks the nav item for the current route active", () => {
     navState.pathname = "/ui/logs";
     renderWithProviders(<Sidebar {...defaultProps} />);
@@ -658,6 +674,12 @@ describe("Sidebar (leftnav)", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
+  });
+
+  it("does not highlight Home when the Aria workspace is active", () => {
+    navState.pathname = "/ui/aria";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
@@ -679,6 +701,7 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Playground", "/ui/playground");
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
+    expectHref("Alerts", "/ui/alerts");
     expectHref("API Reference", "/ui/api-reference");
   });
 

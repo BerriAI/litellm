@@ -224,7 +224,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
+    thinking_on_by_default: ReadOnly[bool | None]
     supports_tool_search: bool | None
+    supports_per_turn_control: ReadOnly[bool | None]
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
     supports_continuation: ReadOnly[bool | None]
@@ -431,6 +433,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     regional_processing_uplift_multiplier_us: (
         float | None
     )  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    fedramp_uplift_multiplier: ReadOnly[
+        float | None
+    ]  # OpenAI FedRAMP endpoint (gov.api.openai.com) uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     regional_endpoint_uplift_multiplier: ReadOnly[
         float | None
     ]  # Vertex AI non-global (regional) endpoint uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
@@ -699,6 +704,8 @@ class CallTypes(str, Enum):
     adelete_responses = "adelete_responses"
     cancel_responses = "cancel_responses"
     acancel_responses = "acancel_responses"
+    compact_responses = "compact_responses"
+    acompact_responses = "acompact_responses"
     alist_input_items = "alist_input_items"
     llm_passthrough_route = "llm_passthrough_route"
     allm_passthrough_route = "allm_passthrough_route"
@@ -802,6 +809,8 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "compact_responses",
+    "acompact_responses",
     "acreate_skill",
     "acreate_realtime_client_secret",
     "arealtime_calls",
@@ -2981,6 +2990,8 @@ _DETECTED_LANGUAGES: Final = TypeAdapter(tuple[TranscriptionDetectedLanguage, ..
 
 
 class TranscriptionResponse(OpenAIObject):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     text: str | None = None
     usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
     languages: Sequence[TranscriptionDetectedLanguage] | None = None
@@ -4258,6 +4269,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    fedramp_uplift_multiplier: float | None = None
     regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
@@ -4291,6 +4303,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_regex_lookaround",
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
+        "supports_per_turn_control",
         "supports_pdf_input",
         "supports_continuation",
         "reasoning_modes",
@@ -4646,6 +4659,7 @@ class LlmProviders(str, Enum):
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
+    EMPIRIOLABS = "empiriolabs"
     EU_JEV = "eu_jev"
     MISTRAL = "mistral"
     MILVUS = "milvus"
@@ -5260,11 +5274,13 @@ class DataResidency(Enum):
     Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
     us.api.openai.com -> US). Used to apply the regional-processing
     cost uplift (see ``regional_processing_uplift_multiplier_<region>``
-    on ModelInfo).
+    on ModelInfo). gov.api.openai.com maps to FEDRAMP, which applies
+    ``fedramp_uplift_multiplier`` instead.
     """
 
     US = "us"
     EU = "eu"
+    FEDRAMP = "fedramp"
 
 
 LLMResponseTypes = (

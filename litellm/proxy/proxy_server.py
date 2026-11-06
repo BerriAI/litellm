@@ -6,6 +6,7 @@ import importlib
 import inspect
 import io
 import itertools
+import logging
 import os
 import random
 import re
@@ -205,7 +206,6 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.rust_bridge.catalog import Target
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
@@ -332,10 +332,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_batch import (
-    active_post_call_redis_batch,
-    drain_post_call_redis_batches,
-)
+from litellm.caching.redis_batch import drain_post_call_redis_batches
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -423,9 +420,13 @@ from litellm.messages.dispatch import messages_target
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import CeilingResolver, resolve_agent_access_group_ceiling
+from litellm.proxy.alerting_endpoints.model_deprecation_alerts import (
+    router as model_deprecation_alerts_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
@@ -615,9 +616,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     get_management_object_ttl,
     model_access_group_cache_key,
-    model_access_group_spend_counter_key,
     project_cache_key,
-    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
@@ -877,13 +876,28 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
-from litellm.proxy.spend_tracking.usage_capture import UsageBatchWriter, UsageCaptureRuntime
-from litellm.proxy.spend_tracking.usage_meter import UsageCaptureSettings
 from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import (
+    SPEND_COUNTERS_TARGET,
+    SpendCounterStore,
+    end_user_counter,
+    is_unavailable,
+    key_counter,
+    key_window_counter,
+    model_access_group_counter,
+    org_counter,
+    project_counter,
+    tag_counter,
+    team_counter,
+    team_member_counter,
+    team_window_counter,
+    user_counter,
+)
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
 
@@ -970,7 +984,6 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
-    SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
     active_spend_counter_batch,
     forget_spend_counter,
@@ -1392,7 +1405,6 @@ async def _flush_spend_around_logging_drain_on_shutdown(
     finally:
         await worker.stop(discard_pending=True, timeout=GracefulShutdownManager.remaining(2.0, clock=clock))
     await drain_tasks(GracefulShutdownManager.remaining(5.0, clock=clock))
-    await usage_capture.stop(GracefulShutdownManager.remaining(clock=clock))
     await flush_spend()
 
 
@@ -2931,9 +2943,19 @@ def configured_max_request_size_mb() -> int | float | None:
     return MAX_REQUEST_SIZE_MB_SETTING.validate_python(general_settings.get("max_request_size_mb"))
 
 
+_ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProxyType(
+    {
+        ("POST", "/claude-code/plugins/upload"): 11,
+        ("POST", "/skill-hub/skills/upload"): 11,
+        ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+    }
+)
+
+
 app.add_middleware(
     RequestBodyDecompressionMiddleware,
     get_max_request_size_mb=lambda: configured_max_request_size_mb() if premium_user is True else None,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -3136,6 +3158,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 saml_sso_cache: Final = DualCache(default_in_memory_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS)
 model_max_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
@@ -3303,39 +3326,9 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 spend_event_producer: SpendEventProducer | None = None
 
-usage_capture: Final = UsageCaptureRuntime()
-
-
-def _configure_usage_capture() -> None:
-    settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
-    capture_settings: Final = settings.get("accounting_capture")
-    if settings.get("accounting_sync_ack") and capture_settings is None:
-        raise ValueError("accounting_sync_ack requires accounting_capture")
-    if capture_settings is None:
-        if usage_capture.meter is not None:
-            raise ValueError("Disabling accounting_capture requires a worker restart")
-        return
-    if (
-        prisma_client is None
-        or CollectorSettings().enabled
-        or os.getenv("SPEND_LOGS_URL")
-        or litellm.apply_search_free_tier
-    ):
-        raise ValueError(
-            "Usage capture requires local Prisma writes and disabled collector, remote writer and search free tier"
-        )
-    from litellm.proxy.db.accounting_ledger import AccountingLedger
-
-    ledger: Final = AccountingLedger.for_client(prisma_client)
-    writer: Final = UsageBatchWriter(ledger.insert_usage_batch, ledger.load_usage_batch)
-    usage_capture.start(
-        writer.write, UsageCaptureSettings.model_validate(capture_settings), load=ledger.load_usage_batch
-    )
-
 
 def cost_tracking():
     global prisma_client, spend_event_producer
-    _configure_usage_capture()
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
@@ -3476,28 +3469,18 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     in-memory copy is guarded by a read-compare-write with no await in between,
     so it is atomic within the worker.
     """
-    cached: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    needs_update = True
-    if cached is not None:
-        try:
-            needs_update = float(cached) < db_spend
-        except (TypeError, ValueError):
-            needs_update = True
-    if needs_update:
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
-    if spend_counter_cache.redis_cache is not None:
-        forget_spend_counter(counter_key)
-        try:
-            repaired: Final = await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to repair stale spend counter %s in Redis",
-                counter_key,
-                exc_info=True,
-            )
-            return
-        if repaired is not None:
-            record_spend_counter_value(counter_key, repaired)
+    forget_spend_counter(counter_key)
+    try:
+        repaired: Final = await spend_counter_store.set_max(counter_key, db_spend)
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to repair stale spend counter %s in Redis",
+            counter_key,
+            exc_info=True,
+        )
+        return
+    if repaired is not None:
+        record_spend_counter_value(counter_key, repaired)
 
 
 async def reseed_spend_counter_from_db(counter_key: str) -> bool:
@@ -3594,19 +3577,8 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
         if batched is not None:
             return batched
 
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            redis_val: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-            return (float(redis_val) if redis_val is not None else None), True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
-                counter_key,
-                e,
-            )
-
-    in_memory_val: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    return (float(in_memory_val) if in_memory_val is not None else None), False
+    value, authoritative = await spend_counter_store.read(counter_key)
+    return (float(value) if value is not None else None), authoritative
 
 
 async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
@@ -3621,7 +3593,7 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
     # Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend: Final = await SpendCounterReseed.coalesced(
         prisma_client=prisma_client,
-        spend_counter_cache=spend_counter_cache,
+        spend_counter_store=spend_counter_store,
         counter_key=counter_key,
     )
     if db_spend is not None:
@@ -3643,11 +3615,12 @@ async def increment_spend_counters(
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
+    windows_from_ledger: bool = False,
 ):
     """
     Atomically increment spend counters for budget enforcement.
 
-    Uses spend_counter_cache (DualCache with Redis backend when available)
+    Uses spend_counter_store (Redis when available, this worker's memory behind it)
     so counters are shared across all pods. Budget check functions read
     from these counters via get_current_spend() (Redis-first).
 
@@ -3655,7 +3628,7 @@ async def increment_spend_counters(
     updated before the next request's auth check runs.
     """
     with spend_counter_batch_scope(
-        spend_counter_cache.redis_cache,
+        spend_counter_store,
         counter_keys=post_call_counter_keys(
             token=token,
             team_id=team_id,
@@ -3679,6 +3652,7 @@ async def increment_spend_counters(
             request_started_at=request_started_at,
             model_access_groups=model_access_groups,
             project_id=project_id,
+            windows_from_ledger=windows_from_ledger,
         )
 
 
@@ -3706,6 +3680,50 @@ def _finish_pending_read(absent_key: str, pending_read: str, remember_absent: bo
         user_api_key_cache.budget_windows_absent_cache.set_cache(key=absent_key, value=True)
         return
     user_api_key_cache.budget_windows_absent_cache.delete_cache(absent_key)
+
+
+async def accounting_window_keys(token: str | None, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+    scopes: Final = tuple(
+        (entity_type, entity_id, cache_key)
+        for entity_type, entity_id, cache_key in (
+            (Litellm_EntityType.KEY, token, token),
+            (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
+        )
+        if entity_id is not None and cache_key is not None
+    )
+    snapshots: Final = tuple(
+        [
+            await _accounting_scope_windows(entity_type, entity_id, cache_key)
+            for entity_type, entity_id, cache_key in scopes
+        ]
+    )
+    from itertools import chain
+
+    return tuple(chain.from_iterable(snapshots))
+
+
+async def _accounting_scope_windows(
+    entity_type: Litellm_EntityType, entity_id: str, cache_key: str
+) -> tuple[Mapping[str, object], ...]:
+    from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
+
+    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    limits: Final = (
+        await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
+    )
+    if not isinstance(limits, list):
+        return ()
+    windows: Final = TypeAdapter(tuple[object, ...]).validate_python(limits)
+    return tuple(
+        {
+            "entity_type": entity_type.value,
+            "entity_id": entity_id,
+            "window_duration": fixed[0],
+            "window_start": fixed[1].isoformat(),
+        }
+        for window in windows
+        if (fixed := fixed_budget_window(window)) is not None
+    )
 
 
 async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str) -> object:
@@ -3749,6 +3767,7 @@ async def _increment_spend_counters_batched(
     request_started_at: datetime | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
+    windows_from_ledger: bool = False,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3776,7 +3795,11 @@ async def _increment_spend_counters_batched(
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
-        window_counter: Final = f"spend:{entity_type.value}:{entity_id}:window:{duration}"
+        window_counter: Final = (
+            key_window_counter(entity_id, str(duration))
+            if entity_type is Litellm_EntityType.KEY
+            else team_window_counter(entity_id, str(duration))
+        )
         window_start: Final = get_budget_window_start(window)
         pending_window: Final = (
             await _prepare_window_spend_counter_increment(
@@ -3790,15 +3813,16 @@ async def _increment_spend_counters_batched(
             if window_counter not in reserved_counter_keys
             else None
         )
-        await _enqueue_window_spend_row_update(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            reset_at=window_reset_at,
-            window_duration=duration,
-            window_start=window_start,
-            increment=cost,
-            request_started_at=request_started_at,
-        )
+        if not windows_from_ledger:
+            await _enqueue_window_spend_row_update(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                reset_at=window_reset_at,
+                window_duration=duration,
+                window_start=window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
         return pending_window
 
     async def _window_increments(
@@ -3838,7 +3862,7 @@ async def _increment_spend_counters_batched(
         hashed_token: Final = (
             hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
         )
-        key_counter_key: Final = f"spend:key:{hashed_token}"
+        key_counter_key: Final = key_counter(hashed_token)
         key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
             if key_counter_key in reserved_counter_keys
@@ -3854,7 +3878,7 @@ async def _increment_spend_counters_batched(
         return key_pending + await _cached_window_increments(Litellm_EntityType.KEY, hashed_token, hashed_token)
 
     async def _team_scope(scope_team_id: str) -> tuple[_SpendScopeItem, ...]:
-        team_counter_key: Final = f"spend:team:{scope_team_id}"
+        team_counter_key: Final = team_counter(scope_team_id)
         team_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
             if team_counter_key in reserved_counter_keys
@@ -3874,7 +3898,7 @@ async def _increment_spend_counters_batched(
     async def _team_member_scope(
         scope_user_id: str, scope_team_id: str
     ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
+        team_member_counter_key: Final = team_member_counter(scope_user_id, scope_team_id)
         if team_member_counter_key in reserved_counter_keys:
             return ()
         return (
@@ -3886,7 +3910,7 @@ async def _increment_spend_counters_batched(
         )
 
     async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        user_counter_key: Final = f"spend:user:{scope_user_id}"
+        user_counter_key: Final = user_counter(scope_user_id)
         if user_counter_key in reserved_counter_keys:
             return ()
         return (
@@ -4049,7 +4073,7 @@ async def _prepare_end_user_and_tag_spend_increments(
             coro
             for coro in (
                 _prepare_unreserved_spend_counter_increment(
-                    counter_key=f"spend:end_user:{end_user_id}",
+                    counter_key=end_user_counter(end_user_id),
                     source_cache_key=end_user_cache_key(end_user_id),
                     increment=response_cost,
                     reserved_counter_keys=reserved_counter_keys,
@@ -4058,7 +4082,7 @@ async def _prepare_end_user_and_tag_spend_increments(
                 else None,
                 *(
                     _prepare_unreserved_spend_counter_increment(
-                        counter_key=f"spend:tag:{tag_name}",
+                        counter_key=tag_counter(tag_name),
                         source_cache_key=tag_cache_key(tag_name),
                         increment=response_cost,
                         reserved_counter_keys=reserved_counter_keys,
@@ -4094,7 +4118,7 @@ async def _prepare_model_access_group_spend_increments(
     results: Final = await asyncio.gather(
         *(
             _prepare_unreserved_spend_counter_increment(
-                counter_key=model_access_group_spend_counter_key(group),
+                counter_key=model_access_group_counter(group),
                 source_cache_key=model_access_group_cache_key(group),
                 increment=response_cost,
                 reserved_counter_keys=reserved_counter_keys,
@@ -4115,7 +4139,7 @@ async def _prepare_org_spend_increment(
         return ()
 
     pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=f"spend:org:{org_id}",
+        counter_key=org_counter(org_id),
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
@@ -4132,7 +4156,7 @@ async def _prepare_project_spend_increment(
         return ()
 
     pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=project_spend_counter_key(project_id),
+        counter_key=project_counter(project_id),
         source_cache_key=project_cache_key(project_id),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
@@ -4167,7 +4191,7 @@ async def _prepare_spend_counter_increment(
     pipelined Redis call.
 
     On first access per pod:
-    1. Check spend_counter_cache (in-memory -> Redis via DualCache)
+    1. Check spend_counter_store (Redis, then this worker's memory)
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
@@ -4272,7 +4296,7 @@ async def ensure_spend_counter_initialized(
         # Shares the per-counter lock with get_current_spend.
         db_spend: Final = await SpendCounterReseed.coalesced(
             prisma_client=prisma_client,
-            spend_counter_cache=spend_counter_cache,
+            spend_counter_store=spend_counter_store,
             counter_key=counter_key,
             require_cache_warm=True,
         )
@@ -4313,7 +4337,7 @@ async def ensure_window_spend_counter_initialized(
 
     window_spend: Final = await SpendCounterReseed.coalesced_window(
         prisma_client=prisma_client,
-        spend_counter_cache=spend_counter_cache,
+        spend_counter_store=spend_counter_store,
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -4339,29 +4363,13 @@ async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
         batched_value, _ = batched
         if batched_value is None:
             return False
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=batched_value)
+        spend_counter_store.set_local(counter_key, batched_value)
         return True
 
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            current_value: Final[object] = await spend_counter_cache.redis_cache.async_get_cache(
-                key=counter_key,
-            )
-            if current_value is None:
-                return False
-            spend_counter_cache.in_memory_cache.set_cache(
-                key=counter_key,
-                value=current_value,
-            )
-            return True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "Unable to read Redis spend counter %s before initialization, falling back to in-memory: %s",
-                counter_key,
-                e,
-            )
-
-    return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
+    current_value, from_redis = await spend_counter_store.read(counter_key)
+    if from_redis and current_value is not None:
+        spend_counter_store.set_local(counter_key, current_value)
+    return current_value is not None
 
 
 async def increment_spend_counter(counter_key: str, increment: float):
@@ -4373,10 +4381,10 @@ async def increment_spend_counter(counter_key: str, increment: float):
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def refresh_spend_counter_ttl(counter_key: str) -> bool:
-    if spend_counter_cache.redis_cache is None:
+    if not spend_counter_store.has_redis:
         return False
     try:
-        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key)
+        return await spend_counter_store.refresh_ttl(counter_key)
     except Exception as e:
         verbose_proxy_logger.debug("spend counter TTL refresh skipped for %s: %s", counter_key, e)
         return False
@@ -4384,25 +4392,17 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def increment_spend_counter_cache(counter_key: str, increment: float) -> float | None:
-    if spend_counter_cache.redis_cache is not None:
+    if spend_counter_store.has_redis:
         try:
-            current_value: Final = await spend_counter_cache.redis_cache.async_increment(
-                key=counter_key,
-                value=increment,
-                refresh_ttl=True,
-            )
+            current_value: Final = await spend_counter_store.increment(counter_key, increment)
         except Exception:
-            await invalidate_spend_counter(counter_key=counter_key)
+            forget_spend_counter(counter_key)
             raise
-        spend_counter_cache.in_memory_cache.set_cache(
-            key=counter_key,
-            value=current_value,
-        )
         record_spend_counter_value(counter_key, float(current_value))
         return current_value
 
     return await SpendCounterReseed.increment_in_memory(
-        spend_counter_cache=spend_counter_cache, counter_key=counter_key, increment=increment
+        spend_counter_store=spend_counter_store, counter_key=counter_key, increment=increment
     )
 
 
@@ -4412,10 +4412,8 @@ _increment_spend_counter_cache: Final = increment_spend_counter_cache
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_spend_counter(counter_key: str) -> None:
     forget_spend_counter(counter_key)
-    spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
-    if spend_counter_cache.redis_cache is not None:
-        with contextlib.suppress(Exception):
-            await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
+    with contextlib.suppress(Exception):
+        await spend_counter_store.delete((counter_key,))
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
@@ -4427,51 +4425,22 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
     try:
         await increment_spend_counters_pipeline(pending=pending)
     except Exception as e:
-        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e):
+        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e) or is_unavailable(e):
             return
         raise
 
 
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
-    """Post-call increments ride the request's post-call pipeline with the other counters. Each counter's
-    new value lands in memory when the pipeline settles; a failed one is invalidated so no reader trusts a
+    """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
+    new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
     counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
-    redis_cache: Final = spend_counter_cache.redis_cache
-    if redis_cache is None or not pending:
-        return False
-    batch: Final = active_post_call_redis_batch(redis_cache)
-    if batch is None:
-        return False
-    ttl: Final = redis_cache.get_ttl()
-    with service_target(SPEND_COUNTERS_TARGET):
-        for item in pending:
-            batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
-    return True
-
-
-def _settle_spend_counter_increment(item: PendingSpendIncrement) -> Callable[[asyncio.Future[float]], Awaitable[None]]:
-    async def settle(future: asyncio.Future[float]) -> None:
-        if not future.cancelled() and future.exception() is None:
-            current_value: Final = float(future.result())
-            spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
-            record_spend_counter_value(item.counter_key, current_value)
-            return
-        if future.cancelled():
-            if spend_counter_cache.in_memory_cache.get_cache(key=item.counter_key) is not None:
-                spend_counter_cache.in_memory_cache.increment_cache(key=item.counter_key, value=item.increment)
-            return
-        verbose_proxy_logger.warning(
-            "Spend counter %s increment did not land in the post-call pipeline; invalidating it", item.counter_key
-        )
-        await invalidate_spend_counter(counter_key=item.counter_key)
-
-    return settle
+    return spend_counter_store.increment_many_post_call(tuple((item.counter_key, item.increment) for item in pending))
 
 
 async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
     failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
-    if spend_counter_cache.redis_cache is None:
+    if not spend_counter_store.has_redis:
         return await run_spend_counter_pipeline(pending=pending)
     try:
         return await run_spend_counter_pipeline(pending=pending)
@@ -4486,26 +4455,21 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     happens to counters whose increment may or may not have landed when the pipeline fails."""
     if not pending:
         return ()
-    redis_cache: Final = spend_counter_cache.redis_cache
-    if redis_cache is None:
+    if not spend_counter_store.has_redis:
         return tuple(
             [
                 await SpendCounterReseed.increment_in_memory(
-                    spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
+                    spend_counter_store=spend_counter_store, counter_key=item.counter_key, increment=item.increment
                 )
                 for item in pending
             ]
         )
-    ttl: Final = redis_cache.get_ttl()
-    increment_list: Final = [
-        RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
-        for item in pending
-    ]
-    results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
-    for item, current_value in zip(pending, results or ()):
-        spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
-        record_spend_counter_value(item.counter_key, float(current_value))
-    return tuple(float(current_value) for current_value in results or ())
+    totals: Final = await spend_counter_store.increment_many(
+        tuple((item.counter_key, item.increment) for item in pending)
+    )
+    for item, current_value in zip(pending, totals, strict=True):
+        record_spend_counter_value(item.counter_key, current_value)
+    return totals
 
 
 _CachedSpendObjectT = TypeVar(
@@ -4528,15 +4492,9 @@ def _add_spend_to_locally_cached_object(
     )
 
 
-async def _add_spend_to_shared_global_proxy_spend(
-    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
-) -> float | None:
-    if cache.redis_cache is None:
-        return None
+async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> float | None:
     try:
-        return await cache.redis_cache.async_increment_if_present(
-            key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost, parent_otel_span=parent_otel_span
-        )
+        return await cache.increment_if_present(GLOBAL_PROXY_SPEND_CACHE_KEY, response_cost)
     except Exception as e:
         verbose_proxy_logger.warning(
             "Spend tracking - failed to add spend to the global proxy spend in Redis. "
@@ -4547,11 +4505,9 @@ async def _add_spend_to_shared_global_proxy_spend(
         return None
 
 
-async def _add_spend_to_global_proxy_spend(
-    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
-) -> None:
+async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
     local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
-    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
     local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
     if not isinstance(local_total, (int, float)):
         return
@@ -4667,7 +4623,7 @@ async def update_cache(
     if litellm.max_budget <= 0:
         return
     with service_target(SPEND_COUNTERS_TARGET):
-        await _add_spend_to_global_proxy_spend(target, response_cost, parent_otel_span)
+        await _add_spend_to_global_proxy_spend(target, response_cost)
 
 
 def run_ollama_serve():
@@ -5390,6 +5346,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         redis_cache,
         default_redis_ttl=litellm.default_redis_ttl,
     )
+    spend_counter_store.attach_redis(connect(redis_cache))
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -7296,6 +7253,11 @@ class ProxyConfig:
                     )
                 )
 
+            if "spend_logs_prompt_storage" in general_settings:
+                _ = ConfigGeneralSettings.model_validate(
+                    MappingProxyType({"spend_logs_prompt_storage": typed_general_settings["spend_logs_prompt_storage"]})
+                )
+
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
@@ -9024,6 +8986,7 @@ class ProxyConfig:
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
             additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+            spend_counters=spend_counter_store,
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()
@@ -13402,6 +13365,13 @@ async def completion(
             _response.choices[0].text = e.message
             return _response
     except Exception as e:
+        if is_provider_overload(e):
+            raise await base_llm_response_processor.handle_llm_api_exception(
+                e=e,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+                version=version,
+            )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
@@ -13913,7 +13883,7 @@ async def audio_transcriptions(
             api_base=api_base,
             version=version,
             response_cost=response_cost,
-            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            model_region=user_api_key_dict.allowed_model_region,
             call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
@@ -17003,9 +16973,6 @@ async def _apply_search_filter_to_models(
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
         if search_lower in team_public_model_name.lower():
             return True
-        # Also match the underlying LiteLLM model name (e.g.
-        # "openrouter/deepseek/deepseek-chat"), so users can find
-        # deployments by typing the provider or the upstream model id.
         litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
         litellm_model: Final = litellm_params.get("model")
         return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
@@ -18636,7 +18603,11 @@ async def model_deprecations(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
-    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
+    return collect_model_deprecations(
+        llm_router=llm_router,
+        warn_within_days=warn_within_days,
+        successor_log_level=logging.DEBUG,
+    )
 
 
 def get_model_group_info(
@@ -22403,6 +22374,7 @@ app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
+app.include_router(model_deprecation_alerts_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
@@ -22420,6 +22392,7 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=configured_max_request_size_mb,
     is_request_size_limit_enabled=lambda: premium_user is True,
+    route_max_request_size_mb=_ROUTE_MAX_REQUEST_SIZE_MB,
 )
 app.add_middleware(
     AdmissionControlMiddleware,
