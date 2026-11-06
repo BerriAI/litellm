@@ -897,7 +897,7 @@ class BaseLLMHTTPHandler:
 
         fake_stream = (
             fake_stream
-            or optional_params.pop("fake_stream", False)
+            or optional_params.pop("fake_stream", False) is True
             or provider_config.should_fake_stream(model=model, custom_llm_provider=custom_llm_provider, stream=stream)
         )
 

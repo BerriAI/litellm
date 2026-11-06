@@ -16746,8 +16746,14 @@ def _enrich_model_info_with_litellm_data(
             if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
     }
+    native_output_info: Final = {
+        **merged_model_info,
+        "supports_bedrock_native_structured_output_by_default": litellm_model_info.get(
+            "supports_bedrock_native_structured_output_by_default"
+        ),
+    }
     model["model_info"] = (
-        {**merged_model_info, "supports_native_structured_output": native_structured_output_support(merged_model_info)}
+        {**merged_model_info, "supports_native_structured_output": native_structured_output_support(native_output_info)}
         if "supports_native_structured_output" in merged_model_info
         and "supports_native_structured_output" not in stamped_model_info
         else merged_model_info

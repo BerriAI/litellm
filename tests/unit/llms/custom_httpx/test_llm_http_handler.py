@@ -4890,16 +4890,18 @@ async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_reque
     ]
 
 
-class _StreamRouteConfig(_TransformRecordingConfig):
+class _PlainStreamRouteConfig(_TransformRecordingConfig):
     def __init__(self):
         super().__init__(transform_async=False)
 
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return f"{api_base}/{'stream' if stream else 'answer'}"
+
+
+class _StreamRouteConfig(_PlainStreamRouteConfig):
     @property
     def has_custom_stream_wrapper(self) -> bool:
         return True
-
-    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
-        return f"{api_base}/{'stream' if stream else 'answer'}"
 
 
 def _answers_only_the_non_streaming_route(request: httpx.Request) -> httpx.Response:
@@ -4908,7 +4910,12 @@ def _answers_only_the_non_streaming_route(request: httpx.Request) -> httpx.Respo
     return httpx.Response(403, json={"message": "not authorized to stream"})
 
 
-def _fake_streamed_completion(acompletion: bool, client: HTTPHandler | AsyncHTTPHandler):
+def _fake_streamed_completion(
+    acompletion: bool,
+    client: HTTPHandler | AsyncHTTPHandler,
+    fake_stream: object = True,
+    provider_config: BaseConfig | None = None,
+):
     return BaseLLMHTTPHandler().completion(
         model="stub-model",
         messages=[{"role": "user", "content": "hi"}],
@@ -4917,13 +4924,13 @@ def _fake_streamed_completion(acompletion: bool, client: HTTPHandler | AsyncHTTP
         model_response=ModelResponse(),
         encoding=None,
         logging_obj=_streaming_logging_obj(),
-        optional_params={"fake_stream": True},
+        optional_params={"fake_stream": fake_stream},
         timeout=10.0,
         litellm_params={},
         acompletion=acompletion,
         stream=True,
         client=client,
-        provider_config=_StreamRouteConfig(),
+        provider_config=provider_config or _StreamRouteConfig(),
     )
 
 
@@ -4937,6 +4944,33 @@ async def test_a_fake_streamed_completion_is_sent_to_the_non_streaming_route():
     sync_chunks: Final = list(_fake_streamed_completion(acompletion=False, client=sync_client))
     async_chunks: Final = [
         chunk async for chunk in await _fake_streamed_completion(acompletion=True, client=async_client)
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+
+
+def _answers_only_the_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/stream"):
+        return _sse_echoing_transformed_by(request)
+    return httpx.Response(403, json={"message": "only streaming is allowed"})
+
+
+@pytest.mark.parametrize("fake_stream", ["true", 1], ids=["string", "int"])
+async def test_a_fake_stream_value_other_than_true_still_streams_from_the_streaming_route(fake_stream: object):
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_streaming_route)))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_streaming_route))
+
+    sync_chunks: Final = list(
+        _fake_streamed_completion(
+            acompletion=False, client=sync_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    )
+    async_chunks: Final = [
+        chunk
+        async for chunk in await _fake_streamed_completion(
+            acompletion=True, client=async_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
     ]
 
     assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
