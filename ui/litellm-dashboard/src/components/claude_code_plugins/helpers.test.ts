@@ -17,11 +17,16 @@ import {
   buildMarketplaceSettingsSnippet,
 } from "./helpers";
 
-describe("getManagedSkillArchivePath", () => {
+describe.each(["legacy", "neutral"])("getManagedSkillArchivePath %s", (format) => {
   const base = "https://proxy.example.com";
   const digest = "a".repeat(64);
-  const path = `/claude-code/plugins/my-skill/archive/${digest}.zip`;
-  const source = { source: "archive" as const, url: `${base}${path}`, sha256: digest };
+  const path =
+    format === "legacy" ? `/claude-code/plugins/my-skill/archive/${digest}.zip` : "/skill-hub/skills/my-skill/archive";
+  const source = {
+    source: "archive" as const,
+    url: `${base}${path}`,
+    sha256: format === "legacy" ? digest : undefined,
+  };
   const identify = (overrides: Partial<PluginSource> = {}, name = "my-skill") =>
     getManagedSkillArchivePath(name, { ...source, ...overrides }, base);
 
@@ -40,7 +45,7 @@ describe("getManagedSkillArchivePath", () => {
     `${base}${path}?redirect=other`,
     `${base}${path}#fragment`,
     `${base}${path.replace("my-skill", "another-skill")}`,
-    `${base}${path.replace(digest, "b".repeat(64))}`,
+    ...(format === "legacy" ? [`${base}${path.replace(digest, "b".repeat(64))}`] : []),
   ])("rejects a different credential recipient or archive: %s", (url) => {
     expect(identify({ url })).toBeNull();
   });
@@ -48,6 +53,7 @@ describe("getManagedSkillArchivePath", () => {
   it("requires an archive type, safe skill name and full SHA256 digest", () => {
     expect(identify({ source: "url" })).toBeNull();
     expect(identify({}, "../my-skill")).toBeNull();
+    if (format !== "legacy") return;
     expect(identify({ sha256: undefined })).toBeNull();
     expect(identify({ sha256: "short" })).toBeNull();
   });

@@ -1,10 +1,17 @@
 from typing import Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.proxy.auth.user_roles import KeyManagementRoutes, LitellmUserRoles
+from litellm.types.proxy.management_endpoints.user_requests import NewUserRequest
 from litellm.types.utils import LiteLLMPydanticObjectBase
+
+
+class SSONewUserRequest(NewUserRequest):
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str | None = None
 
 
 class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):

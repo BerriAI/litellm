@@ -66,7 +66,7 @@ describe("chat page URL state with ChatShellProvider", () => {
 
     expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
     act(() => {
-      fireEvent.change(screen.getByPlaceholderText("Ask a question, attach a file, or paste something to work on…"), {
+      fireEvent.change(screen.getByPlaceholderText("Ask anything…"), {
         target: { value: "How much did this cost?" },
       });
     });
@@ -77,7 +77,7 @@ describe("chat page URL state with ChatShellProvider", () => {
     await waitFor(() => expect(window.location.search).toMatch(/^\?id=/));
     const conversationId = new URLSearchParams(window.location.search).get("id");
     expect(conversationId).toBeTruthy();
-    expect(await screen.findByRole("heading", { level: 1, name: "How much did this cost?" })).toBeInTheDocument();
+    expect(await screen.findByText("How much did this cost?")).toBeInTheDocument();
     expect(await screen.findByText("The estimated cost is one cent.")).toBeInTheDocument();
     await waitFor(() =>
       expect(localStorage.getItem("litellm_chat_history_v1:url-test-user")).toContain(conversationId),
@@ -86,12 +86,11 @@ describe("chat page URL state with ChatShellProvider", () => {
     act(() => window.history.back());
     await waitFor(() => expect(window.location.search).toBe(""));
 
-    expect(
-      await screen.findByPlaceholderText("Ask a question, attach a file, or paste something to work on…"),
-    ).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("Ask anything…")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "What are we working on?" })).toBeInTheDocument();
     expect(screen.queryByText("The estimated cost is one cent.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "How much did this cost?" })).toBeInTheDocument();
+    act(() => window.history.forward());
+    expect(await screen.findByText("The estimated cost is one cent.")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/chat");
   });
 });
