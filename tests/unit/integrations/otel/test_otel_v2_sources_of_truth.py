@@ -1613,10 +1613,12 @@ def test_request_identity_from_user_api_key_auth_flattens_key_metadata():
     class _Auth:
         metadata = {"team": "a", "customtag": "b", "nested": {"k": "v"}}
 
-    ident = RequestIdentity.from_user_api_key_auth(_Auth())
-    assert ident.metadata["user_api_key_auth_metadata.team"] == "a"
-    assert ident.metadata["user_api_key_auth_metadata.customtag"] == "b"
-    assert ident.metadata["user_api_key_auth_metadata.nested.k"] == "v"
+    ident: Final = RequestIdentity.from_user_api_key_auth(_Auth())
+    assert ident.metadata == {
+        "user_api_key_auth_metadata.team": "a",
+        "user_api_key_auth_metadata.customtag": "b",
+        "user_api_key_auth_metadata.nested.k": "v",
+    }
 
 
 # --- request-metadata translation layer (RequestContext) -------------------- #
