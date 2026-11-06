@@ -74,6 +74,30 @@ class TestChatGPTResponsesAPITransformation:
 
         assert "service_tier" not in request
 
+    def test_chatgpt_sends_system_input_items_as_developer(self) -> None:
+        system_string_item: Final = {"role": "system", "content": "Be brief."}
+        system_blocks_item: Final = {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "Answer in French."}],
+        }
+        user_item: Final = {"role": "user", "content": "Hello"}
+        developer_item: Final = {"role": "developer", "content": "Use metric units."}
+        request: Final = ChatGPTResponsesAPIConfig().transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[system_string_item, user_item, system_blocks_item, developer_item],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {**system_string_item, "role": "developer"},
+            user_item,
+            {**system_blocks_item, "role": "developer"},
+            developer_item,
+        ]
+
     @pytest.mark.parametrize(
         "model_name",
         [
