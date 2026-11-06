@@ -4720,7 +4720,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
-        executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+        if self.claim_sync_success_log():
+            executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _get_completed_success_callbacks(
         self, *, asynchronous: bool

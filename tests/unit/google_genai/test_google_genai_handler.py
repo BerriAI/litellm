@@ -6,6 +6,7 @@ Test to verify the Google GenAI generate_content handler functionality
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Final
@@ -387,6 +388,20 @@ class _SyncSuccessEvents(CustomLogger):
         self.events.append((kwargs["call_type"], kwargs["litellm_call_id"]))
 
 
+class _CacheHitFlags(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cache_hits: list[object] = []
+        self.call_returned: Final = threading.Event()
+
+    def logging_hook(self, kwargs, result, call_type):
+        self.call_returned.wait(timeout=1.0)
+        return kwargs, result
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.cache_hits.append(kwargs.get("cache_hit"))
+
+
 class _SuccessPayloads(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -681,6 +696,35 @@ async def test_generate_content_adapter_runs_sync_callbacks_once_on_async_reques
 
     assert logged.events == [("agenerate_content", _ADAPTER_CALL_ID)]
     assert _litellm_error_messages(_litellm_errors) == []
+
+
+def test_sync_generate_content_adapter_cache_hit_reaches_callbacks_as_a_cache_hit(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    logged = _CacheHitFlags()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    router: Final = _adapter_router()
+    prompts: Final = ("first", "second", "third")
+
+    def call(prompt: str, logged_count: int) -> None:
+        logged.call_returned.clear()
+        router.generate_content(
+            model="grok-group", contents=[{"role": "user", "parts": [{"text": prompt}]}], caching=True
+        )
+        logged.call_returned.set()
+        wait_until(lambda: len(logged.cache_hits) == logged_count, message="the call's success callback ran")
+
+    with respx.mock() as upstream:
+        route = upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=_upstream_reply(stream=False)
+        )
+        for index, prompt in enumerate(prompts):
+            call(prompt, 2 * index + 1)
+            call(prompt, 2 * index + 2)
+
+    assert route.call_count == len(prompts)
+    assert [hit is True for hit in logged.cache_hits] == [False, True] * len(prompts)
 
 
 @pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
