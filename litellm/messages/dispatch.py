@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
 from types import MappingProxyType
@@ -190,6 +191,18 @@ def anthropic_messages_handler(
     )
 
 
+async def _native_amessages(
+    hook: Callable[[NativeCall], Awaitable[MessagesResult]],
+    call: NativeCall,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> MessagesResult:
+    # Python's handler leaves the event loop (run_in_executor) before it builds the provider body, so
+    # tasks scheduled next to the call, such as the proxy's during_call guardrails, edit the request first
+    await asyncio.sleep(0)
+    return await native_call_hook(hook, call, args, kwargs)
+
+
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
@@ -197,7 +210,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
         _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_AMESSAGES,
-        native=native_call_hook,
+        native=_native_amessages,
     )
 
 
