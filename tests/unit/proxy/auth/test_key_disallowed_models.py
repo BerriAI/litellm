@@ -2,6 +2,8 @@ from typing import Final
 
 import pytest
 
+import litellm
+
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_model
 from litellm.proxy.auth.key_disallowed_models import (
@@ -38,6 +40,16 @@ def test_a_disallowed_model_is_refused_however_it_is_named(fields: dict[str, obj
     with pytest.raises(ProxyException) as error:
         ensure_key_may_call_model(requested, token, None)  # pyright: ignore[reportArgumentType]  # parametrized str or list
     assert "is not available for this API key" in _denied_model(error)
+
+
+def test_a_key_alias_that_a_global_alias_redirects_to_a_disallowed_model_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", {"public-name": "gpt-denied"})
+    token: Final = _token(disallowed_models=("gpt-denied",), aliases={"short": "public-name"})
+    with pytest.raises(ProxyException) as error:
+        ensure_key_may_call_model("short", token, None)
+    _denied_model(error)
 
 
 @pytest.mark.parametrize("disallowed", [None, (), ("gpt-other",)])

@@ -145,7 +145,13 @@ def test_a_key_owner_cannot_remove_disallowed_models_but_can_add_them(gateway: G
         allowed: Final = scenario.model()
         disallowed: Final = scenario.model()
         owner: Final = scenario.user(user_role="internal_user")
-        key: Final = scenario.key(user_id=owner, disallowed_models=[disallowed])
+        owner_key: Final = scenario.key(user_id=owner)
+        created: Final = gateway.request(
+            "POST", "/key/generate", {"user_id": owner, "disallowed_models": [disallowed]}, key=owner_key
+        )
+        assert created.status_code == 200, f"{created.status_code} {created.text}"
+        key: Final = string_value(JSON_OBJECT.validate_json(created.content)["key"])
+        scenario.cleanups.callback(scenario.delete_key, key)
         cleared: Final = gateway.request("POST", "/key/update", {"key": key, "disallowed_models": []}, key=key)
         assert cleared.status_code == 403, f"{cleared.status_code} {cleared.text}"
         assert "disallowed_models" in cleared.text, cleared.text
