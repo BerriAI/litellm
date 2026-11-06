@@ -12,9 +12,11 @@ from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.azure.common_utils import EntraRejectionError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
@@ -39,6 +41,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        context_management: JsonValue = None,
     ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -70,6 +73,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                context_management=context_management,
                 drop_params=drops_unsupported_params((litellm_params or {}).get("drop_params")),
             )
 
@@ -80,11 +84,14 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
+            if context_management is not None:
+                await aload_beta_headers_config()
             # Get required headers with Azure authentication
             headers: Final = self.get_required_headers(
                 api_key=api_key,
                 litellm_params=litellm_params,
                 messages=messages,
+                context_management=context_management,
             )
             if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(
@@ -129,6 +136,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         except AnthropicError:
             # Re-raise Anthropic exceptions as-is
             raise
+        except EntraRejectionError as rejection:
+            raise AnthropicError(status_code=rejection.status_code, message=rejection.message) from rejection
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
             verbose_logger.error("HTTP error in CountTokens handler: %s", e)

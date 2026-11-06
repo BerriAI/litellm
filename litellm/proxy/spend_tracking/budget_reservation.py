@@ -432,7 +432,7 @@ async def invalidate_budget_reservation_counters(
 
 
 async def release_or_invalidate_budget_reservation(
-    budget_reservation: dict | None,  # mutable-ok: stamps finalized on the caller's shared reservation dict
+    budget_reservation: dict[str, object] | None,  # mutable-ok: stamps finalized on the caller's reservation
 ) -> None:
     """Reconcile a still-open reservation on a terminal path that settles no cost.
 
@@ -1262,6 +1262,15 @@ def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float
         return float(entry.get("reserved_cost", default_reserved_cost) or 0.0)
     except (TypeError, ValueError):
         return default_reserved_cost
+
+
+def fixed_budget_window(window: object) -> tuple[str, datetime] | None:
+    fields: Final = _coerce_window(window)
+    start: Final = get_budget_window_start(window)
+    duration: Final = fields.get("budget_duration")
+    if not fields.get("reset_at") or not isinstance(duration, str) or start is None:
+        return None
+    return duration, start
 
 
 def get_budget_window_start(window: object) -> datetime | None:
