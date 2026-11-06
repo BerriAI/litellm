@@ -8,6 +8,7 @@ from litellm.router_api import ChangeSet
 
 # v2 implementation
 from litellm.types.guardrails import Guardrail, GuardrailItem, GuardrailItemSpec
+from litellm.types.router import GuardrailLiteLLMParams
 
 all_guardrails: list[GuardrailItem] = []
 
@@ -50,11 +51,13 @@ def init_guardrails_v2(
     _populate_router_guardrail_list(guardrail_list=guardrail_list, router=llm_router)
 
 
-def _numeric_weight(guardrail_name: str | None, weight: object) -> float | None:
-    if weight is None or isinstance(weight, (int, float)):
-        return weight
+def _with_weight(params: GuardrailLiteLLMParams, guardrail_name: str | None, weight: object) -> GuardrailLiteLLMParams:
+    if weight is None:
+        return params
+    if isinstance(weight, (int, float)):
+        return {**params, "weight": weight}
     verbose_proxy_logger.warning("Ignoring non-numeric weight %r on guardrail %s", weight, guardrail_name)
-    return None
+    return params
 
 
 def _populate_router_guardrail_list(guardrail_list: list[Guardrail], router: Router | None = None) -> None:
@@ -90,13 +93,16 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail], router: Rou
 
         router_guardrail: GuardrailTypedDict = GuardrailTypedDict(
             guardrail_name=guardrail_name or "",
-            litellm_params={
-                "guardrail": params_dict.get("guardrail", ""),
-                "mode": params_dict.get("mode", ""),
-                "api_key": params_dict.get("api_key"),
-                "api_base": params_dict.get("api_base"),
-                "weight": _numeric_weight(guardrail_name, params_dict.get("weight")),
-            },
+            litellm_params=_with_weight(
+                GuardrailLiteLLMParams(
+                    guardrail=params_dict.get("guardrail", ""),
+                    mode=params_dict.get("mode", ""),
+                    api_key=params_dict.get("api_key"),
+                    api_base=params_dict.get("api_base"),
+                ),
+                guardrail_name,
+                params_dict.get("weight"),
+            ),
             callback=callback,
             id=guardrail_id,
         )
