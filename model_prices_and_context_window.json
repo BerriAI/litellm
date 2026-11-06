@@ -31989,7 +31989,8 @@
         "rpm": 1000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+        "successor_model": "gemini/gemini-nano-banana-2.1",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/images/generations",
@@ -32544,7 +32545,7 @@
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 3e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -32590,6 +32591,7 @@
         "input_cost_per_token_flex": 2.5e-07,
         "output_cost_per_token_batches": 1.5e-06,
         "output_cost_per_token_flex": 1.5e-06,
+        "successor_model": "gemini/gemini-3.6-flash",
         "supports_audio_input": true,
         "supports_computer_use": true
     },
@@ -32606,7 +32608,7 @@
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -32653,7 +32655,8 @@
         "output_cost_per_token_batches": 4.5e-06,
         "input_cost_per_token_flex": 7.5e-07,
         "output_cost_per_token_flex": 4.5e-06,
-        "cache_read_input_token_cost_flex": 8e-08
+        "cache_read_input_token_cost_flex": 8e-08,
+        "successor_model": "gemini/gemini-3.6-flash"
     },
     "gemini/gemini-3.6-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -32733,7 +32736,7 @@
         "output_cost_per_token_batches": 1.875e-06,
         "output_cost_per_token_flex": 1.875e-06,
         "rpm": 2000,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions",
@@ -32776,7 +32779,8 @@
         },
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "web_search_billing_unit": "per_query",
-        "google_maps_grounding_cost_per_query": 0.014
+        "google_maps_grounding_cost_per_query": 0.014,
+        "successor_model": "gemini/gemini-3.8-flash"
     },
     "gemini/gemini-3.8-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -33638,7 +33642,7 @@
         "max_output_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 0,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "supported_modalities": [
             "text"
         ],
@@ -33653,7 +33657,8 @@
         "supports_system_messages": false,
         "supports_vision": false,
         "supports_web_search": false,
-        "output_cost_per_image": 0.08
+        "output_cost_per_image": 0.08,
+        "successor_model": "gemini/lyria-3.5"
     },
     "gemini/veo-3.1-fast-generate-preview": {
         "deprecation_date": "2026-10-22",
