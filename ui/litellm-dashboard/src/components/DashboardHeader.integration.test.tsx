@@ -85,7 +85,7 @@ describe("dashboard header controls", () => {
     const { user } = renderHeader();
     await user.click(screen.getByRole("button", { name: /Notifications/ }));
     const tools = await screen.findByRole("dialog", { name: "Notifications" });
-    await user.click(within(tools).getByRole("button", { name: /What’s new/ }));
+    await user.click(within(tools).getByRole("button", { name: /What's new/ }));
     expect(await within(tools).findByRole("link", { name: /Gateway update/ })).toHaveAttribute(
       "href",
       "https://example.com/update",
