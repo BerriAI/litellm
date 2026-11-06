@@ -48,13 +48,18 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
 from .realtime_guardrails import (
+    RealtimeGuardedItem,
+    RealtimeGuardrailBlock,
+    RealtimeGuardrailRewrite,
+    RealtimeGuardrailVerdict,
     RealtimeToolOutput,
     RealtimeUserText,
     guardrail_violation_error_event,
     guardrail_voice_prompt_events,
     realtime_guarded_item,
-    realtime_guardrail_block,
+    realtime_guardrail_verdict,
     realtime_runner_guardrail,
+    rewritten_item,
 )
 
 if TYPE_CHECKING:
@@ -1662,10 +1667,39 @@ class RealTimeStreaming:
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
     ) -> bool:
         """
-        Run registered guardrails on realtime text (transcript, user message, tool output).
-
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
+        """
+        verdict: Final = await self.apply_realtime_guardrails(
+            (transcript,), item_id, pre_block_backend_message, event_hooks
+        )
+        return isinstance(verdict, RealtimeGuardrailBlock)
+
+    async def _screen_client_item(self, guarded_item: RealtimeGuardedItem | None) -> RealtimeGuardrailVerdict:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        match guarded_item:
+            case RealtimeToolOutput(texts=texts, sanitized_event=sanitized_event):
+                return await self.apply_realtime_guardrails(
+                    texts, pre_block_backend_message=sanitized_event, event_hooks=[GuardrailEventHooks.pre_call]
+                )
+            case RealtimeUserText(texts=texts):
+                return await self.apply_realtime_guardrails(texts, event_hooks=[GuardrailEventHooks.pre_call])
+            case None:
+                return None
+
+    async def apply_realtime_guardrails(
+        self,
+        texts: tuple[str, ...],
+        item_id: str | None = None,
+        pre_block_backend_message: str | None = None,
+        event_hooks: Sequence["GuardrailEventHooks"] | None = None,
+    ) -> RealtimeGuardrailVerdict:
+        """
+        Run registered guardrails on realtime text (transcript, user message, tool output).
+
+        A block has already been reported to the client and the backend when this returns.
+        A rewrite carries the masked texts the caller forwards in place of the originals.
 
         ``pre_block_backend_message`` (if provided) is sent to the backend
         BEFORE any of the guardrail's own backend messages when a block is
@@ -1680,19 +1714,19 @@ class RealTimeStreaming:
         """
         from litellm.types.guardrails import GuardrailEventHooks
 
-        block: Final = await realtime_guardrail_block(
-            transcript,
+        block: Final = await realtime_guardrail_verdict(
+            texts,
             event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
             self.request_data,
             self.user_api_key_dict,
             litellm.callbacks,
         )
-        if block is None:
-            return False
+        if not isinstance(block, RealtimeGuardrailBlock):
+            return block
         await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
         await self.websocket.send_text(guardrail_violation_error_event(block.message))
         if not self._is_transcription_session:
-            for voice_prompt_event in guardrail_voice_prompt_events(block.message):
+            for voice_prompt_event in guardrail_voice_prompt_events(block.spoken_message):
                 await self._send_to_backend(voice_prompt_event)
 
         self._violation_count += 1
@@ -1703,9 +1737,9 @@ class RealTimeStreaming:
         verbose_logger.warning(
             "[realtime guardrail] BLOCKED transcript (violation %d): %r",
             self._violation_count,
-            transcript[:80],
+            " ".join(texts)[:80],
         )
-        return True
+        return block
 
     async def _handle_provider_config_message(self, raw_response: str) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
@@ -2190,26 +2224,18 @@ class RealTimeStreaming:
                 guardrail_turn_detection_injected = False
                 msg_type: str | None = None
                 try:
-                    from litellm.types.guardrails import GuardrailEventHooks
-
                     msg_obj = json.loads(message)
                     client_event = msg_obj
                     msg_type = client_event.get("type")
 
-                    match realtime_guarded_item(client_event):
-                        case RealtimeToolOutput(text=tool_output, sanitized_event=sanitized_event):
-                            if await self.run_realtime_guardrails(
-                                tool_output,
-                                pre_block_backend_message=sanitized_event,
-                                event_hooks=[GuardrailEventHooks.pre_call],
-                            ):
-                                continue
-                        case RealtimeUserText(text=user_text):
-                            if await self.run_realtime_guardrails(
-                                user_text, event_hooks=[GuardrailEventHooks.pre_call]
-                            ):
-                                self._pending_guardrail_message = user_text
-                                continue
+                    match await self._screen_client_item(guarded_item := realtime_guarded_item(client_event)):
+                        case RealtimeGuardrailBlock():
+                            if isinstance(guarded_item, RealtimeUserText):
+                                self._pending_guardrail_message = " ".join(guarded_item.texts)
+                            continue
+                        case RealtimeGuardrailRewrite(texts=masked_texts):
+                            msg_obj["item"] = rewritten_item(client_event, masked_texts)
+                            message = json.dumps(msg_obj)
                         case None:
                             pass
 

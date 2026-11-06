@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm.constants import (
@@ -30,7 +31,11 @@ from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.realtime_api import main as realtime_main
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import StandardLoggingPayload, StandardLoggingPayloadErrorInformation
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
+)
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 
@@ -227,14 +232,14 @@ class DisconnectingClientWS:
             return self._messages.pop(0)
         raise RuntimeError("client disconnected")
 
-    async def send_text(self, message):
+    async def send_text(self, message: str) -> None:
         self.sent_to_client.append(message)
 
 
 class GuardrailErrorUndeliveredClientWS(DisconnectingClientWS):
     """Client that disconnects just as the proxy tries to tell it about a guardrail violation"""
 
-    async def send_text(self, message):
+    async def send_text(self, message: str) -> None:
         if "guardrail_violation" in message:
             raise RuntimeError("client disconnected")
         await super().send_text(message)
@@ -1700,17 +1705,57 @@ class TestBedrockRealtimeSdkImportErrors:
         assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
 
 
+class SessionEndOptions(TypedDict, total=False):
+    on_violation: ReadOnly[str]
+    end_session_after_n_fails: ReadOnly[int]
+
+
+class BlockedWordGuardrailOptions(SessionEndOptions, total=False):
+    guardrail_name: ReadOnly[str]
+    event_hook: ReadOnly[GuardrailEventHooks]
+    default_on: ReadOnly[bool]
+    realtime_violation_message: ReadOnly[str]
+
+
 class BlockedWordGuardrail(CustomGuardrail):
-    def __init__(self, blocked_word, **kwargs):
+    def __init__(self, blocked_word: str, **kwargs: Unpack[BlockedWordGuardrailOptions]) -> None:
         super().__init__(**kwargs)
         self.blocked_word = blocked_word
-        self.checked = []
+        self.checked: list[tuple[tuple[str, ...], object]] = []
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
         self.checked.append((tuple(inputs["texts"]), request_data.get("user_api_key_dict")))
         if any(self.blocked_word in text for text in inputs["texts"]):
             raise HTTPException(status_code=400, detail={"error": f"{self.blocked_word} is not allowed"})
         return inputs
+
+
+class MaskingGuardrail(BlockedWordGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.replace(self.blocked_word, "[MASKED]") for text in inputs["texts"]]}
+
+
+class CrashingGuardrail(BlockedWordGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLogging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        raise RuntimeError("guardrail backend down")
 
 
 class TestBedrockRealtimeGuardrails:
@@ -1723,7 +1768,11 @@ class TestBedrockRealtimeGuardrails:
     RESPONSE_CREATE: Final = json.dumps({"type": "response.create"})
 
     @staticmethod
-    def _guardrail(event_hook=GuardrailEventHooks.pre_call, default_on=True, **kwargs) -> BlockedWordGuardrail:
+    def _guardrail(
+        event_hook: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+        default_on: bool = True,
+        **kwargs: Unpack[SessionEndOptions],
+    ) -> BlockedWordGuardrail:
         return BlockedWordGuardrail(
             "hunter2",
             guardrail_name="no_secrets",
@@ -1743,11 +1792,11 @@ class TestBedrockRealtimeGuardrails:
         )
 
     @staticmethod
-    def _bedrock_events(stream) -> list[dict]:
+    def _bedrock_events(stream: FakeBedrockStream) -> list[dict]:
         return [json.loads(chunk.value.bytes_.decode("utf-8"))["event"] for chunk in stream.input_stream.sent]
 
     @classmethod
-    def _text_inputs(cls, stream) -> list[str]:
+    def _text_inputs(cls, stream: FakeBedrockStream) -> list[str]:
         events: Final = cls._bedrock_events(stream)
         user_contents: Final = {
             event["contentStart"]["contentName"]
@@ -1761,18 +1810,23 @@ class TestBedrockRealtimeGuardrails:
         ]
 
     @staticmethod
-    def _client_events(client_ws) -> list[dict]:
+    def _client_events(client_ws: DisconnectingClientWS | RealtimeClientWS) -> list[dict]:
         return [json.loads(message) for message in client_ws.sent_to_client]
 
     @classmethod
-    def _guardrail_errors(cls, client_ws) -> list[dict]:
+    def _guardrail_errors(cls, client_ws: DisconnectingClientWS | RealtimeClientWS) -> list[dict]:
         return [
             event["error"]
             for event in cls._client_events(client_ws)
             if event["type"] == "error" and event["error"]["type"] == "guardrail_violation"
         ]
 
-    async def _forward_client(self, messages, guardrail, client_ws_type=DisconnectingClientWS):
+    async def _forward_client(
+        self,
+        messages: list[str],
+        guardrail: BlockedWordGuardrail,
+        client_ws_type: type[DisconnectingClientWS] | type[ConnectedClientWS] = DisconnectingClientWS,
+    ) -> tuple[FakeBedrockStream, DisconnectingClientWS | ConnectedClientWS]:
         stream: Final = FakeBedrockStream()
         client_ws: Final = client_ws_type(messages)
         await asyncio.wait_for(
@@ -1815,7 +1869,13 @@ class TestBedrockRealtimeGuardrails:
             json.dumps({"event": {"contentEnd": {"stopReason": "END_TURN"}}}),
         )
 
-    async def _forward_bedrock(self, payloads, guardrail, client_audio_streamed=True, client_ws_type=ConnectedClientWS):
+    async def _forward_bedrock(
+        self,
+        payloads: tuple[str, ...],
+        guardrail: BlockedWordGuardrail,
+        client_audio_streamed: bool = True,
+        client_ws_type: type[ConnectedClientWS] | type[GuardrailErrorUndeliveredClientWS] = ConnectedClientWS,
+    ) -> tuple[ConnectedClientWS | GuardrailErrorUndeliveredClientWS, list[object]]:
         config: Final = BedrockRealtimeConfig()
         config.client_audio_streamed = client_audio_streamed
         client_ws: Final = client_ws_type([])
@@ -1835,7 +1895,9 @@ class TestBedrockRealtimeGuardrails:
         return client_ws, logged
 
     @pytest.mark.asyncio
-    async def test_blocked_typed_message_never_reaches_bedrock_and_the_violation_is_voiced(self, stub_aws_models):
+    async def test_blocked_typed_message_never_reaches_bedrock_and_the_violation_is_voiced(
+        self, stub_aws_models: None
+    ) -> None:
         guardrail: Final = self._guardrail()
 
         stream, client_ws = await self._forward_client(
@@ -1856,7 +1918,7 @@ class TestBedrockRealtimeGuardrails:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("role", ["assistant", "system"])
-    async def test_blocked_typed_message_is_screened_whatever_its_role(self, stub_aws_models, role):
+    async def test_blocked_typed_message_is_screened_whatever_its_role(self, stub_aws_models: None, role: str) -> None:
         stream, client_ws = await self._forward_client(
             [self._user_text(self.BLOCKED_TEXT, role=role)], self._guardrail()
         )
@@ -1865,7 +1927,9 @@ class TestBedrockRealtimeGuardrails:
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
 
     @pytest.mark.asyncio
-    async def test_client_message_the_guardrail_cannot_parse_never_reaches_bedrock(self, stub_aws_models):
+    async def test_client_message_the_guardrail_cannot_parse_never_reaches_bedrock(
+        self, stub_aws_models: None
+    ) -> None:
         lone_surrogate_text: Final = self._user_text(f"{self.BLOCKED_TEXT} \ud800")
 
         stream, _ = await self._forward_client(
@@ -1876,7 +1940,7 @@ class TestBedrockRealtimeGuardrails:
         assert self._text_inputs(stream) == [self.CLEAN_TEXT]
 
     @pytest.mark.asyncio
-    async def test_clean_typed_message_reaches_bedrock_unchanged(self, stub_aws_models):
+    async def test_clean_typed_message_reaches_bedrock_unchanged(self, stub_aws_models: None) -> None:
         guardrail: Final = self._guardrail()
 
         stream, client_ws = await self._forward_client([self._user_text(self.CLEAN_TEXT)], guardrail)
@@ -1886,7 +1950,77 @@ class TestBedrockRealtimeGuardrails:
         assert guardrail.checked == [((self.CLEAN_TEXT,), None)]
 
     @pytest.mark.asyncio
-    async def test_blocked_tool_output_is_replaced_and_answered_by_the_model_itself(self, stub_aws_models):
+    async def test_masked_typed_message_reaches_bedrock_masked_and_is_answered(self, stub_aws_models: None) -> None:
+        guardrail: Final = MaskingGuardrail(
+            "hunter2", guardrail_name="mask_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT), self.RESPONSE_CREATE], guardrail
+        )
+
+        events: Final = self._bedrock_events(stream)
+        assert "hunter2" not in json.dumps(events)
+        assert self._text_inputs(stream) == ["my secret is [MASKED]"]
+        assert client_ws.sent_to_client == []
+        assert any("audioInput" in event for event in events), "the client's response.create runs"
+
+    @pytest.mark.asyncio
+    async def test_masked_tool_output_reaches_bedrock_masked(self, stub_aws_models: None) -> None:
+        guardrail: Final = MaskingGuardrail(
+            "hunter2", guardrail_name="mask_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        tool_output: Final = json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "function_call_output", "call_id": "tool_1", "output": self.BLOCKED_TEXT},
+            }
+        )
+
+        stream, client_ws = await self._forward_client([tool_output], guardrail)
+
+        events: Final = self._bedrock_events(stream)
+        assert [event["toolResult"]["content"] for event in events if "toolResult" in event] == [
+            "my secret is [MASKED]"
+        ]
+        assert client_ws.sent_to_client == []
+
+    @pytest.mark.asyncio
+    async def test_blocked_word_stays_out_of_the_spoken_notice_without_a_configured_message(
+        self, stub_aws_models: None
+    ) -> None:
+        guardrail: Final = BlockedWordGuardrail(
+            "hunter2", guardrail_name="no_secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.BLOCKED_TEXT), self.RESPONSE_CREATE], guardrail
+        )
+
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
+        assert ["Say exactly" in text for text in self._text_inputs(stream)] == [True]
+        assert [error["message"] for error in self._guardrail_errors(client_ws)] == ["hunter2 is not allowed"]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_that_crashes_ends_the_session_without_forwarding_the_text(
+        self, stub_aws_models: None
+    ) -> None:
+        guardrail: Final = CrashingGuardrail(
+            "hunter2", guardrail_name="flaky", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+        stream, client_ws = await self._forward_client(
+            [self._user_text(self.CLEAN_TEXT), self.RESPONSE_CREATE], guardrail, client_ws_type=ConnectedClientWS
+        )
+
+        assert self.CLEAN_TEXT not in json.dumps(self._bedrock_events(stream))
+        assert len(self._guardrail_errors(client_ws)) == 1
+        assert client_ws.closed
+
+    @pytest.mark.asyncio
+    async def test_blocked_tool_output_is_replaced_and_answered_by_the_model_itself(
+        self, stub_aws_models: None
+    ) -> None:
         tool_output: Final = json.dumps(
             {
                 "type": "conversation.item.create",
@@ -1919,8 +2053,8 @@ class TestBedrockRealtimeGuardrails:
         ids=["not-default-on", "post-call-hook", "transcription-hook"],
     )
     async def test_guardrail_that_does_not_apply_to_typed_text_changes_nothing(
-        self, stub_aws_models, event_hook, default_on
-    ):
+        self, stub_aws_models: None, event_hook: GuardrailEventHooks, default_on: bool
+    ) -> None:
         guardrail: Final = self._guardrail(event_hook=event_hook, default_on=default_on)
 
         stream, client_ws = await self._forward_client([self._user_text(self.BLOCKED_TEXT)], guardrail)
@@ -1935,7 +2069,9 @@ class TestBedrockRealtimeGuardrails:
         [({"on_violation": "end_session"}, 1), ({"end_session_after_n_fails": 2}, 2)],
         ids=["on-violation-end-session", "after-two-fails"],
     )
-    async def test_end_session_guardrail_closes_the_session(self, stub_aws_models, guardrail_kwargs, blocked_messages):
+    async def test_end_session_guardrail_closes_the_session(
+        self, stub_aws_models: None, guardrail_kwargs: SessionEndOptions, blocked_messages: int
+    ) -> None:
         messages: Final = [self._user_text(self.BLOCKED_TEXT)] * blocked_messages + [self._user_text(self.CLEAN_TEXT)]
 
         stream, client_ws = await self._forward_client(
@@ -1950,7 +2086,9 @@ class TestBedrockRealtimeGuardrails:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("guardrail_kwargs", [{}, {"on_violation": "end_session"}], ids=["default", "end-session"])
-    async def test_blocked_transcript_ends_the_session_before_its_answer_reaches_the_client(self, guardrail_kwargs):
+    async def test_blocked_transcript_ends_the_session_before_its_answer_reaches_the_client(
+        self, guardrail_kwargs: SessionEndOptions
+    ) -> None:
         payloads: Final = (
             *self._user_transcript(self.BLOCKED_TEXT),
             *self._assistant_text("Your secret is safe with me"),
@@ -1970,7 +2108,9 @@ class TestBedrockRealtimeGuardrails:
         assert guardrail.checked == [((self.BLOCKED_TEXT,), None)]
 
     @pytest.mark.asyncio
-    async def test_blocked_transcript_answer_never_reaches_the_client_when_the_previous_answer_closes_late(self):
+    async def test_blocked_transcript_answer_never_reaches_the_client_when_the_previous_answer_closes_late(
+        self,
+    ) -> None:
         earlier_answer: Final = self._assistant_text("Earlier answer")
         payloads: Final = (
             *earlier_answer[:2],
@@ -2000,8 +2140,8 @@ class TestBedrockRealtimeGuardrails:
         ids=["typed-text-session", "pre-call-hook", "not-default-on"],
     )
     async def test_transcript_guardrail_that_does_not_apply_changes_nothing(
-        self, event_hook, default_on, client_audio_streamed
-    ):
+        self, event_hook: GuardrailEventHooks, default_on: bool, client_audio_streamed: bool
+    ) -> None:
         guardrail: Final = self._guardrail(event_hook=event_hook, default_on=default_on)
 
         client_ws, _ = await self._forward_bedrock(
@@ -2018,7 +2158,9 @@ class TestBedrockRealtimeGuardrails:
         assert guardrail.checked == []
 
     @pytest.mark.asyncio
-    async def test_session_ends_when_the_client_leaves_before_hearing_about_a_blocked_message(self, stub_aws_models):
+    async def test_session_ends_when_the_client_leaves_before_hearing_about_a_blocked_message(
+        self, stub_aws_models: None
+    ) -> None:
         stream, client_ws = await self._forward_client(
             [self._user_text(self.BLOCKED_TEXT), self._user_text(self.CLEAN_TEXT)],
             self._guardrail(),
@@ -2029,7 +2171,7 @@ class TestBedrockRealtimeGuardrails:
         assert self._client_events(client_ws) == []
 
     @pytest.mark.asyncio
-    async def test_answers_stop_when_the_client_leaves_before_hearing_about_a_blocked_transcript(self):
+    async def test_answers_stop_when_the_client_leaves_before_hearing_about_a_blocked_transcript(self) -> None:
         guardrail: Final = self._guardrail(event_hook=GuardrailEventHooks.realtime_input_transcription)
 
         _, logged = await self._forward_bedrock(
@@ -2041,9 +2183,11 @@ class TestBedrockRealtimeGuardrails:
         assert not any(event["type"].startswith("response.") for event in logged)
 
     @pytest.mark.asyncio
-    async def test_proxy_request_guardrails_and_key_reach_the_bedrock_session(self, stub_aws_sdk_client, monkeypatch):
+    async def test_proxy_request_guardrails_and_key_reach_the_bedrock_session(
+        self, stub_aws_sdk_client: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         class ProxyLogging(FakeLogging):
-            def update_from_kwargs(self, **kwargs):
+            def update_from_kwargs(self, **kwargs: object) -> None:
                 pass
 
         guardrail: Final = self._guardrail(default_on=False)

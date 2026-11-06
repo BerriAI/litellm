@@ -32,12 +32,17 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_guardrails import (
+    GUARDRAIL_FAILURE_BLOCK,
+    RealtimeGuardedItem,
     RealtimeGuardrailBlock,
+    RealtimeGuardrailRewrite,
+    RealtimeGuardrailVerdict,
     RealtimeToolOutput,
     guardrail_violation_error_event,
     guardrail_voice_prompt_events,
     realtime_guarded_item,
-    realtime_guardrail_block,
+    realtime_guardrail_verdict,
+    rewritten_item,
 )
 from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
 from litellm.llms.base_llm.realtime.transformation import RealtimeSessionUpdateRejection
@@ -395,10 +400,14 @@ class BedrockRealtimeGuardrails:
         self._violation_count = 0
         self._drop_next_response_create = False
 
-    async def _block(self, text: str, hook: "GuardrailEventHooks") -> RealtimeGuardrailBlock | None:
-        return await realtime_guardrail_block(
-            text, (hook,), self._request_data, self._user_api_key_dict, self._callbacks()
-        )
+    async def _verdict(self, texts: tuple[str, ...], hook: "GuardrailEventHooks") -> RealtimeGuardrailVerdict:
+        try:
+            return await realtime_guardrail_verdict(
+                texts, (hook,), self._request_data, self._user_api_key_dict, self._callbacks()
+            )
+        except Exception as e:  # noqa: BLE001  # a guardrail that cannot decide fails closed, never as a Bedrock failure
+            verbose_proxy_logger.warning("Bedrock Realtime: a guardrail failed, ending the session: %s", e)
+            return GUARDRAIL_FAILURE_BLOCK
 
     def _ends_session(self, block: RealtimeGuardrailBlock) -> bool:
         self._violation_count += 1
@@ -418,9 +427,22 @@ class BedrockRealtimeGuardrails:
         guarded_item: Final = realtime_guarded_item(client_event)
         if guarded_item is None:
             return _ClientEventRoute.FORWARD
-        block: Final = await self._block(guarded_item.text, GuardrailEventHooks.pre_call)
-        if block is None:
-            return _ClientEventRoute.FORWARD
+        match await self._verdict(guarded_item.texts, GuardrailEventHooks.pre_call):
+            case None:
+                return _ClientEventRoute.FORWARD
+            case RealtimeGuardrailRewrite(texts=texts):
+                await forward_to_bedrock(json.dumps({**client_event, "item": rewritten_item(client_event, texts)}))
+                return _ClientEventRoute.DROP
+            case RealtimeGuardrailBlock() as block:
+                return await self._route_blocked_item(block, guarded_item, client_ws, forward_to_bedrock)
+
+    async def _route_blocked_item(
+        self,
+        block: RealtimeGuardrailBlock,
+        guarded_item: RealtimeGuardedItem,
+        client_ws: RealtimeClientWebSocket,
+        forward_to_bedrock: Callable[[str], Awaitable[None]],
+    ) -> _ClientEventRoute:
         if isinstance(guarded_item, RealtimeToolOutput):
             await forward_to_bedrock(guarded_item.sanitized_event)
         if not await _send_guardrail_violation(client_ws, block):
@@ -430,7 +452,7 @@ class BedrockRealtimeGuardrails:
             return _ClientEventRoute.END_SESSION
         if isinstance(guarded_item, RealtimeToolOutput):
             return _ClientEventRoute.DROP
-        for voice_prompt_event in guardrail_voice_prompt_events(block.message):
+        for voice_prompt_event in guardrail_voice_prompt_events(block.spoken_message):
             await forward_to_bedrock(voice_prompt_event)
         self._drop_next_response_create = True
         return _ClientEventRoute.DROP
@@ -448,8 +470,8 @@ class BedrockRealtimeGuardrails:
             or not transcript
         ):
             return True
-        block: Final = await self._block(transcript, GuardrailEventHooks.realtime_input_transcription)
-        if block is None:
+        block: Final = await self._verdict((transcript,), GuardrailEventHooks.realtime_input_transcription)
+        if not isinstance(block, RealtimeGuardrailBlock):
             return True
         if await _send_guardrail_violation(client_ws, block):
             await _end_guarded_session(client_ws)

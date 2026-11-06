@@ -1956,6 +1956,51 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_realtime_text_input_masking_guardrail_forwards_only_the_masked_text(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class MaskingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return {**inputs, "texts": [text.replace("test@example.com", "[EMAIL]") for text in inputs["texts"]]}
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [MaskingGuardrail(guardrail_name="email-masker", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "My email is test@example.com"}],
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).client_ack_messages()
+
+    sent_to_backend: Final = json.dumps([c.args[0] for c in backend_ws.send.call_args_list if c.args])
+    assert "test@example.com" not in sent_to_backend
+    assert "My email is [EMAIL]" in sent_to_backend
+    assert client_ws.send_text.call_args_list == []
+
+
+@pytest.mark.asyncio
 async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a client-supplied function_call_output whose content triggers a

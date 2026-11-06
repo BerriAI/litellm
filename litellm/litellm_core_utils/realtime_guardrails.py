@@ -15,11 +15,13 @@ _DEFAULT_VIOLATION_MESSAGE: Final = "I'm sorry, that request was blocked by the 
 BLOCKED_TOOL_OUTPUT: Final = json.dumps({"error": "Tool output blocked by content policy"})
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_TEXTS: Final = TypeAdapter(tuple[str, ...])
 
 
 @dataclass(frozen=True, slots=True)
 class RealtimeGuardrailBlock:
     message: str
+    spoken_message: str
     ends_session_on_violation: bool
     end_session_after_n_fails: int | None
 
@@ -29,14 +31,30 @@ class RealtimeGuardrailBlock:
         )
 
 
+GUARDRAIL_FAILURE_BLOCK: Final = RealtimeGuardrailBlock(
+    message=_DEFAULT_VIOLATION_MESSAGE,
+    spoken_message=_DEFAULT_VIOLATION_MESSAGE,
+    ends_session_on_violation=True,
+    end_session_after_n_fails=None,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RealtimeGuardrailRewrite:
+    texts: tuple[str, ...]
+
+
+RealtimeGuardrailVerdict: TypeAlias = RealtimeGuardrailBlock | RealtimeGuardrailRewrite | None
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeUserText:
-    text: str
+    texts: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class RealtimeToolOutput:
-    text: str
+    texts: tuple[str, ...]
     sanitized_event: str
 
 
@@ -58,9 +76,17 @@ def _input_text(part: object) -> str | None:
     return text if isinstance(text, str) else None
 
 
+def _content_parts(content: object) -> Sequence[object]:
+    return _JSON_ARRAY.validate_python(content) if isinstance(content, list) else ()
+
+
 def _input_texts(content: object) -> tuple[str, ...]:
-    parts: Final[Sequence[object]] = _JSON_ARRAY.validate_python(content) if isinstance(content, list) else ()
-    return tuple(text for text in map(_input_text, parts) if text is not None)
+    return tuple(text for text in map(_input_text, _content_parts(content)) if text is not None)
+
+
+def _with_text(part: object, text: str | None) -> object:
+    part_object: Final = _json_object(part)
+    return part if text is None or part_object is None else {**part_object, "text": text}
 
 
 def _tool_output(client_event: Mapping[str, object], item: Mapping[str, object]) -> RealtimeToolOutput | None:
@@ -69,7 +95,7 @@ def _tool_output(client_event: Mapping[str, object], item: Mapping[str, object])
     if not text:
         return None
     sanitized_event: Final = json.dumps({**client_event, "item": {**item, "output": BLOCKED_TOOL_OUTPUT}})
-    return RealtimeToolOutput(text=text, sanitized_event=sanitized_event)
+    return RealtimeToolOutput(texts=(text,), sanitized_event=sanitized_event)
 
 
 def realtime_guarded_item(client_event: Mapping[str, object]) -> RealtimeGuardedItem | None:
@@ -80,8 +106,18 @@ def realtime_guarded_item(client_event: Mapping[str, object]) -> RealtimeGuarded
         return None
     if item.get("type") == "function_call_output":
         return _tool_output(client_event, item)
-    text: Final = " ".join(_input_texts(item.get("content")))
-    return RealtimeUserText(text=text) if text else None
+    texts: Final = _input_texts(item.get("content"))
+    return RealtimeUserText(texts=texts) if any(texts) else None
+
+
+def rewritten_item(client_event: Mapping[str, object], texts: tuple[str, ...]) -> Mapping[str, object]:
+    item: Final = _json_object(client_event.get("item")) or {}
+    if item.get("type") == "function_call_output":
+        return {**item, "output": " ".join(texts)}
+    parts: Final = _content_parts(item.get("content"))
+    text_positions: Final = tuple(index for index, part in enumerate(parts) if _input_text(part) is not None)
+    replacements: Final = dict(zip(text_positions, texts))
+    return {**item, "content": [_with_text(part, replacements.get(index)) for index, part in enumerate(parts)]}
 
 
 def _violation_text(error: Exception) -> str:
@@ -99,12 +135,21 @@ def _is_guardrail_block(error: Exception) -> bool:
     return hasattr(error, "status_code") or isinstance(error, ValueError)
 
 
-async def _guardrail_block(
-    guardrail: "CustomGuardrail", text: str, user_api_key_dict: object | None
-) -> RealtimeGuardrailBlock | None:
+def _screened_texts(screened: object, texts: tuple[str, ...]) -> tuple[str, ...]:
+    screened_object: Final = _json_object(screened)
     try:
-        await guardrail.apply_guardrail(
-            inputs={"texts": [text], "images": []},
+        returned: Final = _TEXTS.validate_python(screened_object.get("texts") if screened_object else None)
+    except ValidationError:
+        return texts
+    return returned if len(returned) == len(texts) else texts
+
+
+async def _guardrail_outcome(
+    guardrail: "CustomGuardrail", texts: tuple[str, ...], user_api_key_dict: object | None
+) -> RealtimeGuardrailBlock | tuple[str, ...]:
+    try:
+        screened: Final = await guardrail.apply_guardrail(
+            inputs={"texts": list(texts), "images": []},
             request_data={"user_api_key_dict": user_api_key_dict},
             input_type="request",
         )
@@ -114,10 +159,25 @@ async def _guardrail_block(
             raise
         return RealtimeGuardrailBlock(
             message=guardrail.realtime_violation_message or _violation_text(error),
+            spoken_message=guardrail.realtime_violation_message or _DEFAULT_VIOLATION_MESSAGE,
             ends_session_on_violation=guardrail.on_violation == "end_session",
             end_session_after_n_fails=guardrail.end_session_after_n_fails,
         )
-    return None
+    return _screened_texts(screened, texts)
+
+
+async def _screen(
+    guardrails: Sequence["CustomGuardrail"],
+    texts: tuple[str, ...],
+    original_texts: tuple[str, ...],
+    user_api_key_dict: object | None,
+) -> RealtimeGuardrailVerdict:
+    if not guardrails:
+        return None if texts == original_texts else RealtimeGuardrailRewrite(texts=texts)
+    outcome: Final = await _guardrail_outcome(guardrails[0], texts, user_api_key_dict)
+    if isinstance(outcome, RealtimeGuardrailBlock):
+        return outcome
+    return await _screen(guardrails[1:], outcome, original_texts, user_api_key_dict)
 
 
 def realtime_runner_guardrail(
@@ -135,21 +195,17 @@ def realtime_runner_guardrail(
     return callback if runs else None
 
 
-async def realtime_guardrail_block(
-    text: str,
+async def realtime_guardrail_verdict(
+    texts: tuple[str, ...],
     event_hooks: Sequence["GuardrailEventHooks"],
     request_data: Mapping[str, object],
     user_api_key_dict: object | None,
     callbacks: Iterable[object],
-) -> RealtimeGuardrailBlock | None:
-    check_data: Final = {**request_data, "transcript": text, "stream": True}
+) -> RealtimeGuardrailVerdict:
+    check_data: Final = {**request_data, "transcript": " ".join(texts), "stream": True}
     runner_guardrails: Final = (realtime_runner_guardrail(callback, check_data, event_hooks) for callback in callbacks)
     guardrails: Final = {id(guardrail): guardrail for guardrail in runner_guardrails if guardrail is not None}
-    for guardrail in guardrails.values():
-        block = await _guardrail_block(guardrail, text, user_api_key_dict)
-        if block is not None:
-            return block
-    return None
+    return await _screen(tuple(guardrails.values()), texts, texts, user_api_key_dict)
 
 
 def guardrail_violation_error_event(message: str) -> str:

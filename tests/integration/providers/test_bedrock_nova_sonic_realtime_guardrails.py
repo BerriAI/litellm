@@ -131,6 +131,10 @@ async def _events_until(socket: ClientConnection, last: Callable[[Event], bool])
     return tuple(collected)
 
 
+async def _events_until_closed(socket: ClientConnection) -> tuple[Event, ...]:
+    return tuple([JSON_OBJECT.validate_json(raw) async for raw in socket])
+
+
 def _is_done(event: Event) -> bool:
     return event.get("type") == "response.done"
 
@@ -214,36 +218,51 @@ def test_clean_typed_text_reaches_nova_sonic_unchanged(candidate: Gateway, cert:
         assert _user_text_inputs(peer.received()) == (text,)
 
 
-def test_blocked_transcript_hides_that_turns_answer_and_the_next_turn_still_answers(
+def test_blocked_transcript_ends_the_session_before_its_answer_reaches_the_client(
     candidate: Gateway, cert: tuple[Path, Path]
 ) -> None:
     with candidate.scenario() as scenario:
         phrase: Final = _blocked_phrase(candidate, scenario, "realtime_input_transcription")
-        turns: Final = (
-            Turn("user_input", user_transcript(f"tell me {phrase}") + assistant_text(HIDDEN_ANSWER)),
-            Turn("user_input", user_transcript("what is the weather") + assistant_text(VISIBLE_ANSWER)),
-        )
-        with bedrock_realtime_peer(turns, cert) as peer:
+        turn: Final = Turn("user_input", user_transcript(f"tell me {phrase}") + assistant_text(HIDDEN_ANSWER))
+        with bedrock_realtime_peer((turn,), cert) as peer:
             model: Final = _deployment(candidate, scenario, peer)
 
             async def exchange(socket: ClientConnection) -> tuple[Event, ...]:
                 await socket.send(AUDIO_APPEND)
                 await socket.send(_user_text("hello"))
-                blocked_turn: Final = await _events_until(socket, _is_guardrail_error)
-                await socket.send(AUDIO_APPEND)
-                return blocked_turn + await _events_until(socket, _is_done)
+                events: Final = await asyncio.wait_for(_events_until_closed(socket), 60)
+                assert socket.close_code == 1000, (socket.close_code, events)
+                return events
 
             events: Final = asyncio.run(_session(candidate, model, scenario.key(), exchange))
 
         assert HIDDEN_ANSWER not in json.dumps(events), events
-        assert _text_deltas(events) == VISIBLE_ANSWER, events
-        assert [event["type"] for event in events].count("response.done") == 1, events
+        assert not any(str(event.get("type")).startswith("response.") for event in events), events
         transcripts: Final = [
             event["transcript"]
             for event in events
             if event.get("type") == "conversation.item.input_audio_transcription.completed"
         ]
-        assert transcripts == [f"tell me {phrase}", "what is the weather"], events
+        assert transcripts == [f"tell me {phrase}"], events
         assert [object_value(event["error"])["message"] for event in events if _is_guardrail_error(event)] == [
             VIOLATION
         ], events
+
+
+def test_clean_transcript_under_a_transcript_guardrail_is_answered(candidate: Gateway, cert: tuple[Path, Path]) -> None:
+    spoken: Final = f"what is the weather in New York {uuid.uuid4().hex[:8]}"
+    with candidate.scenario() as scenario:
+        _blocked_phrase(candidate, scenario, "realtime_input_transcription")
+        turn: Final = Turn("user_input", user_transcript(spoken) + assistant_text(VISIBLE_ANSWER))
+        with bedrock_realtime_peer((turn,), cert) as peer:
+            model: Final = _deployment(candidate, scenario, peer)
+
+            async def exchange(socket: ClientConnection) -> tuple[Event, ...]:
+                await socket.send(AUDIO_APPEND)
+                await socket.send(_user_text("hello"))
+                return await _events_until(socket, _is_done)
+
+            events: Final = asyncio.run(_session(candidate, model, scenario.key(), exchange))
+
+        assert not any(_is_guardrail_error(event) for event in events), events
+        assert _text_deltas(events) == VISIBLE_ANSWER, events
