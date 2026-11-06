@@ -14,8 +14,9 @@ from integration._support.prisma_clients import connected_proxy_prisma
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy.spend_tracking.usage_alert_job import UsageAlertJob
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.daily_activity_buckets import api_key_bucket
 from litellm.repositories.issues import IssuesRepository
-from litellm.repositories.usage_alert_metrics import IssueMetricWindow
+from litellm.repositories.usage_alert_metrics import IssueMetricWindow, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRule, UsageAlertRuleInput, UsageAlertScope
 
@@ -40,6 +41,110 @@ _TABLES: Final = (
     "LiteLLM_TeamTable",
     "LiteLLM_SpendLogDelivery",
 )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("scope", ("user", "team", "key", "model"))
+async def test_metric_pages_skip_oversized_ids_without_losing_valid_later_entities(
+    db: ManagementDatabase, scope: UsageAlertScope
+) -> None:
+    identities = (
+        "a" * 1025,
+        "\U0001f600" * 1025,
+        "raw:" + "x" * 1016,
+        "raw:" + "x" * 1017,
+        "oversized-" + "x" * 65536,
+        "oversized-" + "\U0001f600" * 8192,
+        *(f"valid-{index:02}" for index in range(10)),
+        "\U0001f600" * 1024,
+    )
+    expected = tuple(
+        sorted(
+            api_key_bucket(value) if scope == "key" else value
+            for value in identities
+            if len(api_key_bucket(value) if scope == "key" else value) <= 1024
+        )
+    )
+    async with _isolated(db) as prisma:
+        for table, entity in (("LiteLLM_DailyUserSpend", "user_id"), ("LiteLLM_DailyTeamSpend", "team_id")):
+            await prisma.writer_db.query_raw(
+                f"""INSERT INTO "{table}" (id,{entity},date,api_key,model,spend,api_requests,updated_at)
+                SELECT $1||n,identity,$2,identity,identity,2,3,CURRENT_TIMESTAMP
+                FROM unnest($3::text[]) WITH ORDINALITY AS items(identity,n) RETURNING id""",
+                table,
+                _DAY.isoformat(),
+                identities,
+            )
+        metrics = UsageAlertMetricsRepository(prisma.writer_db)
+        rows = []
+        cursor = None
+        for _ in range(3):
+            page = await metrics.page(scope, _DAY, 1, cursor=cursor)
+            rows.extend(page.rows)
+            if page.complete:
+                break
+            cursor = page.cursor
+        else:
+            pytest.fail("bounded metric pagination did not finish")
+        assert tuple(sorted(row.entity_id for row in rows)) == expected
+        assert all((row.spend, row.requests) == (2, 3) for row in rows)
+        assert "\U0001f600" * 1024 in expected
+        exact = tuple(api_key_bucket(value) if scope == "key" else value for value in identities[:6]) + ("valid-00",)
+        chosen = await metrics.page(scope, _DAY, 1, entity_ids=exact)
+        assert {row.entity_id for row in chosen.rows} == set(expected).intersection(exact)
+        deployment = await metrics.page("deployment", _DAY, 1)
+        assert len(deployment.rows) == 1
+        assert deployment.rows[0].requests == 3 * len(identities)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_attribution_bounds_keep_invalid_identity_traffic_in_population_totals(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend"
+                (id,user_id,date,api_key,model,custom_llm_provider,spend,api_requests,timed_requests,updated_at)
+            SELECT owner||d||k,owner,($1::date-d)::text,
+                CASE WHEN k='bad' THEN owner||repeat('x',1025) ELSE owner||'-valid' END,
+                'example-model',CASE WHEN k='bad' THEN repeat('p',257) ELSE 'valid-provider' END,
+                CASE WHEN d>0 THEN 10 WHEN (owner='invalid-dominant')=(k='bad') THEN 100 ELSE 20 END,
+                1,CASE WHEN (owner='invalid-dominant')=(k='bad') THEN 90 ELSE 10 END,CURRENT_TIMESTAMP
+            FROM generate_series(0,3) d CROSS JOIN (VALUES('invalid-dominant'),('valid-dominant')) owners(owner)
+                CROSS JOIN (VALUES('bad'),('good')) keys(k) RETURNING id""",
+            _DAY.isoformat(),
+        )
+        windows = tuple(
+            IssueMetricWindow(owner, owner, _DAY - timedelta(days=3), _DAY)
+            for owner in ("invalid-dominant", "valid-dominant")
+        )
+        metrics = UsageAlertMetricsRepository(prisma.writer_db)
+        attributions = await metrics.issue_key_attributions("user", windows)
+        assert len(attributions) == 1
+        attribution = attributions[0]
+        assert (attribution.reference_id, attribution.key_id, attribution.equivalent) == (
+            "valid-dominant",
+            "valid-dominant-valid",
+            False,
+        )
+        assert attribution.positive_change_share == pytest.approx(0.9)
+        assert (attribution.baseline_value, attribution.observed_value) == (20, 120)
+        providers = await metrics.issue_source_providers("user", windows)
+        assert tuple((row.reference_id, row.provider) for row in providers) == (("valid-dominant", "valid-provider"),)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_retirement_usage_omits_oversized_models_before_materialization(db: ManagementDatabase) -> None:
+    models = ("a" * 65536, "valid-model", "\U0001f600" * 1024)
+    async with _isolated(db) as prisma:
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend" (id,user_id,date,api_key,model,api_requests,updated_at)
+            SELECT 'retirement-'||n,'owner',$1,'key',model,7,CURRENT_TIMESTAMP
+            FROM unnest($2::text[]) WITH ORDINALITY AS items(model,n) RETURNING id""",
+            _DAY.isoformat(),
+            models,
+        )
+        rows = await UsageAlertMetricsRepository(prisma.writer_db).deprecation_usage(models, _DAY, _DAY)
+        assert frozenset(row.model for row in rows) == frozenset(models[1:])
+        assert tuple(row.requests for row in rows) == (7, 7)
 
 
 @asynccontextmanager
