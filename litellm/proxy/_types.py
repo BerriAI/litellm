@@ -457,6 +457,7 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/skills/{name}",
         "/skill-hub/skills/{name}/archive",
         "/skill-hub/skills/{name}/content",
+        "/skill-hub/skills/{plugin_name}/downloads",
         "/skill-hub/skills/{name}/versions",
         "/skill-hub/skills/{name}/versions/{version_id}",
         "/skill-hub/skills/{name}/versions/{version_id}/archive",
@@ -490,6 +491,7 @@ class LiteLLMRoutes(enum.Enum):
         "/claude-code/plugins",
         "/claude-code/plugins/upload",
         "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
+        "/claude-code/plugins/{plugin_name}/downloads",
         "/claude-code/plugins/{plugin_name}",
     ]
 
@@ -2505,8 +2507,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
 
     use_spend_logs_ledger: bool = Field(
-        False,
-        description="Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.",
+        True,
+        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(

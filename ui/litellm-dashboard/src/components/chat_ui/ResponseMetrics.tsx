@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -68,6 +69,7 @@ function ResponseCacheIndicator() {
 }
 
 function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
+  const { t } = useTranslation();
   if (usage?.servedFromResponseCache) {
     return <ResponseCacheIndicator />;
   }
@@ -80,7 +82,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
       {readTokens > 0 && (
         <MetricItem
           label="Cache Read"
-          tooltip={PROMPT_CACHE_READ_TOOLTIP}
+          tooltip={t(PROMPT_CACHE_READ_TOOLTIP)}
           icon={<Database className="size-3" aria-hidden="true" />}
           value={String(readTokens)}
         />
@@ -89,7 +91,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
       {creationTokens > 0 && (
         <MetricItem
           label="Cache Write"
-          tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+          tooltip={t(PROMPT_CACHE_CREATION_TOOLTIP)}
           icon={<DatabaseBackup className="size-3" aria-hidden="true" />}
           value={String(creationTokens)}
         />
@@ -99,6 +101,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
 }
 
 const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, totalLatency, usage, toolName }) => {
+  const { t } = useTranslation();
   if (!timeToFirstToken && !totalLatency && !usage) return null;
 
   return (
@@ -106,7 +109,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
       {timeToFirstToken !== undefined && (
         <MetricItem
           label="TTFT"
-          tooltip="Time to first token"
+          tooltip={t("chatUi.responseMetrics.tooltips.timeToFirstToken")}
           icon={<Clock className="size-3" aria-hidden="true" />}
           value={`${(timeToFirstToken / 1000).toFixed(2)}s`}
         />
@@ -114,8 +117,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {totalLatency !== undefined && (
         <MetricItem
-          label="Total Latency"
-          tooltip="Total latency"
+          label={t("chatUi.responseMetrics.labels.totalLatency")}
+          tooltip={t("chatUi.responseMetrics.tooltips.totalLatency")}
           icon={<Clock className="size-3" aria-hidden="true" />}
           value={`${(totalLatency / 1000).toFixed(2)}s`}
         />
@@ -123,8 +126,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {usage?.promptTokens !== undefined && (
         <MetricItem
-          label="In"
-          tooltip="Prompt tokens"
+          label={t("chatUi.responseMetrics.labels.in")}
+          tooltip={t("chatUi.responseMetrics.tooltips.promptTokens")}
           icon={<ArrowDownToLine className="size-3" aria-hidden="true" />}
           value={String(usage.promptTokens)}
         />
@@ -134,8 +137,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {usage?.completionTokens !== undefined && (
         <MetricItem
-          label="Out"
-          tooltip="Completion tokens"
+          label={t("chatUi.responseMetrics.labels.out")}
+          tooltip={t("chatUi.responseMetrics.tooltips.completionTokens")}
           icon={<ArrowUpFromLine className="size-3" aria-hidden="true" />}
           value={String(usage.completionTokens)}
         />
@@ -143,8 +146,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {usage?.reasoningTokens !== undefined && (
         <MetricItem
-          label="Reasoning"
-          tooltip="Reasoning tokens"
+          label={t("chatUi.responseMetrics.labels.reasoning")}
+          tooltip={t("chatUi.responseMetrics.tooltips.reasoningTokens")}
           icon={<Lightbulb className="size-3" aria-hidden="true" />}
           value={String(usage.reasoningTokens)}
         />
@@ -152,8 +155,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {usage?.totalTokens !== undefined && (
         <MetricItem
-          label="Total"
-          tooltip="Total tokens"
+          label={t("chatUi.responseMetrics.labels.total")}
+          tooltip={t("chatUi.responseMetrics.tooltips.totalTokens")}
           icon={<Hash className="size-3" aria-hidden="true" />}
           value={String(usage.totalTokens)}
         />
@@ -161,8 +164,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {typeof usage?.cost === "number" && Number.isFinite(usage.cost) && (
         <MetricItem
-          label="Cost"
-          tooltip="Cost"
+          label={t("chatUi.responseMetrics.labels.cost")}
+          tooltip={t("chatUi.responseMetrics.tooltips.cost")}
           icon={<DollarSign className="size-3" aria-hidden="true" />}
           value={`$${usage.cost.toFixed(6)}`}
         />
@@ -170,8 +173,8 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
 
       {toolName && (
         <MetricItem
-          label="Tool"
-          tooltip="Tool used"
+          label={t("chatUi.responseMetrics.labels.tool")}
+          tooltip={t("chatUi.responseMetrics.tooltips.toolUsed")}
           icon={<Wrench className="size-3" aria-hidden="true" />}
           value={toolName}
         />

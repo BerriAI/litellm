@@ -1,3 +1,6 @@
+import type { SkillListQuery } from "@/components/claude_code_plugins/types";
+import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
+import { useSkillFilters, skillSortQuery } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
 import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
@@ -21,7 +24,6 @@ import { toast } from "@/lib/toast";
 import { isPendingSkill, type SkillHubSkill, type SkillMutationResponse } from "@/components/claude_code_plugins/types";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import SkillSubmissions from "./SkillSubmissions";
-import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable/useUrlTableState";
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;
@@ -29,14 +31,7 @@ interface ClaudeCodePluginsPanelProps {
   isViewOnly?: boolean;
 }
 
-const CATALOG_STATE: UrlTableStateOptions<never> = {
-  keyPrefix: "skills_",
-  defaultPageSize: 50,
-  maxPageSize: 100,
-  sortFields: ["name"],
-  defaultSort: { id: "name", desc: false },
-  filterColumns: [],
-};
+const scanResultFilter = (scan: string): boolean | undefined => (scan === "all" ? undefined : scan === "yes");
 
 const SKILLS_TABS = ["skills", "submissions"] as const;
 
@@ -57,11 +52,20 @@ interface CatalogSkillDetailProps {
   accessToken: string | null;
   queryScope: QueryKey;
   canWrite: boolean;
+  isAdmin: boolean;
   onBack: () => void;
   onEdit: (skill: SkillHubSkill) => void;
 }
 
-function CatalogSkillDetail({ skill, accessToken, queryScope, canWrite, onBack, onEdit }: CatalogSkillDetailProps) {
+function CatalogSkillDetail({
+  skill,
+  accessToken,
+  queryScope,
+  canWrite,
+  isAdmin,
+  onBack,
+  onEdit,
+}: CatalogSkillDetailProps) {
   const { t } = useTranslation();
   const detail = useQuery({
     queryKey: [...queryScope, "detail", skill.id, skill.name],
@@ -82,6 +86,7 @@ function CatalogSkillDetail({ skill, accessToken, queryScope, canWrite, onBack, 
         skill={skillHubDetail(detail.data ?? skill)}
         onBack={onBack}
         accessToken={accessToken}
+        isAdmin={isAdmin}
         onEditClick={canWrite && detail.isSuccess && !detail.isFetching ? () => onEdit(detail.data) : undefined}
       />
     </>
@@ -107,11 +112,20 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
   const { readOnly, canWrite, isAdmin, adminView } = skillPermissions(accessToken, userRole, isViewOnly);
   const queryScope = ["skill-hub", accessToken, userRole, readOnly] as const;
   const showForm = Boolean(isAddModalVisible || editingSkill) && canWrite;
-  const { pagination, onPaginationChange } = useUrlTableState(CATALOG_STATE);
+  const filters = useSkillFilters();
+  const { pagination, onPaginationChange, sorting, onSortingChange } = filters;
   const { pageIndex, pageSize } = pagination;
+  const catalogQuery: SkillListQuery & { limit: number; offset: number } = {
+    limit: pageSize,
+    offset: pageIndex * pageSize,
+    query: filters.search,
+    tag: filters.tag,
+    security_scan_passed: scanResultFilter(filters.scan),
+    ...skillSortQuery(sorting),
+  };
   const plugins = useQuery({
-    queryKey: [...queryScope, "published", pageIndex, pageSize],
-    queryFn: () => listSkillHubSkills(accessToken!, { limit: pageSize, offset: pageIndex * pageSize }),
+    queryKey: [...queryScope, "published", catalogQuery],
+    queryFn: () => listSkillHubSkills(accessToken!, catalogQuery),
     enabled: Boolean(accessToken),
   });
   const pluginsList = plugins.data?.skills ?? [];
@@ -156,6 +170,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
       {selectedSkill ? (
         <CatalogSkillDetail
           skill={selectedSkill}
+          isAdmin={isAdmin}
           accessToken={accessToken}
           queryScope={queryScope}
           canWrite={canWrite}
@@ -182,6 +197,9 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
               </TabsTrigger>
             </TabsList>
             <TabsContent value="skills">
+              <div className="my-4">
+                <SkillFilters {...filters} tags={plugins.data?.tags ?? []} />
+              </div>
               {plugins.isError && (
                 <div role="alert" className="my-3 text-sm text-destructive">
                   {t("skills.panel.loadFailed")}
@@ -193,6 +211,9 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
               <PluginTable
                 pluginsList={pluginsList}
                 isLoading={plugins.isLoading}
+                filtered={filters.active}
+                sorting={sorting}
+                onSortingChange={onSortingChange}
                 onDeleteClick={handleDeleteClick}
                 isAdmin={isAdmin}
                 onPluginClick={setSelectedSkillId}

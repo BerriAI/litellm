@@ -314,10 +314,12 @@ export const getManagedSkillArchivePath = (
   if (source.source !== "archive" || !validatePluginName(name)) {
     return null;
   }
-  if (!source.sha256 || !SHA256_REGEX.test(source.sha256)) {
+  if (source.sha256 && !SHA256_REGEX.test(source.sha256)) {
     return null;
   }
-  const path = `/claude-code/plugins/${name}/archive/${source.sha256}.zip`;
+  const path = source.sha256
+    ? `/claude-code/plugins/${name}/archive/${source.sha256}.zip`
+    : `/skill-hub/skills/${name}/archive`;
   try {
     const expectedUrl = new URL(`${proxyBaseUrl.replace(/\/+$/, "")}${path}`, pageOrigin);
     return /^https?:$/.test(expectedUrl.protocol) && source.url === expectedUrl.href ? path : null;

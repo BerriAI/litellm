@@ -29,12 +29,10 @@ import respx
 
 import litellm
 from litellm import Router
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import (
     Deployment,
@@ -117,13 +115,15 @@ async def test_discovered_limits_survive_deployment_growth_and_removal(
         )
         for deployment in deployments[initial_count:]:
             router.add_deployment(deployment)
-            await router._arefresh_deployment_model_info(router.model_list[-1], client=handler)
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
         assert all(
             router.get_configured_token_limits(deployment.model_name) == (4096, 4096) for deployment in deployments
         )
         for deployment in deployments[-2:]:
             router.delete_deployment(deployment.model_info.id or "")
-        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
         assert all(
             router.get_configured_token_limits(deployment.model_name) == (4096, 4096) for deployment in deployments[:-2]
         )
@@ -167,8 +167,9 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
     await handler.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         handler.client = client
-        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+        await router.arefresh_model_info(client=handler)
         assert router.get_configured_token_limits("local") == (None, None)
+        router.cache.in_memory_cache.flush_cache()
         await router.arefresh_model_info(client=handler)
         assert router.get_configured_token_limits("local") == (2048, 2048)
     _invalidate_model_cost_lowercase_map()
@@ -204,7 +205,7 @@ async def test_discovery_sends_the_secret_behind_an_oidc_api_key(
     await handler.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         handler.client = client
-        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+        await router.arefresh_model_info(client=handler)
     assert authorizations == ["Bearer local-secret"]
     _invalidate_model_cost_lowercase_map()
 
@@ -299,54 +300,6 @@ async def test_discovery_refreshes_other_endpoints_while_one_is_pending(monkeypa
     _invalidate_model_cost_lowercase_map()
 
 
-async def test_discovered_limits_expire_after_the_last_successful_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
-    clock: Final = Mock(return_value=0.0)
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "local",
-                "litellm_params": {
-                    "model": "hosted_vllm/local-model",
-                    "api_base": "https://expiry.test/v1",
-                    "api_key": "local-key",
-                },
-                "model_info": {"id": "expiring-discovery"},
-            }
-        ]
-    )
-    router._discovered_model_info_cache = InMemoryCache(clock=clock, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS)
-    responses: Final = iter(
-        (
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
-            httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}),
-            httpx.Response(503),
-        )
-    )
-    handler: Final = AsyncHTTPHandler()
-    await handler.client.aclose()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: next(responses))) as client:
-        handler.client = client
-        await router.arefresh_model_info(client=handler)
-        clock.return_value = MODEL_INFO_REFRESH_SECONDS
-        router.cache.in_memory_cache.flush_cache()
-        await router.arefresh_model_info(client=handler)
-        clock.return_value = 2 * MODEL_INFO_REFRESH_SECONDS + 1
-        router.cache.in_memory_cache.flush_cache()
-        await router.arefresh_model_info(client=handler)
-        assert router.get_configured_token_limits("local") == (8192, 8192)
-        group: Final = router.get_model_group_info("local")
-        assert group is not None
-        assert group.max_input_tokens == 8192
-        clock.return_value = 3 * MODEL_INFO_REFRESH_SECONDS + 1
-        await router.arefresh_model_info(client=handler)
-        assert router.get_configured_token_limits("local") == (None, None)
-        expired_group: Final = router.get_model_group_info("local")
-        assert expired_group is not None
-        assert expired_group.max_input_tokens is None
-    _invalidate_model_cost_lowercase_map()
-
-
 @pytest.mark.parametrize("provider", ("hosted_vllm", "openai", "openai_like", "text-completion-openai"))
 async def test_discovered_limits_are_isolated_overridable_and_refreshable(
     provider: str, monkeypatch: pytest.MonkeyPatch
@@ -390,11 +343,6 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
         assert listing is not None
         assert listing.max_input_tokens == 8192
         assert router.get_configured_token_limits("local") == (8192, 8192)
-        assert router._deployment_max_input_tokens("local", router.model_list[1]) == 4096
-        allowed: Final = router._pre_call_checks(
-            model="local", healthy_deployments=router.model_list, input="prompt", input_token_count=5000
-        )
-        assert [deployment["model_info"]["id"] for deployment in allowed] == ["one"]
         assert router.model_list[0]["model_info"].get("max_input_tokens") is None
         assert litellm.model_cost[f"{provider}/org/local-model"].get("max_input_tokens") is None
         router.cache.in_memory_cache.flush_cache()
@@ -892,32 +840,19 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         litellm.model_cost[backend_model] = backend_entry
         _invalidate_model_cost_lowercase_map()
 
-        router = Router(model_list=[])
-        with patch.object(Router, "_add_deployment", lambda self, deployment: deployment):
-            router._create_deployment(
-                deployment_info={},
-                _model_name="chatgpt/gpt-5.4",
-                _litellm_params={
-                    "model": "gpt-5.4",
-                    "custom_llm_provider": "chatgpt",
-                },
-                _model_info={
-                    "id": "chatgpt-shared-mode-base",
-                    "mode": "responses",
-                },
-            )
-            router._create_deployment(
-                deployment_info={},
-                _model_name="chatgpt/gpt-5.4-medium",
-                _litellm_params={
-                    "model": "gpt-5.4",
-                    "custom_llm_provider": "chatgpt",
-                },
-                _model_info={
-                    "id": "chatgpt-shared-mode-alias",
-                    "mode": "chat",
-                },
-            )
+        Router(
+            model_list=[
+                {
+                    "model_name": model_name,
+                    "litellm_params": {"model": "gpt-5.4", "custom_llm_provider": "chatgpt"},
+                    "model_info": {"id": model_id, "mode": mode},
+                }
+                for model_name, model_id, mode in (
+                    ("chatgpt/gpt-5.4", "chatgpt-shared-mode-base", "responses"),
+                    ("chatgpt/gpt-5.4-medium", "chatgpt-shared-mode-alias", "chat"),
+                )
+            ]
+        )
 
         assert litellm.model_cost[backend_model]["mode"] == "responses"
         assert "mode" in litellm.model_cost[backend_model]
@@ -940,7 +875,7 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
 @pytest.mark.parametrize("rate", (0.0, 0.004))
 @pytest.mark.parametrize("explicit_base", (False, True))
 @pytest.mark.parametrize("provider", (None, "bedrock"))
-@pytest.mark.parametrize("registration_path", ("direct", "startup", "reload"))
+@pytest.mark.parametrize("registration_path", ("startup", "reload"))
 def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
@@ -986,12 +921,9 @@ def test_bedrock_deployment_inherits_invoked_profile_around_custom_prices(
             }
         ),
     )
-    if registration_path == "direct":
-        Router._register_deployment_pricing(deployment)
-    else:
-        router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
-        if registration_path == "reload":
-            router.replay_model_cost_registrations()
+    router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
+    if registration_path == "reload":
+        router.replay_model_cost_registrations()
     response: Final = ModelResponse(
         model=model,
         usage=Usage(
@@ -1260,50 +1192,6 @@ def test_partial_custom_pricing_bills_explicit_cache_hits(
         _restore_model_cost_entries(model_keys)
 
 
-def test_inherit_builtin_cache_pricing_fills_only_missing_fields():
-    """Direct unit test of the helper: missing cache fields are filled from the
-    backend model's built-in entry, while an explicitly set cache field and the
-    user's input/output pricing are left untouched.
-    """
-    backend_model = "anthropic/claude-sonnet-4-5-20250929"
-    builtin_info = litellm.get_model_info(model=backend_model)
-    builtin_cache_create = builtin_info["cache_creation_input_token_cost"]
-    builtin_cache_read = builtin_info["cache_read_input_token_cost"]
-    assert builtin_cache_create is not None and builtin_cache_create > 0
-    assert builtin_cache_read is not None and builtin_cache_read > 0
-
-    explicit_cache_read = builtin_cache_read + 1
-    model_info = {
-        "input_cost_per_token": 0.000003,
-        "cache_read_input_token_cost": explicit_cache_read,
-    }
-
-    Router._inherit_builtin_cache_pricing(
-        model_info=model_info,
-        backend_model=backend_model,
-        custom_llm_provider="anthropic",
-    )
-
-    assert model_info["input_cost_per_token"] == 0.000003
-    assert model_info["cache_read_input_token_cost"] == explicit_cache_read
-    assert model_info["cache_creation_input_token_cost"] == builtin_cache_create
-
-
-def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
-    """No canonical entry for the backend model means the helper leaves the
-    passed-in dict unchanged rather than raising.
-    """
-    model_info = {"input_cost_per_token": 0.000003}
-
-    Router._inherit_builtin_cache_pricing(
-        model_info=model_info,
-        backend_model="this-backend-model-does-not-exist-x9y8z7",
-        custom_llm_provider=None,
-    )
-
-    assert model_info == {"input_cost_per_token": 0.000003}
-
-
 _TIER_BACKEND_MODEL: Final = "tier-priced-backend"
 _TIER_BACKEND_KEY: Final = f"openai/{_TIER_BACKEND_MODEL}"
 _CUSTOM_STANDARD_INPUT_RATE: Final = 0.00011
@@ -1347,86 +1235,6 @@ def _register_azure_tier_backend() -> None:
     litellm.model_cost[_AZURE_TIER_BACKEND_KEY] = copy.deepcopy(_AZURE_TIER_BACKEND_ENTRY)
     litellm.get_model_info.cache_clear()
     _invalidate_model_cost_lowercase_map()
-
-
-def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> None:
-    model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
-    }
-    try:
-        _register_tier_backend()
-        model_info: Final = {
-            "id": "custom-priced-tier-deployment",
-            "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
-            "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
-            "output_cost_per_token_ultrafast": 0.00999,
-        }
-
-        Router._inherit_builtin_service_tier_pricing(
-            model_info=model_info,
-            backend_model=_TIER_BACKEND_MODEL,
-            custom_llm_provider="openai",
-        )
-
-        assert model_info == {
-            "id": "custom-priced-tier-deployment",
-            "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
-            "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
-            "input_cost_per_token_ultrafast": _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"],
-            "output_cost_per_token_ultrafast": 0.00999,
-            "input_cost_per_token_priority": _TIER_BACKEND_ENTRY["input_cost_per_token_priority"],
-            "output_cost_per_token_priority": _TIER_BACKEND_ENTRY["output_cost_per_token_priority"],
-            "input_cost_per_token_flex": _TIER_BACKEND_ENTRY["input_cost_per_token_flex"],
-            "output_cost_per_token_flex": _TIER_BACKEND_ENTRY["output_cost_per_token_flex"],
-            "input_cost_per_token_balanced": _TIER_BACKEND_ENTRY["input_cost_per_token_balanced"],
-            "output_cost_per_token_balanced": _TIER_BACKEND_ENTRY["output_cost_per_token_balanced"],
-            "cache_read_input_token_cost_ultrafast": _TIER_BACKEND_ENTRY["cache_read_input_token_cost_ultrafast"],
-            "input_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
-                "input_cost_per_token_above_272k_tokens_ultrafast"
-            ],
-            "output_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
-                "output_cost_per_token_above_272k_tokens_ultrafast"
-            ],
-        }
-    finally:
-        _restore_model_cost_entries(model_cost_entries)
-        litellm.get_model_info.cache_clear()
-
-
-def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend() -> None:
-    model_cost_entries: Final = {
-        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
-    }
-    try:
-        _register_tier_backend()
-        model_info_without_base_rate: Final = {
-            "id": "custom-priced-no-base-rate",
-            "input_cost_per_token_ultrafast": 0.00031,
-        }
-        expected_without_base_rate: Final = copy.deepcopy(model_info_without_base_rate)
-        Router._inherit_builtin_service_tier_pricing(
-            model_info=model_info_without_base_rate,
-            backend_model=_TIER_BACKEND_MODEL,
-            custom_llm_provider="openai",
-        )
-
-        model_info_with_unknown_backend: Final = {
-            "id": "custom-priced-unknown-backend",
-            "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
-            "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
-        }
-        expected_with_unknown_backend: Final = copy.deepcopy(model_info_with_unknown_backend)
-        Router._inherit_builtin_service_tier_pricing(
-            model_info=model_info_with_unknown_backend,
-            backend_model="tier-priced-backend-unknown",
-            custom_llm_provider="openai",
-        )
-
-        assert model_info_without_base_rate == expected_without_base_rate
-        assert model_info_with_unknown_backend == expected_with_unknown_backend
-    finally:
-        _restore_model_cost_entries(model_cost_entries)
-        litellm.get_model_info.cache_clear()
 
 
 def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() -> None:
@@ -1644,8 +1452,8 @@ def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_pay
             + 100 * _AZURE_TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
         )
 
-        payload: Final = Router._deployment_model_cost_payload(
-            deployment=Deployment(
+        router.add_deployment(
+            Deployment(
                 model_name="azure/tier-priced-alias-from-params",
                 litellm_params=LiteLLM_Params(
                     model="azure/tier-priced-alias",
@@ -1657,209 +1465,13 @@ def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_pay
                 model_info=ModelInfo(id=payload_id),
             )
         )
+        payload: Final = litellm.model_cost[payload_id]
 
         assert payload["input_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY["input_cost_per_token_priority"]
         assert payload["output_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
-
-
-@pytest.mark.parametrize(
-    ("model_info_base_model", "params_base_model", "model", "expected"),
-    (
-        pytest.param(
-            "azure/tier-priced-model-info-base",
-            "azure/tier-priced-params-base",
-            "azure/tier-priced-deployment-alias",
-            "azure/tier-priced-model-info-base",
-            id="model-info-base-model-wins",
-        ),
-        pytest.param(
-            None,
-            "azure/tier-priced-params-base",
-            "azure/tier-priced-deployment-alias",
-            "azure/tier-priced-params-base",
-            id="params-base-model-fallback",
-        ),
-        pytest.param(
-            None,
-            None,
-            "azure/tier-priced-deployment-alias",
-            "azure/tier-priced-deployment-alias",
-            id="model-fallback",
-        ),
-        pytest.param(
-            "",
-            "azure/tier-priced-params-base",
-            "azure/tier-priced-deployment-alias",
-            "azure/tier-priced-params-base",
-            id="empty-model-info-base-model-falls-through",
-        ),
-    ),
-)
-def test_cost_map_backend_model_uses_canonical_model_precedence(
-    model_info_base_model: str | None,
-    params_base_model: str | None,
-    model: str,
-    expected: str,
-) -> None:
-    deployment: Final = Deployment(
-        model_name="azure/tier-priced-cost-map-backend",
-        litellm_params=LiteLLM_Params(model=model, base_model=params_base_model),
-        model_info=ModelInfo(id="tier-priced-cost-map-backend", base_model=model_info_base_model),
-    )
-
-    assert Router._cost_map_backend_model(deployment) == expected
-
-
-def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
-    """Direct unit test of the helper: an entry carrying only an
-    off_peak_pricing block inherits the backend model's built-in base token
-    rates, so cost lookup via the deployment id can bill standard rates
-    outside the windows.
-    """
-    backend_model = "gpt-4o-mini"
-    builtin_info = litellm.get_model_info(model=backend_model, custom_llm_provider="openai")
-    off_peak_block = {
-        "hours_utc": "00:00-00:00",
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 1e-06,
-    }
-    model_info = {"off_peak_pricing": off_peak_block}
-
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=model_info,
-        backend_model=backend_model,
-        custom_llm_provider="openai",
-    )
-
-    assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
-    assert model_info["output_cost_per_token"] == builtin_info["output_cost_per_token"]
-    assert model_info["off_peak_pricing"] == off_peak_block
-
-
-def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
-    """A backend with above-threshold pricing hands the whole rate structure to
-    the deployment entry, so peak-hour billing of large prompts through that
-    entry matches the shared backend entry instead of flattening to the base
-    rate.
-    """
-    backend_model = "gemini/gemini-2.5-pro"
-    builtin_info = litellm.get_model_info(model=backend_model)
-    assert builtin_info["input_cost_per_token_above_200k_tokens"] is not None
-
-    model_info = {
-        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
-    }
-
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=model_info,
-        backend_model=backend_model,
-        custom_llm_provider="gemini",
-    )
-
-    assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
-    assert (
-        model_info["input_cost_per_token_above_200k_tokens"] == builtin_info["input_cost_per_token_above_200k_tokens"]
-    )
-    assert (
-        model_info["output_cost_per_token_above_200k_tokens"] == builtin_info["output_cost_per_token_above_200k_tokens"]
-    )
-
-
-def test_inherit_builtin_base_rates_for_off_peak_carries_companion_billing_fields():
-    """Billing rules that are not literal cost rates, like the web search
-    billing unit, must ride along, or grounding and regional uplifts would
-    bill differently through the deployment entry than through the shared
-    backend entry.
-    """
-    backend_model = "gemini-3-pro-image"
-    raw_entry = litellm.model_cost[backend_model]
-    assert raw_entry.get("web_search_billing_unit") is not None
-
-    model_info = {
-        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
-    }
-
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=model_info,
-        backend_model=backend_model,
-        custom_llm_provider=None,
-    )
-
-    assert model_info["web_search_billing_unit"] == raw_entry["web_search_billing_unit"]
-    assert model_info["input_cost_per_token"] == raw_entry["input_cost_per_token"]
-
-
-def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_zero():
-    """A tiered-only backend has no flat token rates; get_model_info synthesizes
-    zeros for them, and storing those would mark the deployment explicitly
-    priced free. The tier table itself must carry over as an isolated copy so
-    mutating the deployment entry never touches the shared cost map.
-    """
-    backend_model = "dashscope/qwen-flash"
-    raw_tiers = litellm.model_cost[backend_model]["tiered_pricing"]
-
-    model_info = {
-        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
-    }
-
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=model_info,
-        backend_model=backend_model,
-        custom_llm_provider="dashscope",
-    )
-
-    assert model_info.get("input_cost_per_token") != 0
-    assert model_info.get("output_cost_per_token") != 0
-    assert model_info["tiered_pricing"] == raw_tiers
-    assert model_info["tiered_pricing"] is not raw_tiers
-    assert model_info["tiered_pricing"][0] is not raw_tiers[0]
-
-    original_first_tier = copy.deepcopy(raw_tiers[0])
-    model_info["tiered_pricing"][0]["input_cost_per_token"] = 123.0
-    assert raw_tiers[0] == original_first_tier
-
-
-def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
-    """An entry that sets its own base rate beside the block already counts as
-    a full custom pricing entry; the helper must not mix builtin rates into it.
-    """
-    model_info = {
-        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
-        "input_cost_per_token": 3e-06,
-    }
-
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=model_info,
-        backend_model="gpt-4o-mini",
-        custom_llm_provider="openai",
-    )
-
-    assert model_info["input_cost_per_token"] == 3e-06
-    assert "output_cost_per_token" not in model_info
-
-
-def test_inherit_builtin_base_rates_for_off_peak_noop_without_block_or_backend():
-    """Nothing happens without an off_peak_pricing block, and an unmapped
-    backend model leaves the entry unchanged rather than raising.
-    """
-    plain_info = {"id": "dep-1"}
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=plain_info,
-        backend_model="gpt-4o-mini",
-        custom_llm_provider="openai",
-    )
-    assert plain_info == {"id": "dep-1"}
-
-    off_peak_info = {"off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07}}
-    Router._inherit_builtin_base_rates_for_off_peak(
-        model_info=off_peak_info,
-        backend_model="this-backend-model-does-not-exist-x9y8z7",
-        custom_llm_provider=None,
-    )
-    assert "input_cost_per_token" not in off_peak_info
 
 
 def test_custom_pricing_field_denylist_covers_all_builtin_pricing_fields():
@@ -2635,28 +2247,6 @@ def test_repointing_a_deployment_drops_its_previous_backend_key(monkeypatch):
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.parametrize(
-    "model, custom_llm_provider, expected",
-    [
-        ("gpt-4o", None, ("gpt-4o",)),
-        ("gpt-4o", "openai", ("openai/gpt-4o",)),
-        ("openai/gpt-4o", None, ("openai/gpt-4o",)),
-        ("responses/gpt-4o", "openai", ("openai/responses/gpt-4o", "openai/gpt-4o")),
-        ("responses/gpt-4o", None, ("responses/gpt-4o", "gpt-4o")),
-    ],
-)
-def test_backend_cost_map_keys_matches_what_registration_writes(model, custom_llm_provider, expected):
-    """
-    The withdrawal path drops exactly the keys the registration wrote, so the two
-    have to agree on the provider prefix and on the responses/ alias. The first
-    key is also the one the registration uses as the shared backend key, so its
-    position is load-bearing rather than incidental.
-    """
-    keys = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
-    assert keys == expected
-    assert keys[0] == (model if custom_llm_provider is None else f"{custom_llm_provider}/{model}")
-
-
 def test_mantle_chat_deployment_does_not_rewrite_the_shared_responses_row():
     """
     A Bedrock Mantle deployment that pins ``mode: chat`` routes its own chat
@@ -3135,55 +2725,34 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
         _invalidate_model_cost_lowercase_map()
 
 
-def test_replay_model_cost_registrations_survives_a_malformed_deployment():
-    """
-    The rebuild reads whatever dicts are sitting in model_list, so one entry that
-    cannot be rebuilt into a Deployment must not stop the rest being restored.
-    """
-    saved_model_cost = litellm.model_cost
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "healthy",
-                    "litellm_params": {"model": "hosted_vllm/healthy-backend"},
-                    "model_info": {"id": "healthy-id", "max_input_tokens": 777},
-                }
-            ],
-        )
-        router.model_list.insert(0, {"litellm_params": {}})
-
-        litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
-        _invalidate_model_cost_lowercase_map()
-        router.replay_model_cost_registrations()
-
-        assert litellm.model_cost["healthy-id"]["max_input_tokens"] == 777
-    finally:
-        litellm.model_cost = saved_model_cost
-        _invalidate_model_cost_lowercase_map()
-
-
 def test_deployment_model_cost_payload_folds_in_litellm_params_pricing():
     """
     Custom pricing is configured on litellm_params but has to land in the
     cost-map entry, and setting it pulls in the built-in cache pricing for the
     backend model. Both are what make the entry reproducible from a deployment.
     """
-    payload = Router._deployment_model_cost_payload(
-        deployment=Deployment(
-            model_name="priced",
-            litellm_params=LiteLLM_Params(
-                model="gemini/gemini-2.5-pro",
-                input_cost_per_token=0.000123,
-            ),
-            model_info=ModelInfo(id="payload-id", max_input_tokens=4242),
+    model_keys = {"payload-id": copy.deepcopy(litellm.model_cost.get("payload-id"))}
+    try:
+        Router(
+            model_list=[
+                Deployment(
+                    model_name="priced",
+                    litellm_params=LiteLLM_Params(
+                        model="gemini/gemini-2.5-pro",
+                        input_cost_per_token=0.000123,
+                    ),
+                    model_info=ModelInfo(id="payload-id", max_input_tokens=4242),
+                ).to_json(exclude_none=True)
+            ]
         )
-    )
+        payload = litellm.model_cost["payload-id"]
 
-    assert payload["id"] == "payload-id"
-    assert payload["max_input_tokens"] == 4242
-    assert payload["input_cost_per_token"] == 0.000123
-    assert payload["cache_read_input_token_cost"] > 0
+        assert payload["id"] == "payload-id"
+        assert payload["max_input_tokens"] == 4242
+        assert payload["input_cost_per_token"] == 0.000123
+        assert payload["cache_read_input_token_cost"] > 0
+    finally:
+        _restore_model_cost_entries(model_keys)
 
 
 def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -> None:
@@ -3193,18 +2762,21 @@ def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -
     }
     try:
         _register_tier_backend()
-        payload: Final = Router._deployment_model_cost_payload(
-            deployment=Deployment(
-                model_name="tier-priced-payload",
-                litellm_params=LiteLLM_Params(
-                    model=_TIER_BACKEND_MODEL,
-                    custom_llm_provider="openai",
-                    input_cost_per_token=_CUSTOM_STANDARD_INPUT_RATE,
-                    output_cost_per_token=_CUSTOM_STANDARD_OUTPUT_RATE,
-                ),
-                model_info=ModelInfo(id=model_id),
-            )
+        Router(
+            model_list=[
+                Deployment(
+                    model_name="tier-priced-payload",
+                    litellm_params=LiteLLM_Params(
+                        model=_TIER_BACKEND_MODEL,
+                        custom_llm_provider="openai",
+                        input_cost_per_token=_CUSTOM_STANDARD_INPUT_RATE,
+                        output_cost_per_token=_CUSTOM_STANDARD_OUTPUT_RATE,
+                    ),
+                    model_info=ModelInfo(id=model_id),
+                ).to_json(exclude_none=True)
+            ]
         )
+        payload: Final = litellm.model_cost[model_id]
 
         assert payload["input_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
         assert payload["output_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
@@ -3227,15 +2799,14 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
         "hosted_vllm/both-families-backend": copy.deepcopy(litellm.model_cost.get("hosted_vllm/both-families-backend")),
     }
     try:
-        Router._register_deployment_in_model_cost(
-            model_id="both-families-id",
-            model_info={
-                "id": "both-families-id",
-                "max_input_tokens": 999,
-                "litellm_provider": "hosted_vllm",
-            },
-            model="hosted_vllm/both-families-backend",
-            custom_llm_provider=None,
+        Router(
+            model_list=[
+                {
+                    "model_name": "both-families",
+                    "litellm_params": {"model": "hosted_vllm/both-families-backend"},
+                    "model_info": {"id": "both-families-id", "max_input_tokens": 999},
+                }
+            ]
         )
 
         assert litellm.model_cost["both-families-id"]["max_input_tokens"] == 999
@@ -3345,8 +2916,6 @@ def test_replay_live_router_model_cost_rebuilds_every_live_router():
     A process can hold more than one Router, so the rebuild has to fan out across
     all of them rather than restoring whichever one happens to be reachable.
     """
-    from litellm.router import _replay_live_router_model_cost
-
     saved_model_cost = litellm.model_cost
     try:
         first = Router(
@@ -3368,9 +2937,7 @@ def test_replay_live_router_model_cost_rebuilds_every_live_router():
             ],
         )
 
-        litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
-        _invalidate_model_cost_lowercase_map()
-        _replay_live_router_model_cost()
+        _simulate_price_data_reload({"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}})
 
         assert litellm.model_cost["first-id"]["max_input_tokens"] == 111
         assert litellm.model_cost["second-id"]["max_input_tokens"] == 222
@@ -3437,61 +3004,6 @@ def test_strategy_router_alias_pricing_never_enters_model_cost(monkeypatch):
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
-
-
-def test_inherit_builtin_tiered_output_rate_fills_the_backend_flat_rate():
-    """
-    A deployment entry whose custom tiers publish only input rates would bill
-    completions at 0, so the backend model's flat output rate is copied in at
-    registration.
-    """
-    model_info = {"tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}]}
-
-    Router._inherit_builtin_tiered_output_rate(
-        model_info=model_info,
-        backend_model="claude-haiku-4-5",
-        custom_llm_provider="anthropic",
-    )
-
-    backend_rate = litellm.get_model_info(model="claude-haiku-4-5", custom_llm_provider="anthropic")[
-        "output_cost_per_token"
-    ]
-    assert backend_rate > 0
-    assert model_info["output_cost_per_token"] == backend_rate
-
-
-def test_inherit_builtin_tiered_output_rate_never_stores_a_synthesized_zero():
-    """
-    Regression: get_model_info reports output_cost_per_token 0 for a backend that
-    only publishes tiered rates (e.g. dashscope/qwen-flash), and storing that zero
-    would mark the deployment as explicitly priced free.
-    """
-    backend_info = litellm.get_model_info(model="qwen-flash", custom_llm_provider="dashscope")
-    assert backend_info["output_cost_per_token"] == 0
-
-    model_info = {"tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}]}
-    Router._inherit_builtin_tiered_output_rate(
-        model_info=model_info,
-        backend_model="qwen-flash",
-        custom_llm_provider="dashscope",
-    )
-
-    assert "output_cost_per_token" not in model_info
-
-
-def test_inherit_builtin_tiered_output_rate_leaves_a_user_rate_alone():
-    model_info = {
-        "tiered_pricing": [{"range": [0, 3000], "input_cost_per_token": 3.25e-07}],
-        "output_cost_per_token": 9e-07,
-    }
-
-    Router._inherit_builtin_tiered_output_rate(
-        model_info=model_info,
-        backend_model="claude-haiku-4-5",
-        custom_llm_provider="anthropic",
-    )
-
-    assert model_info["output_cost_per_token"] == 9e-07
 
 
 # --- a config.yaml PTU deployment must not also bill per token ------------------

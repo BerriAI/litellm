@@ -2708,6 +2708,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/{plugin_name}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plugin Downloads
+         * @description Admin-only ZIP download totals and authenticated downloader history.
+         *
+         *     Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+         *     starting when tracking is deployed. External sources and installation completion are not observed.
+         */
+        get: operations["get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}/enable": {
         parameters: {
             query?: never;
@@ -15911,6 +15934,29 @@ export interface paths {
          * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
          */
         get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{plugin_name}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plugin Downloads
+         * @description Admin-only ZIP download totals and authenticated downloader history.
+         *
+         *     Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+         *     starting when tracking is deployed. External sources and installation completion are not observed.
+         */
+        get: operations["get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -29396,7 +29442,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "compact_responses" | "acompact_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -31299,8 +31345,8 @@ export interface components {
             use_google_kms?: boolean | null;
             /**
              * Use Spend Logs Ledger
-             * @description Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.
-             * @default false
+             * @description Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.
+             * @default true
              */
             use_spend_logs_ledger: boolean;
             /**
@@ -42026,20 +42072,63 @@ export interface components {
              */
             url: string;
         };
+        /** PluginDownloadEvent */
+        PluginDownloadEvent: {
+            /** Authenticated */
+            authenticated: boolean;
+            /** Digest */
+            digest: string;
+            /**
+             * Downloaded At
+             * Format: date-time
+             */
+            downloaded_at: string;
+            /** Id */
+            id: string;
+            /** Key Alias */
+            key_alias: string | null;
+            /** Team Alias */
+            team_alias: string | null;
+            /** Team Id */
+            team_id: string | null;
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** PluginDownloadsResponse */
+        PluginDownloadsResponse: {
+            /** Anonymous Downloads */
+            anonymous_downloads: number;
+            /** Downloads */
+            downloads: components["schemas"]["PluginDownloadEvent"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Total Downloads */
+            total_downloads: number;
+        };
         /**
          * PluginListItem
          * @description Plugin item in list responses.
          */
         PluginListItem: {
+            /** Approved By */
+            approved_by?: string | null;
             author?: components["schemas"]["PluginAuthor"] | null;
             /** Category */
             category?: string | null;
             /** Created At */
             created_at: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Download Count */
+            download_count?: number | null;
             /** Enabled */
             enabled: boolean;
             /** Homepage */
@@ -42054,6 +42143,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -46837,6 +46933,11 @@ export interface components {
             next_offset: number | null;
             /** Skills */
             skills: components["schemas"]["SkillHubSkill"][];
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
         };
         /** SkillHubMetadata */
         SkillHubMetadata: {
@@ -46922,12 +47023,23 @@ export interface components {
         };
         /** SkillHubSkill */
         SkillHubSkill: {
+            /** Approved By */
+            approved_by?: string | null;
             /** Content Url */
             content_url?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             /** Domain */
             domain?: string | null;
+            /**
+             * Download Count
+             * @description Gateway ZIP downloads, including repeat downloads
+             */
+            download_count?: number | null;
             /** Download Url */
             download_url?: string | null;
             /** Id */
@@ -46938,6 +47050,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -57025,6 +57144,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of download events */
+                limit?: number;
+                /** @description Previous next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDownloadsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -74267,6 +74422,10 @@ export interface operations {
                 query?: string;
                 offset?: number;
                 limit?: number;
+                tag?: string;
+                security_scan_passed?: boolean | null;
+                sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
+                sort_order?: "asc" | "desc";
             };
             header?: never;
             path?: never;
@@ -74709,6 +74868,42 @@ export interface operations {
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of download events */
+                limit?: number;
+                /** @description Previous next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDownloadsResponse"];
                 };
             };
             /** @description Validation Error */
