@@ -51,7 +51,7 @@ createServer((request, response) => {
   if (pathname === "/__workflow_run_fixture_login") {
     response.writeHead(302, {
       "Set-Cookie": `token=${token}; Path=/; SameSite=Lax; Max-Age=86400`,
-      Location: `${dashboard}/ui/workflows/run-preview`,
+      Location: `${dashboard}/workflows/run-preview`,
     });
     response.end();
     return;

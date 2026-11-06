@@ -116,7 +116,7 @@ LENS_DEV_PROXY_URL=http://127.0.0.1:3378 NEXT_PUBLIC_USE_REWRITES=true \
   --hostname 127.0.0.1 --port 3377
 ```
 
-Open `http://workflow-runs.localhost:3377/__workflow_run_fixture_login`. The preview is development-only, served inside the real dashboard shell, and labeled “Fixture preview”. Its local fixture credential is not a gateway credential
+Open `http://workflow-runs.localhost:3377/__workflow_run_fixture_login`. It redirects to `/workflows/run-preview` under Agentic > Workflow Runs. The preview is development-only, served inside the real dashboard shell, and labeled “Fixture preview”. Its local fixture credential is not a gateway credential
 
 Select the completed, running and failed runs. Inspect Python values, a failed step with two attempts and an LLM spend record. Filter by status, navigate to the second history page, then inspect two distinct executions referencing `node_1`. The pending fixture has no reported steps. The scalar Python fixture deliberately exercises JSON false and zero as rendering edge cases
 
