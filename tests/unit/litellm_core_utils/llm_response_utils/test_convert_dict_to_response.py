@@ -2814,6 +2814,24 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert result.usage.output_tokens == 5
         assert result.usage.input_token_details.audio_tokens == 4
 
+    def test_parse_error_keeps_the_transcript_out_of_the_exception(self):
+        import traceback
+
+        from litellm.types.utils import TranscriptionResponse
+
+        transcript: Final = "CANARYTRANSCRIPT customer account ending 2750"
+
+        with pytest.raises(Exception, match="Invalid response object") as exc_info:
+            convert_to_model_response_object(
+                response_object={"text": transcript, "usage": {"type": "duration", "seconds": "not-a-number"}},
+                model_response_object=TranscriptionResponse(),
+                response_type="audio_transcription",
+            )
+
+        rendered: Final = "".join(traceback.format_exception(exc_info.value))
+        assert "received_args=" in rendered
+        assert "CANARYTRANSCRIPT" not in rendered
+
 class TestConvertToModelResponseObjectRerank:
     def test_basic_rerank(self):
         from litellm.types.utils import RerankResponse
