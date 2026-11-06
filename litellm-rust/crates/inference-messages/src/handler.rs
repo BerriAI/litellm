@@ -131,6 +131,7 @@ async fn provider_call(
     let transform_context =
         MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params);
     let filtered = requested_optional_params(sanitized, provider, &transform_context)?;
+    let requested_params = serde_json::to_value(&filtered.params).map_err(serialize_failure)?;
     let trimmed =
         without_additional_drop_params(filtered, &shaping.settings.additional_drop_params)?;
 
@@ -173,7 +174,7 @@ async fn provider_call(
     let request_context = RequestContext {
         model: body.model.clone(),
         custom_llm_provider: provider.as_str().to_string(),
-        optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
+        optional_params: requested_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
