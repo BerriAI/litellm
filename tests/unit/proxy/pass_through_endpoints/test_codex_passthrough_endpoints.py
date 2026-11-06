@@ -1,14 +1,18 @@
 import asyncio
 import base64
 import json
+import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime
 from typing import Final
 
 import httpx
+import jwt
 import pytest
 import respx
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from jwt.algorithms import RSAAlgorithm
 
 import litellm
 from litellm import Router
@@ -16,7 +20,8 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.chatgpt.common_utils import OPENAI_AUTH_CLAIM_KEY
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
 from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import (
@@ -979,6 +984,90 @@ def test_proxy_allowed_routes_keep_litellm_models_off_native_routes_unless_v1_re
         "/backend-api/codex/responses",
         json={"model": "open-weights", "input": "Hello", "stream": True},
         headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert (catalog.status_code, response.status_code) == (200, 200), response.text
+    assert ("open-weights" in [model["slug"] for model in catalog.json()["models"]]) is through_litellm
+    assert provider.called is through_litellm
+    assert chatgpt.called is not through_litellm
+
+
+_JWT_ISSUER: Final = "https://idp.codex-test.example"
+_JWT_JWKS_URL: Final = f"{_JWT_ISSUER}/keys"
+_JWT_AUDIENCE: Final = "litellm-proxy"
+_JWT_KID: Final = "codex-test-key"
+_JWT_TEAM: Final = "codex-team"
+
+
+def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -> str:
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk: Final = {
+        **json.loads(RSAAlgorithm.to_jwk(private_key.public_key())),
+        "kid": _JWT_KID,
+        "alg": "RS256",
+        "use": "sig",
+    }
+    keys_cache: Final = DualCache()
+    keys_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=keys_cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            issuers=[{"issuer": _JWT_ISSUER, "jwks_url": _JWT_JWKS_URL, "audience": _JWT_AUDIENCE}],
+            team_ids_jwt_field="groups",
+            team_allowed_routes=team_allowed_routes,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    proxy_server.user_api_key_cache.set_cache(
+        key=f"team_id:{_JWT_TEAM}",
+        value=LiteLLM_TeamTableCachedObj(team_id=_JWT_TEAM, models=["chatgpt-native", "open-weights"]),
+    )
+    issued_at: Final = int(time.time())
+    return jwt.encode(
+        {
+            "sub": "codex-user",
+            "iss": _JWT_ISSUER,
+            "aud": _JWT_AUDIENCE,
+            "iat": issued_at,
+            "exp": issued_at + 300,
+            "groups": [_JWT_TEAM],
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": _JWT_KID},
+    )
+
+
+@pytest.mark.parametrize(
+    ("team_allowed_routes", "through_litellm"),
+    [
+        pytest.param(["/backend-api/codex/*"], False, id="team allowed only the native routes"),
+        pytest.param(["/backend-api/codex/*", "openai_routes"], True, id="team allowed openai routes too"),
+    ],
+)
+def test_jwt_team_routes_keep_litellm_models_off_native_routes_unless_v1_responses_is_allowed(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+    team_allowed_routes: list[str],
+    through_litellm: bool,
+) -> None:
+    token: Final = _team_jwt(monkeypatch, team_allowed_routes)
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    catalog: Final = client.get(
+        "/backend-api/codex/models?client_version=1.0.0", headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": token}
+    )
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "open-weights", "input": "Hello", "stream": True},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": token},
     )
     assert (catalog.status_code, response.status_code) == (200, 200), response.text
     assert ("open-weights" in [model["slug"] for model in catalog.json()["models"]]) is through_litellm

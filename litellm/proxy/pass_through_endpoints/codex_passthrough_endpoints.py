@@ -4,6 +4,7 @@ import hmac
 import json
 import re
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 
@@ -25,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import check_model_access_helper, check_tools_allowlist
+from litellm.proxy.auth.handle_jwt import JWTAuthManager
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import (
@@ -175,7 +177,7 @@ def codex_shared_cache() -> _SharedCache:
     return proxy_logging_obj.internal_usage_cache.dual_cache
 
 
-def _may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
+def _key_may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
     if not RouteChecks.is_allowed_on_proxy(_LITELLM_RESPONSES_PATH):
         return False
     try:
@@ -185,6 +187,59 @@ def _may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
     except HTTPException:
         return False
     return True
+
+
+async def _jwt_policy_admits_litellm_responses(
+    gateway_token: str, model: str, request_headers: Mapping[str, str]
+) -> bool:
+    from litellm.proxy.proxy_server import (
+        general_settings_view,
+        jwt_handler,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    try:
+        _ = await JWTAuthManager.auth_builder(
+            api_key=gateway_token,
+            jwt_handler=jwt_handler,
+            request_data={"model": model},
+            general_settings=dict(general_settings_view()),
+            route=_LITELLM_RESPONSES_PATH,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=request_headers,
+            request_method="POST",
+        )
+    except Exception:  # noqa: BLE001  # any JWT policy refusal keeps the caller on ChatGPT's models
+        return False
+    return True
+
+
+@dataclass(frozen=True, slots=True)
+class _LitellmResponsesAccess:
+    key_admits: bool
+    jwt_token: str | None
+    request_headers: Mapping[str, str]
+
+    async def admits(self, model: str) -> bool:
+        if not self.key_admits:
+            return False
+        if self.jwt_token is None:
+            return True
+        return await _jwt_policy_admits_litellm_responses(self.jwt_token, model, self.request_headers)
+
+
+def _litellm_responses_access(user_api_key_dict: UserAPIKeyAuth, request: Request) -> _LitellmResponsesAccess:
+    standard_jwt: Final = bool(user_api_key_dict.jwt_claims) and not user_api_key_dict.token
+    return _LitellmResponsesAccess(
+        key_admits=_key_may_call_litellm_responses(user_api_key_dict),
+        jwt_token=_gateway_token(request) if standard_jwt else None,
+        request_headers=request.headers,
+    )
 
 
 def _account_slugs_cache_key(headers: Mapping[str, str]) -> str | None:
@@ -264,13 +319,14 @@ async def _serves_through_litellm(
     model: object,
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
+    access: _LitellmResponsesAccess,
     caller: str,
     headers: Mapping[str, str],
     cache: _SharedCache,
 ) -> bool:
-    if not routes_to_litellm(model, llm_router, user_api_key_dict.team_id) or not _may_call_litellm_responses(
-        user_api_key_dict
-    ):
+    if not isinstance(model, str) or not routes_to_litellm(model, llm_router, user_api_key_dict.team_id):
+        return False
+    if not await access.admits(model):
         return False
     account_slugs: Final = await _account_slugs(headers, caller, cache)
     return account_slugs is not None and model not in account_slugs
@@ -305,6 +361,7 @@ async def native_turn_serves_through_litellm(
         model,
         llm_router,
         user_api_key_dict,
+        _litellm_responses_access(user_api_key_dict, request),
         _models_etag_caller(user_api_key_dict, gateway_token),
         _forwarded_headers(request),
         codex_shared_cache(),
@@ -523,11 +580,11 @@ def _chatgpt_body(body: Mapping[str, object], client_model: str | None) -> Mappi
 
 
 async def _litellm_catalog_rows(
-    user_api_key_dict: UserAPIKeyAuth, llm_router: "Router | None"
+    user_api_key_dict: UserAPIKeyAuth, access: _LitellmResponsesAccess, llm_router: "Router | None"
 ) -> tuple[CodexCatalogRow, ...]:
     from litellm.proxy.proxy_server import codex_catalog_rows_for_key
 
-    if llm_router is None or not _may_call_litellm_responses(user_api_key_dict):
+    if llm_router is None or not access.key_admits:
         return ()
     try:
         rows: Final = await codex_catalog_rows_for_key(user_api_key_dict)
@@ -537,7 +594,9 @@ async def _litellm_catalog_rows(
             type(error).__name__,
         )
         return ()
-    return tuple(row for row in rows if routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
+    routed: Final = tuple(row for row in rows if routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
+    admitted: Final = await asyncio.gather(*(access.admits(row.id) for row in routed))
+    return tuple(row for row, row_admitted in zip(routed, admitted, strict=True) if row_admitted)
 
 
 def _models_etag_caller(user_api_key_dict: UserAPIKeyAuth, gateway_token: str) -> str:
@@ -570,6 +629,7 @@ async def _cached_models_etag(caller: str, upstream_etag: str, cache: _SharedCac
 async def _key_models_etag(
     upstream_etag: str,
     user_api_key_dict: UserAPIKeyAuth,
+    access: _LitellmResponsesAccess,
     caller: str,
     llm_router: "Router | None",
     cache: _SharedCache,
@@ -577,7 +637,7 @@ async def _key_models_etag(
     cached: Final = await _cached_models_etag(caller, upstream_etag, cache)
     if cached is not None:
         return cached
-    rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
+    rows: Final = await _litellm_catalog_rows(user_api_key_dict, access, llm_router)
     return await _remembered_models_etag(caller, upstream_etag, rows, cache)
 
 
@@ -596,6 +656,7 @@ def _with_etag(response: Response, content: bytes | str, etag: str | None) -> Re
 async def _catalog(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
+    access: _LitellmResponsesAccess,
     caller: str,
     headers: Mapping[str, str],
     cache: _SharedCache,
@@ -619,7 +680,7 @@ async def _catalog(
     account_slugs_key: Final = _account_slugs_cache_key(headers)
     if account_slugs_key is not None:
         await _remember_account_slugs(account_slugs_key, slugs, cache)
-    rows: Final = await _litellm_catalog_rows(user_api_key_dict, llm_router)
+    rows: Final = await _litellm_catalog_rows(user_api_key_dict, access, llm_router)
     upstream_etag: Final = upstream.headers.get(_ETAG_HEADER)
     etag: Final = None if upstream_etag is None else await _remembered_models_etag(caller, upstream_etag, rows, cache)
     if not rows:
@@ -634,6 +695,7 @@ async def _responses(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
+    access: _LitellmResponsesAccess,
     caller: str,
     headers: Mapping[str, str],
     cache: _SharedCache,
@@ -641,7 +703,7 @@ async def _responses(
     from litellm.proxy.proxy_server import llm_router
 
     body: Final = _JSON_OBJECT.validate_python(await read_request_body(request))
-    if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, caller, headers, cache):
+    if await _serves_through_litellm(body.get("model"), llm_router, user_api_key_dict, access, caller, headers, cache):
         litellm_body: Final = _litellm_body(body, llm_router, user_api_key_dict.team_id, headers)
         await check_tools_allowlist(
             request_body=dict(litellm_body),
@@ -667,7 +729,7 @@ async def _responses(
     upstream_models_etag: Final = upstream.headers.get(_MODELS_ETAG_HEADER)
     if upstream_models_etag is not None:
         upstream.headers[_MODELS_ETAG_HEADER] = await _key_models_etag(
-            upstream_models_etag, user_api_key_dict, caller, llm_router, cache
+            upstream_models_etag, user_api_key_dict, access, caller, llm_router, cache
         )
     return upstream
 
@@ -718,6 +780,7 @@ async def codex_passthrough_route(
 
     headers: Final = _forwarded_headers(request)
     caller: Final = _models_etag_caller(user_api_key_dict, gateway_token)
+    access: Final = _litellm_responses_access(user_api_key_dict, request)
     if endpoint == "models":
-        return await _catalog(request, user_api_key_dict, caller, headers, cache)
-    return await _responses(request, fastapi_response, user_api_key_dict, caller, headers, cache)
+        return await _catalog(request, user_api_key_dict, access, caller, headers, cache)
+    return await _responses(request, fastapi_response, user_api_key_dict, access, caller, headers, cache)
