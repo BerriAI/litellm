@@ -23,6 +23,7 @@ from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
     Summary,
 )
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -5935,6 +5936,464 @@ def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a
     ]
 
 
+_OPENAI_GPT_ROW: Final = {"litellm_provider": "openai", "mode": "chat", "supports_prompt_cache_breakpoint": True}
+_EPHEMERAL: Final = {"type": "ephemeral"}
+_CLIENT_MARKED_MESSAGES: Final = (
+    {"role": "system", "content": "Rules"},
+    {"role": "system", "content": "Stable prefix", "cache_control": _EPHEMERAL},
+    {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": _EPHEMERAL}]},
+)
+_PINNED_EXPLICIT: Final = {"mode": "explicit"}
+_MESSAGE: Final = TypeAdapter(Mapping[str, object])
+_PARTS: Final = TypeAdapter(list[Mapping[str, object]])
+
+
+def _client_marked_messages() -> list[AllMessageValues]:
+    return cast(List[AllMessageValues], copy.deepcopy(list(_CLIENT_MARKED_MESSAGES)))  # cast-ok: chat message dicts
+
+
+def _marked_parts(role: object, content: object) -> frozenset[tuple[object, object, str]]:
+    if not isinstance(content, list):
+        return frozenset()
+    return frozenset(
+        (role, part.get("text"), json.dumps(part["prompt_cache_breakpoint"], sort_keys=True))
+        for part in _PARTS.validate_python(content)
+        if "prompt_cache_breakpoint" in part
+    )
+
+
+def _marked_parts_of(items: object) -> frozenset[tuple[object, object, str]]:
+    messages: Final = (_MESSAGE.validate_python(item) for item in cast(list[object], items))  # cast-ok: wire list
+    return frozenset().union(*(_marked_parts(message.get("role"), message.get("content")) for message in messages))
+
+
+@pytest.mark.parametrize(
+    ("row_key", "row", "model", "custom_llm_provider", "api_base", "prompt_cache_options", "reads_breakpoints"),
+    [
+        pytest.param(
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            _MANTLE_GPT_ROW,
+            "openai.gpt-5.6-sol",
+            "bedrock_mantle",
+            None,
+            None,
+            True,
+            id="flagged-hosted-row",
+        ),
+        pytest.param(
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            _MANTLE_GPT_ROW,
+            "openai.gpt-5.6-sol",
+            "bedrock_mantle",
+            None,
+            _PINNED_EXPLICIT,
+            True,
+            id="flagged-hosted-row-pinned-explicit",
+        ),
+        pytest.param(
+            "bedrock_mantle/gpt-6-luna",
+            {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": False},
+            "gpt-6-luna",
+            "bedrock_mantle",
+            None,
+            _PINNED_EXPLICIT,
+            False,
+            id="hosted-row-opted-out",
+        ),
+        pytest.param(
+            "bedrock_mantle/anthropic.claude-sonnet-test",
+            {"litellm_provider": "bedrock_mantle", "mode": "chat"},
+            "anthropic.claude-sonnet-test",
+            "bedrock_mantle",
+            None,
+            _PINNED_EXPLICIT,
+            False,
+            id="claude-on-the-same-host",
+        ),
+        pytest.param(
+            "gpt-6-luna",
+            _OPENAI_GPT_ROW,
+            "gpt-6-luna",
+            "openai",
+            "https://api.openai.com/v1",
+            None,
+            True,
+            id="openai-api",
+        ),
+        pytest.param(
+            "gpt-6-luna",
+            _OPENAI_GPT_ROW,
+            "gpt-6-luna",
+            "openai",
+            "https://gateway.example.com/v1",
+            None,
+            False,
+            id="third-party-host",
+        ),
+        pytest.param(
+            "gpt-6-luna",
+            _OPENAI_GPT_ROW,
+            "gpt-6-luna",
+            "openai",
+            "https://gateway.example.com/v1",
+            _PINNED_EXPLICIT,
+            True,
+            id="third-party-host-opted-in",
+        ),
+    ],
+)
+def test_transform_request_marks_the_parts_the_chat_route_marks_for_the_same_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    row_key: str,
+    row: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    api_base: str | None,
+    prompt_cache_options: Mapping[str, object] | None,
+    reads_breakpoints: bool,
+) -> None:
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    monkeypatch.setitem(litellm.model_cost, row_key, row)
+    litellm_params: Final[dict[str, object]] = {
+        "custom_llm_provider": custom_llm_provider,
+        **({} if api_base is None else {"api_base": api_base}),
+    }
+    options: Final[dict[str, object]] = (
+        {} if prompt_cache_options is None else {"prompt_cache_options": prompt_cache_options}
+    )
+    chat_request: Final = OpenAIGPTConfig().transform_request(
+        model=model,
+        messages=_client_marked_messages(),
+        optional_params={"extra_body": dict(options)},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+    bridged_request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=_client_marked_messages(),
+        optional_params=dict(options),
+        litellm_params=dict(litellm_params),
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    chat_marks: Final = _marked_parts_of(chat_request["messages"])
+    assert _marked_parts_of(bridged_request["input"]) == chat_marks
+    assert {(role, text) for role, text, _ in chat_marks} == (
+        {("system", "Stable prefix"), ("user", "hi")} if reads_breakpoints else set()
+    )
+
+
+@pytest.mark.parametrize("opted_in", [True, False])
+def test_transform_request_follows_the_deployments_own_breakpoint_opt_in_like_the_chat_route(
+    monkeypatch: pytest.MonkeyPatch, opted_in: bool
+) -> None:
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
+    monkeypatch.setitem(litellm.model_cost, "luna-chat", {"litellm_provider": "openai", "mode": "chat"})
+    litellm_params: Final[dict[str, object]] = {
+        "custom_llm_provider": "openai",
+        "api_base": "https://api.openai.com/v1",
+        "model_info": {"supports_prompt_cache_breakpoint": opted_in},
+    }
+    chat_request: Final = OpenAIGPTConfig().transform_request(
+        model="luna-chat",
+        messages=_client_marked_messages(),
+        optional_params={},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+    bridged_request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="luna-chat",
+        messages=_client_marked_messages(),
+        optional_params={},
+        litellm_params=dict(litellm_params),
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    chat_marks: Final = _marked_parts_of(chat_request["messages"])
+    assert _marked_parts_of(bridged_request["input"]) == chat_marks
+    assert {(role, text) for role, text, _ in chat_marks} == (
+        {("system", "Stable prefix"), ("user", "hi")} if opted_in else set()
+    )
+
+
+def test_transform_request_keeps_a_marked_string_system_message_in_input_and_folds_the_unmarked_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+    messages: Final = _client_marked_messages()
+    chat_route_system: Final = AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(messages[1])
+    (chat_route_part,) = _PARTS.validate_python(chat_route_system.get("content"))
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="openai.gpt-5.6-sol",
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    breakpoint_marker: Final = chat_route_part["prompt_cache_breakpoint"]
+    assert request["instructions"] == "Rules"
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": breakpoint_marker}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hi", "prompt_cache_breakpoint": breakpoint_marker}],
+        },
+    ]
+    assert messages == list(_CLIENT_MARKED_MESSAGES)
+
+
+def _roles_and_texts(request_input: object) -> list[tuple[object, list[object]]]:
+    items: Final = (_MESSAGE.validate_python(item) for item in cast(list[object], request_input))  # cast-ok: wire list
+    return [
+        (item.get("role"), [part.get("text") for part in _PARTS.validate_python(item.get("content"))]) for item in items
+    ]
+
+
+@pytest.mark.parametrize(
+    "marked_system",
+    [
+        {"role": "system", "content": "Stable prefix", "cache_control": _EPHEMERAL},
+        {"role": "system", "content": [{"type": "text", "text": "Stable prefix", "cache_control": _EPHEMERAL}]},
+    ],
+    ids=["marked_string", "marked_part"],
+)
+def test_transform_request_keeps_system_messages_in_order_when_a_marked_one_comes_first(
+    monkeypatch: pytest.MonkeyPatch, marked_system: AllMessageValues
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="openai.gpt-5.6-sol",
+        messages=[marked_system, {"role": "system", "content": "Rules"}, {"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "instructions" not in request
+    assert _roles_and_texts(request["input"]) == [
+        ("system", ["Stable prefix"]),
+        ("system", ["Rules"]),
+        ("user", ["hi"]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("row_key", "row", "model", "litellm_params"),
+    [
+        pytest.param(
+            "luna-responses",
+            {"litellm_provider": "openai", "mode": "responses"},
+            "luna-responses",
+            {"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1"},
+            id="openai-model-without-breakpoints",
+        ),
+        pytest.param(
+            "luna-responses",
+            {"litellm_provider": "openai", "mode": "responses"},
+            "luna-responses",
+            {"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1", "drop_params": True},
+            id="openai-model-without-breakpoints-drop-params",
+        ),
+        pytest.param(
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            _MANTLE_GPT_ROW,
+            "openai.gpt-5.6-sol",
+            {"custom_llm_provider": "bedrock_mantle", "model_info": {"supports_prompt_cache_breakpoint": False}},
+            id="mantle-deployment-opted-out",
+        ),
+    ],
+)
+def test_transform_request_folds_system_messages_as_before_where_the_breakpoint_is_stripped(
+    monkeypatch: pytest.MonkeyPatch,
+    row_key: str,
+    row: Mapping[str, object],
+    model: str,
+    litellm_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, row)
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": _PINNED_EXPLICIT}],
+            },
+            {"role": "system", "content": "Rules"},
+            {"role": "user", "content": "hi"},
+        ],
+        optional_params={},
+        litellm_params=dict(litellm_params),
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["instructions"] == "Rules"
+    assert _roles_and_texts(request["input"]) == [("system", ["Stable prefix"]), ("user", ["hi"])]
+    assert list(_marked_parts_of(request["input"])) == []
+
+
+def test_transform_request_still_folds_a_string_system_message_behind_an_unmarked_list_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="openai.gpt-5.6-sol",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "Stable prefix"}]},
+            {"role": "system", "content": "Rules"},
+            {"role": "user", "content": "hi"},
+        ],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["instructions"] == "Rules"
+    assert _roles_and_texts(request["input"]) == [("system", ["Stable prefix"]), ("user", ["hi"])]
+
+
+def _mantle_marked_texts(model: str, messages: list[object], **litellm_params: object) -> set[tuple[object, object]]:
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(List[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params={},
+        litellm_params={"custom_llm_provider": "bedrock_mantle", **litellm_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return {(role, text) for role, text, _ in _marked_parts_of(request["input"])}
+
+
+def test_transform_request_puts_no_breakpoint_on_empty_marked_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    marked: Final = _mantle_marked_texts(
+        "openai.gpt-5.6-sol",
+        [
+            {"role": "system", "content": "", "cache_control": _EPHEMERAL},
+            {"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": "", "cache_control": _EPHEMERAL}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "there"}, {"type": "text", "text": ""}],
+                "cache_control": _EPHEMERAL,
+            },
+        ],
+    )
+
+    assert marked == {("user", "there")}
+
+
+def test_transform_request_maps_a_string_cache_control_like_an_object_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    marked: Final = _mantle_marked_texts(
+        "openai.gpt-5.6-sol",
+        [
+            {"role": "system", "content": "Rules", "cache_control": "ephemeral"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi", "cache_control": "ephemeral"},
+                    {"type": "text", "text": "there", "cache_control": _EPHEMERAL},
+                ],
+            },
+        ],
+    )
+
+    assert marked == {("system", "Rules"), ("user", "hi"), ("user", "there")}
+
+
+def test_transform_request_maps_client_cache_control_for_an_alias_whose_base_model_reads_breakpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    marked: Final = _mantle_marked_texts(
+        "my-alias", list(_client_marked_messages()), base_model="openai.gpt-5.6-sol"
+    )
+
+    assert marked == {("system", "Stable prefix"), ("user", "hi")}
+
+
+def _completion_marked_texts(model: str, model_info: Mapping[str, object]) -> set[tuple[object, object]]:
+    response_body: Final = {
+        "id": "resp_alias_marks",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_alias_marks",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        litellm.completion(
+            model=model,
+            messages=_client_marked_messages(),
+            api_key="sk-test",
+            model_info=model_info,
+            cache={"no-cache": True},
+        )
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    return {(role, text) for role, text, _ in _marked_parts_of(request_body["input"])}
+
+
+def test_completion_maps_client_cache_control_for_an_alias_whose_base_model_is_declared_in_model_info() -> None:
+    served_model_marks: Final = _completion_marked_texts("openai/responses/gpt-5.6", {})
+
+    assert served_model_marks
+    assert _completion_marked_texts("openai/responses/team-alias", {"base_model": "gpt-5.6"}) == served_model_marks
+
+
+def test_transform_request_leaves_client_cache_control_unmapped_for_a_deployment_that_does_not_read_breakpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "bedrock_mantle/gpt-6-luna", {**_MANTLE_GPT_ROW, "supports_prompt_cache_breakpoint": False}
+    )
+
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6-luna",
+        messages=_client_marked_messages(),
+        optional_params={"prompt_cache_options": _PINNED_EXPLICIT},
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["instructions"] == "Rules Stable prefix"
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
@@ -5992,6 +6451,9 @@ def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_id
     assert as_string[1] == _system_input_item(reminder)
 
 
+_HOST_WITHOUT_BREAKPOINTS: Final = {"custom_llm_provider": "openai", "api_base": "https://gateway.example.com/v1"}
+
+
 def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requests():
     handler: Final = LiteLLMResponsesTransformationHandler()
     top_level_system: Final = [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}]
@@ -6031,7 +6493,7 @@ def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requ
         model="gpt-5.6-luna",
         messages=first_request_messages,
         optional_params={},
-        litellm_params={},
+        litellm_params=dict(_HOST_WITHOUT_BREAKPOINTS),
         headers={},
         litellm_logging_obj=Mock(),
     )
@@ -6039,7 +6501,7 @@ def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requ
         model="gpt-5.6-luna",
         messages=second_request_messages,
         optional_params={},
-        litellm_params={},
+        litellm_params=dict(_HOST_WITHOUT_BREAKPOINTS),
         headers={},
         litellm_logging_obj=Mock(),
     )

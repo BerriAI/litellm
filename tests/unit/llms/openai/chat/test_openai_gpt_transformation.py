@@ -1056,6 +1056,19 @@ class TestCacheControlAsPromptCacheBreakpoint:
             {"role": "user", "content": "unmarked"},
         ]
 
+    def test_gpt_5_6_rewrites_a_string_mark_and_a_mark_on_empty_text(self):
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": "", "cache_control": _EPHEMERAL},
+            {"role": "user", "content": [_text("Describe this"), {**_text("plain"), "cache_control": "ephemeral"}]},
+            {"role": "user", "content": [_text("context"), _marked(_text(""))]},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [
+            {"role": "system", "content": [_breakpoint(_text(""))]},
+            {"role": "user", "content": [_text("Describe this"), _breakpoint(_text("plain"))]},
+            {"role": "user", "content": [_text("context"), _breakpoint(_text(""))]},
+        ]
+
     def test_gpt_5_6_message_level_mark_on_list_content_marks_the_last_part(self):
         messages: list[dict[str, object]] = [
             {"role": "user", "content": [_text("first"), _text("last")], "cache_control": _EPHEMERAL},

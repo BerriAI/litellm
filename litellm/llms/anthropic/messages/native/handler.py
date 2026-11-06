@@ -69,17 +69,6 @@ _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 
-def _bridges_to_responses_api(model: str, custom_llm_provider: str, deployment_model_info: object) -> bool:
-    from litellm.responses.bridge_check import responses_api_bridge_check, str_keyed_mapping
-
-    model_info, _ = responses_api_bridge_check(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        deployment_model_info=str_keyed_mapping(deployment_model_info),
-    )
-    return model_info.get("mode") == "responses"
-
-
 def _responses_mode_is_lost_by_prefix_strip(
     requested_model: str, resolved_model: str, custom_llm_provider: str, deployment_model_info: object
 ) -> bool:
@@ -89,11 +78,14 @@ def _responses_mode_is_lost_by_prefix_strip(
     deployment id such as ``perplexity/perplexity/sonar`` (mode ``responses``) is shadowed by the
     chat entry ``perplexity/sonar`` and would otherwise be sent to chat/completions.
     """
+    from litellm.responses.bridge_check import responses_bridge_model
+
     if requested_model == resolved_model:
         return False
-    return _bridges_to_responses_api(
-        requested_model, custom_llm_provider, deployment_model_info
-    ) and not _bridges_to_responses_api(resolved_model, custom_llm_provider, deployment_model_info)
+    return (
+        responses_bridge_model(requested_model, custom_llm_provider, deployment_model_info) is not None
+        and responses_bridge_model(resolved_model, custom_llm_provider, deployment_model_info) is None
+    )
 
 
 @dataclass(frozen=True, slots=True)

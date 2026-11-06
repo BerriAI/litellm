@@ -34,7 +34,13 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
     replay_items,
     requested_phase,
 )
-from litellm.integrations.anthropic_cache_control_hook import routed_model_info, supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    holds_prompt_cache_breakpoint,
+    message_carries_prompt_cache_breakpoint,
+    routed_model_info,
+    supports_openai_prompt_cache_breakpoint,
+)
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_chat_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
@@ -235,6 +241,31 @@ def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool
     return not _supports_audio_input(model, litellm_params)
 
 
+def _messages_in_cache_mark_dialect(
+    named_models: Sequence[str],
+    messages: Sequence["AllMessageValues"],
+    optional_params: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    model_info: Mapping[str, object] | None,
+) -> Sequence["AllMessageValues"]:
+    reads_breakpoints: Final = any(
+        AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            name,
+            _served_provider(litellm_params),
+            litellm_params.get("api_base"),
+            optional_params.get("prompt_cache_options"),
+            model_info,
+        )
+        for name in named_models
+    )
+    if not reads_breakpoints:
+        return messages
+    return tuple(
+        AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message, holds_prompt_cache_breakpoint)
+        for message in messages
+    )
+
+
 def responses_provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
     return MappingProxyType(
         {
@@ -271,6 +302,12 @@ def _get_reasoning_items(
     if items:
         return items
     return []
+
+
+def _folds_into_instructions(msg: "AllMessageValues", keep_prompt_cache_breakpoints: bool) -> bool:
+    return msg.get("role") == "system" and not (
+        keep_prompt_cache_breakpoints and message_carries_prompt_cache_breakpoint(msg)
+    )
 
 
 def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]:  # mutable-ok: API message payload
@@ -871,7 +908,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def convert_chat_completion_messages_to_responses_api(
         self,
-        messages: list["AllMessageValues"],
+        messages: Sequence["AllMessageValues"],
         *,
         drop_params: bool = False,
         target_trims_breakpoints: bool = True,
@@ -884,6 +921,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             messages,
             drop_params=drop_params,
             target_trims_breakpoints=target_trims_breakpoints,
+            keep_prompt_cache_breakpoints=keep_prompt_cache_breakpoints,
             replay_tool_search=replay_tool_search,
             include_namespace=include_namespace,
             replay_openai_history=replay_openai_history,
@@ -897,10 +935,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _convert_chat_completion_messages_to_responses_input(
         self,
-        messages: list["AllMessageValues"],
+        messages: Sequence["AllMessageValues"],
         *,
         drop_params: bool = False,
         target_trims_breakpoints: bool = True,
+        keep_prompt_cache_breakpoints: bool = False,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
         replay_openai_history: bool = False,
@@ -924,8 +963,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_system_count: Final = next(
-            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
+        leading_folded_system_count: Final = next(
+            (
+                index
+                for index, msg in enumerate(messages)
+                if not _folds_into_instructions(msg, keep_prompt_cache_breakpoints)
+            ),
             len(messages),
         )
 
@@ -939,7 +982,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(replayed_turn.items)
             elif role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                if isinstance(content, str) and index < leading_folded_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
@@ -1174,7 +1217,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             supports_openai_prompt_cache_breakpoint(name, provider, model_info) for name in named_models
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
-            messages,
+            _messages_in_cache_mark_dialect(
+                named_models,
+                messages,
+                cast(Mapping[str, object], optional_params),  # cast-ok: upcast of the untyped params dict
+                litellm_params,
+                model_info,
+            ),
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             target_trims_breakpoints=drops_unsupported_params(litellm_params.get("drop_params")),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,

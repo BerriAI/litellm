@@ -318,6 +318,7 @@ class AnthropicAdapter:
         api_base: str | None = None,
         deployment_model_info: Mapping[str, object] | None = None,
         drop_params: bool = True,
+        target_reads_prompt_cache_breakpoint: bool = False,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -348,7 +349,9 @@ class AnthropicAdapter:
         (
             translated_body,
             tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        ) = LiteLLMAnthropicMessagesAdapter(
+            target_reads_prompt_cache_breakpoint=target_reads_prompt_cache_breakpoint
+        ).translate_anthropic_to_openai(
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
@@ -434,8 +437,9 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self, *, keep_cache_control: bool = False) -> None:
+    def __init__(self, *, keep_cache_control: bool = False, target_reads_prompt_cache_breakpoint: bool = False) -> None:
         self.keep_cache_control: Final = keep_cache_control
+        self._target_reads_prompt_cache_breakpoint: Final = target_reads_prompt_cache_breakpoint
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -473,6 +477,8 @@ class LiteLLMAnthropicMessagesAdapter:
         source: object,
         target: object,
         model: str | None,
+        *,
+        has_prompt_cache_breakpoint_slot: bool = True,
     ) -> None:
         """
         Extract cache_control from source and add to target if it should be preserved.
@@ -486,12 +492,15 @@ class LiteLLMAnthropicMessagesAdapter:
             source: Dict or TypedDict containing potential cache_control field
             target: Dict or TypedDict to add cache_control to
             model: Model name to check if cache_control should be preserved
+            has_prompt_cache_breakpoint_slot: Whether the OpenAI cache dialect reads a breakpoint on this block
         """
         # TypedDict objects are dicts at runtime, so .get() works
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
+        if cache_control and (
+            self.keep_cache_control or self._target_keeps_mark(model, has_prompt_cache_breakpoint_slot)
+        ):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -499,6 +508,12 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 # Fallback for non-dict objects (shouldn't happen in practice)
                 cast(dict[str, object], target)["cache_control"] = cache_control
+
+    def _target_keeps_mark(self, model: str | None, has_prompt_cache_breakpoint_slot: bool) -> bool:
+        if not model:
+            return False
+        reads_as_breakpoint: Final = self._target_reads_prompt_cache_breakpoint and has_prompt_cache_breakpoint_slot
+        return reads_as_breakpoint or self.target_consumes_cache_control(model)
 
     @staticmethod
     def _add_prompt_cache_breakpoint_if_present(source: object, target: _BlockT) -> _BlockT:
@@ -651,7 +666,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
-                                self._add_cache_control_if_applicable(content, text_block, model)
+                                self._add_cache_control_if_applicable(
+                                    content, text_block, model, has_prompt_cache_breakpoint_slot=False
+                                )
                                 if "cache_control" in text_block:
                                     has_cache_control_in_text = True
                                 assistant_content_list.append(text_block)
@@ -678,7 +695,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     type="function",
                                     function=function_chunk,
                                 )
-                                self._add_cache_control_if_applicable(content, tool_call, model)
+                                self._add_cache_control_if_applicable(
+                                    content, tool_call, model, has_prompt_cache_breakpoint_slot=False
+                                )
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
                                 # Anthropic's schema has no cache_control on thinking or
@@ -942,7 +961,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
             tool_param = _chat_tool_param(function_chunk, tool)
-            self._add_cache_control_if_applicable(tool, tool_param, model)
+            self._add_cache_control_if_applicable(tool, tool_param, model, has_prompt_cache_breakpoint_slot=False)
             new_tools.append(tool_param)
 
         return new_tools, tool_name_mapping
