@@ -435,6 +435,7 @@ class LiteLLMAnthropicMessagesAdapter:
             source: Dict or TypedDict containing potential cache_control field
             target: Dict or TypedDict to add cache_control to
             model: Model name to check if cache_control should be preserved
+            has_prompt_cache_breakpoint_slot: Whether the OpenAI cache dialect reads a breakpoint on this block
         """
         # TypedDict objects are dicts at runtime, so .get() works
         cache_control: Final = (
