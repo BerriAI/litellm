@@ -65,6 +65,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
+    declared_provider,
     is_registered_custom_provider,
     resolve_model_and_provider_for_metadata,
 )
@@ -141,6 +142,7 @@ if TYPE_CHECKING:
     from litellm.router_rust.steps.prerouting import PreRoutingStrategies
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.rust_bridge._native import RouterCoreHandle
+    from litellm.types.utils import ModelInfo as ModelMapInfo
 
 # The PTU share teams and the team ceilings read so far.
 _PTUMemo: TypeAlias = tuple[
@@ -679,7 +681,7 @@ class HostRegistry(HostModelInfo):
         self._cached_get_model_group_info: Callable[[str], ModelGroupInfo | None] = lru_cache(  # pyright: ignore[reportIncompatibleMethodOverride]  # the per-router cache shadows the uncached method, as the core keeps it
             maxsize=DEFAULT_MAX_LRU_CACHE_SIZE
         )(self._core_get_model_group_info)
-        self._core_cached_deployment_model_info: Callable[[str, str], object] = lru_cache(
+        self._core_cached_deployment_model_info: Callable[[str, str], ModelMapInfo | None] = lru_cache(
             maxsize=DEFAULT_MAX_LRU_CACHE_SIZE
         )(self._core_get_deployment_model_info)
         self.cached_deployment_tracks_usage: Callable[[str, str], bool] = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
@@ -2078,6 +2080,38 @@ class HostRegistry(HostModelInfo):
             return None
         model: Final = _params_of(deployment).get("model")
         return None if model is None else str(model)
+
+    def _core_get_routable_upstream_provider(self, model_name: str, team_id: str | None = None) -> str | None:
+        """The provider the deployment ``_core_get_routable_upstream_model`` reads declares: its
+        ``litellm_params.custom_llm_provider``, else its model's ``provider/`` prefix. None when it declares neither."""
+        deployment: Final = next(iter(self._routable_deployments(model_name, team_id)), None)
+        if deployment is None:
+            return None
+        params: Final = _params_of(deployment)
+        model: Final = params.get("model")
+        provider: Final = params.get("custom_llm_provider")
+        return declared_provider(
+            model if isinstance(model, str) else None, provider if isinstance(provider, str) else None
+        )
+
+    def _core_get_routable_deployment_model_info(
+        self, model_name: str, team_id: str | None = None
+    ) -> "tuple[ModelMapInfo | None, ...]":
+        """Each deployment a request from ``team_id`` to ``model_name`` can route to, read one at a time the way
+        cost tracking reads it: its upstream model's cost map entry merged with its own ``model_info``, None where
+        neither is known. Nothing is merged across deployments, so a caller can tell a deployment that lacks a
+        capability from one that says nothing."""
+        return tuple(
+            self._routable_deployment_model_info(deployment)
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
+    def _routable_deployment_model_info(self, deployment: Mapping[str, object]) -> "ModelMapInfo | None":
+        deployment_id: Final = _model_info_of(deployment).get("id")
+        model: Final = _params_of(deployment).get("model")
+        if not isinstance(deployment_id, str) or not isinstance(model, str):
+            return None
+        return self._core_cached_deployment_model_info(deployment_id, model)
 
     def _core_map_team_model(
         self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
