@@ -1338,7 +1338,8 @@ async def test_upsert_sso_user_fills_user_alias_for_existing_user():
 
 
 @pytest.mark.asyncio
-async def test_insert_sso_user_sets_user_alias_from_display_name():
+@pytest.mark.parametrize("user_id", ["S-1-5-21-adfs-user", " employee-42 "])
+async def test_insert_sso_user_sets_user_alias_from_display_name(user_id: str):
     """
     A newly created SSO user is inserted with the IdP display name as user_alias.
     """
@@ -1347,7 +1348,7 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
 
     sso_result = CustomOpenID(
-        id="S-1-5-21-adfs-user",
+        id=user_id,
         email="jane.doe@example.com",
         first_name="Jane",
         last_name="Doe",
@@ -1357,7 +1358,7 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     )
     user_defined_values: SSOUserDefinedValues = {
         "models": [],
-        "user_id": "S-1-5-21-adfs-user",
+        "user_id": user_id,
         "user_email": "jane.doe@example.com",
         "max_budget": None,
         "user_role": "internal_user",
@@ -1366,12 +1367,14 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
 
     with patch(
         "litellm.proxy.management_endpoints.ui_sso.new_user",
-        return_value=NewUserResponse(user_id="S-1-5-21-adfs-user", key="sk-xxxxx", teams=None),
+        return_value=NewUserResponse(user_id=user_id, key="sk-xxxxx", teams=None),
     ) as mock_new_user:
         await insert_sso_user(result_openid=sso_result, user_defined_values=user_defined_values)
 
     new_user_request = mock_new_user.call_args.kwargs["data"]
-    assert new_user_request.user_id == "S-1-5-21-adfs-user"
+    assert new_user_request.user_id == user_id
+    assert new_user_request.sso_user_id == user_id
+    assert new_user_request.metadata == {"auth_provider": "generic"}
     assert new_user_request.user_email == "jane.doe@example.com"
     assert new_user_request.user_alias == "Doe, Jane"
 
