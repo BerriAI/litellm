@@ -10,10 +10,15 @@ production. Every test asserts the exact resulting dict, never "ran without erro
 """
 
 from unittest.mock import MagicMock
+from typing import Final
+
+import pytest
 
 
 
 import litellm
+from litellm.exceptions import UnsupportedParamsError
+from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
 from litellm.videos.utils import VideoGenerationRequestUtils
 
 get_requested = (
@@ -179,3 +184,18 @@ def test_optional__non_dict_extra_body_ignored():
     )
 
     assert result == {"seconds": "8"}
+
+
+def test_extra_body_cannot_restore_image_conflicts_after_mapping() -> None:
+    params: Final = get_requested({
+        "kwargs": {
+            "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+            "extra_body": {"content": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": "reference_image"}]},
+        },
+    })
+    config: Final = VolcEngineVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match="content cannot be combined"):
+        get_optional("model", config, params)
+    assert get_optional("model", config, params, drop_params=True) == {
+        "content": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "role": "first_frame"}],
+    }

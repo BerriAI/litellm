@@ -3,9 +3,11 @@ Tests for RunwayML video generation transformation.
 """
 
 from unittest.mock import Mock
+from typing import Final
 
 import httpx
 import pytest
+from litellm.exceptions import UnsupportedParamsError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.runwayml.videos.transformation import (
@@ -372,3 +374,11 @@ class TestRunwayMLVideoTransformation:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = RunwayMLVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

@@ -19,6 +19,7 @@ import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
@@ -197,6 +198,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
           skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
+        _ = unsupported_video_fields(video_create_optional_params, model, "vertex_ai", drop_params)
         mapped_params: Final[dict[str, object]] = {}
 
         # Map input_reference to image (will be processed in transform_video_create_request)

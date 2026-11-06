@@ -2,7 +2,8 @@ import base64
 import io
 import json
 from pathlib import Path
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 from unittest.mock import Mock
 
 import httpx
@@ -16,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig, VolcEngineVideoError
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.types.videos.utils import decode_video_id_with_provider, encode_video_id_with_provider
 from litellm.utils import ProviderConfigManager
 from litellm.videos.main import avideo_content, avideo_generation
@@ -1129,3 +1131,69 @@ def test_a_video_created_through_a_routing_group_is_polled_on_the_member_that_cr
 
     hosts = [call.request.url.host for call in respx.calls]
     assert hosts[1::2] == hosts[0::2]
+
+
+@pytest.mark.parametrize("role", ["first_frame", "last_frame", "reference_image"])
+def test_openrouter_video_images_become_provider_content(role: str) -> None:
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "duration": 8, "aspect_ratio": "9:16", "resolution": "720p", "seed": 0, "generate_audio": False,
+        **(
+            {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]}
+            if role == "reference_image"
+            else {"frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "frame_type": role}]}
+        ),
+    })
+    config: Final = VolcEngineVideoConfig()
+    mapped: Final = config.map_openai_params(params, SEEDANCE_2_5, False)
+    body, _, _ = config.transform_video_create_request(
+        model=SEEDANCE_2_5, prompt="a cat", api_base=API_BASE,
+        video_create_optional_request_params=mapped, litellm_params=GenericLiteLLMParams(), headers={},
+    )
+    assert body["content"] == [
+        {"type": "text", "text": "a cat"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": role},
+    ]
+    assert (body["duration"], body["ratio"]) == (8, "9:16")
+    assert not ({"frame_images", "input_references", "aspect_ratio"} & body.keys())
+
+
+@pytest.mark.parametrize("other", [
+    {"content": [{"type": "image_url", "image_url": {"url": "https://example.com/raw.png"}, "role": "reference_image"}]},
+    {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]},
+    {"input_reference": "https://example.com/old.png"},
+    {"frame_images": [
+        {"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/duplicate.png"}, "frame_type": "first_frame"},
+    ]},
+])
+def test_openrouter_image_conflicts_raise_or_keep_first_frame(other: object) -> None:
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        **cast(Mapping[str, object], other),
+    })
+    config: Final = VolcEngineVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(params, SEEDANCE_2_5, False)
+    assert config.map_openai_params(params, SEEDANCE_2_5, True) == {
+        "content": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "role": "first_frame"}],
+    }
+
+
+def test_openrouter_duration_conflict_raises_or_prefers_duration() -> None:
+    config: Final = VolcEngineVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match="duration and seconds"):
+        config.map_openai_params({"duration": 8, "seconds": "5"}, SEEDANCE_2_5, False)
+    assert config.map_openai_params({"duration": 8, "seconds": "5"}, SEEDANCE_2_5, True) == {"duration": 8}
+    assert config.map_openai_params({"duration": 8, "seconds": "8"}, SEEDANCE_2_5, False) == {"duration": 8}
+
+
+@pytest.mark.parametrize("images", [[], [{"type": "image_url", "image_url": {}}]])
+def test_openrouter_empty_and_invalid_frames(images: object) -> None:
+    params: Final = cast(VideoCreateOptionalRequestParams, {"frame_images": images})
+    config: Final = VolcEngineVideoConfig()
+    if images:
+        with pytest.raises(UnsupportedParamsError, match="Invalid video image"):
+            config.map_openai_params(params, SEEDANCE_2_5, False)
+        assert config.map_openai_params(params, SEEDANCE_2_5, True) == {}
+    else:
+        assert config.map_openai_params(params, SEEDANCE_2_5, False) == {"content": []}

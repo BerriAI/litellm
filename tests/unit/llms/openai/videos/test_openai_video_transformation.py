@@ -1,4 +1,9 @@
 import io
+from typing import Final
+
+import pytest
+
+from litellm.exceptions import UnsupportedParamsError
 
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -115,3 +120,11 @@ def test_video_edit_request_without_file_sends_json_id_reference():
     assert url == "https://api.openai.com/v1/videos/edits"
     assert data == {"prompt": "brighter", "video": {"id": "video_abc123"}}
     assert files is None
+
+
+@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = OpenAIVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from litellm.exceptions import UnsupportedParamsError
 
 import litellm
 import litellm.llms.fal_ai.videos.transformation as fal_video_module
@@ -695,3 +696,11 @@ class TestFalAIVideoTransformation:
             )
             == 5 * row["output_cost_per_second_768p"]
         )
+
+
+@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "seed"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = FalAIVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

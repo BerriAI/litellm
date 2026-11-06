@@ -1,6 +1,7 @@
 from typing import Any, Final, cast
 
 import litellm
+from litellm.llms.base_llm.videos.async_task_utils import OPENROUTER_VIDEO_FIELDS
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 from litellm.utils import filter_out_litellm_params
@@ -39,7 +40,23 @@ class VideoGenerationRequestUtils:
             extra_body: Final = video_generation_optional_params["extra_body"]
             if extra_body and isinstance(extra_body, dict):
                 # extra_body params override mapped params
-                mapped_params.update(extra_body)
+                mapped_images: Final = (
+                    "content" in mapped_params
+                    and (
+                        "frame_images" in video_generation_optional_params
+                        or "input_references" in video_generation_optional_params
+                    )
+                    and "frame_images" not in mapped_params
+                    and "input_references" not in mapped_params
+                )
+                mapped_params.update(
+                    {
+                        key: value
+                        for key, value in extra_body.items()
+                        if not (key in OPENROUTER_VIDEO_FIELDS and key not in mapped_params)
+                        and not (key == "content" and mapped_images)
+                    }
+                )
             # Remove extra_body from mapped_params since it's not sent to the API
             mapped_params.pop("extra_body", None)
 

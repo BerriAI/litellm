@@ -6,9 +6,11 @@ import io
 import json
 import os
 from unittest.mock import MagicMock, Mock, patch
+from typing import Final
 
 import httpx
 import pytest
+from litellm.exceptions import UnsupportedParamsError
 
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.cost_calculation import video_generation_cost
@@ -842,3 +844,11 @@ class TestGeminiVideoCostTracking:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = GeminiVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

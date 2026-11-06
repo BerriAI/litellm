@@ -1434,3 +1434,11 @@ class TestDashScopeVideoEndToEndRequest:
     async def test_a_size_in_a_tier_the_model_lacks_never_reaches_dashscope(self):
         with pytest.raises(UnsupportedParamsError, match="480P"):
             await self._wire_request(model="dashscope/wan2.7-t2v", prompt="p", size="854x480")
+
+
+@pytest.mark.parametrize("field", ["aspect_ratio", "frame_images", "input_references", "generate_audio"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = DashScopeVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)
