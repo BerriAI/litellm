@@ -158,6 +158,7 @@ GroupField: TypeAlias = Literal[
     "display_name",
     "mode",
     "service_tiers",
+    "pinned_reasoning_efforts",
     "max_input_tokens",
     "deployment_model_info",
     "token_limits",
@@ -939,7 +940,7 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        field: Literal["service_tiers"],
+        field: Literal["service_tiers", "pinned_reasoning_efforts"],
         include_hidden: bool = False,
         team_id: str | None = None,
     ) -> tuple[object, ...]: ...
@@ -1001,6 +1002,7 @@ class RouterRegistry:
           (were ``get_configured_display_name``, ``get_configured_mode``,
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
+        - ``pinned_reasoning_efforts``: the ``reasoning_effort`` each routable deployment pins
         - ``max_input_tokens``: each routable deployment's own ``model_info.max_input_tokens``
         - ``deployment_model_info``: each routable deployment's model info, merged with the pricing map
         """
@@ -1015,6 +1017,8 @@ class RouterRegistry:
             return r._core_get_configured_mode(name)
         if field == "service_tiers":
             return r._core_get_configured_service_tiers(name, team_id=team_id)
+        if field == "pinned_reasoning_efforts":
+            return r._core_get_pinned_reasoning_efforts(name, team_id=team_id)
         if field == "max_input_tokens":
             return r._core_get_configured_max_input_tokens(name, team_id=team_id)
         if field == "deployment_model_info":
@@ -1135,6 +1139,18 @@ class RouterRegistry:
         if kind == "prompt_caching_pins":
             return r._core_prompt_caching_pin_cache
         raise ValueError(f"unknown plugin kind {kind!r}")
+
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """
+        ``request_input`` without the encrypted reasoning that ``targets``, the deployments a
+        ``model_group`` request may go to, cannot decrypt, keeping each item's readable summary.
+        When encrypted content affinity is on for the group, the router sends the request to the
+        reasoning's origin, so reasoning one target can decrypt stays; otherwise every target must
+        decrypt it (was reading ``optional_callbacks`` for ``EncryptedContentAffinityCheck``).
+        """
+        return self._router._core_decryptable_reasoning(model_group, request_input, targets)
 
 
 # Settings a caller may read. Assigning one from outside the router goes through apply(ChangeSet(assign=...)).

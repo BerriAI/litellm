@@ -1510,6 +1510,14 @@ class HostRegistry(HostModelInfo):
             return self.__getattr__("_core_prompt_caching_pin_cache")  # pyright: ignore[reportReturnType]  # raises RustCoreUnsupported
         return self.checks.prompt_caching_pin_cache
 
+    def _core_decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: Sequence[Deployment]
+    ) -> tuple[object, ...]:
+        """The input ``targets`` can decrypt (``registry().decryptable_reasoning``)."""
+        if self.checks is None:
+            return self.__getattr__("_core_decryptable_reasoning")  # pyright: ignore[reportReturnType]  # raises RustCoreUnsupported
+        return self.checks.decryptable_reasoning(model_group, request_input, targets)
+
     def replay_model_cost_registrations(self) -> None:
         """Re-register every served deployment's cost-map entries (``replay_model_cost_registrations``)."""
         provider_unresolved: Final = self._provider_unresolved_deployments
