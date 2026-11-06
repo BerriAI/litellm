@@ -9,6 +9,8 @@ from typing import Final, Protocol
 from prisma.errors import RawQueryError, TransactionExpiredError, TransactionNotStartedError
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.pending_operations import defer_until_operations_finish
+
 
 class AnalyticsTransaction(Protocol):
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
@@ -101,23 +103,22 @@ class BoundedAnalyticsDatabase:
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         if not self._admission.acquire(blocking=False):
             raise AnalyticsCapacityError("Analytics capacity is busy. Try again shortly")
-        try:
-            remaining: Final = _remaining_seconds()
-            return await asyncio.wait_for(
-                self._query(query, args), timeout=6.25 if remaining is None else min(6.25, remaining)
-            )
-        except RawQueryError as error:
-            if _PostgresError.model_validate(error.meta or {}).code not in ("57014", "55P03"):
-                raise
-            raise AnalyticsCapacityError("Analytics exceeded its query budget. Try again shortly") from error
-        except (
-            TransactionExpiredError,
-            TransactionNotStartedError,
-            asyncio.TimeoutError,
-        ) as error:
-            raise AnalyticsCapacityError("Analytics exceeded its connection budget. Try again shortly") from error
-        finally:
-            self._admission.release()
+        with defer_until_operations_finish(self._admission.release):
+            try:
+                remaining: Final = _remaining_seconds()
+                return await asyncio.wait_for(
+                    self._query(query, args), timeout=6.25 if remaining is None else min(6.25, remaining)
+                )
+            except RawQueryError as error:
+                if _PostgresError.model_validate(error.meta or {}).code not in ("57014", "55P03"):
+                    raise
+                raise AnalyticsCapacityError("Analytics exceeded its query budget. Try again shortly") from error
+            except (
+                TransactionExpiredError,
+                TransactionNotStartedError,
+                asyncio.TimeoutError,
+            ) as error:
+                raise AnalyticsCapacityError("Analytics exceeded its connection budget. Try again shortly") from error
 
     async def _query(self, query: str, args: tuple[object, ...]) -> Sequence[Mapping[str, object]]:
         async with _bounded_transaction(

@@ -53,6 +53,8 @@ _MEMBERS: Final = TypeAdapter(tuple[_Member, ...])
 _CANDIDATES: Final = """
 SELECT DISTINCT custom_llm_provider AS provider, model FROM "LiteLLM_DailyUserSpend"
 WHERE date=$1 AND timed_requests>0 AND custom_llm_provider<>'' AND model<>''
+  AND CASE WHEN octet_length(custom_llm_provider)<=1024 THEN length(custom_llm_provider)<=256 ELSE false END
+  AND CASE WHEN octet_length(model)<=4096 THEN length(model)<=1024 ELSE false END
   AND ($2::text IS NULL OR (custom_llm_provider,model)>($2,$3))
 ORDER BY provider,model LIMIT $4
 """
@@ -201,6 +203,8 @@ class ProviderLatencyRepository:
             await self._database.query_raw(
                 """SELECT DISTINCT custom_llm_provider AS provider,model FROM "LiteLLM_DailyUserSpend"
             WHERE date=$1 AND custom_llm_provider=$2 AND model IS NOT NULL AND model<>'' AND timed_requests>0
+              AND CASE WHEN octet_length(custom_llm_provider)<=1024 THEN length(custom_llm_provider)<=256 ELSE false END
+              AND CASE WHEN octet_length(model)<=4096 THEN length(model)<=1024 ELSE false END
             ORDER BY model LIMIT 101""",
                 day.isoformat(),
                 provider,

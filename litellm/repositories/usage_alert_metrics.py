@@ -64,6 +64,16 @@ class IssueSourceProvider:
     provider: str
 
 
+def _bounded_identity(scope: Scope, entity: str) -> str:
+    # Check the stored byte length before decoding text; escaped key IDs add four characters.
+    maximum: Final = (
+        f"CASE WHEN {entity}='unattributed' OR {entity} LIKE 'raw:%' THEN 1020 ELSE 1024 END"
+        if scope == "key"
+        else "1024"
+    )
+    return f"CASE WHEN octet_length({entity})<=4096 THEN length({entity})<={maximum} ELSE false END"
+
+
 def _window_payload(scope: Scope, windows: tuple[IssueMetricWindow, ...]) -> str:
     if len(windows) > 500 or any(not 1 <= (window.day - window.start).days <= 30 for window in windows):
         raise ValueError("Read at most 500 issue windows with 1–30 reference days per batch")
@@ -154,6 +164,7 @@ def _key_attribution_query(scope: Scope, metric: Literal["spend", "requests"]) -
         FROM population p JOIN ranked r USING(reference_id) WHERE r.rank=1
     ), windows AS MATERIALIZED (
         SELECT DISTINCT api_key,entity_id,start_day,target_day FROM candidate WHERE api_key<>''
+            AND {_bounded_identity("key", "api_key")}
     ), key_population AS (
         SELECT w.*,
             {team_days} AS team_days,
@@ -183,10 +194,11 @@ _ROWS: Final = TypeAdapter(tuple[DailyAlertMetrics, ...])
 _BATCH_SIZE: Final = 10
 _DEPRECATION_USAGE: Final = TypeAdapter(tuple[ModelDeprecationUsage, ...])
 
-_DEPRECATION_USAGE_QUERY: Final = """
+_DEPRECATION_USAGE_QUERY: Final = f"""
 WITH activity AS MATERIALIZED (
     SELECT model, date, api_key, user_id, api_requests FROM "LiteLLM_DailyUserSpend"
     WHERE date >= $1 AND date <= $2 AND model = ANY($3::text[]) AND api_requests > 0
+        AND {_bounded_identity("model", "model")}
 ), daily AS (
     SELECT model, date, SUM(api_requests)::bigint AS requests FROM activity GROUP BY model, date
 ), latest AS (
@@ -201,6 +213,7 @@ WITH activity AS MATERIALIZED (
     SELECT model, COUNT(DISTINCT NULLIF(NULLIF(team_id, ''), 'litellm-dashboard'))::int AS teams
     FROM "LiteLLM_DailyTeamSpend"
     WHERE date >= $1 AND date <= $2 AND model = ANY($3::text[]) AND api_requests > 0
+        AND {_bounded_identity("model", "model")}
     GROUP BY model
 )
 SELECT totals.*, latest.last_used_date, latest.last_day_requests, COALESCE(teams.teams, 0) AS teams
@@ -227,6 +240,7 @@ def _query(scope: Scope) -> str:
 WITH entities AS MATERIALIZED (
     SELECT DISTINCT {entity} AS entity_id FROM {table}
     WHERE date >= $1 AND date <= $2 AND {entity} >= COALESCE($3::text, '') AND ($3::text IS NULL OR {entity} <> $3)
+        AND {_bounded_identity(scope, entity)}
     ORDER BY entity_id LIMIT $4
 )
 SELECT entities.entity_id, activity.date AS day,
@@ -327,7 +341,8 @@ class UsageAlertMetricsRepository:
                 ), ranked AS (
                     SELECT *,SUM(timed) OVER(PARTITION BY reference_id) AS total FROM grouped
                 ) SELECT reference_id,provider FROM ranked
-                WHERE provider<>'' AND timed>0 AND timed>=0.8*total""",
+                WHERE provider<>'' AND timed>0 AND timed>=0.8*total
+                    AND CASE WHEN octet_length(provider)<=1024 THEN length(provider)<=256 ELSE false END""",
                 _window_payload(scope, windows),
             )
         )
@@ -368,7 +383,9 @@ class UsageAlertMetricsRepository:
         )
         exact_query: Final = (
             query[: query.index("WITH entities")]
-            + "WITH entities AS MATERIALIZED (SELECT unnest($3::text[]) AS entity_id)"
+            + f"""WITH entities AS MATERIALIZED (
+                SELECT entity_id FROM unnest($3::text[]) AS ids(entity_id)
+                WHERE {_bounded_identity(scope, "entity_id")})"""
             + query[query.index("\nSELECT entities") :]
         )
         async with db_span("daily_activity_query", sql_relation(query)):
