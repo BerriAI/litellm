@@ -222,3 +222,115 @@ async def test_blocked_tool_loaded_by_a_replayed_tool_search_raises_next_to_allo
             )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["blocked_tools"] == ["run_shell"]
+
+
+def _registry_mock_with_output(input_policies: dict, output_policies: dict):
+    reg = _registry_mock(input_policies)
+    reg.get_output_policy.side_effect = lambda name: output_policies.get(name, "untrusted")
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_tool_result_blocks_trusted_tool_call(guardrail):
+    request_data = {
+        "user_api_key_request_route": "/v1/messages",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "read_external_note",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": "Note contents",
+                    }
+                ],
+            },
+        ],
+    }
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock_with_output(
+            {"read_external_note": "untrusted", "send_summary": "trusted"},
+            {"read_external_note": "untrusted", "send_summary": "trusted"},
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=_tool_response_inputs(["send_summary"]),
+                request_data=request_data,
+                input_type="response",
+            )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["blocked_tools"] == ["send_summary"]
+    assert exc_info.value.detail["untrusted_sources"] == ["read_external_note"]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_function_call_output_blocks_trusted_tool_call(guardrail):
+    request_data = {
+        "user_api_key_request_route": "/v1/responses",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "read_external_note",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "Note contents",
+            },
+        ],
+    }
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock_with_output(
+            {"read_external_note": "untrusted", "send_summary": "trusted"},
+            {"read_external_note": "untrusted", "send_summary": "trusted"},
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=_tool_response_inputs(["send_summary"]),
+                request_data=request_data,
+                input_type="response",
+            )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["blocked_tools"] == ["send_summary"]
+    assert exc_info.value.detail["untrusted_sources"] == ["read_external_note"]
+
+
+@pytest.mark.asyncio
+async def test_request_stage_blocks_route_tool_when_function_tool_names_non_empty(guardrail):
+    request_data = {
+        "user_api_key_request_route": "/v1/messages",
+        "tools": [
+            {"name": "ping", "input_schema": {"type": "object"}},
+            {"type": "bash_20250124", "name": "bash"},
+        ],
+    }
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock({"ping": "untrusted", "bash": "blocked"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=_tool_request_inputs(["ping"]),
+                request_data=request_data,
+                input_type="request",
+            )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["blocked_tools"] == ["bash"]
+
