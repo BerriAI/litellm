@@ -1997,13 +1997,6 @@ model LiteLLM_WorkflowRun {
   @@index([created_by])
 }
 
-// Append-only log of state transitions. Never mutate rows here.
-// `step_name` and `event_type` are caller-defined strings — no hardcoded enums.
-// Status auto-update rules (applied by the append endpoint):
-//   step.started   → run.status = running
-//   step.failed    → run.status = failed
-//   hook.waiting   → run.status = paused
-//   hook.received  → run.status = running
 model LiteLLM_WorkflowDefinition {
   workflow_id           String @id
   team_id               String
@@ -2070,6 +2063,13 @@ model LiteLLM_WorkflowStep {
   @@unique([run_id, node_id])
 }
 
+// Append-only log of state transitions. Never mutate rows here.
+// `step_name` and `event_type` are caller-defined strings — no hardcoded enums.
+// Status auto-update rules (applied by the append endpoint):
+//   step.started   → run.status = running
+//   step.failed    → run.status = failed
+//   hook.waiting   → run.status = paused
+//   hook.received  → run.status = running
 model LiteLLM_WorkflowEvent {
   event_id        String   @id @default(uuid())
   run_id          String
