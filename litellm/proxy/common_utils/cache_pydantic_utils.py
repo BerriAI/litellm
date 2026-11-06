@@ -16,13 +16,17 @@ are encoded; pass a Pydantic model or convert with e.g. ``dataclasses.asdict`` f
 
 from __future__ import annotations
 
-from typing import TypeVar
+from collections.abc import Mapping, Sequence
+from typing import TypeAlias, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 
 T = TypeVar("T", bound=BaseModel)
+
+CacheData: TypeAlias = "str | int | float | bool | None | Sequence[CacheData] | Mapping[str, CacheData]"
+CacheValue: TypeAlias = "BaseModel | CacheData"
 
 
 class CacheCodec:
