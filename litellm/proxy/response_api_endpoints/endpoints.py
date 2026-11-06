@@ -3,7 +3,7 @@ import contextlib
 import copy
 import json
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
@@ -2191,6 +2191,14 @@ class _GuardrailWalk(Protocol):
         guardrails_only: bool,
     ) -> object: ...
 
+    def async_post_call_streaming_iterator_hook(
+        self,
+        response: AsyncIterable[object],
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: ProxyLogging hands the guardrails the request dict they edit
+        guardrails_only: bool = False,
+    ) -> AsyncGenerator[object, None]: ...
+
 
 async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
@@ -2308,6 +2316,12 @@ def _responses_ws_frame_guard(
             guardrail_information=guardrail_information,
             pii_tokens=pii_tokens,
             bill_refusal=partial(record_refused_turn, guardrail_information),
+            guard_output=partial(
+                proxy_logging_obj.async_post_call_streaming_iterator_hook,
+                user_api_key_dict=user_api_key_dict,
+                request_data=guarded_data,
+                guardrails_only=True,
+            ),
         )
 
     return guard
