@@ -177,10 +177,17 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
         ), missing.text
 
 
+@pytest.mark.parametrize("hold_registration_metadata", (False, True))
 def test_callback_refuses_a_response_without_iss_when_the_authorization_server_advertises_iss_support(
     gateway: Gateway,
+    peer: Gateway,
+    hold_registration_metadata: bool,
 ) -> None:
     wire_holder: Final[list[Wire]] = []
+    metadata_started: Final = threading.Event()
+    metadata_release: Final = threading.Event()
+    if not hold_registration_metadata:
+        metadata_release.set()
 
     def respond(request: Request) -> Reply:
         path: Final = urlsplit(request.target).path
@@ -188,6 +195,8 @@ def test_callback_refuses_a_response_without_iss_when_the_authorization_server_a
             "/.well-known/oauth-authorization-server",
             "/.well-known/openid-configuration",
         ):
+            metadata_started.set()
+            assert metadata_release.wait(timeout=20), "metadata was not released"
             issuer: Final = wire_holder[0].url
             return Reply(
                 body=json.dumps(
@@ -206,19 +215,29 @@ def test_callback_refuses_a_response_without_iss_when_the_authorization_server_a
             )
         return Reply(status=404, body=json.dumps({"error": "not_found"}).encode())
 
-    with wire_server(respond) as wire, mcp_peer() as peer, gateway.scenario() as scenario:
+    with wire_server(respond) as wire, mcp_peer() as resource, gateway.scenario() as scenario:
         wire_holder.append(wire)
         alias: Final = "rt5" + uuid.uuid4().hex[:10]
-        identity: Final = register_mcp(
-            scenario,
-            peer,
-            alias,
-            issuer=wire.url,
-            auth_type="oauth2",
-            oauth2_flow="authorization_code",
-            credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
-        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            registering: Final = pool.submit(
+                register_mcp,
+                scenario,
+                resource,
+                alias,
+                issuer=wire.url,
+                auth_type="oauth2",
+                oauth2_flow="authorization_code",
+                credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+            )
+            try:
+                if hold_registration_metadata:
+                    assert metadata_started.wait(timeout=20), "metadata did not start"
+                identity: Final = registering.result(timeout=20)
+            finally:
+                metadata_release.set()
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+
+        _start_callback_flow(peer, alias, key, "ac-client", expected_authorization_url=wire.url + "/authorize")
 
         relay, cookie, cookie_value = _start_callback_flow(
             gateway, alias, key, "ac-client", expected_authorization_url=wire.url + "/authorize"
@@ -266,7 +285,10 @@ def test_callback_refuses_a_response_without_iss_when_the_authorization_server_a
 
         wire_requests: Final = wire.drain()
         wire_method_paths: Final = tuple((request.method, urlsplit(request.target).path) for request in wire_requests)
-        assert wire_method_paths == (("GET", "/.well-known/oauth-authorization-server"),), wire_method_paths
+        assert wire_method_paths == (
+            ("GET", "/.well-known/oauth-authorization-server"),
+            ("GET", "/.well-known/oauth-authorization-server"),
+        ), wire_method_paths
         assert not any(method == "POST" and path == "/token" for method, path in wire_method_paths), wire_method_paths
 
 
