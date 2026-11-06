@@ -1975,10 +1975,53 @@ model LiteLLM_ShadowEvalFunnel {
 
 // One instance of work being done. `status` is a materialized cache of the
 // latest event; the event log is the authoritative source of truth.
+model LiteLLM_WorkflowDefinition {
+  workflow_id           String   @id @default(uuid())
+  team_id               String
+  name                  String
+  etag                  String
+  digest                String
+  bundle_json           String
+  contributors          String[]
+  published_snapshot_id String?
+  published_etag        String?
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
+  snapshots             LiteLLM_WorkflowSnapshot[]
+
+  @@unique([team_id, name])
+  @@index([team_id, workflow_id])
+}
+
+model LiteLLM_WorkflowSnapshot {
+  snapshot_id  String   @id @default(uuid())
+  workflow_id  String
+  team_id      String
+  name         String
+  digest       String
+  bundle_json  String
+  contributors String[]
+  published_by String?
+  created_at   DateTime @default(now())
+  definition   LiteLLM_WorkflowDefinition @relation(fields: [workflow_id], references: [workflow_id], onDelete: Restrict)
+
+  @@index([workflow_id, created_at, snapshot_id])
+  @@index([team_id, snapshot_id])
+}
+
 model LiteLLM_WorkflowRun {
   run_id        String   @id @default(uuid())
   session_id    String   @unique @default(uuid())
   workflow_type String
+  workflow_id       String?
+  snapshot_id       String?
+  team_id           String?
+  engine_owned      Boolean   @default(false)
+  request_digest    String?
+  idempotency_key   String?
+  lease_token       String?
+  lease_expires_at  DateTime?
+  cancel_requested Boolean   @default(false)
   status        String   @default("pending")
   created_by    String?  // user_id of the key that created this run; null = created by master key
   created_at    DateTime @default(now())
@@ -1994,6 +2037,10 @@ model LiteLLM_WorkflowRun {
   @@index([session_id])
   @@index([created_at])
   @@index([created_by])
+  @@unique([created_by, team_id, workflow_id, idempotency_key], map: "LiteLLM_WorkflowRun_principal_idempotency_key")
+  @@index([workflow_id, team_id, created_at, run_id])
+  @@index([engine_owned, status, lease_expires_at])
+  @@index([team_id, engine_owned, status])
 }
 
 // Append-only log of state transitions. Never mutate rows here.

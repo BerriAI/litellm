@@ -468,7 +468,7 @@ async def release_or_invalidate_budget_reservation(
             budget_reservation["finalized"] = True
 
 
-async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
+async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object] | None) -> None:
     """Release a reservation no logging callback took ownership of, once the request ended.
 
     A handler whose litellm call never builds a logging object (batch cancel, file

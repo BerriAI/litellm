@@ -841,6 +841,12 @@ from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
+from litellm.proxy.management_endpoints.workflow_definition_endpoints import (
+    router as workflow_definition_router,
+)
+from litellm.proxy.management_endpoints.workflow_execution_endpoints import (
+    router as workflow_execution_router,
+)
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
@@ -1983,6 +1989,9 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    from litellm.proxy.workflows.lifespan import workflow_lifespan
+
+                    await admin_mcp_stack.enter_async_context(workflow_lifespan(database))
                     gc.freeze()
                     verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
                     yield state
@@ -13089,6 +13098,28 @@ async def chat_completion(
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data: Final = await read_request_body(request=request)
+    workflow_data: Final = as_str_mapping(_UNTYPED_VALUE.validate_python(data))
+    workflow_model: Final = workflow_data.get("model") if workflow_data is not None else None
+    if isinstance(workflow_model, str) and workflow_model.startswith("workflow/"):
+        from litellm.proxy.deps.database import get_database
+        from litellm.proxy.deps.repositories import (
+            get_workflow_definition_repository,
+            get_workflow_execution_repository,
+        )
+        from litellm.proxy.management_endpoints.workflow_execution_endpoints import invoke_workflow
+
+        workflow_database: Final = await get_database(request)
+        try:
+            return await invoke_workflow(
+                request,
+                fastapi_response,
+                user_api_key_dict,
+                workflow_data,
+                await get_workflow_definition_repository(workflow_database),
+                await get_workflow_execution_repository(workflow_database),
+            )
+        finally:
+            await release_unbound_budget_reservation(user_api_key_dict.budget_reservation)
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):
             # Covers both missing and JSON-string metadata (multipart /
@@ -22365,6 +22396,8 @@ app.include_router(model_access_group_management_router)
 app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
+app.include_router(workflow_execution_router)
+app.include_router(workflow_definition_router)
 app.include_router(memory_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)

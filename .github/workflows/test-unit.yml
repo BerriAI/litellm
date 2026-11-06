@@ -547,6 +547,7 @@ jobs:
 
           - shard: proxy-endpoints
             test-path: |-
+              tests/unit/proxy/workflows
               tests/unit/proxy/management_endpoints
               tests/unit/proxy/management_helpers
               tests/unit/proxy/list_api

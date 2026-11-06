@@ -660,6 +660,21 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UPDATE.value,
     )
 
+    workflow_definition_routes = (
+        "/v1/workflows",
+        "/v1/workflows/{workflow_id}",
+        "/v1/workflows/{workflow_id}/validate",
+        "/v1/workflows/{workflow_id}/publish",
+    )
+
+    workflow_execution_routes = (
+        "/v1/workflows/{workflow_id}/test",
+        "/v1/workflows/{workflow_id}/runs",
+        "/v1/workflows/runs/{run_id}/steps",
+        "/v1/workflows/runs/{run_id}/definition",
+        "/v1/workflows/runs/{run_id}/cancel",
+    )
+
     management_routes = (
         [
             # user
@@ -723,6 +738,8 @@ class LiteLLMRoutes(enum.Enum):
         + mcp_management_routes
         + list(agent_management_routes)
         + list(skill_hub_routes)
+        + list(workflow_definition_routes)
+        + list(workflow_execution_routes)
     )
 
     spend_tracking_routes = [
@@ -966,6 +983,8 @@ class LiteLLMRoutes(enum.Enum):
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
         *skill_hub_routes,
+        *workflow_definition_routes,
+        *workflow_execution_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

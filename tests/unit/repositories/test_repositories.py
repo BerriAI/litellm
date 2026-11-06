@@ -3,6 +3,8 @@ Tests for gateway repository layer.
 """
 
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List, Optional
@@ -2242,6 +2244,39 @@ class TestTeamRepositoryArchiveData:
 
 
 class TestPrismaTableRepository:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("changed_field", ["litellm_call_id", "api_key", "team_id", "session_id"])
+    @pytest.mark.parametrize("row_status", ["success", "failure"])
+    async def test_receipt_lookup_selects_only_the_exact_child_call(
+        self, changed_field: str, row_status: str
+    ) -> None:
+        from litellm.repositories.table_repositories import SpendLogsRepository
+
+        @dataclass(frozen=True, slots=True)
+        class Receipt:
+            request_id: str
+            litellm_call_id: str = "child-call"
+            api_key: str = "key-hash"
+            team_id: str = "team"
+            session_id: str = "session"
+            status: str = "success"
+
+        intended: Final = Receipt("response_cache_hit123", status=row_status)
+        unrelated: Final = replace(intended, request_id="unrelated", **{changed_field: "different"})
+
+        @dataclass(frozen=True, slots=True)
+        class Rows:
+            async def find_many(self, *, where: Mapping[str, object], take: int) -> tuple[Receipt, ...]:
+                return tuple(
+                    row for row in (unrelated, intended) if all(getattr(row, key) == value for key, value in where.items())
+                )[:take]
+
+        client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_spendlogs=Rows()))
+        result: Final = await SpendLogsRepository(client, use_writer=True).request_ids_for_call(
+            call_id="child-call", key_hash="key-hash", team_id="team", session_id="session",
+        )
+        assert result == ("response_cache_hit123",)
+
     def test_table_property_returns_named_delegate(self):
         from litellm.proxy.common_utils.config_sync_pubsub import (
             _PublishOnWriteActions,

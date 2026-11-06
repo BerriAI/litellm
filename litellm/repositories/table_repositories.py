@@ -111,6 +111,20 @@ def _delivery_id(row: Mapping[str, object]) -> str:
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
     table_name = "litellm_spendlogs"
 
+    async def request_ids_for_call(
+        self, *, call_id: str, key_hash: str, team_id: str, session_id: str
+    ) -> tuple[str, ...]:
+        rows: Final = await self.table.find_many(
+            where={
+                "litellm_call_id": call_id,
+                "api_key": key_hash,
+                "team_id": team_id,
+                "session_id": session_id,
+            },
+            take=2,
+        )
+        return tuple(row.request_id for row in rows)
+
     async def insert_with_deliveries(
         self, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool = True
     ) -> int:
