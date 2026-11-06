@@ -239,6 +239,32 @@ describe("buildCreateServerPayload credentials", () => {
   });
 });
 
+describe("buildCreateServerPayload secret headers", () => {
+  const rows = [
+    { header: " DD-API-KEY ", value: " api-secret " },
+    { header: "DD-APPLICATION-KEY", value: "app-secret" },
+  ];
+
+  it("sends the rows as credentials.headers and never as a top-level field", () => {
+    const payload = payloadOf(build({ auth_type: "secret_headers", secret_headers: rows }));
+    expect(payload.credentials).toEqual({
+      headers: { "DD-API-KEY": "api-secret", "DD-APPLICATION-KEY": "app-secret" },
+    });
+    expect(payload).not.toHaveProperty("secret_headers");
+  });
+
+  it("leaves out rows that a different auth type left behind", () => {
+    const payload = payloadOf(build({ auth_type: "api_key", credentials: { auth_value: "k" }, secret_headers: rows }));
+    expect(payload.credentials).toEqual({ auth_value: "k" });
+    expect(payload).not.toHaveProperty("secret_headers");
+  });
+
+  it("omits credentials when no row names a header", () => {
+    const payload = payloadOf(build({ auth_type: "secret_headers", secret_headers: [{ header: " ", value: "v" }] }));
+    expect(payload).not.toHaveProperty("credentials");
+  });
+});
+
 describe("buildCreateServerPayload flags", () => {
   it.each([["true_passthrough"], ["oauth_delegate"]])("defaults dcr_bridge on for %s", (authType) => {
     expect(payloadOf(build({ auth_type: authType })).dcr_bridge).toBe(true);
