@@ -28,7 +28,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch.object(litellm, "credential_list", []),
-        patch("litellm.proxy.credential_endpoints.nim_model_discovery._CACHE", InMemoryCache()),
+        patch("litellm.proxy.credential_endpoints.nim_model_discovery._CACHE", InMemoryCache(clock=lambda: 0.0)),
     ):
         with TestClient(app) as test_client:
             yield test_client
