@@ -68,6 +68,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
+    config.addinivalue_line("markers", "shares_worker_state: owned proxies here share the worker DB and Redis")
     config.stash[REPORTS] = []
     config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
