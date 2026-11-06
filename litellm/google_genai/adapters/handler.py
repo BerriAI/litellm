@@ -43,6 +43,7 @@ class GenerateContentToCompletionHandler:
         stream: bool = False,
         litellm_params: GenericLiteLLMParams | None = None,
         extra_kwargs: Mapping[str, object] | None = None,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenerateContentCompletionKwargs:
         """Prepare kwargs for litellm.completion/acompletion"""
 
@@ -70,6 +71,12 @@ class GenerateContentToCompletionHandler:
             if "litellm_metadata" in extra_kwargs:
                 completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
 
+        if isinstance(custom_logging_obj, LiteLLMLoggingObj):
+            completion_kwargs["success_callback"] = [
+                *(custom_logging_obj.dynamic_success_callbacks or ()),
+                *(custom_logging_obj.dynamic_async_success_callbacks or ()),
+            ]
+
         if stream:
             completion_kwargs["stream"] = stream
             stream_options: Final = _adapter_stream_options((extra_kwargs or {}).get("stream_options"))
@@ -85,6 +92,7 @@ class GenerateContentToCompletionHandler:
         litellm_params: GenericLiteLLMParams,
         config: dict[str, object] | None = None,
         stream: bool = False,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs: object,
     ) -> dict[str, object] | AsyncIterator[bytes]:
         """Handle generate_content call asynchronously using completion adapter"""
@@ -96,6 +104,7 @@ class GenerateContentToCompletionHandler:
             stream=stream,
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
+            custom_logging_obj=custom_logging_obj,
         )
 
         try:
@@ -136,6 +145,7 @@ class GenerateContentToCompletionHandler:
         config: dict[str, object] | None = None,
         stream: bool = False,
         _is_async: bool = False,
+        custom_logging_obj: LiteLLMLoggingObj | None = None,
         **kwargs: object,
     ) -> dict[str, object] | AsyncIterator[bytes] | Coroutine[None, None, dict[str, object] | AsyncIterator[bytes]]:
         """Handle generate_content call using completion adapter"""
@@ -147,6 +157,7 @@ class GenerateContentToCompletionHandler:
                 config=config,
                 stream=stream,
                 litellm_params=litellm_params,
+                custom_logging_obj=custom_logging_obj,
                 **kwargs,
             )
 
@@ -157,6 +168,7 @@ class GenerateContentToCompletionHandler:
             stream=stream,
             litellm_params=litellm_params,
             extra_kwargs=kwargs,
+            custom_logging_obj=custom_logging_obj,
         )
 
         try:
