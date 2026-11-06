@@ -927,6 +927,8 @@ async def _key_metadata_unless_database_fails(
     rows: Sequence[GroupingSetsRow] | Sequence[EntityRollupRow] | Sequence[DailySpendRecord],
 ) -> Mapping[str, KeyMetadataRow] | None:
     api_keys: Final = frozenset(row.api_key for row in rows if row.api_key and row.api_key != PTU_SENTINEL_API_KEY)
+    if not api_keys:
+        return MappingProxyType({})
     return await unless_database_fails(
         repository.key_metadata(api_keys, spend_logs_window(frozenset(row.date for row in rows))),
         None,
