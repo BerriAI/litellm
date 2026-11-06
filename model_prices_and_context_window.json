@@ -13460,13 +13460,16 @@
         "supports_reasoning": true
     },
     "azure_ai/mistral-document-ai-2512": {
+        "deprecation_date": "2027-02-15",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "litellm_provider": "azure_ai",
         "ocr_cost_per_page": 0.003,
         "mode": "ocr",
         "supported_endpoints": [
             "/v1/ocr"
         ],
-        "source": "https://ai.azure.com/catalog/models/mistral-document-ai-2512"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
+        "successor_model": "azure_ai/mistral-ocr-4-0"
     },
     "azure_ai/mistral-ocr-4-0": {
         "litellm_provider": "azure_ai",
