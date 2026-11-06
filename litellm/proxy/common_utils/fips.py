@@ -23,7 +23,7 @@ def _fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
 
 
 def openssl_enforces_fips() -> bool:
-    """Python's OpenSSL runs with FIPS-only defaults and itself refuses MD5."""
+    """Python's OpenSSL runs with FIPS-only defaults and itself refuses scrypt."""
     try:
         import _hashlib
 
@@ -32,7 +32,7 @@ def openssl_enforces_fips() -> bool:
     except (ImportError, AttributeError, ValueError):
         return False
     try:
-        _hashlib.new("md5", b"", usedforsecurity=True)
+        _hashlib.scrypt(b"", salt=b"\0" * 16, n=2, r=1, p=1, dklen=16)
     except ValueError:
         return True
     return False

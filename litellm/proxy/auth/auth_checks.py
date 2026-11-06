@@ -133,10 +133,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
-    model_access_group_spend_counter_key,
     object_permission_cache_key,
     project_cache_key,
-    project_spend_counter_key,
     tag_cache_key,
     tag_registry_cache_key,
     team_membership_auth_cache_key,
@@ -151,8 +149,21 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.redis.stores.spend_counters import (
+    SPEND_COUNTERS_TARGET,
+    end_user_counter,
+    key_counter,
+    key_window_counter,
+    model_access_group_counter,
+    org_counter,
+    project_counter,
+    tag_counter,
+    team_counter,
+    team_member_counter,
+    team_window_counter,
+    user_counter,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -1426,7 +1437,7 @@ async def common_checks(
 
             user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
+                counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
@@ -1974,7 +1985,7 @@ async def check_end_user_budget(
     from litellm.proxy.proxy_server import get_current_spend
 
     end_user_spend: Final = await get_current_spend(
-        counter_key=f"spend:end_user:{end_user_obj.user_id}",
+        counter_key=end_user_counter(end_user_obj.user_id),
         fallback_spend=end_user_obj.spend or 0.0,
         max_budget=end_user_budget,
         fallback_authoritative=True,
@@ -3187,7 +3198,7 @@ async def cache_team_object(
     usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
     # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
     # for both caches, so the usage cache only has its own memory to clear.
-    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_cache
+    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_connection
 
     await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
 
@@ -3328,37 +3339,40 @@ async def invalidate_team_member_spend_state(
     await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
 
     if new_spend is not None:
-        from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+        from litellm.proxy.proxy_server import (
+            SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+            spend_counter_cache,
+            spend_counter_store,
+        )
 
-        spend_counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
+        spend_counter_key: Final = team_member_counter(user_id, team_id)
         spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
 
-        spend_counter_cache.in_memory_cache.set_cache(key=spend_counter_key, value=new_spend, ttl=60)
-        if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_store.set(spend_counter_key, new_spend, ttl=60)
+        except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
+            verbose_proxy_logger.warning(
+                "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
+                "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
+                spend_counter_key,
+                e,
+            )
             try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
-            except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
+                await spend_counter_store.delete((spend_counter_key,))
+            except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
                 verbose_proxy_logger.warning(
-                    "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
-                    "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
+                    "Failed to delete stale spend counter %s in Redis after a failed reset write",
                     spend_counter_key,
-                    e,
+                    exc_info=True,
                 )
-                try:
-                    await spend_counter_cache.redis_cache.async_delete_cache(key=spend_counter_key)
-                except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
-                    verbose_proxy_logger.warning(
-                        "Failed to delete stale spend counter %s in Redis after a failed reset write",
-                        spend_counter_key,
-                        exc_info=True,
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={
-                            "error": "Spend was reset in the database, but Redis is unreachable and still "
-                            "holds the pre-reset counter. Retry once Redis is reachable."
-                        },
-                    ) from e
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": "Spend was reset in the database, but Redis is unreachable and still "
+                        "holds the pre-reset counter. Retry once Redis is reachable."
+                    },
+                ) from e
+            spend_counter_store.set_local(spend_counter_key, new_spend, ttl=60)
 
         spend_counter_cache.in_memory_cache.set_cache(
             key=spend_db_floor_key,
@@ -6722,7 +6736,7 @@ async def virtual_key_max_budget_check(
         from litellm.proxy.proxy_server import get_current_spend
 
         fallback_spend: Final = valid_token.spend or 0.0
-        counter_key: Final = f"spend:key:{valid_token.token}"
+        counter_key: Final = key_counter(str(valid_token.token))
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
@@ -6811,7 +6825,7 @@ async def _virtual_key_multi_budget_check(
 
     for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
+        counter_key = key_window_counter(str(valid_token.token), str(w["budget_duration"]))
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -7118,7 +7132,7 @@ async def _check_team_member_budget(
             from litellm.proxy.proxy_server import get_current_spend
 
             team_member_spend = await get_current_spend(
-                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                counter_key=team_member_counter(valid_token.user_id, team_object.team_id),
                 fallback_spend=team_member_spend,
                 max_budget=team_member_budget,
             )
@@ -7230,7 +7244,7 @@ async def team_max_budget_check(
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
-            counter_key=f"spend:team:{team_object.team_id}",
+            counter_key=team_counter(team_object.team_id),
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
@@ -7283,7 +7297,7 @@ async def _team_multi_budget_check(
 
     for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
+        counter_key = team_window_counter(team_object.team_id, str(w["budget_duration"]))
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -7402,7 +7416,7 @@ async def _project_max_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     project_spend: Final = await get_current_spend(
-        counter_key=project_spend_counter_key(project_object.project_id),
+        counter_key=project_counter(project_object.project_id),
         fallback_spend=project_object.spend or 0.0,
         max_budget=max_budget,
     )
@@ -7609,7 +7623,7 @@ async def organization_max_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     org_spend: Final = await get_current_spend(
-        counter_key=f"spend:org:{org_id}",
+        counter_key=org_counter(org_id),
         fallback_spend=org_table.spend or 0.0,
         max_budget=org_max_budget,
     )
@@ -7699,7 +7713,7 @@ async def tag_max_budget_check_for_tags(
             from litellm.proxy.proxy_server import get_current_spend
 
             tag_spend = await get_current_spend(
-                counter_key=f"spend:tag:{tag_name}",
+                counter_key=tag_counter(tag_name),
                 fallback_spend=tag_object.spend or 0.0,
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 fallback_authoritative=True,
@@ -7754,7 +7768,7 @@ async def _model_access_group_max_budget_check(
             continue
 
         group_spend = await get_current_spend(
-            counter_key=model_access_group_spend_counter_key(group),
+            counter_key=model_access_group_counter(group),
             fallback_spend=budget.spend,
             max_budget=budget.max_budget,
             fallback_authoritative=True,

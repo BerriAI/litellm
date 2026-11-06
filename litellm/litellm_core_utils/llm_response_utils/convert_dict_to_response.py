@@ -1072,9 +1072,10 @@ def convert_to_model_response_object(
         if isinstance(e, APIError):
             raise
 
+        hide_reply: Final = response_type == "audio_transcription"
         received_args: Final = dict(
-            response_object=response_object,
-            model_response_object=model_response_object,
+            response_object="<hidden>" if hide_reply else response_object,
+            model_response_object="<hidden>" if hide_reply else model_response_object,
             response_type=response_type,
             stream=stream,
             start_time=start_time,

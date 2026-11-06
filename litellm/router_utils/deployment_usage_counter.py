@@ -2,8 +2,8 @@
 usage-based-routing-v2 selection and ``enforce_model_rate_limits`` read.
 
 The router charges one request before the routing pre-call checks run and hands it back when a check
-refuses the attempt. The tokens of a served call ride the router's own usage write, as the twin of its
-``global_router:`` tpm increment (``enforcement_tpm_operation``). Nothing else writes these keys.
+refuses the attempt. The tokens of a served call follow the router's own usage write, as the twin of its
+``global_router:`` tpm increment (``charge_tokens``). Nothing else writes these keys.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import RouterCacheEnum
 from litellm.utils import get_utc_datetime
@@ -27,7 +28,6 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 USAGE_TTL: Final = 60
-ROUTER_USAGE_TARGET: Final = "router_usage"
 _STR_MAP: Final = TypeAdapter(Mapping[str, object])
 _ROUTER_USAGE_PREFIX: Final = RouterCacheEnum.TPM.value.split("{", 1)[0]
 
@@ -146,6 +146,23 @@ class DeploymentUsageCounter:
         _ = self._increment(charge.key, -1)
         end_attempt(charge)
 
+    @with_service_target(ROUTER_USAGE_TARGET)
+    async def charge_tokens(
+        self,
+        operations: Iterable[RedisPipelineIncrementOperation],
+        counted: bool,
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """The served call's tokens, as the twins of the router's ``global_router:`` tpm increments: counted
+        in this worker's memory now, in Redis on the request's post-call pipeline."""
+        twins: Final = usage_twins(operations, counted)
+        if not twins:
+            return
+        try:
+            await self.dual_cache.async_increment_cache_pipeline_post_call(twins, parent_otel_span)
+        except Exception as e:  # noqa: BLE001  # see _async_increment
+            verbose_router_logger.debug("DeploymentUsageCounter: tokens were not recorded. Got - %s", e)
+
     def _held(self, key: str, value: int, count: int) -> int:
         """What this worker's memory keeps: a charge never lowers what a later charge already wrote."""
         held: Final = self.dual_cache.in_memory_cache.get_cache(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # InMemoryCache reads are untyped
@@ -181,6 +198,7 @@ class DeploymentUsageCounter:
 
 
 __all__ = [
+    "ROUTER_USAGE_TARGET",
     "USAGE_TTL",
     "DeploymentUsageCounter",
     "UsageCharge",
