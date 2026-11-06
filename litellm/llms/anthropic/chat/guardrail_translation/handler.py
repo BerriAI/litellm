@@ -518,6 +518,13 @@ def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewrit
     return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}
 
 
+def _in_stream_block_order(
+    tool_calls: Sequence[ChatCompletionMessageToolCall], blocks: Sequence[tuple[int, Mapping[str, object]]]
+) -> tuple[ChatCompletionMessageToolCall, ...]:
+    positions: Final = MappingProxyType({block.get("id"): position for position, (_, block) in enumerate(blocks)})
+    return tuple(sorted(tool_calls, key=lambda tool_call: positions.get(tool_call.id, len(positions))))
+
+
 def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...]:
     """The guardrail-visible shape of each tool call, whether the guardrail handed
     back the ``ChatCompletionMessageToolCall`` objects it was given or plain dicts."""
@@ -1572,15 +1579,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             if built_response is not None and hasattr(built_response, "choices") and built_response.choices:
                 model_response: Final = cast(ModelResponse, built_response)
                 first_choice: Final = cast(Choices, model_response.choices[0])
-                tool_calls_list: Final = (
-                    *anthropic_server_tool_calls(first_choice.message),
-                    *cast(list[ChatCompletionMessageToolCall], first_choice.message.tool_calls or []),
+                tool_call_blocks: Final = self._streamed_tool_call_blocks(responses_so_far)
+                tool_calls_list: Final = _in_stream_block_order(
+                    (
+                        *anthropic_server_tool_calls(first_choice.message),
+                        *cast(list[ChatCompletionMessageToolCall], first_choice.message.tool_calls or []),
+                    ),
+                    tool_call_blocks,
                 )
                 string_so_far = first_choice.message.content
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_list or ())
                 guardrail_inputs: Final = GenericGuardrailAPIInputs()
                 leading_texts: Final = (string_so_far,) if isinstance(string_so_far, str) and string_so_far else ()
-                tool_call_blocks: Final = self._streamed_tool_call_blocks(responses_so_far)
                 streamed_query_strings: Final = _streamed_query_strings(tool_call_blocks, pre_guardrail_tool_calls)
                 streamed_result_strings: Final = self._streamed_web_search_result_strings(responses_so_far)
                 streamed_web_search_strings: Final = (*streamed_result_strings, *streamed_query_strings)

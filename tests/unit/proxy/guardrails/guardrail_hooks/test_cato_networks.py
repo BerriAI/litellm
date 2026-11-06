@@ -1,6 +1,7 @@
 import asyncio
 import json
 import ssl
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2239,11 +2240,11 @@ async def test_post_call_success_hook_redacts_both_content_and_tool_arguments():
 
 @pytest.mark.asyncio
 async def test_post_call_success_hook_inspects_and_redacts_server_tool_call_arguments():
-    guard = _make_guardrail()
-    request_data = {"messages": [{"role": "user", "content": "look up persimmon"}]}
+    guard: Final = _make_guardrail()
+    request_data: Final = {"messages": [{"role": "user", "content": "look up persimmon"}]}
 
-    def side_effect(url, *args, **kwargs):
-        last = kwargs["json"]["messages"][-1]["content"]
+    def side_effect(url: str, *args: object, **kwargs: dict[str, list[dict[str, str]]]) -> Response:
+        last: Final = kwargs["json"]["messages"][-1]["content"]
         return _make_response(
             {
                 "analysis_result": {"policy_drill_down": {"PII": {}}},
@@ -2257,7 +2258,7 @@ async def test_post_call_success_hook_inspects_and_redacts_server_tool_call_argu
             }
         )
 
-    llm_response = ModelResponse(
+    llm_response: Final = ModelResponse(
         choices=[
             {
                 "finish_reason": "tool_calls",
@@ -2289,18 +2290,18 @@ async def test_post_call_success_hook_inspects_and_redacts_server_tool_call_argu
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         side_effect=side_effect,
     ) as mock_post:
-        result = await guard.async_post_call_success_hook(
+        result: Final = await guard.async_post_call_success_hook(
             data=request_data,
             response=llm_response,
             user_api_key_dict=UserAPIKeyAuth(),
         )
 
-    inspected = [call.kwargs["json"]["messages"][-1] for call in mock_post.call_args_list]
+    inspected: Final = [call.kwargs["json"]["messages"][-1] for call in mock_post.call_args_list]
     assert inspected == [
         {"role": "assistant", "content": '{"query": "persimmon"}'},
         {"role": "assistant", "content": '{"city": "Paris"}'},
     ]
-    message = result.choices[0].message
+    message: Final = result.choices[0].message
     assert message.provider_specific_fields == {
         "server_tool_calls": [
             {
@@ -2414,9 +2415,9 @@ async def test_post_call_success_hook_redacts_claude_hosted_web_fetch_url():
     from openai.types.responses import ResponseFunctionWebSearch
     from openai.types.responses.response_function_web_search import ActionOpenPage
 
-    guard = _make_guardrail()
-    request_data = {"messages": [{"role": "user", "content": "read the page"}]}
-    anonymize_response = _make_response(
+    guard: Final = _make_guardrail()
+    request_data: Final = {"messages": [{"role": "user", "content": "read the page"}]}
+    anonymize_response: Final = _make_response(
         {
             "analysis_result": {"policy_drill_down": {"PII": {}}},
             "required_action": {"action_type": "anonymize_action", "policy_name": "PII"},
@@ -2428,7 +2429,7 @@ async def test_post_call_success_hook_redacts_claude_hosted_web_fetch_url():
             },
         }
     )
-    response = _make_responses_api_response(
+    response: Final = _make_responses_api_response(
         [
             ResponseFunctionWebSearch(
                 id="ws_srvtoolu_01",
@@ -2443,12 +2444,12 @@ async def test_post_call_success_hook_redacts_claude_hosted_web_fetch_url():
         new_callable=AsyncMock,
     ) as mock_post:
         mock_post.return_value = anonymize_response
-        result = await guard.async_post_call_success_hook(
+        result: Final = await guard.async_post_call_success_hook(
             data=request_data,
             response=response,
             user_api_key_dict=UserAPIKeyAuth(),
         )
-    posted = mock_post.call_args.kwargs["json"]["messages"]
+    posted: Final = mock_post.call_args.kwargs["json"]["messages"]
     assert posted[-1] == {"role": "assistant", "content": '{"url": "https://example.com/?ssn=123-45-6789"}'}
     assert (result.output[0].id, result.output[0].action.url) == (
         "ws_srvtoolu_01",
