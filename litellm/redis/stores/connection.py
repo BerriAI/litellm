@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm.rust_bridge._native import (
     NativeAuthCache,
+    NativeDeploymentHealth,
     NativeRateLimits,
     NativeRedisClient,
     NativeRouterCooldowns,
@@ -43,6 +44,9 @@ class RedisStores:
 
     def sensitive_route_pins(self) -> NativeSensitiveRoutePins:
         return NativeSensitiveRoutePins(self.client)
+
+    def deployment_health(self) -> NativeDeploymentHealth:
+        return NativeDeploymentHealth(self.client)
 
 
 def connect(redis_cache: RedisCache | None) -> RedisStores:

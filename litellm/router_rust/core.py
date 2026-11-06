@@ -76,6 +76,7 @@ from litellm.litellm_core_utils.total_deadline import (
     enforce_total_timeout_scope,
 )
 from litellm.redis.stores.connection import connect
+from litellm.redis.stores.deployment_health import DeploymentHealthStore
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.redis.stores.router_usage import RouterUsage
 from litellm.router_api import (
@@ -1486,7 +1487,9 @@ class RustCore(
             store=RouterCooldownStore(redis.router_cooldowns()),
             default_cooldown_time=self._cooldown_given,  # pyright: ignore[reportArgumentType]  # the constructor's value, as the Python core passes it
         )
-        self._health_checks: DeploymentHealthCache = resolved.health_routing.health_checks(self._cache)
+        self._health_checks: DeploymentHealthCache = resolved.health_routing.health_checks(
+            DeploymentHealthStore(redis.deployment_health())
+        )
         self._version: int = 1
         self._settings: RustSettings | None = None
         self._tag_filtering_models: tuple[int, bool] | None = None
@@ -2127,6 +2130,7 @@ class RustCore(
             redis: Final = connect(changes.redis_cache)
             self._usage.attach_redis(redis)
             self._cooldowns.cooldown_store.attach_redis(redis)
+            self._health_checks.store.attach_redis(redis)
             self._checks.prompt_caching_pin_cache.attach_redis_cache(changes.redis_cache)
             self._prerouter.attach_redis_cache(changes.redis_cache)
         return ApplyResult(
