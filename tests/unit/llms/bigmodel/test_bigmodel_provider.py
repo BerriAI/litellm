@@ -421,6 +421,34 @@ async def test_messages_forward_native_tools_thinking_and_usage(web_fetch_reques
     assert route.calls.last.request.headers["x-native-message"] == "preserved"
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_messages_drops_cache_salt_for_bigmodel() -> None:
+    route: Final = respx.post(f"{BASE}/api/anthropic/v1/messages").respond(
+        json={
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": MODEL,
+            "content": [{"type": "text", "text": "Hello"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model=f"bigmodel/{MODEL}",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        cache_salt="salt-a",
+        api_base=f"{BASE}/api/anthropic",
+        provider_specific_header={"custom_llm_provider": "bigmodel"},
+    )
+
+    assert "cache_salt" not in json.loads(route.calls.last.request.content)
+
+
 @pytest.mark.parametrize(
     "terminal_type,status",
     (("response.completed", "completed"), ("response.incomplete", "incomplete")),

@@ -100,6 +100,9 @@ class BigModelMessagesConfig(OpenAILikeAnthropicMessagesConfig):
     def custom_llm_provider(self) -> str:
         return "bigmodel"
 
+    def supports_cache_salt(self) -> bool:
+        return False
+
     def is_native_messages_route(self) -> bool:
         return True
 

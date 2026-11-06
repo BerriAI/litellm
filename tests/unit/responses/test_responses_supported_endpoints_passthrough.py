@@ -191,6 +191,25 @@ async def test_without_opt_in_still_bridges_through_chat_completions():
 
 
 @respx.mock
+async def test_bridge_preserves_existing_cache_salt_handling():
+    responses_route, chat_route = _mock_backend(respx.mock)
+
+    result = await litellm.aresponses(
+        model="custom_openai/my-model",
+        input="hi",
+        cache_salt="salt-a",
+        api_base=API_BASE,
+        api_key="sk-backend",
+        model_info={"supported_endpoints": ["/v1/chat/completions"]},
+    )
+
+    assert responses_route.call_count == 0
+    assert chat_route.call_count == 1
+    assert json.loads(chat_route.calls.last.request.content)["cache_salt"] == "salt-a"
+    assert isinstance(result, ResponsesAPIResponse)
+
+
+@respx.mock
 async def test_prompt_swap_to_other_provider_drops_deployment_opt_in(monkeypatch):
     """When a prompt manager moves the request to another provider, the original deployment's
     `supported_endpoints` no longer describes the upstream, so the swapped provider bridges."""
