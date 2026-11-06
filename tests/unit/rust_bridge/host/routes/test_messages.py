@@ -245,3 +245,57 @@ def test_a_late_rejection_tells_the_logger_the_resolved_call_first() -> None:
     assert isinstance(mapped, litellm.BadRequestError)
     assert logger.model_call_details["custom_llm_provider"] == "anthropic"
     assert logger.model_call_details["optional_params"] == {"max_tokens": 8}
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "cut", "error_class", "text"),
+    (
+        (
+            True,
+            (60, None, False),
+            "ReadError",
+            "Response payload is not completed: <TransferEncodingError: 400, "
+            "message='Not enough data to satisfy transfer length header.'>",
+        ),
+        (
+            True,
+            (19, 100, True),
+            "ReadError",
+            "Response payload is not completed: <ContentLengthError: 400, "
+            "message='Not enough data to satisfy content length header (received 19 of 100 bytes).'>. "
+            "ConnectionResetError(104, 'Connection reset by peer')",
+        ),
+        (
+            False,
+            (60, None, False),
+            "RemoteProtocolError",
+            "peer closed connection without sending complete message body (incomplete chunked read)",
+        ),
+        (
+            False,
+            (19, 100, False),
+            "RemoteProtocolError",
+            "peer closed connection without sending complete message body (received 19 bytes, expected 100)",
+        ),
+        (False, (19, 100, True), "ReadError", ""),
+    ),
+)
+def test_a_stream_body_cut_reaches_the_caller_as_the_transport_raised_it(
+    monkeypatch: pytest.MonkeyPatch,
+    aiohttp: bool,
+    cut: tuple[int, int | None, bool],
+    error_class: str,
+    text: str,
+) -> None:
+    import httpx
+
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    native: Final = RuntimeError("upstream network error")
+    native.messages_body_cut = cut  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(native, {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert type(mapped) is getattr(httpx, error_class)
+    assert str(mapped) == text

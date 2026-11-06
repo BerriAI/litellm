@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import datetime
+import errno
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 
 import httpx
+from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -24,7 +27,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.host import callbacks_legacy_python
+from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
@@ -120,6 +123,7 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
+_BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
     Callable[[dict[str, object]], object], handler.validate_anthropic_api_metadata
@@ -172,6 +176,27 @@ def _timeout_text(phase: str, request: Mapping[str, object]) -> str:
             llm_provider="litellm-httpx-handler",
         )
     )
+
+
+def _body_cut(received: int, expected: int | None, reset: bool) -> httpx.TransportError:
+    if not http_transport.uses_aiohttp_transport():
+        if reset:
+            return httpx.ReadError("")
+        detail: Final = (
+            "incomplete chunked read" if expected is None else f"received {received} bytes, expected {expected}"
+        )
+        return httpx.RemoteProtocolError(f"peer closed connection without sending complete message body ({detail})")
+    payload: Final = (
+        TransferEncodingError("Not enough data to satisfy transfer length header.")
+        if expected is None
+        else ContentLengthError(
+            f"Not enough data to satisfy content length header (received {received} of {expected} bytes)."
+        )
+    )
+    text: Final = f"Response payload is not completed: {payload!r}"
+    if not reset:
+        return httpx.ReadError(text)
+    return httpx.ReadError(f"{text}. {ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))!r}")
 
 
 def _upstream_failure(
@@ -232,6 +257,11 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
         return httpx.ReadTimeout(_BODY_READ_TIMEOUT)
+    body_cut: Final = getattr(error, "messages_body_cut", None)
+    if body_cut is not None:
+        # Python reads a stream's body outside its HTTP client's error mapping, so a body the
+        # connection cut short reaches the caller as its transport raised it.
+        return _body_cut(*_BODY_CUT.validate_python(body_cut))
     if getattr(error, "messages_late_rejection", False):
         _log_resolved_call(request, request_provider)
     if getattr(error, "messages_request_error", False):
