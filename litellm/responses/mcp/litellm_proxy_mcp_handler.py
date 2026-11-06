@@ -964,6 +964,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
+                if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
+                    raise
                 error_message = f"Tool call blocked: PII entity '{getattr(e, 'entity_type', 'unknown')}' detected by guardrail '{getattr(e, 'guardrail_name', 'unknown')}'. {e}"
                 tool_results.append(
                     {
@@ -980,6 +982,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
+                if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
+                    raise
                 error_message = (
                     f"Tool call blocked: Guardrail '{getattr(e, 'guardrail_name', 'unknown')}' violation. {e}"
                 )
@@ -998,6 +1002,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     error=e,
                 )
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
+                if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
+                    raise
                 error_message = f"Tool call failed: {str(e.detail) if hasattr(e, 'detail') else str(e)}"
                 tool_results.append(
                     {
@@ -1025,6 +1031,10 @@ class LiteLLM_Proxy_MCP_Handler:
         return tool_results
 
     _execute_tool_calls = execute_tool_calls
+
+    @staticmethod
+    def should_raise_mcp_guardrail_block(error: Exception) -> bool:
+        return getattr(error, "mcp_block_behavior", None) == "raise"
 
     @staticmethod
     def create_follow_up_messages_for_chat(

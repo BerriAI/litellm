@@ -452,8 +452,9 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self, *, keep_cache_control: bool = False) -> None:
+    def __init__(self, *, keep_cache_control: bool = False, keep_tool_errors: bool = False) -> None:
         self.keep_cache_control: Final = keep_cache_control
+        self.keep_tool_errors: Final = keep_tool_errors
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -634,11 +635,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            tool_result = ChatCompletionToolMessage(
-                                role="tool",
-                                tool_call_id=content.get("tool_use_id", ""),
-                                content=self._tool_result_content(content.get("content")),
-                            )
+                            tool_result = self._tool_message(content)
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
 
@@ -1454,6 +1451,15 @@ class LiteLLMAnthropicMessagesAdapter:
         if not isinstance(image_source, dict):
             return None
         return anthropic_image_source_to_openai_url(image_source)
+
+    def _tool_message(self, block: object) -> ChatCompletionToolMessage:
+        fields: Final = as_str_mapping(block) or {}
+        is_error: Final = fields.get("is_error")
+        tool_call_id: Final = tool_use_id if isinstance(tool_use_id := fields.get("tool_use_id"), str) else ""
+        content: Final = self._tool_result_content(fields.get("content"))
+        if self.keep_tool_errors and isinstance(is_error, bool):
+            return ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content, is_error=is_error)
+        return ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content)
 
     def _tool_result_content(self, raw_content: object) -> ToolResultContent:
         if isinstance(raw_content, str):

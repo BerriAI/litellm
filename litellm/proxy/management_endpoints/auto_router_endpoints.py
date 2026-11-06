@@ -1112,6 +1112,7 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
             router_registry.plugins("complexity"),
             router_registry.plugins("adaptive"),
             router_registry.plugins("quality"),
+            router_registry.plugins("switchyard"),
         )
     )
 

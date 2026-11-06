@@ -257,11 +257,12 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
-        Override in subclasses for format-specific conversion.
+        Override in subclasses for format-specific conversion. ``keep_tool_errors`` copies a provider's
+        tool-failure marker onto tool messages as ``is_error``; only for copies that are never sent to a model.
 
         Returns None if no convertible content is found.
         """
