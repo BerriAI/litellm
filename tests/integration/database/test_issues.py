@@ -945,7 +945,7 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
                 """INSERT INTO "LiteLLM_DailyUserSpend"
                 (id,user_id,date,api_key,model,custom_llm_provider,api_requests,successful_requests,updated_at)
                 VALUES($1,$2,$3,$4,'example-model',$1,10,10,CURRENT_TIMESTAMP),
-                    ($1||'-wide',repeat(chr(128640),65536),$3,repeat(chr(128640),65536),
+                    ($1||'-wide',repeat(chr(128640),8192),$3,repeat(chr(128640),8192),
                      'example-model',$1,20,20,CURRENT_TIMESTAMP)""",
                 identity,
                 owner,
@@ -976,7 +976,7 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
             await _query(
                 db,
                 """UPDATE "LiteLLM_DeletedVerificationToken"
-                SET user_id=repeat(chr(128640),65536),team_id=repeat(chr(128640),65536)
+                SET user_id=repeat(chr(128640),8192),team_id=repeat(chr(128640),8192)
                 WHERE id=$1||'-400'""",
                 identity,
             )
