@@ -33,9 +33,9 @@ const MAX_ROUTERS = 4;
 const MAX_MODELS = 100;
 const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
 
-const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[] = [
-  { value: "forward", label: "Adoption check: key's traffic vs the router" },
-  { value: "reverse", label: "Regression check: router's picks vs a baseline" },
+const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; labelKey: ParseKeys }[] = [
+  { value: "forward", labelKey: "costOptimization.shadowEval.start.directionOptions.forward" },
+  { value: "reverse", labelKey: "costOptimization.shadowEval.start.directionOptions.reverse" },
 ] as const;
 
 const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, ParseKeys> = {
@@ -44,11 +44,11 @@ const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, ParseKeys> = {
 };
 
 const DURATION_OPTIONS = [
-  { value: "1", label: "1 day" },
-  { value: "3", label: "3 days" },
-  { value: "7", label: "7 days" },
-  { value: "14", label: "14 days" },
-  { value: "30", label: "30 days" },
+  { value: "1", days: 1 },
+  { value: "3", days: 3 },
+  { value: "7", days: 7 },
+  { value: "14", days: 14 },
+  { value: "30", days: 30 },
 ] as const;
 
 const Field: React.FC<{ label: string; htmlFor?: string; className?: string; children: React.ReactNode }> = ({
@@ -241,6 +241,8 @@ export const StartForm: React.FC = () => {
   const [durationDays, setDurationDays] = useState("7");
   const [judgeModel, setJudgeModel] = useState<string | null>(null);
   const [maxBudget, setMaxBudget] = useState("10");
+  const directionOption = DIRECTION_OPTIONS.find((o) => o.value === direction);
+  const durationOption = DURATION_OPTIONS.find((o) => o.value === durationDays);
   const { data: autoRouters } = useAutoRouters();
   const configuredGroups = usePlainModelGroups();
   const chatGroups = usePlainChatModelGroups();
@@ -327,12 +329,12 @@ export const StartForm: React.FC = () => {
               onValueChange={(v: string | null) => setDirection(v === "reverse" ? "reverse" : "forward")}
             >
               <SelectTrigger className="w-full">
-                <SelectValue>{DIRECTION_OPTIONS.find((o) => o.value === direction)?.label}</SelectValue>
+                <SelectValue>{directionOption && t(directionOption.labelKey)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {DIRECTION_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -400,12 +402,15 @@ export const StartForm: React.FC = () => {
           <Field label={t("costOptimization.shadowEval.start.duration")}>
             <Select value={durationDays} onValueChange={(v: string | null) => setDurationDays(v ?? "7")}>
               <SelectTrigger className="w-full">
-                <SelectValue>{DURATION_OPTIONS.find((o) => o.value === durationDays)?.label}</SelectValue>
+                <SelectValue>
+                  {durationOption &&
+                    t("costOptimization.shadowEval.start.durationDays", { count: durationOption.days })}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {DURATION_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {t("costOptimization.shadowEval.start.durationDays", { count: option.days })}
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -1491,7 +1491,9 @@ class RoutingContext:
         return self._router._params_sent_to_deployment(request, deployment)
 
     def default_litellm_params(self) -> Mapping[str, object]:
-        return self._router._active_default_litellm_params()
+        """The router's ``default_litellm_params`` that are set (a None value is no default)."""
+        configured: Final = self.settings().default_litellm_params
+        return {key: value for key, value in (configured or {}).items() if value is not None}
 
     def settings(self) -> RouterSettings:
         return self._router.settings()

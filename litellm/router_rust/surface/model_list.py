@@ -187,10 +187,16 @@ class HostedModelList(list[Entry]):
         self,
         handle: Callable[[], "RouterCoreHandle | None"],
         apply: Callable[[Mapping[str, object]], None],
+        live: Callable[[object], Mapping[str, object]] = lambda _: {},
+        live_info: Callable[[object], Mapping[str, object]] = lambda _: {},
     ) -> None:
         super().__init__()
         self._handle: Final = handle
         self._apply: Final = apply
+        # A deployment's litellm_params values its record carries as text, by id (``live_params``).
+        self._live: Final = live
+        # A deployment's model_info values its record reads back changed (non-string keys), by id.
+        self._live_info: Final = live_info
         # The handle and registry version the contents were last read at.
         self._read_at: tuple[object, int] | None = None
         self._stable: _Stable = {}
@@ -225,7 +231,7 @@ class HostedModelList(list[Entry]):
         keys, counts = _keys(records, self._id_counts if appended else {})
         entries: Final[list[Entry]] = []  # mutable-ok: filled here
         for key, record in zip(keys, records, strict=True):
-            typed = typed_deployment(_record(record))
+            typed = self._with_live(typed_deployment(_record(record)))
             held = self._stable.get(key) if key is not None else None
             kept = held is not None and held[0] == typed
             entry = held[1] if held is not None and kept else _HostedEntry(typed, self._entry_written)
@@ -235,6 +241,18 @@ class HostedModelList(list[Entry]):
         self._stable = stable
         self._id_counts = counts
         return entries
+
+    def _with_live(self, record: Mapping[str, object]) -> Mapping[str, object]:
+        params: Final = as_str_mapping(record.get("litellm_params"))
+        info: Final = as_str_mapping(record.get("model_info"))
+        model_id: Final = (info or {}).get("id")
+        live: Final = self._live(model_id) if params is not None else {}
+        live_info: Final = self._live_info(model_id) if info is not None else {}
+        if live:
+            record = {**record, "litellm_params": {**(params or {}), **live}}  # rebind-ok: given its live values
+        if live_info:
+            record = {**record, "model_info": {**(info or {}), **live_info}}  # rebind-ok: see above
+        return record
 
     # -- a build ----------------------------------------------------------------------------------
 
