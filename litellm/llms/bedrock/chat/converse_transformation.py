@@ -1380,8 +1380,6 @@ class AmazonConverseConfig(BaseConfig):
         # returns {} instead of the requested JSON. The model already
         # returns JSON when the prompt asks for it.
 
-        # A request that goes native without asking for thinking keeps the json tool's faked stream, so it still
-        # needs only bedrock:InvokeModel, unless the model takes native output on every request.
         streams_natively: Final = native_schema is not None and bedrock_chat_uses_native_structured_output(
             model, self.custom_llm_provider or "bedrock_converse", model_info
         )
