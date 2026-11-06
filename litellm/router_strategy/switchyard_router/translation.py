@@ -7,6 +7,11 @@ from typing import TYPE_CHECKING, Final
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+from litellm.types.decisions import (
+    OpenAIChoiceAnswer,
+    OpenAIDecisionResponse,
+    systemone_choice_key,
+)
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -129,3 +134,68 @@ def judge_response(response: ModelResponse) -> LlmResponse.Agg:
             "outputs": tuple(message_to_switchyard(choice["message"]) for choice in choices),
         }
     )
+
+
+def _decision_text(value: object) -> str:
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _decision_question(name: str, question: Mapping[str, object]) -> Mapping[str, object]:
+    kind: Final = mapping(question["kind"])
+    if kind.get("type") != "choice":
+        raise ValueError("Switchyard decision routing asks choice questions only")
+    return {
+        "type": "choice",
+        "name": name,
+        "instructions": _decision_text(question.get("instructions")),
+        "choices": [
+            {
+                "value": option["id"],
+                **({"description": _decision_text(option["description"])} if option.get("description") else {}),
+            }
+            for option in map(mapping, sequence(mapping(kind["data"])["options"]))
+        ],
+    }
+
+
+def decision_request(request: Mapping[str, object], model: str) -> Mapping[str, object]:
+    questions: Final = mapping(request["questions"])
+    return {
+        "model": model,
+        "input": _decision_text(request["context"]),
+        "questions": [_decision_question(name, mapping(question)) for name, question in questions.items()],
+    }
+
+
+def _choice_value(answer: object) -> Mapping[str, object]:
+    if not isinstance(answer, OpenAIChoiceAnswer):
+        raise ValueError("The decision model refused or returned a non-choice answer")
+    return {
+        "type": "choice",
+        "data": {
+            "selected": systemone_choice_key(answer.choice),
+            "probabilities": {systemone_choice_key(p.value): p.probability for p in answer.probabilities},
+        },
+    }
+
+
+def decision_response(response: OpenAIDecisionResponse, request: Mapping[str, object]) -> Mapping[str, object]:
+    names: Final = tuple(mapping(request["questions"]))
+    if len(response.answers) != len(names):
+        raise ValueError("The decision model did not answer every question")
+    return {
+        "id": None,
+        "model": response.model,
+        "answers": {
+            answer.name or name: {
+                "value": _choice_value(answer),
+                "provider_confidence": getattr(answer, "confidence", None),
+            }
+            for name, answer in zip(names, response.answers, strict=True)
+        },
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.total_tokens,
+        },
+    }

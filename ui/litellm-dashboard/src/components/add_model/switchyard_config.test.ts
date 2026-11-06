@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { emptySwitchyardConfig, stageConfidence, switchyardConfigSchema, toggleClassifier } from "./switchyard_config";
+import {
+  emptySwitchyardConfig,
+  isDecisionModelMode,
+  setClassifierKind,
+  stageConfidence,
+  switchyardConfigSchema,
+  toggleClassifier,
+} from "./switchyard_config";
 
 describe("Switchyard configuration", () => {
   it("changes the confidence default when the classifier is toggled", () => {
@@ -50,5 +57,41 @@ describe("Switchyard configuration", () => {
         classifier: { ...config.classifier, message_hash_fallback: true, session_affinity: false },
       }).success,
     ).toBe(false);
+  });
+  it("reads a stored classifier without a kind as an LLM judge", () => {
+    const parsed = switchyardConfigSchema.parse({
+      models: { capable: "strong", efficient: "fast", judge: "judge" },
+      classifier: { base_threshold: 0.4 },
+    });
+    expect(parsed.classifier).toMatchObject({ kind: "llm", base_threshold: 0.4 });
+  });
+  it("switches classifier kind with fresh settings and clears a judge of the wrong kind", () => {
+    const llm = {
+      ...toggleClassifier(emptySwitchyardConfig(), true),
+      models: { capable: "a", efficient: "b", judge: "gpt" },
+    };
+    const decision = setClassifierKind(llm, "decision");
+    expect(decision.classifier).toEqual({ kind: "decision", cutoff: 0.6 });
+    expect(decision.models.judge).toBe("");
+    expect(setClassifierKind(decision, "decision")).toBe(decision);
+    const saved = switchyardConfigSchema.parse({ ...decision, models: { ...decision.models, judge: "jev" } });
+    expect(saved.classifier).toEqual({ kind: "decision", cutoff: 0.6 });
+  });
+  it("rejects LLM-only settings on a decision classifier and out-of-range cutoffs", () => {
+    const models = { capable: "a", efficient: "b", judge: "jev" };
+    expect(
+      switchyardConfigSchema.safeParse({ models, classifier: { kind: "decision", base_threshold: 0.5 } }).success,
+    ).toBe(false);
+    expect(switchyardConfigSchema.safeParse({ models, classifier: { kind: "decision", cutoff: 1.2 } }).success).toBe(
+      false,
+    );
+  });
+  it.each([
+    ["evaluation", true],
+    ["decisions", true],
+    ["chat", false],
+    [undefined, false],
+  ])("treats mode %s as a decision model: %s", (mode, expected) => {
+    expect(isDecisionModelMode(mode)).toBe(expected);
   });
 });

@@ -11367,8 +11367,9 @@ class PythonCore(DeprecatedRouterMembers):
         return tuple(deployment.litellm_params.tags or ())
 
     def init_switchyard_router_deployment(self, deployment: Deployment) -> None:
-        from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig
+        from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
         from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
+        from litellm.types.decisions import OpenAIDecisionResponse
 
         config: Final = SwitchyardRouterConfig.model_validate(deployment.litellm_params.switchyard_router_config)
         if deployment.model_name in (config.models.capable, config.models.efficient, config.models.judge):
@@ -11380,10 +11381,16 @@ class PythonCore(DeprecatedRouterMembers):
                 raise TypeError("Switchyard judge must return a non-streaming completion")
             return result
 
+        async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
+            result: Final = await self._core_ctx.adecisions(**request)
+            if not isinstance(result, OpenAIDecisionResponse):
+                raise TypeError("Switchyard decision judge must return an OpenAI-shaped decision response")
+            return result
+
         self._register_pre_routing_strategy(
             registry=self._core_switchyard_routers,
             deployment=deployment,
-            strategy=SwitchyardRouter(deployment.model_name, config, complete_judge),
+            strategy=SwitchyardRouter(deployment.model_name, config, build_algorithm(config), complete_judge, decide),
             strategy_label="Switchyard",
         )
 

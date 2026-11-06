@@ -6,7 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { modelCreateCall, modelPatchUpdateCall } from "@/components/networking";
-import { emptySwitchyardConfig, switchyardConfigSchema, type SwitchyardConfig } from "./switchyard_config";
+import {
+  emptySwitchyardConfig,
+  isDecisionModelMode,
+  switchyardConfigSchema,
+  type SwitchyardConfig,
+} from "./switchyard_config";
 import SwitchyardConfigFields from "./SwitchyardConfigFields";
 
 interface Props {
@@ -42,9 +47,12 @@ export default function SwitchyardRouterForm({
     queryFn: () => fetchAvailableModels(accessToken),
     enabled: Boolean(accessToken) && !hidden,
   });
-  const choices = models
-    .filter((model) => model.model_group !== name && !model.model_group.startsWith("auto_router/"))
-    .map((model) => ({ value: model.model_group, label: model.model_group }));
+  const routable = models.filter(
+    (model) => model.model_group !== name && !model.model_group.startsWith("auto_router/"),
+  );
+  const toChoice = (model: { model_group: string }) => ({ value: model.model_group, label: model.model_group });
+  const choices = routable.filter((model) => !isDecisionModelMode(model.mode)).map(toChoice);
+  const decisionChoices = routable.filter((model) => isDecisionModelMode(model.mode)).map(toChoice);
   const save = async () => {
     const validated = switchyardConfigSchema.safeParse(config);
     if (!name.trim()) {
@@ -109,6 +117,7 @@ export default function SwitchyardRouterForm({
         value={config}
         onChange={setConfig}
         models={choices}
+        decisionModels={decisionChoices}
         onToolSemanticsError={setToolError}
       />
       {(error || toolError) && (

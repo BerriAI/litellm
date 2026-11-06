@@ -5328,7 +5328,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0,<3" },
     { name = "mcp", marker = "extra == 'proxy'", specifier = ">=2.3.0,<3" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.17.2,<4.0" },
-    { name = "nemo-switchyard", marker = "extra == 'switchyard'", specifier = "==0.3.0" },
+    { name = "nemo-switchyard", marker = "extra == 'switchyard'", specifier = "==0.4.0a1" },
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = ">=1.8.0,<2.0" },
     { name = "openai", specifier = ">=2.20.0,<4.0.0" },
@@ -6552,16 +6552,16 @@ wheels = [
 
 [[package]]
 name = "nemo-switchyard"
-version = "0.3.0"
+version = "0.4.0a1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/29/2b/60bba54499585dad82fb37643577ffde2cc6de0ea283ddaefe4c2f73ab9a/nemo_switchyard-0.3.0.tar.gz", hash = "sha256:8eb5cf8ff9cb51d50aa9b1927559d4add807eef5041de9c27ab51ccf111d7b4c", size = 579981, upload-time = "2026-09-22T18:06:55.156Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/f8/088042a9e7152402384107a900d252f9aae1a9ad92764b1f866387413929/nemo_switchyard-0.4.0a1.tar.gz", hash = "sha256:8399becc03cc6f77e4885a95f70c0565d9aba27f15bfea6758596fdf81043097", size = 768645, upload-time = "2026-10-29T22:20:19.364Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/bc/8c413bc9df00a0972934d6ea1265982360ad9ece2b15df67a3374eff66f3/nemo_switchyard-0.3.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6b265e2cc399d487706140a8d949f5c6bab2ec2d4da9216fc06046df2a5e26d6", size = 8575163, upload-time = "2026-09-22T18:06:42.224Z" },
-    { url = "https://files.pythonhosted.org/packages/50/de/e6a812c444b897f091649bf83ca60f483abab7fec92b30ce289f1a968101/nemo_switchyard-0.3.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:cdc64503e427095c73e7840f0de093f0ee35fc3e306825e522050cd6e6825039", size = 8251239, upload-time = "2026-09-22T18:06:44.842Z" },
-    { url = "https://files.pythonhosted.org/packages/af/26/2424b9987c82917146d0533627eb7cd59819487dd86abc35dc8671039514/nemo_switchyard-0.3.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:bb40a39da460cc28d0c2143044233fef69b2c113813c511255f813ef0ac5bf1b", size = 8964907, upload-time = "2026-09-22T18:06:47.152Z" },
-    { url = "https://files.pythonhosted.org/packages/37/5e/013e2ca5b866d6235b4be482a3ef78e49ad571e6a6c1972f8c89686f32ee/nemo_switchyard-0.3.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f0c3728517a7015d87bbdf6a21303a344c9d886ae98d910dee6a01c67f8657d3", size = 9058284, upload-time = "2026-09-22T18:06:49.477Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/3c/f47e0d133205c07b4c56035a898c9a19d7a9e5bc1b23ba32fa701a931693/nemo_switchyard-0.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:45b76e1e5caa0e08fdb15a2ae97646ab901672a78e743c2a055629d393762070", size = 7623515, upload-time = "2026-09-22T18:06:51.82Z" },
-    { url = "https://files.pythonhosted.org/packages/bc/f0/7999e147c5646e57bb8d1f38fe6e7d32dd8c7f26026e0f8a9ca7e9be9c87/nemo_switchyard-0.3.0-cp310-abi3-win_arm64.whl", hash = "sha256:d363408274523c804033ae470420379370db5e8b73e953dc880143591ad24283", size = 7304384, upload-time = "2026-09-22T18:06:53.702Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/38/e1b2473dac6c847d7513c17d75eca220d8a9088b991c5fb73a4934791027/nemo_switchyard-0.4.0a1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1f34de8c0a4626c34b566db8b55c9591acda5121e249b8fffc9010cbe4578d3f", size = 9101897, upload-time = "2026-10-29T22:20:08.381Z" },
+    { url = "https://files.pythonhosted.org/packages/38/82/4e6cefc7db47967f903718d54e7b08b9c48ffbd71f74f3dc06fc37fbe0ee/nemo_switchyard-0.4.0a1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:2c9777180635fceb30ff6144ec03443337fc0ab0e008b9ad25ab6802433214a7", size = 8796148, upload-time = "2026-10-29T22:20:10.886Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/6b/abc7e73629e4d34ad2c923e63996bbdcbb3c96e515c44fdd2b5734688e45/nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a943433bd0294e86942f9c29ffc6ff6ad2717c27619a59dd730635603f1dea12", size = 9841418, upload-time = "2026-10-29T22:20:12.703Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/92/c53d48d794fc11c59c1219f8839f7313fa9d499e75753d22a58407be2535/nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5a63b3d26b49802827dec3ba6a187765c0b6e26b732bf0a16de59f593ad32a9e", size = 9709820, upload-time = "2026-10-29T22:20:14.612Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/95/058f0fbb48670c904fe2c93b8d9959073402293cc6dfbb6ac074b70c2c3f/nemo_switchyard-0.4.0a1-cp310-abi3-win_amd64.whl", hash = "sha256:ae42923283f3b88ebf0a92d3161729654a9987a1208478498e764e06cb8bd7dc", size = 8273177, upload-time = "2026-10-29T22:20:16.372Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/52/7561cc1988733e87fce82df8cf4a52beaa109e6b0bf5eff52661db113f97/nemo_switchyard-0.4.0a1-cp310-abi3-win_arm64.whl", hash = "sha256:6e7517ff21b7c8a4f1617e84e45ed03686ed30c31709c0a6d3be8b8f4a50ae23", size = 7910792, upload-time = "2026-10-29T22:20:17.997Z" },
 ]
 
 [[package]]

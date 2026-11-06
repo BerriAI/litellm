@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
 if TYPE_CHECKING:
-    from switchyard.libsy import Algorithm
+    from switchyard.libsy import Algorithm, TaskClassifierConfig
 
 
-class ClassifierConfig(BaseModel):
+class LlmClassifierConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    kind: Literal["llm"] = "llm"
     base_threshold: float = Field(default=0.5, ge=0, le=1)
     threshold_step: float = Field(default=0.0, ge=0, le=1)
     session_affinity: bool = False
@@ -20,6 +21,27 @@ class ClassifierConfig(BaseModel):
     max_output_tokens: int = Field(default=4096, gt=0)
     response_format_type: Literal["json_schema", "json_object"] = "json_schema"
     prompt: str | None = None
+
+
+class DecisionClassifierConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["decision"]
+    cutoff: float = Field(default=0.6, ge=0, le=1)
+    instructions: str | Mapping[str, object] | None = None
+    evidence: Mapping[str, object] | None = None
+
+
+def _classifier_kind(value: object) -> str:
+    if isinstance(value, Mapping):
+        return str(value.get("kind", "llm"))
+    return str(getattr(value, "kind", "llm"))
+
+
+ClassifierConfig: TypeAlias = Annotated[
+    Annotated[LlmClassifierConfig, Tag("llm")] | Annotated[DecisionClassifierConfig, Tag("decision")],
+    Discriminator(_classifier_kind),
+]
 
 
 class StageOptions(BaseModel):
@@ -66,10 +88,6 @@ class SwitchyardRouterConfig(BaseModel):
             return self.options.confidence_threshold
         return 0.7 if self.classifier is not None else 0.5
 
-    @property
-    def default_model(self) -> str:
-        return self.models.capable if self.options.picker == "capable_first" else self.models.efficient
-
     def runtime_models(self) -> Mapping[str, tuple[str, ...]]:
         return {
             "any": (self.models.capable, self.models.efficient),
@@ -79,33 +97,43 @@ class SwitchyardRouterConfig(BaseModel):
         }
 
 
-def build_algorithm(config: SwitchyardRouterConfig) -> Algorithm:
-    from switchyard.libsy import LlmFallback, TaskClassifierConfig, algorithms
+def _task_classifier(config: SwitchyardRouterConfig) -> TaskClassifierConfig | None:
+    from switchyard.libsy import TaskClassifierConfig
 
-    classifier: Final = config.classifier
-    fallback: Final = (
-        LlmFallback(
-            config=TaskClassifierConfig(
-                base_threshold=classifier.base_threshold,
-                threshold_step=classifier.threshold_step,
-                session_affinity=classifier.session_affinity,
-                message_hash_fallback=classifier.message_hash_fallback,
-                recent_turn_window=classifier.recent_turn_window,
-                max_output_tokens=classifier.max_output_tokens,
-                response_format_type=classifier.response_format_type,
-                prompt=classifier.prompt,
+    match config.classifier:
+        case None:
+            return None
+        case LlmClassifierConfig() as llm:
+            return TaskClassifierConfig(
+                base_threshold=llm.base_threshold,
+                threshold_step=llm.threshold_step,
+                session_affinity=llm.session_affinity,
+                message_hash_fallback=llm.message_hash_fallback,
+                recent_turn_window=llm.recent_turn_window,
+                max_output_tokens=llm.max_output_tokens,
+                response_format_type=llm.response_format_type,
+                prompt=llm.prompt,
             )
-        )
-        if classifier is not None
-        else None
-    )
+        case DecisionClassifierConfig() as decision:
+            return TaskClassifierConfig.decision(
+                cutoff=decision.cutoff,
+                candidates={"capable": config.models.capable, "efficient": config.models.efficient},
+                evidence=dict(decision.evidence or {}),
+                instructions=decision.instructions,
+            )
+
+
+def build_algorithm(config: SwitchyardRouterConfig) -> Algorithm:
+    from switchyard.libsy import LlmFallback, algorithms
+
+    classifier: Final = _task_classifier(config)
     return algorithms.stage_router(
         picker=config.options.picker,
         confidence_threshold=config.confidence_threshold,
         recent_window=config.options.recent_window,
         tool_semantics=dict(config.options.tool_semantics) if config.options.tool_semantics is not None else None,
         only_on_wrong_signal_escalation=config.options.only_on_wrong_signal_escalation,
-        classifier=fallback,
+        classifier=LlmFallback(config=classifier) if classifier is not None else None,
     )
 
 
@@ -115,7 +143,7 @@ def validate_switchyard_config_write(config: Mapping[str, object] | None) -> str
     try:
         build_algorithm(SwitchyardRouterConfig.model_validate(config))
     except ImportError:
-        return "Switchyard requires the optional dependency. Install litellm[switchyard] (nemo-switchyard==0.3.0)."
+        return "Switchyard requires the optional dependency. Install litellm[switchyard] (nemo-switchyard==0.4.0a1)."
     except (ValueError, TypeError) as error:
         return f"Invalid switchyard_router_config: {error}"
     return None

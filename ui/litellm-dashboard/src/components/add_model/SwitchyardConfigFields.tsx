@@ -7,29 +7,43 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ModelChoiceCombobox, { type ModelChoice } from "./ModelChoiceCombobox";
-import { stageConfidence, toggleClassifier, parseToolSemantics, type SwitchyardConfig } from "./switchyard_config";
+import {
+  stageConfidence,
+  toggleClassifier,
+  setClassifierKind,
+  parseToolSemantics,
+  type SwitchyardConfig,
+} from "./switchyard_config";
 
 interface Props {
   value: SwitchyardConfig;
   onChange: (value: SwitchyardConfig) => void;
   models: ModelChoice[];
+  decisionModels: ModelChoice[];
   onToolSemanticsError: (error: string | null) => void;
 }
 
-export default function SwitchyardConfigFields({ value, onChange, models, onToolSemanticsError }: Props) {
+export default function SwitchyardConfigFields({
+  value,
+  onChange,
+  models,
+  decisionModels,
+  onToolSemanticsError,
+}: Props) {
   const id = useId();
   const [toolSemantics, setToolSemantics] = useState(
     value.options.tool_semantics ? JSON.stringify(value.options.tool_semantics, null, 2) : "",
   );
   const classifier = value.classifier;
+  const llm = classifier?.kind === "llm" ? classifier : undefined;
+  const decision = classifier?.kind === "decision" ? classifier : undefined;
   const setOption = (key: "recent_window", text: string) =>
     onChange({ ...value, options: { ...value.options, [key]: text === "" ? undefined : Number(text) } });
   const setClassifierNumber = (
     key: "base_threshold" | "threshold_step" | "max_output_tokens" | "recent_turn_window",
     text: string,
   ) => {
-    if (classifier)
-      onChange({ ...value, classifier: { ...classifier, [key]: text === "" ? undefined : Number(text) } });
+    if (llm) onChange({ ...value, classifier: { ...llm, [key]: text === "" ? undefined : Number(text) } });
   };
   const changeToolSemantics = (text: string) => {
     setToolSemantics(text);
@@ -85,6 +99,11 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
               </SelectItem>
             </SelectContent>
           </Select>
+          {value.options.picker === "capable_first" && (
+            <p className="text-sm text-muted-foreground">
+              Switchyard has not benchmarked this bias, so it has no calibrated confidence thresholds.
+            </p>
+          )}
         </div>
         {(["capable", "efficient"] as const).map((tier) => (
           <div key={tier} className="min-w-0 space-y-2">
@@ -120,19 +139,42 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
           />
         </div>
         {classifier && (
-          <div className="min-w-0 space-y-2">
-            <label htmlFor={`${id}-judge`} className="text-sm font-medium">
-              Judge model
-            </label>
-            <ModelChoiceCombobox
-              id={`${id}-judge`}
-              value={value.models.judge ?? ""}
-              onChange={(judge) => onChange({ ...value, models: { ...value.models, judge: judge ?? "" } })}
-              choices={models}
-              placeholder="Select a judge model"
-              ariaInvalid={undefined}
-              ariaDescribedBy={undefined}
-            />
+          <div className="grid gap-5 md:grid-cols-2">
+            <div className="min-w-0 space-y-2">
+              <label htmlFor={`${id}-classifier-kind`} className="text-sm font-medium">
+                Classifier type
+              </label>
+              <Select
+                value={classifier.kind}
+                items={[
+                  { value: "llm", label: "LLM judge" },
+                  { value: "decision", label: "Decision model" },
+                ]}
+                onValueChange={(kind) => onChange(setClassifierKind(value, kind === "decision" ? "decision" : "llm"))}
+              >
+                <SelectTrigger id={`${id}-classifier-kind`} className="min-h-10 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="llm">LLM judge</SelectItem>
+                  <SelectItem value="decision">Decision model</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-0 space-y-2">
+              <label htmlFor={`${id}-judge`} className="text-sm font-medium">
+                {decision ? "Decision model" : "Judge model"}
+              </label>
+              <ModelChoiceCombobox
+                id={`${id}-judge`}
+                value={value.models.judge ?? ""}
+                onChange={(judge) => onChange({ ...value, models: { ...value.models, judge: judge ?? "" } })}
+                choices={decision ? decisionModels : models}
+                placeholder={decision ? "Select a decision model" : "Select a judge model"}
+                ariaInvalid={undefined}
+                ariaDescribedBy={undefined}
+              />
+            </div>
           </div>
         )}
       </div>
@@ -185,7 +227,43 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
               onChange={(event) => changeToolSemantics(event.target.value)}
             />
           </div>
-          {classifier && (
+          {decision && (
+            <>
+              <h3 className="text-sm font-semibold">Decision model</h3>
+              <div className="min-w-0 space-y-2">
+                <label htmlFor={`${id}-cutoff`}>Advantage cutoff</label>
+                <Input
+                  id={`${id}-cutoff`}
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={decision.cutoff}
+                  onChange={(event) =>
+                    onChange({ ...value, classifier: { ...decision, cutoff: Number(event.target.value) } })
+                  }
+                />
+                <p className="text-sm text-muted-foreground">
+                  Route to the capable model when the decision model’s advantage probability is above this value.
+                </p>
+              </div>
+              <div className="min-w-0 space-y-2">
+                <label htmlFor={`${id}-instructions`}>Decision instructions</label>
+                <Textarea
+                  id={`${id}-instructions`}
+                  value={decision.instructions ?? ""}
+                  placeholder="Use Switchyard’s built-in instructions"
+                  onChange={(event) =>
+                    onChange({
+                      ...value,
+                      classifier: { ...decision, instructions: event.target.value || undefined },
+                    })
+                  }
+                />
+              </div>
+            </>
+          )}
+          {llm && (
             <>
               <h3 className="text-sm font-semibold">Classifier</h3>
               <div className="grid gap-4 md:grid-cols-2">
@@ -205,7 +283,7 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
                       min={key.includes("threshold") ? 0 : 1}
                       max={key.includes("threshold") ? 1 : undefined}
                       step={key.includes("threshold") ? 0.01 : 1}
-                      value={classifier[key] ?? ""}
+                      value={llm[key] ?? ""}
                       onChange={(event) => setClassifierNumber(key, event.target.value)}
                     />
                   </div>
@@ -214,7 +292,7 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
               <div className="min-w-0 space-y-2">
                 <label htmlFor={`${id}-format`}>Response format</label>
                 <Select
-                  value={classifier.response_format_type}
+                  value={llm.response_format_type}
                   items={[
                     { value: "json_schema", label: "JSON schema" },
                     { value: "json_object", label: "JSON object" },
@@ -223,7 +301,7 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
                     onChange({
                       ...value,
                       classifier: {
-                        ...classifier,
+                        ...llm,
                         response_format_type: format === "json_object" ? "json_object" : "json_schema",
                       },
                     })
@@ -242,10 +320,10 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
                 <label htmlFor={`${id}-prompt`}>Classifier prompt</label>
                 <Textarea
                   id={`${id}-prompt`}
-                  value={classifier.prompt ?? ""}
+                  value={llm.prompt ?? ""}
                   placeholder="Use Switchyard’s built-in prompt"
                   onChange={(event) =>
-                    onChange({ ...value, classifier: { ...classifier, prompt: event.target.value || undefined } })
+                    onChange({ ...value, classifier: { ...llm, prompt: event.target.value || undefined } })
                   }
                 />
               </div>
@@ -253,27 +331,27 @@ export default function SwitchyardConfigFields({ value, onChange, models, onTool
                 <label htmlFor={`${id}-affinity`}>Session affinity</label>
                 <Switch
                   id={`${id}-affinity`}
-                  checked={classifier.session_affinity}
+                  checked={llm.session_affinity}
                   onCheckedChange={(enabled) =>
                     onChange({
                       ...value,
                       classifier: {
-                        ...classifier,
+                        ...llm,
                         session_affinity: enabled,
-                        message_hash_fallback: enabled && classifier.message_hash_fallback,
+                        message_hash_fallback: enabled && llm.message_hash_fallback,
                       },
                     })
                   }
                 />
               </div>
-              {classifier.session_affinity && (
+              {llm.session_affinity && (
                 <div className="flex items-center justify-between">
                   <label htmlFor={`${id}-hash`}>Use message hash when session ID is missing</label>
                   <Switch
                     id={`${id}-hash`}
-                    checked={classifier.message_hash_fallback}
+                    checked={llm.message_hash_fallback}
                     onCheckedChange={(enabled) =>
-                      onChange({ ...value, classifier: { ...classifier, message_hash_fallback: enabled } })
+                      onChange({ ...value, classifier: { ...llm, message_hash_fallback: enabled } })
                     }
                   />
                 </div>

@@ -14,7 +14,8 @@ const optionsFields = {
   tool_semantics: z.record(z.enum(["observe", "mutate", "plan", "new"]), z.array(z.string())).optional(),
   only_on_wrong_signal_escalation: z.boolean().optional(),
 };
-const classifierFields = {
+const llmClassifierFields = {
+  kind: z.literal("llm").default("llm"),
   base_threshold: threshold.default(0.5),
   threshold_step: threshold.default(0),
   max_output_tokens: positiveInteger.default(4096),
@@ -24,11 +25,17 @@ const classifierFields = {
   session_affinity: z.boolean().default(false),
   message_hash_fallback: z.boolean().default(false),
 };
+const decisionClassifierFields = {
+  kind: z.literal("decision"),
+  cutoff: threshold.default(0.6),
+  instructions: z.string().optional(),
+  evidence: z.record(z.string(), z.unknown()).optional(),
+};
 const configFields = {
   algorithm: z.literal("stage_router").default("stage_router"),
   models: z.object({ capable: modelName, efficient: modelName, judge: modelName.optional() }).strict(),
   options: z.object(optionsFields).strict().default({ picker: "efficient_first" }),
-  classifier: z.object(classifierFields).strict().optional(),
+  classifier: z.union([z.object(decisionClassifierFields).strict(), z.object(llmClassifierFields).strict()]).optional(),
 };
 export const switchyardConfigSchema = z
   .object(configFields)
@@ -41,7 +48,11 @@ export const switchyardConfigSchema = z
         path: ["models", "judge"],
       });
     }
-    if (value.classifier?.message_hash_fallback && !value.classifier.session_affinity) {
+    if (
+      value.classifier?.kind === "llm" &&
+      value.classifier.message_hash_fallback &&
+      !value.classifier.session_affinity
+    ) {
       ctx.addIssue({
         code: "custom",
         message: "Message hash fallback requires session affinity",
@@ -51,14 +62,20 @@ export const switchyardConfigSchema = z
   });
 
 export type SwitchyardConfig = z.infer<typeof switchyardConfigSchema>;
-export const defaultClassifier = (): NonNullable<SwitchyardConfig["classifier"]> => ({
-  base_threshold: 0.5,
-  threshold_step: 0,
-  max_output_tokens: 4096,
-  response_format_type: "json_schema",
-  session_affinity: false,
-  message_hash_fallback: false,
-});
+export type ClassifierKind = NonNullable<SwitchyardConfig["classifier"]>["kind"];
+export const isDecisionModelMode = (mode: string | undefined): boolean => mode === "decisions" || mode === "evaluation";
+export const defaultClassifier = (kind: ClassifierKind = "llm"): NonNullable<SwitchyardConfig["classifier"]> =>
+  kind === "decision"
+    ? { kind: "decision", cutoff: 0.6 }
+    : {
+        kind: "llm",
+        base_threshold: 0.5,
+        threshold_step: 0,
+        max_output_tokens: 4096,
+        response_format_type: "json_schema",
+        session_affinity: false,
+        message_hash_fallback: false,
+      };
 export const emptySwitchyardConfig = (): SwitchyardConfig => ({
   algorithm: "stage_router",
   models: { capable: "", efficient: "" },
@@ -75,6 +92,11 @@ export const toggleClassifier = (config: SwitchyardConfig, enabled: boolean): Sw
   },
   classifier: enabled ? config.classifier ?? defaultClassifier() : undefined,
 });
+
+export const setClassifierKind = (config: SwitchyardConfig, kind: ClassifierKind): SwitchyardConfig =>
+  config.classifier?.kind === kind
+    ? config
+    : { ...config, models: { ...config.models, judge: "" }, classifier: defaultClassifier(kind) };
 
 export function parseToolSemantics(text: string): SwitchyardConfig["options"]["tool_semantics"] {
   if (!text.trim()) return undefined;

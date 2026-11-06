@@ -19,7 +19,6 @@ def test_default_confidence_depends_on_classifier(classifier: dict[str, object] 
         }
     )
     assert config.confidence_threshold == (0.7 if classifier is not None else 0.5)
-    assert config.default_model == "fast"
 
 
 @pytest.mark.parametrize("classifier", [None, {}])
@@ -36,7 +35,6 @@ def test_explicit_confidence_is_preserved(classifier: dict[str, object] | None) 
         }
     )
     assert config.confidence_threshold == 0.63
-    assert config.default_model == "strong"
 
 
 @pytest.mark.parametrize(
@@ -57,6 +55,19 @@ def test_request_rewrite_and_unknown_options_are_rejected(option: str) -> None:
         {"options": {"confidence_threshold": 2}},
         {"models": {"capable": "", "efficient": "fast"}},
         {"models": {"capable": "strong", "efficient": "fast", "judge": "judge"}},
+        {"models": {"capable": "strong", "efficient": "fast", "judge": "j"}, "classifier": {"kind": "other"}},
+        {
+            "models": {"capable": "strong", "efficient": "fast", "judge": "j"},
+            "classifier": {"kind": "decision", "cutoff": 1.5},
+        },
+        {
+            "models": {"capable": "strong", "efficient": "fast", "judge": "j"},
+            "classifier": {"kind": "decision", "base_threshold": 0.5},
+        },
+        {
+            "models": {"capable": "strong", "efficient": "fast", "judge": "j"},
+            "classifier": {"kind": "llm", "cutoff": 0.5},
+        },
     ],
 )
 def test_invalid_config_cannot_be_saved(bad: dict[str, object]) -> None:
@@ -84,3 +95,15 @@ def test_native_validation_rejects_invalid_session_affinity() -> None:
     )
     assert violation is not None
     assert "Invalid switchyard_router_config" in violation
+
+
+@pytest.mark.parametrize(
+    "classifier", [{"kind": "decision"}, {"kind": "decision", "cutoff": 0.4, "evidence": {"a": 1}}]
+)
+def test_decision_classifier_config_can_be_saved(classifier: dict[str, object]) -> None:
+    assert (
+        validate_switchyard_config_write(
+            {"models": {"capable": "strong", "efficient": "fast", "judge": "jev"}, "classifier": classifier}
+        )
+        is None
+    )
