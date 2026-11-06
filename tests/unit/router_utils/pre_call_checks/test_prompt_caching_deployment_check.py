@@ -27,7 +27,6 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     _get_min_token_count_for_deployments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardLoggingPayload
@@ -1802,7 +1801,7 @@ async def test_pin_holds_for_a_metadata_dict_reused_after_a_request_failed_on_th
             metadata=reused_metadata,
             mock_response="litellm.InternalServerError",
         )
-    router.cooldown_cache.cooldown_store.delete_cache(CooldownCache.get_cooldown_cache_key("dep-1"))
+    router.cooldown_cache.cooldown_store.evict_local("dep-1")
     messages: Final = _messages(word_count=5000)
     await PromptCachingCache(cache=router.prompt_caching_pin_cache).async_add_model_id(
         model_id="dep-2", messages=messages, tools=None
@@ -2061,7 +2060,7 @@ async def test_responses_prompts_served_while_a_peer_cools_down_stay_pinned_once
         pins_before = len(pins)
         assert await _serve_response(router, prompt) == "dep-2"
         assert await _eventually(lambda before=pins_before: len(pins) > before)
-    router.cooldown_cache.cooldown_store.delete_cache(CooldownCache.get_cooldown_cache_key("dep-1"))
+    router.cooldown_cache.cooldown_store.evict_local("dep-1")
     unpinned = {
         (
             await router.aresponses(model=MODEL_GROUP_ALIAS, input=f"unpinned {index}", mock_response="ok")
