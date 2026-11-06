@@ -1,7 +1,7 @@
 import json
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Dict, Final, List, Literal, Optional
 from unittest.mock import AsyncMock
@@ -2133,6 +2133,7 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
 
     mock_logging_obj = mocker.Mock()
     mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
@@ -2179,6 +2180,7 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
 
     mock_logging_obj = mocker.Mock()
     mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
@@ -2525,6 +2527,223 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
         request_data={"messages": [], "metadata": {}},
         input_type="request",
     )
+
+
+_TINY_PNG_B64: Final = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+_TINY_PNG_DATA_URI: Final = f"data:image/png;base64,{_TINY_PNG_B64}"
+_BEDROCK_APPLY_URL: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/gr-img-1/version/1/apply"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_bedrock_image_allow_scans_once_and_syncs_logging(mocker: MockerFixture) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    bedrock_response: Final = {
+        "action": "NONE",
+        "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "NONE", "action": "NONE"}]}}],
+        "usage": {"imageUnits": 1},
+        "guardrailCoverage": {"images": {"guarded": 1, "total": 1}},
+    }
+    captured_requests: Final[list[httpx.Request]] = []  # mutable-ok: test capture sink for MockTransport
+
+    def _bedrock_transport(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json=bedrock_response)
+
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-image-guard",
+        guardrailIdentifier="gr-img-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_bedrock_transport)),
+    )
+
+    mock_registry: Final = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = guardrail
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    logging_obj: Final = Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-img-allow",
+        function_id="fn-img-allow",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "metadata": {},
+            "proxy_server_request": {"headers": {"user-agent": "python-requests/2.32.5"}},
+        },
+        optional_params={},
+    )
+    mocker.patch.object(logging_obj, "async_success_handler", AsyncMock())
+
+    pre_call_data: Final = {
+        "guardrail_name": "bedrock-image-guard",
+        "metadata": {"route": "/apply_guardrail"},
+    }
+    mock_processor: Final = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(return_value=(pre_call_data, logging_obj))
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging: Final = mocker.Mock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        http_response: Final = await client.post(
+            "/guardrails/apply_guardrail",
+            json={
+                "guardrail_name": "bedrock-image-guard",
+                "images": [_TINY_PNG_DATA_URI],
+                "response_format": "native",
+            },
+        )
+
+    assert http_response.status_code == 200
+    assert http_response.json() == bedrock_response
+    assert len(captured_requests) == 1
+    assert str(captured_requests[0].url) == _BEDROCK_APPLY_URL
+    sent_payload: Final = json.loads(captured_requests[0].content)
+    assert sent_payload == {
+        "source": "INPUT",
+        "content": [{"image": {"format": "png", "source": {"bytes": _TINY_PNG_B64}}}],
+    }
+
+    logged_entries: Final = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    assert logged_entries[0]["guardrail_name"] == "bedrock-image-guard"
+    assert logged_entries[0]["guardrail_provider"] == "bedrock"
+    assert logged_entries[0]["guardrail_status"] == "success"
+    assert logged_entries[0]["guardrail_response"] == bedrock_response
+    assert pre_call_data["metadata"]["standard_logging_guardrail_information"] == logged_entries
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_bedrock_image_block_returns_400_and_syncs_failure_logging(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    blocked_response: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Image blocked by Bedrock content policy"}],
+        "assessments": [
+            {"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}
+        ],
+        "usage": {"imageUnits": 1},
+    }
+    captured_requests: Final[list[httpx.Request]] = []  # mutable-ok: test capture sink for MockTransport
+
+    def _bedrock_transport(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json=blocked_response)
+
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-image-guard",
+        guardrailIdentifier="gr-img-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_bedrock_transport)),
+    )
+
+    mock_registry: Final = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = guardrail
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    logging_obj: Final = Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-img-block",
+        function_id="fn-img-block",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "metadata": {},
+            "proxy_server_request": {"headers": {"user-agent": "python-requests/2.32.5"}},
+        },
+        optional_params={},
+    )
+
+    pre_call_data: Final = {
+        "guardrail_name": "bedrock-image-guard",
+        "metadata": {"route": "/apply_guardrail"},
+    }
+    mock_processor: Final = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(return_value=(pre_call_data, logging_obj))
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging: Final = mocker.Mock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        http_response: Final = await client.post(
+            "/guardrails/apply_guardrail",
+            json={
+                "guardrail_name": "bedrock-image-guard",
+                "images": [_TINY_PNG_DATA_URI],
+            },
+        )
+
+    assert http_response.status_code == 400
+    assert "Image blocked by Bedrock content policy" in http_response.text
+    assert len(captured_requests) == 1
+    assert str(captured_requests[0].url) == _BEDROCK_APPLY_URL
+
+    logged_entries: Final = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    assert logged_entries[0]["guardrail_name"] == "bedrock-image-guard"
+    assert logged_entries[0]["guardrail_provider"] == "bedrock"
+    assert logged_entries[0]["guardrail_status"] == "guardrail_intervened"
+    assert logged_entries[0]["guardrail_response"] == blocked_response
+    assert pre_call_data["metadata"]["standard_logging_guardrail_information"] == logged_entries
+    assert logging_obj.model_call_details["standard_logging_object"]["request_tags"] == [
+        "User-Agent: python-requests",
+        "User-Agent: python-requests/2.32.5",
+    ]
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
 
 
 @pytest.mark.asyncio

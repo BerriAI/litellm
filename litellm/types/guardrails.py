@@ -1560,7 +1560,8 @@ class GuardrailResponseFormat(Enum):
 
 class ApplyGuardrailRequest(LiteLLMBaseModel):
     guardrail_name: str
-    text: str
+    text: str = ""
+    images: tuple[str, ...] | None = None
     language: str | None = None
     entities: list[PiiEntityType] | None = None
     input_type: str = "request"
