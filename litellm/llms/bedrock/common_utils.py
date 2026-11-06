@@ -1538,6 +1538,19 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_model_name_without_provider(model: str) -> str:
+    """The model id without Bedrock's routing and region prefixes and without its provider namespace.
+
+    A Bedrock foundation model id is ``<provider>.<model>`` with a one-word provider (``anthropic.``,
+    ``deepseek.``, ``moonshotai.``), so a base model whose first dot-separated part is one word drops it:
+    ``bedrock/us.openai.gpt-6.1-sol`` and ``us-east-1/openai.gpt-6.1-sol`` are ``gpt-6.1-sol``,
+    ``us.deepseek.r1-v1:0`` is ``r1-v1:0``. Any other base model, such as ``gpt-5.5`` or an imported model's
+    ARN id, is returned as is."""
+    base: Final = get_bedrock_base_model(model)
+    provider, separator, name = base.partition(".")
+    return name if separator and provider.isalnum() else base
+
+
 def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
     """
     Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
