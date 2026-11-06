@@ -244,6 +244,10 @@ impl PythonBinding for MessagesPythonHost {
         public_response(py, ROUTE_HOST_MODULE, &response)
     }
 
+    fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.cache.store_response(py, response)
+    }
+
     fn encode_stream_head(
         &mut self,
         py: Python<'_>,
