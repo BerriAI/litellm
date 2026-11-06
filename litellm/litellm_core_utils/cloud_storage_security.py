@@ -1,11 +1,12 @@
 import posixpath
 import re
-from collections.abc import Mapping, Sequence
-from itertools import accumulate, repeat
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import accumulate, chain, repeat
 from typing import Final
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 
 VERTEX_AI_MANAGED_GCS_PREFIX: Final = "litellm-vertex-files/"
 BEDROCK_MANAGED_S3_BATCH_PREFIX: Final = "litellm-bedrock-files-"
@@ -46,6 +47,65 @@ def is_managed_cloud_storage_uri(file_id: str) -> bool:
     decodings: Final = _decodings(file_id)
     settled: Final = decodings[-1] == decodings[-2]
     return decodings[-1].startswith(MANAGED_CLOUD_STORAGE_SCHEMES) or not settled
+
+
+_S3_SCHEME: Final = "s3://"
+_FIRST_CHARACTERS_THAT_CAN_DECODE_TO_S3: Final = ("s", "%")
+_CLIENT_MEDIA_FIELDS: Final = ("messages", "input", "system")
+_MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "file_data"})
+
+
+def _media_uris(value: object, key: str | None = None) -> Iterator[str]:
+    if isinstance(value, str):
+        return iter((value,) if key in _MEDIA_URI_KEYS else ())
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        return chain.from_iterable(_media_uris(child, child_key) for child_key, child in fields.items())
+    items: Final = as_object_list(value)
+    return chain.from_iterable(map(_media_uris, items)) if items is not None else iter(())
+
+
+def _s3_bucket(uri: str) -> str | None:
+    return uri.removeprefix(_S3_SCHEME).partition("/")[0] if uri.startswith(_S3_SCHEME) else None
+
+
+def _s3_object_key(uri: str) -> str | None:
+    if not uri.startswith(_S3_SCHEME):
+        return None
+    _, separator, object_key = uri.removeprefix(_S3_SCHEME).partition("/")
+    return object_key if separator else None
+
+
+def _outside_managed_prefixes(object_key: str) -> bool:
+    return not any(prefix in object_key for prefix in BEDROCK_MANAGED_S3_PREFIXES)
+
+
+def _refused_in_some_decoding(
+    uri: str, s3_part: Callable[[str], str | None], is_allowed: Callable[[str], bool]
+) -> bool:
+    decodings: Final = _decodings(uri)
+    parts: Final = tuple(part for part in map(s3_part, decodings) if part is not None)
+    settled: Final = decodings[-1] == decodings[-2]
+    return bool(parts) and (not settled or not all(map(is_allowed, parts)))
+
+
+def _is_s3_uri(uri: str) -> bool:
+    return uri.startswith(_FIRST_CHARACTERS_THAT_CAN_DECODE_TO_S3) and any(
+        decoding.startswith(_S3_SCHEME) for decoding in _decodings(uri)
+    )
+
+
+def s3_media_uris(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    media_uris: Final = chain.from_iterable(_media_uris(request_body.get(field)) for field in _CLIENT_MEDIA_FIELDS)
+    return tuple(filter(_is_s3_uri, media_uris))
+
+
+def is_managed_s3_uri(uri: str) -> bool:
+    return _refused_in_some_decoding(uri, _s3_object_key, _outside_managed_prefixes)
+
+
+def names_an_unlisted_s3_bucket(uri: str, is_listed: Callable[[str], bool]) -> bool:
+    return _refused_in_some_decoding(uri, _s3_bucket, is_listed)
 
 
 _SAFE_OBJECT_COMPONENT_PATTERN: Final = re.compile(r"[^A-Za-z0-9._-]+")

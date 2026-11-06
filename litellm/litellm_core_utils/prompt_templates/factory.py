@@ -11,12 +11,11 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Final, TypeAlias, TypeVar, cast, overload
+from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic_core import ErrorDetails, PydanticCustomError
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 import litellm.types
@@ -4215,12 +4214,11 @@ class BedrockImageProcessor:
         extension: Final = PurePosixPath(uri).suffix.removeprefix(".").lower()
         if not extension:
             return None
-        bedrock_format: Final = "jpeg" if extension == "jpg" else extension
         config: Final = litellm.AmazonConverseConfig()
-        if bedrock_format in config.get_supported_image_types():
-            return f"image/{bedrock_format}"
-        if bedrock_format in config.get_supported_video_types():
-            return f"video/{bedrock_format}"
+        if extension in config.get_supported_image_types():
+            return f"image/{extension}"
+        if extension in config.get_supported_video_types():
+            return f"video/{extension}"
         try:
             return get_file_mime_type_from_extension(extension)
         except ValueError:
@@ -4233,6 +4231,13 @@ class BedrockImageProcessor:
             raise litellm.BadRequestError(
                 message=f"Cannot tell the media type of {uri} from its file extension. "
                 "Set the part's `format` to its MIME type, e.g. `image/png`.",
+                model="",
+                llm_provider="bedrock",
+            )
+        if mime_type.startswith("audio/"):
+            raise litellm.BadRequestError(
+                message=f"Bedrock Converse does not accept {uri} as {mime_type}. "
+                "Audio is not one of its image, document, or video formats.",
                 model="",
                 llm_provider="bedrock",
             )
@@ -4424,13 +4429,15 @@ def _convert_to_bedrock_tool_call_invoke(
 def _append_bedrock_tool_result_media_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     processed_block: BedrockContentBlock,
-    content: dict,
+    content: Mapping[str, object],
     content_type: str,
 ) -> None:
     if "image" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(image=processed_block["image"]))
     elif "document" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(document=processed_block["document"]))
+    elif "video" in processed_block:
+        tool_result_content_blocks.append(BedrockToolResultContentBlock(video=processed_block["video"]))
     else:
         verbose_logger.warning(
             "Bedrock Converse: unrecognized BedrockContentBlock keys %s for %s tool-result block %s; dropping.",
@@ -4440,21 +4447,23 @@ def _append_bedrock_tool_result_media_block(
         )
 
 
-class _S3MediaOwner(TypedDict, total=False):
-    bucket_owner: ReadOnly[object]
-
-
-_S3_MEDIA_OWNER: Final = TypeAdapter(_S3MediaOwner)
-
-
-def _s3_bucket_owner(media: _S3MediaOwner) -> str | None:
-    owner: Final = media.get("bucket_owner")
-    return owner if isinstance(owner, str) else None
+def _s3_bucket_owner(media: object, url: str) -> str | None:
+    fields: Final = as_str_mapping(media)
+    owner: Final = fields.get("bucket_owner") if fields is not None else None
+    if owner is None or (isinstance(owner, str) and owner):
+        return owner
+    if not url.startswith("s3://"):
+        return None
+    raise litellm.BadRequestError(
+        message=f"`bucket_owner` for {url} must be the AWS account id as a non-empty string, not {owner!r}.",
+        model="",
+        llm_provider="bedrock",
+    )
 
 
 def _append_bedrock_tool_result_image_url_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
-    content: dict,
+    content: ChatCompletionImageObject,
 ) -> None:
     format: str | None = None
     if isinstance(content["image_url"], dict):
@@ -4462,26 +4471,21 @@ def _append_bedrock_tool_result_image_url_block(
         format = content["image_url"].get("format")
     else:
         image_url = content["image_url"]
-    bucket_owner: Final = (
-        _s3_bucket_owner(_S3_MEDIA_OWNER.validate_python(content["image_url"]))
-        if isinstance(content["image_url"], dict)
-        else None
-    )
     processed_block: Final = BedrockImageProcessor.process_image_sync(
         image_url=image_url,
         format=format,
-        bucket_owner=bucket_owner,
+        bucket_owner=_s3_bucket_owner(content["image_url"], image_url),
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "image_url")
 
 
 def _append_bedrock_tool_result_file_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
-    content: dict,
+    content: ChatCompletionFileObject,
 ) -> None:
     # Match the user-message path (_process_file_message): accept either
     # file_data (base64 data URI) or file_id (server-side reference / URL).
-    file_obj: Final = content.get("file") or {}
+    file_obj: Final = content.get("file") or ChatCompletionFileObjectFile()
     file_data: Final = file_obj.get("file_data")
     file_id: Final = file_obj.get("file_id")
     if file_data is None and file_id is None:
@@ -4490,10 +4494,11 @@ def _append_bedrock_tool_result_file_block(
             model="",
             llm_provider="bedrock",
         )
+    url: Final = cast(str, file_id or file_data)
     processed_block: Final = BedrockImageProcessor.process_image_sync(
-        image_url=cast(str, file_id or file_data),
+        image_url=url,
         format=file_obj.get("format"),
-        bucket_owner=_s3_bucket_owner(_S3_MEDIA_OWNER.validate_python(file_obj)),
+        bucket_owner=_s3_bucket_owner(file_obj, url),
     )
     _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "file")
 
@@ -5143,13 +5148,10 @@ class BedrockConverseMessagesProcessor:
                                     format = element["image_url"].get("format")
                                 else:
                                     image_url = element["image_url"]
-                                bucket_owner: str | None = (
-                                    element["image_url"].get("bucket_owner")
-                                    if isinstance(element["image_url"], dict)
-                                    else None
-                                )
                                 _part = await BedrockImageProcessor.process_image_async(
-                                    image_url=image_url, format=format, bucket_owner=bucket_owner
+                                    image_url=image_url,
+                                    format=format,
+                                    bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "file":
@@ -5286,7 +5288,15 @@ class BedrockConverseMessagesProcessor:
                                     image_url = element["image_url"]["url"]
                                 else:
                                     image_url = element["image_url"]
-                                assistants_part = await BedrockImageProcessor.process_image_async(image_url=image_url)
+                                assistants_part = await BedrockImageProcessor.process_image_async(
+                                    image_url=image_url,
+                                    format=(
+                                        element["image_url"].get("format")
+                                        if isinstance(element["image_url"], dict)
+                                        else None
+                                    ),
+                                    bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
+                                )
                                 assistants_parts.append(assistants_part)
                                 # Add cache point block for assistant content elements
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
@@ -5416,8 +5426,9 @@ class BedrockConverseMessagesProcessor:
                 llm_provider="bedrock",
             )
         format: Final = file_message.get("format")
+        url: Final = cast(str, file_id or file_data)
         return BedrockImageProcessor.process_image_sync(
-            image_url=cast(str, file_id or file_data), format=format, bucket_owner=file_message.get("bucket_owner")
+            image_url=url, format=format, bucket_owner=_s3_bucket_owner(file_message, url)
         )
 
     _process_file_message = process_file_message
@@ -5442,8 +5453,9 @@ class BedrockConverseMessagesProcessor:
                 model="",
                 llm_provider="bedrock",
             )
+        url: Final = cast(str, file_id or file_data)
         return await BedrockImageProcessor.process_image_async(
-            image_url=cast(str, file_id or file_data), format=format, bucket_owner=file_message.get("bucket_owner")
+            image_url=url, format=format, bucket_owner=_s3_bucket_owner(file_message, url)
         )
 
     @staticmethod
@@ -5573,13 +5585,10 @@ def _bedrock_converse_messages_pt(
                                 format = element["image_url"].get("format")
                             else:
                                 image_url = element["image_url"]
-                            bucket_owner: str | None = (
-                                element["image_url"].get("bucket_owner")
-                                if isinstance(element["image_url"], dict)
-                                else None
-                            )
                             _part = BedrockImageProcessor.process_image_sync(
-                                image_url=image_url, format=format, bucket_owner=bucket_owner
+                                image_url=image_url,
+                                format=format,
+                                bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
@@ -5717,7 +5726,15 @@ def _bedrock_converse_messages_pt(
                                 image_url = element["image_url"]["url"]
                             else:
                                 image_url = element["image_url"]
-                            assistants_part = BedrockImageProcessor.process_image_sync(image_url=image_url)
+                            assistants_part = BedrockImageProcessor.process_image_sync(
+                                image_url=image_url,
+                                format=(
+                                    element["image_url"].get("format")
+                                    if isinstance(element["image_url"], dict)
+                                    else None
+                                ),
+                                bucket_owner=_s3_bucket_owner(element["image_url"], image_url),
+                            )
                             assistants_parts.append(assistants_part)
                         # Add cache point block for assistant content elements
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(

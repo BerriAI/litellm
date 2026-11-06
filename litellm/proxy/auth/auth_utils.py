@@ -495,7 +495,7 @@ _PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSettin
 )
 
 
-class _ClientSideStorageAllowlist(BaseModel):
+class ClientSideStorageAllowlist(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     allowed_client_side_s3_buckets: tuple[str, ...] | None = None
@@ -555,7 +555,7 @@ def _check_banned_params(
             return
         if (
             setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
-        ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
+        ) is not None and ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
             continue
         if (
             _allow_model_level_clientside_configurable_parameters(

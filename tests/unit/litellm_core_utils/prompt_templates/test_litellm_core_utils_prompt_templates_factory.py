@@ -3120,6 +3120,21 @@ def _s3_source(uri: str, bucket_owner: str | None = None) -> Mapping[str, object
             id="string-url-uppercase-extension",
         ),
         pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.jpg"}},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/cat.jpg")}},
+            id="jpg-is-jpeg",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/CAT.PNG"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/CAT.PNG")}},
+            id="uppercase-image-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/DEMO.MOV"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/DEMO.MOV")}},
+            id="uppercase-video-extension",
+        ),
+        pytest.param(
             {
                 "type": "image_url",
                 "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
@@ -3196,6 +3211,10 @@ async def test_bedrock_converse_s3_media_without_a_known_extension_or_format_is_
         pytest.param(
             {"url": "s3://media-bucket/scans/page.png", "format": "image/tiff"}, "image/tiff", id="tiff-format"
         ),
+        pytest.param({"url": "s3://media-bucket/voice/note.mp3"}, "audio/mpeg", id="mp3-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/voice/note.bin", "format": "audio/mp4"}, "audio/mp4", id="audio-format"
+        ),
     ],
 )
 async def test_bedrock_converse_s3_media_in_a_format_bedrock_does_not_take_is_a_bad_request(
@@ -3206,6 +3225,42 @@ async def test_bedrock_converse_s3_media_in_a_format_bedrock_does_not_take_is_a_
 
     assert image_url["url"] in excinfo.value.message
     assert named_format in excinfo.value.message
+
+
+_PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+
+def _owned_image_url_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "image_url", "image_url": {"url": url, "bucket_owner": bucket_owner}}
+
+
+def _owned_file_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "file", "file": {"file_id": url, "bucket_owner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("bucket_owner", [111122223333, ["111122223333"], ""], ids=["int", "list", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content(part_for("s3://media-bucket/dir/cat.png", bucket_owner), run_async)
+
+    assert "`bucket_owner`" in excinfo.value.message
+    assert "s3://media-bucket/dir/cat.png" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_ignores_a_bucket_owner_on_media_that_is_not_on_s3(
+    part_for: Callable[[str, object], Mapping[str, object]], run_async: bool
+):
+    content: Final = await _converse_user_content(
+        part_for(f"data:image/png;base64,{_PNG_BASE64}", 111122223333), run_async
+    )
+
+    assert content == [{"image": {"format": "png", "source": {"bytes": _PNG_BASE64}}}]
 
 
 @pytest.mark.parametrize(
@@ -3240,11 +3295,44 @@ def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapp
     ]
 
 
+@pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+def test_bedrock_converse_tool_result_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object
+):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {
+            "tool_call_id": "tooluse_s3_1",
+            "role": "tool",
+            "name": "fetch_screenshot",
+            "content": [part_for("s3://media-bucket/dir/cat.png", bucket_owner)],
+        },
+    ]
+
+    with respx.mock, pytest.raises(litellm.BadRequestError) as excinfo:
+        _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+
+    assert "`bucket_owner`" in excinfo.value.message
+
+
 @pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
 async def test_bedrock_converse_assistant_s3_image_is_sent_as_an_s3_location(run_async: bool):
     messages: Final = [
         {"role": "user", "content": "Draw a cat."},
-        {"role": "assistant", "content": [{"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png"}}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "format": "image/webp",
+                        "bucket_owner": _S3_BUCKET_OWNER,
+                    },
+                }
+            ],
+        },
         {"role": "user", "content": "Make it bigger."},
     ]
 
@@ -3258,7 +3346,7 @@ async def test_bedrock_converse_assistant_s3_image_is_sent_as_an_s3_location(run
         )
 
     assert converted[1]["content"] == [
-        {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png")}}
+        {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
     ]
 
 

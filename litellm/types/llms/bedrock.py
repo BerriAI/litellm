@@ -9,7 +9,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, overri
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-from .openai import ChatCompletionToolCallChunk
+from .openai import ChatCompletionFileObjectFile, ChatCompletionImageUrlObject, ChatCompletionToolCallChunk
 
 
 class CachePointBlock(TypedDict, total=False):
@@ -30,6 +30,14 @@ class S3Location(TypedDict):
 class SourceBlock(TypedDict, total=False):
     bytes: ReadOnly[str | None]  # base 64 encoded string
     s3Location: ReadOnly[S3Location]
+
+
+class S3MediaImageUrlObject(ChatCompletionImageUrlObject, total=False):
+    bucket_owner: ReadOnly[object]
+
+
+class S3MediaFileObjectFile(ChatCompletionFileObjectFile, total=False):
+    bucket_owner: ReadOnly[object]
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
@@ -74,6 +82,7 @@ class SearchResultBlock(TypedDict, total=False):
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    video: ReadOnly[VideoBlock]
     searchResult: SearchResultBlock
     json: dict
     text: str
