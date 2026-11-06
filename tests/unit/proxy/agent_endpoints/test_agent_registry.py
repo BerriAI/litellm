@@ -578,6 +578,15 @@ def test_redact_sensitive_agent_litellm_params_handles_none_and_json_string():
     assert json.loads(redacted)["model"] == "gpt-4"
 
 
+@pytest.mark.parametrize("unset", [None, "", False, 0, [], {}])
+def test_redact_sensitive_agent_litellm_params_shows_an_unset_secret_as_unset(unset: object) -> None:
+    redacted: Final = redact_sensitive_agent_litellm_params(
+        {"api_key": unset, "client_secret": SENTINEL_AWS_SECRET_ACCESS_KEY}
+    )
+
+    assert json.loads(json.dumps(redacted)) == {"api_key": unset, "client_secret": REDACTED_BY_LITELM_STRING}
+
+
 def test_redact_sensitive_agent_litellm_params_recurses_into_lists_of_dicts():
     """A secret nested inside a list of provider sub-configs (a shape a
     non-sensitively-named key can legitimately hold) must also be redacted,
