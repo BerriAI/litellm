@@ -174,7 +174,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         try:
             raw_response_json: Final = raw_response.json()
         except Exception as e:
-            raise ValueError(f"Error transforming response to json: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming response to json: {e}")
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()
@@ -190,10 +190,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
             response_kwargs["usage"] = usage
 
         if not response_kwargs:
-            raise ValueError(
-                "Invalid response format. Received response does not match the expected format. Got: ",
-                response_object,
-            )
+            raise ValueError("Invalid response format. Received response does not match the expected format.")
 
         response: Final = TranscriptionResponse(**response_kwargs)
 
