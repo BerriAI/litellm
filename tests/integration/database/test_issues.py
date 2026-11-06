@@ -17,6 +17,7 @@ from prisma.types import DatasourceOverride
 from psycopg import sql
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.proxy.management_endpoints.common_daily_activity import daily_activity_repository
 from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase
 from litellm.repositories.daily_activity_sql import build_bounded_daily_activity_sql
 from litellm.repositories.issue_activity import IssueActivityRepository
@@ -912,13 +913,13 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
     store: Final = IssuesRepository.from_prisma(db.prisma)
     activity: Final = IssueActivityRepository.from_prisma(db.prisma)
     measured: Final = _MeasuredActivityDatabase(activity.database)
-    repository: Final = IssueActivityRepository(activity.activity, measured)
+    repository: Final = IssueActivityRepository(daily_activity_repository(db.prisma, query_database=measured), measured)
     identity: Final = uuid4().hex
     reporting_key: Final = sha256(identity.encode()).hexdigest()
     day: Final = date.today() - timedelta(days=3)
     with gateway.scenario() as scenario:
         owner: Final = scenario.user(user_role="internal_user")
-        issue: Final = _issue(IssueCohort(scope_type="user", scope_id=owner)).model_copy(
+        issue: Final = _issue(IssueCohort(scope_type="provider", scope_id=identity)).model_copy(
             update={"range_start": day, "range_end": day}
         )
         try:
@@ -942,8 +943,10 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
             await _query(
                 db,
                 """INSERT INTO "LiteLLM_DailyUserSpend"
-                (id,user_id,date,api_key,model,api_requests,successful_requests,updated_at)
-                VALUES($1,$2,$3,$4,'example-model',10,10,CURRENT_TIMESTAMP)""",
+                (id,user_id,date,api_key,model,custom_llm_provider,api_requests,successful_requests,updated_at)
+                VALUES($1,$2,$3,$4,'example-model',$1,10,10,CURRENT_TIMESTAMP),
+                    ($1||'-wide',repeat(chr(128640),65536),$3,repeat(chr(128640),65536),
+                     'example-model',$1,20,20,CURRENT_TIMESTAMP)""",
                 identity,
                 owner,
                 day.isoformat(),
@@ -963,13 +966,26 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
             assert users.users[0].user_id == owner and users.users[0].user_alias == "u" * 256
             assert users.users[0].user_email is None
             assert measured.outputs[-1][0] == 1 and measured.outputs[-1][1] < 2048
+            assert all(size < 2048 for _, size in measured.outputs)
+            totals: Final = await repository.daily_activity(issue.cohort, day, day)
+            assert totals.metadata.total_api_requests == 30
             for endpoint in ("keys", "users"):
                 response: Final = gateway.request("GET", f"/issues/{issue.id}/{endpoint}", params={"limit": "1"})
                 assert response.status_code == 200 and len(response.content) < 2048
                 assert "padding" not in response.text
+            await _query(
+                db,
+                """UPDATE "LiteLLM_DeletedVerificationToken"
+                SET user_id=repeat(chr(128640),65536),team_id=repeat(chr(128640),65536)
+                WHERE id=$1||'-400'""",
+                identity,
+            )
+            legacy: Final = await repository.keys(issue.cohort, day, day, 1, 0)
+            assert legacy.api_keys[0].metadata.user_id is None and legacy.api_keys[0].metadata.team_id is None
+            assert all(size < 2048 for _, size in measured.outputs[-2:])
         finally:
             await _remove_issues(db, (issue.id,))
-            await _query(db, 'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id=$1', identity)
+            await _query(db, "DELETE FROM \"LiteLLM_DailyUserSpend\" WHERE id IN ($1,$1||'-wide')", identity)
             await _query(db, 'DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', reporting_key)
 
 
