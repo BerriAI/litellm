@@ -127,6 +127,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const isPortalRoute = CUSTOMER_PORTAL_SEGMENTS.has(routeSegment);
   useEffect(() => {
     if (isPortalRoute && mode !== "customer-portal") setMode("customer-portal");
+    if (!isPortalRoute && mode === "customer-portal") setMode("ai-gateway");
   }, [isPortalRoute, mode, setMode]);
   useEffect(() => {
     void recordUiEvent({ page: routeSegment || "home", action: "view" });
