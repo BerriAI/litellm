@@ -38,24 +38,26 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    drop_lookaround_regex_patterns,
-    is_object_schema,
-    native_redacted_thinking_data,
-    parse_content_for_reasoning,
-    tool_with_sanitized_parameters,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_lookaround_regex_patterns,
+    is_object_schema,
+    tool_with_sanitized_parameters,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     is_system_message,
     message_field,
     parts_of,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    native_redacted_thinking_data,
+    parse_content_for_reasoning,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
@@ -77,6 +79,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_native_output_is_opt_in,
+    bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
     requests_output_config_format,
@@ -1421,6 +1424,16 @@ class AmazonConverseConfig(BaseConfig):
         ) or requests_output_config_format(optional_params)
         return native_output_requested and bedrock_native_output_is_opt_in(
             bedrock_capability_model(model, litellm_params.get("base_model")),
+            self.custom_llm_provider or "bedrock_converse",
+            deployment_model_info(litellm_params),
+        )
+
+    def uses_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        return bedrock_native_output_retry_requested(
+            bedrock_capability_model(model, litellm_params.get("base_model")),
+            optional_params,
             self.custom_llm_provider or "bedrock_converse",
             deployment_model_info(litellm_params),
         )

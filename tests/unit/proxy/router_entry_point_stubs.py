@@ -99,6 +99,8 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
             return router.is_recognized_model(name)
         if kind == "upstream":
             return router.get_routable_upstream_model(name, **_given(team_id=team_id))
+        if kind == "upstream_provider":
+            return router.get_routable_upstream_provider(name, **_given(team_id=team_id))
         if kind == "search_tool_support":
             return router.get_search_tool_support(name, **_given(team_id=team_id))
         if kind == "from_id":
@@ -127,6 +129,8 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
             return router.get_pinned_reasoning_efforts(name, **_given(team_id=team_id))
         if field == "max_input_tokens":
             return router.get_configured_max_input_tokens(name, **_given(team_id=team_id))
+        if field == "deployment_model_info":
+            return router.get_routable_deployment_model_info(name, **_given(team_id=team_id))
         if field == "listing_info":
             return router.get_model_listing_info(name)
         if field == "mode":

@@ -3,18 +3,21 @@
 Codex CLI discovers a provider's models with ``GET <model_catalog_url>?client_version=<its version>``
 (the provider's ``model_catalog_url`` pointed at ``/v1/models``, with its ``api_key_model_discovery``
 feature on) and decodes the body as its own ``ModelsResponse``, ``{"models": [ModelInfo, ...]}``,
-never the OpenAI list shape. This module builds that body from the rows ``/v1/models`` already
-lists: a model Codex knows keeps Codex's own entry for it, any other model gets the fallback entry
-Codex itself uses for an unknown slug, and ``model_info.service_tiers`` becomes the entry's
+never the OpenAI list shape. Codex then ignores its own bundled catalog, so this body is all it knows
+about the provider's models. It is built from the rows ``/v1/models`` already lists: a model Codex
+knows, by its id or by the upstream model its deployments call once the provider's own prefixes are
+stripped, keeps Codex's own entry for it, minus any service tier some deployment behind it prices tokens
+but not that tier for; any other model gets an entry translated from the capabilities its deployments' model info
+declares (see ``codex_model_translation``). ``model_info.service_tiers`` becomes the entry's
 ``service_tiers``, which Codex turns into slash commands (``/ultrafast``) that send ``service_tier``
 upstream. A ``model_info.max_input_tokens`` the operator sets replaces a known model's
 ``context_window``, up to the most Codex lets its own ``model_context_window`` raise that model to.
-A fallback entry offers the model group's ``supported_reasoning_efforts`` as its reasoning levels,
+A translated entry offers the model group's ``supported_reasoning_efforts`` as its reasoning levels,
 trimmed to the ones the requesting Codex release can parse.
 
-The stock entries are Codex 0.159.3's bundled catalog, vendored unchanged from
-https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/models-manager/models.json (Apache-2.0)
-as ``codex_bundled_models_0.159.3.json``, and ``codex_base_instructions.md`` is
+The stock entries are Codex 0.166.0's bundled catalog, vendored unchanged from
+https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/models-manager/models.json (Apache-2.0)
+as ``codex_bundled_models_0.166.0.json``, and ``codex_base_instructions.md`` is
 ``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at
 a newer tag.
 """
@@ -23,19 +26,29 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from functools import cache
 from itertools import accumulate, pairwise
 from pathlib import Path
-from types import MappingProxyType, NoneType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from packaging.version import Version
-from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.proxy.common_utils.codex_model_translation import (
+    TOKEN_PRICE_KEY,
+    CodexDeploymentCapabilities,
+    CodexFallbackModel,
+    CodexServiceTier,
+    TierId,
+    codex_fallback_entry,
+    combined_capabilities,
+    no_priced_deployment_lacks_tier,
+    tier_price_keys,
+)
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -44,91 +57,26 @@ if TYPE_CHECKING:
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
-CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.159.3.json")
+CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.166.0.json")
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
-_TierId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
-_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
-_EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
-_PREFERRED_DEFAULT_EFFORT: Final = "medium"
-_CODEX_UNSET_EFFORT: Final = "none"
-
-
-class CodexServiceTier(LiteLLMBaseModel):
-    """A `ModelServiceTier` as Codex reads it: the slash command is `name` lowercased, and toggling
-    it sends `id` as the request's `service_tier`."""
-
-    model_config = ConfigDict(frozen=True)
-
-    id: _TierId
-    name: str
-    description: str
+_NO_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _ConfiguredTier(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: _TierId
+    id: TierId
     name: str | None = None
     description: str | None = None
 
 
-_CONFIGURED_TIERS: Final = TypeAdapter(tuple[_TierId | _ConfiguredTier, ...])
-
-
-class CodexFallbackReasoningLevel(LiteLLMBaseModel):
-    """A `ReasoningEffortPreset` as Codex reads it: picking it sends `effort` as the request's reasoning effort."""
-
-    model_config = ConfigDict(frozen=True)
-
-    effort: str
-    description: str
-
-
-class CodexTruncationPolicy(LiteLLMBaseModel):
-    mode: Literal["bytes"] = "bytes"
-    limit: int = 10_000
-
-
-class CodexFallbackModel(LiteLLMBaseModel):
-    """One `ModelInfo` entry of a Codex model catalog for a model Codex does not know.
-
-    Every field that some Codex release since `model_catalog_json` appeared
-    (0.105.0) deserializes without a default is spelled out here, so one catalog
-    parses on all of them; the values match the fallback metadata Codex uses for
-    a model slug it does not know, so picking such a proxy model behaves the
-    same as `codex -m` did.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    slug: str
-    display_name: str
-    description: NoneType = None
-    default_reasoning_level: str | None = Field(default=None, exclude_if=lambda level: level is None)
-    supported_reasoning_levels: tuple[CodexFallbackReasoningLevel, ...] = ()
-    shell_type: Literal["unified_exec"] = "unified_exec"
-    visibility: Literal["list"] = "list"
-    supported_in_api: Literal[True] = True
-    priority: int
-    service_tiers: tuple[CodexServiceTier, ...] = ()
-    availability_nux: NoneType = None
-    upgrade: NoneType = None
-    support_verbosity: Literal[False] = False
-    supports_reasoning_summaries: Literal[False] = False
-    supports_parallel_tool_calls: Literal[False] = False
-    default_verbosity: NoneType = None
-    apply_patch_tool_type: NoneType = None
-    truncation_policy: CodexTruncationPolicy = CodexTruncationPolicy()
-    experimental_supported_tools: tuple[()] = ()
-    context_window: int | None
-    base_instructions: str
-    supports_search_tool: bool = False
+_CONFIGURED_TIERS: Final = TypeAdapter(tuple[TierId | _ConfiguredTier, ...])
 
 
 class CodexStockUpgrade(LiteLLMBaseModel):
@@ -160,11 +108,13 @@ class CodexStockModel(LiteLLMBaseModel):
     supported_in_api: bool = True
     upgrade: CodexStockUpgrade | None = None
     service_tiers: tuple[CodexServiceTier, ...] = ()
+    additional_speed_tiers: tuple[str, ...] = ()
     default_service_tier: str | None = None
     supports_search_tool: bool = False
     supported_reasoning_levels: tuple[CodexReasoningLevel, ...] = ()
     context_window: int | None = None
     max_context_window: int | None = None
+    minimal_client_version: str | tuple[int, ...] | None = None
 
 
 class CodexStockCatalog(LiteLLMBaseModel):
@@ -179,22 +129,26 @@ _NATIVE_ALIAS_DEFAULTS: Final[CodexAliasDefaults] = "deployment"
 @dataclass(frozen=True, slots=True)
 class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
-    input limit, the upstream model behind it, the reasoning effort its deployments pin, and the
+    input limit, the upstream model behind it and the provider its deployment declares, the reasoning
+    effort its deployments pin, and the
     `model_info` values the operator set; `service_tiers` holds one raw `model_info.service_tiers`
     value per deployment behind the id, None where a deployment sets none, and
     `configured_max_input_tokens` one `model_info.max_input_tokens` per deployment the same way.
-    `supported_reasoning_efforts` is the model group's, None when unknown."""
+    `deployment_capabilities` holds what each deployment's model info, merged with the cost map,
+    declares. `supported_reasoning_efforts` is the model group's, None when unknown."""
 
     id: str
     mode: str | None = None
     max_input_tokens: int | None = None
     upstream_model: str | None = None
+    upstream_provider: str | None = None
     reasoning_effort: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
     supported_reasoning_efforts: tuple[str, ...] | None = None
     search_tool_support: tuple[bool | None, ...] = ()
     configured_max_input_tokens: tuple[int | None, ...] = ()
+    deployment_capabilities: tuple[CodexDeploymentCapabilities, ...] = ()
 
 
 @cache
@@ -297,44 +251,87 @@ def _codex_can_drive(model_id: str, mode: str | None) -> bool:
     return "*" not in model_id and (mode is None or mode in CODEX_CHAT_MODES)
 
 
-def _parses_custom_efforts(client_version: str | None) -> bool:
+@cache
+def _provider_model_names() -> Mapping[str, Callable[[str], str]]:
+    """Imported on first use for the same reason as `tier_price_keys`."""
+    from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
+
+    return MappingProxyType(
+        {"bedrock": bedrock_model_name_without_provider, "bedrock_mantle": bedrock_model_name_without_provider}
+    )
+
+
+def _provider_model_name(upstream_model: str, upstream_provider: str | None) -> str:
+    """The upstream model without the prefixes its provider adds, the provider being the one the deployment
+    declares in `custom_llm_provider`, else the model's `provider/` prefix."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
+
+    provider: Final = declared_provider(upstream_model, upstream_provider)
+    if provider is None:
+        return upstream_model
+    model: Final = upstream_model.removeprefix(f"{provider}/")
+    name_for: Final = _provider_model_names().get(provider)
+    return model if name_for is None else name_for(model)
+
+
+def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> CodexStockModel | None:
+    """Codex's entry for the row's id, else for its upstream model as written, else for that model's name
+    once its provider's own prefixes are stripped (`bedrock/us.openai.gpt-6.1-sol` is `gpt-6.1-sol`)."""
+    names: Final = (
+        (row.id,)
+        if row.upstream_model is None
+        else (row.id, row.upstream_model, _provider_model_name(row.upstream_model, row.upstream_provider))
+    )
+    return next((stock[name] for name in names if name in stock), None)
+
+
+def _readable_by(stock_model: CodexStockModel, client_version: str | None) -> bool:
+    """Whether Codex's own server would hand this entry to the requesting release: one at or past the entry's
+    `minimal_client_version`. An older release can fail to decode it, and one entry it cannot decode (a reasoning
+    effort it has no name for) fails the whole catalog, so it gets a translated entry. No version keeps the entry."""
+    minimum: Final = stock_model.minimal_client_version
+    if minimum is None or client_version is None:
+        return True
     try:
-        return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
+        return Version(client_version) >= Version(minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
     except ValueError:
         return False
 
 
-def codex_reasoning_levels(
-    efforts: Sequence[str], client_version: str | None
-) -> tuple[tuple[CodexFallbackReasoningLevel, ...], str | None]:
-    """The reasoning levels a fallback entry offers for a model group's efforts, and its default level.
+def _tier_fields(stock_model: CodexStockModel, tiers: tuple[CodexServiceTier, ...]) -> Mapping[str, object]:
+    """The tier fields of an entry offering `tiers`. Codex turns `/fast` on off a speed tier as much as off a
+    service tier, so a speed tier stays only while a service tier billed the same way is still offered, and the
+    default tier only while it is still offered."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
 
-    Codex before 0.138.0 fails the whole catalog on an effort it has no name for, so for it, and for
-    a version that does not parse, only the efforts every release knows are offered. The default is
-    set whenever a level is offered, because Codex reads a missing one as `none`: `none` itself when the
-    group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
-    nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
-    else the weakest declared level, else the first one."""
-    parses_any: Final = _parses_custom_efforts(client_version)
-    offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
-    if not offered:
-        return (), None
-    nearest: Final = nearest_declared_reasoning_effort(_PREFERRED_DEFAULT_EFFORT, offered, "down")
-    levels: Final = tuple(
-        CodexFallbackReasoningLevel(effort=effort, description=f"Sends reasoning_effort={effort} upstream")
-        for effort in offered
+    offered: Final = frozenset(tier.id for tier in tiers)
+    offered_prices: Final = frozenset(get_service_tier_cost_key(TOKEN_PRICE_KEY, tier) for tier in offered)
+    speed_tiers: Final = tuple(
+        tier
+        for tier in stock_model.additional_speed_tiers
+        if get_service_tier_cost_key(TOKEN_PRICE_KEY, tier) in offered_prices - {TOKEN_PRICE_KEY}
     )
-    if _CODEX_UNSET_EFFORT in offered:
-        return levels, _CODEX_UNSET_EFFORT
-    return levels, nearest if nearest in offered else offered[0]
+    return MappingProxyType(
+        {
+            "service_tiers": tiers,
+            **({"additional_speed_tiers": speed_tiers} if stock_model.additional_speed_tiers else {}),
+            "default_service_tier": (
+                stock_model.default_service_tier if stock_model.default_service_tier in offered else None
+            ),
+        }
+    )
 
 
-def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> CodexStockModel | None:
-    listed: Final = stock.get(row.id)
-    if listed is not None or row.upstream_model is None:
-        return listed
-    upstream: Final = stock.get(row.upstream_model)
-    return upstream if upstream is not None else stock.get(row.upstream_model.partition("/")[2])
+def _priced_tiers(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, object]:
+    """Codex's own tiers for the model without the ones some deployment behind the row prices tokens but not
+    that tier for, or nothing when none is dropped. Sending a tier the upstream does not sell fails the
+    request, and the cost map prices a tier for exactly the models that sell it, while a deployment it has no
+    token price for at all says nothing either way."""
+    deployments: Final = row.deployment_capabilities
+    tiers: Final = tuple(
+        tier for tier in stock_model.service_tiers if no_priced_deployment_lacks_tier(tier.id, deployments)
+    )
+    return _NO_UPDATE if tiers == stock_model.service_tiers else _tier_fields(stock_model, tiers)
 
 
 def _alias_context_window(row: CodexCatalogRow, stock_model: CodexStockModel) -> Mapping[str, int]:
@@ -374,8 +371,7 @@ def _deployment_defaults(row: CodexCatalogRow, stock_model: CodexStockModel) -> 
     none otherwise, and a window no larger than the alias's own limit."""
     return MappingProxyType(
         {
-            "service_tiers": (),
-            "default_service_tier": None,
+            **_tier_fields(stock_model, ()),
             "default_verbosity": None,
             "upgrade": None,
             "availability_nux": None,
@@ -394,24 +390,24 @@ def _entry(
     alias_defaults: CodexAliasDefaults,
     client_version: str | None,
 ) -> CodexCatalogEntry:
-    stock_model: Final = _stock_for(row, stock)
+    matched: Final = _stock_for(row, stock)
+    stock_model: Final = matched if matched is not None and _readable_by(matched, client_version) else None
     stock_tiers: Final = MappingProxyType(
         {tier.id: tier for tier in (stock_model.service_tiers if stock_model is not None else ())}
     )
     configured: Final = configured_service_tiers(row.service_tiers, row.id, stock_tiers)
     search_tool: Final = offered_search_tool(row.search_tool_support)
     if stock_model is None:
-        levels, default_level = codex_reasoning_levels(row.supported_reasoning_efforts or (), client_version)
-        return CodexFallbackModel(
+        return codex_fallback_entry(
             slug=row.id,
             display_name=row.display_name if row.display_name is not None else row.id,
-            default_reasoning_level=default_level,
-            supported_reasoning_levels=levels,
             priority=index,
+            capabilities=combined_capabilities(row.deployment_capabilities, row.max_input_tokens),
+            instructions=instructions,
             service_tiers=configured if configured is not None else (),
-            context_window=row.max_input_tokens,
-            base_instructions=instructions,
             supports_search_tool=search_tool is True,
+            reasoning_efforts=row.supported_reasoning_efforts or (),
+            client_version=client_version,
         )
     upgrade: Final = (
         stock_model.upgrade if stock_model.upgrade is not None and stock_model.upgrade.model in served else None
@@ -431,17 +427,12 @@ def _entry(
         **_configured_window(row, stock_model),
     }
     if configured is None:
-        return stock_model.model_copy(update=listing)
-    configured_ids: Final = frozenset(tier.id for tier in configured)
+        return stock_model.model_copy(update={**_priced_tiers(row, stock_model), **listing})
     return stock_model.model_copy(
         update={
             **listing,
-            "service_tiers": configured,
-            "default_service_tier": (
-                stock_model.default_service_tier
-                if not deployment_decides and stock_model.default_service_tier in configured_ids
-                else None
-            ),
+            **_tier_fields(stock_model, configured),
+            **({"default_service_tier": None} if deployment_decides else {}),
         }
     )
 
@@ -527,8 +518,10 @@ def codex_models_response_json(
     `max_context_window`. A row listed under another name than the Codex model its `upstream_model` names (an alias) takes that model's
     entry; `alias_defaults="deployment"` drops the defaults Codex picks for that model in favor of
     what the alias's deployments pin, while `"codex"` keeps them, as Codex would use them for the
-    model's own name. `client_version` is the requesting Codex's version, which decides the reasoning
-    levels a fallback entry may offer; None counts as a version too old for custom levels.
+    model's own name. Codex's own service tiers stay on a known model's entry only when no deployment
+    behind the row prices tokens without pricing them, and only while the operator configures none. `client_version` is the
+    requesting Codex's version, which decides the reasoning levels a fallback entry may offer; None counts
+    as a version too old for custom levels.
     """
     drivable: Final = tuple(row for row in rows if _codex_can_drive(row.id, row.mode))
     entries: Final = _entries(drivable, stock, instructions, 0, alias_defaults, client_version)
@@ -619,6 +612,35 @@ def _shared_pinned_effort(pinned: tuple[object, ...]) -> str | None:
     return first if isinstance(first, str) and all(effort == first for effort in pinned) else None
 
 
+def deployment_capabilities(model_info: Mapping[str, object] | None, model_id: str) -> CodexDeploymentCapabilities:
+    """One deployment's model info, merged with the cost map, as the capabilities a Codex entry describes.
+    Model info that does not validate declares nothing, logged, so one bad value never fails the listing."""
+    if model_info is None:
+        return CodexDeploymentCapabilities()
+    prices_tokens: Final = model_info.get(TOKEN_PRICE_KEY) is not None
+    priced: Final = frozenset(key for key in tier_price_keys() if model_info.get(key) is not None)
+    try:
+        return CodexDeploymentCapabilities.model_validate(
+            {**model_info, "prices_tokens": prices_tokens, "priced_service_tier_keys": priced}
+        )
+    except ValidationError as e:
+        verbose_proxy_logger.warning(
+            "model info of a deployment of %s declares no capability to Codex: %s", model_id, e.errors()[0]["msg"]
+        )
+        return CodexDeploymentCapabilities(prices_tokens=prices_tokens, priced_service_tier_keys=priced)
+
+
+def _deployment_capabilities(
+    lookup_id: str, registry: RouterRegistry | None, team_id: str | None
+) -> tuple[CodexDeploymentCapabilities, ...]:
+    if registry is None:
+        return ()
+    return tuple(
+        deployment_capabilities(model_info, lookup_id)
+        for model_info in registry.group(lookup_id, field="deployment_model_info", team_id=team_id)
+    )
+
+
 def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, label_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
@@ -628,6 +650,9 @@ def _catalog_row(
         mode=row.get("mode"),
         max_input_tokens=row.get("max_input_tokens"),
         upstream_model=registry.resolve(lookup_id, kind="upstream", team_id=team_id) if registry is not None else None,
+        upstream_provider=(
+            registry.resolve(lookup_id, kind="upstream_provider", team_id=team_id) if registry is not None else None
+        ),
         display_name=registry.group(label_id, field="display_name") if registry is not None else None,
         reasoning_effort=(
             _shared_pinned_effort(registry.group(lookup_id, field="pinned_reasoning_efforts", team_id=team_id))
@@ -642,6 +667,7 @@ def _catalog_row(
         configured_max_input_tokens=(
             registry.group(lookup_id, field="max_input_tokens", team_id=team_id) if registry is not None else ()
         ),
+        deployment_capabilities=_deployment_capabilities(lookup_id, registry, team_id),
     )
 
 
@@ -655,8 +681,9 @@ def codex_catalog_rows(
     """`rows` joined with the router's configured metadata, looked up by each entry's internal id so
     team-scoped rows resolve the way the Anthropic listing's display names do, a `model_group_alias`
     reading its target's deployments under its own name; `team_id` is the requesting key's team, so the
-    upstream model that picks Codex's stock entry, the tiers, and the configured input limits are read
-    only off the deployments its requests can route to, and the reasoning efforts are the ones
+    upstream model that picks Codex's stock entry, the tiers, the configured input limits and each
+    deployment's capabilities are read only off the deployments its requests can route to, and the
+    reasoning efforts are the ones
     `/model_group/info` reports for the entry. Display names are read under `label_entries`' ids when given."""
     lookup_ids: Final = MappingProxyType(dict(entries))
     label_ids: Final = lookup_ids if label_entries is None else MappingProxyType(dict(label_entries))

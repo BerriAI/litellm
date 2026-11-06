@@ -51,7 +51,7 @@ from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     anthropic_content_lists,
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
