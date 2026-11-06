@@ -2528,6 +2528,37 @@ class TestResponsesWSFirstFrameModelAuth:
         assert walk["request_data"]["litellm_metadata"]["guardrails"] == ["turn-selected"]
 
     @pytest.mark.asyncio
+    async def test_frame_guard_keeps_presidio_s_tokens_from_the_post_call_guardrails(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return {**data, "input": "<PERSON>", "metadata": {"pii_tokens": {"<PERSON>": "Jane"}, "kept": True}}
+
+        async def post_call_stream(response, user_api_key_dict, request_data, guardrails_only=False):
+            async for chunk in response:
+                yield chunk
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock(side_effect=post_call_stream)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+
+        async def provider_reply():
+            yield "Hello <PERSON>"
+
+        guarded = await guard(json.dumps({"type": "response.create", "input": "Jane"}))
+        assert guarded.guard_output is not None
+        served = [chunk async for chunk in guarded.guard_output(provider_reply())]
+
+        assert served == ["Hello <PERSON>"]
+
+        assert dict(guarded.pii_tokens) == {"<PERSON>": "Jane"}
+        walk = proxy_logging_obj.async_post_call_streaming_iterator_hook.call_args.kwargs
+        assert walk["request_data"]["metadata"] == {"kept": True}
+
+    @pytest.mark.asyncio
     async def test_frame_guard_bills_a_rejected_frame_as_a_failed_request(self):
         import litellm
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger

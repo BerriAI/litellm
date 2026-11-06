@@ -2319,7 +2319,7 @@ def _responses_ws_frame_guard(
             guard_output=partial(
                 proxy_logging_obj.async_post_call_streaming_iterator_hook,
                 user_api_key_dict=user_api_key_dict,
-                request_data=guarded_data,
+                request_data=_without_pii_tokens(guarded_data),
                 guardrails_only=True,
             ),
         )
@@ -2529,6 +2529,19 @@ def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
 
 
 _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _without_pii_tokens(
+    data: dict[str, object],  # mutable-ok: ProxyLogging hands the guardrails the request dict they edit
+) -> dict[str, object]:  # mutable-ok: same
+    """The socket unmasks the client's copy of a reply itself and keeps Presidio's tokens in the turn history, which
+    goes back to the provider on the next turn. Without the tokens the post_call walk can't unmask the reply into that
+    history."""
+    metadata: Final = data.get("metadata")
+    bucket: Final = _WS_FRAME.validate_python(metadata) if isinstance(metadata, dict) else None
+    if bucket is None or "pii_tokens" not in bucket:
+        return data
+    return {**data, "metadata": {key: value for key, value in bucket.items() if key != "pii_tokens"}}
 
 
 @dataclass(slots=True)
