@@ -6,20 +6,18 @@ from typing import Final
 from litellm.caching.redis_cache import RedisCache
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.redis.stores.connection import connect
-from litellm.rust_bridge._native import NativeRedisClient, native_redis_breaker_states
+from litellm.rust_bridge._native import NativeRedisBreaker, NativeRedisClient, native_redis_breaker_states
+
+_BREAKER: Final = RedisBreakerSettings(failure_threshold=5, recovery_timeout=60.0, timeout_min_duration=5.0)
 
 
 def _settings(namespace: str) -> RedisStoreSettings:
     return RedisStoreSettings(
-        redis_kwargs={"host": "127.0.0.1", "port": 1},
-        namespace=namespace,
-        default_ttl=60,
-        breaker=RedisBreakerSettings(failure_threshold=5, recovery_timeout=60.0, timeout_min_duration=5.0),
+        redis_kwargs={"host": "127.0.0.1", "port": 1}, namespace=namespace, default_ttl=60, breaker=None
     )
 
 
-def test_concurrent_first_connects_share_one_client_without_deadlocking() -> None:
-    before: Final = len(native_redis_breaker_states())
+def test_concurrent_first_connects_finish_without_deadlocking() -> None:
     namespace: Final = f"concurrent-connect-{uuid.uuid4()}"
     pool: Final = ThreadPoolExecutor(max_workers=8)
     futures: Final = tuple(pool.submit(NativeRedisClient.connect, _settings(namespace)) for _ in range(8))
@@ -29,23 +27,39 @@ def test_concurrent_first_connects_share_one_client_without_deadlocking() -> Non
         pool.shutdown(wait=False)
 
     assert all(client is not None for client in clients)
+
+
+def test_concurrent_lookups_of_one_redis_share_one_breaker_without_deadlocking() -> None:
+    gc.collect()
+    before: Final = len(native_redis_breaker_states())
+    redis_kwargs: Final = {"host": f"shared-breaker-{uuid.uuid4()}.invalid", "port": 6379}
+    pool: Final = ThreadPoolExecutor(max_workers=8)
+    futures: Final = tuple(pool.submit(NativeRedisBreaker.shared, redis_kwargs, _BREAKER) for _ in range(8))
+    try:
+        breakers: Final = tuple(future.result(timeout=30) for future in futures)
+    finally:
+        pool.shutdown(wait=False)
+
     assert len(native_redis_breaker_states()) == before + 1
+    for _ in range(_BREAKER.failure_threshold):
+        breakers[0].failed(False)
+    assert {breaker.state for breaker in breakers} == {"open"}
 
 
-def _breaker_states_while_connected(namespace: str) -> int:
-    client: Final = NativeRedisClient.connect(_settings(namespace))
-    assert client is not None
+def _breaker_states_while_held() -> int:
+    breaker: Final = NativeRedisBreaker(_BREAKER)
+    assert breaker.state == "closed"
     return len(native_redis_breaker_states())
 
 
-def test_a_discarded_client_leaves_the_process_registry() -> None:
+def test_a_discarded_breaker_leaves_the_process_registry() -> None:
     gc.collect()
     before: Final = len(native_redis_breaker_states())
 
-    while_connected: Final = _breaker_states_while_connected(f"discarded-{uuid.uuid4()}")
+    while_held: Final = _breaker_states_while_held()
     gc.collect()
 
-    assert while_connected == before + 1
+    assert while_held == before + 1
     assert len(native_redis_breaker_states()) == before
 
 

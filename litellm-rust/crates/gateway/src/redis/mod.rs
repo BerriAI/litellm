@@ -89,7 +89,7 @@ pub(crate) async fn connect(
                 environment: resources.lookup.clone(),
                 credential_provider: None,
             },
-            breaker,
+            breaker.map(|config| litellm_redis_connect::breaker(config, Some(events.clone()))),
         )?)
     };
     let coordination = match plan.coordination {

@@ -6,14 +6,14 @@ use std::{
     time::Duration,
 };
 
-use litellm_circuit_breaker::Config as BreakerConfig;
+use litellm_circuit_breaker::Breaker;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{self, SecondsError};
 use litellm_redis_client::{RedisClient, RedisEvents, WeakRedisClient};
 use litellm_redis_connect::{CredentialSource, HostServices, SharedEnvironment};
 use litellm_redis_resolve::{Kwargs, PythonException};
-use litellm_redis_types::{ProviderHandle, Resolution};
+use litellm_redis_types::{ProviderHandle, Resolution, Target};
 use pyo3::{
     exceptions::{PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
@@ -22,7 +22,7 @@ use pyo3::{
 };
 
 use self::credentials::PythonCredentialSource;
-use crate::redis::events::{ServiceLoggingEvents, state_label};
+use crate::redis::{breaker::NativeRedisBreaker, events::ServiceLoggingEvents};
 
 pyo3::import_exception!(redis.exceptions, RedisClusterException);
 
@@ -67,31 +67,6 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
     }
 }
 
-/// `litellm.redis.store_settings.RedisBreakerSettings`, which `RedisCache` fills from `litellm.constants`.
-#[derive(FromPyObject)]
-pub(crate) struct RedisBreaker {
-    #[pyo3(attribute)]
-    failure_threshold: u32,
-    #[pyo3(attribute)]
-    recovery_timeout: f64,
-    #[pyo3(attribute)]
-    timeout_min_duration: f64,
-}
-
-impl RedisBreaker {
-    fn config(&self) -> PyResult<BreakerConfig> {
-        let seconds = |seconds: f64| {
-            Duration::try_from_secs_f64(seconds)
-                .map_err(|error| PyValueError::new_err(error.to_string()))
-        };
-        Ok(BreakerConfig {
-            failure_threshold: self.failure_threshold,
-            recovery_timeout: seconds(self.recovery_timeout)?,
-            timeout_min_duration: seconds(self.timeout_min_duration)?,
-        })
-    }
-}
-
 /// `litellm.redis.store_settings.RedisStoreSettings`, which a `RedisCache` captures when it is built.
 #[derive(FromPyObject)]
 pub(crate) struct StoreSettings {
@@ -102,7 +77,7 @@ pub(crate) struct StoreSettings {
     #[pyo3(attribute)]
     default_ttl: f64,
     #[pyo3(attribute)]
-    breaker: Option<RedisBreaker>,
+    breaker: Option<Py<NativeRedisBreaker>>,
 }
 
 fn is_plain(value: &Bound<'_, PyAny>) -> bool {
@@ -138,20 +113,11 @@ fn shared_client(
     py: Python<'_>,
     spec: RedisSpec,
     namespace: Option<String>,
-    breaker: Option<BreakerConfig>,
+    breaker: Option<Breaker>,
 ) -> PyResult<Option<RedisClient>> {
     let environment: SharedEnvironment = Arc::new(ProcessEnvironment);
-    let RedisSpec {
-        kwargs,
-        credential_provider,
-    } = spec;
-    // The registry entry's client keeps the provider alive, so no live entry shares its address
-    let handle = credential_provider
-        .as_ref()
-        .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
     let logger = crate::logger::capture(py);
-    let environ = py.import("os")?.getattr("environ")?;
-    let resolved = match logger.scope(|| resolve(&kwargs, handle, &environ))? {
+    let resolved = match logger.scope(|| resolve_spec(py, &spec))? {
         Ok(resolution) => {
             logger.scope(|| {
                 for ignored in &resolution.ignored {
@@ -175,7 +141,8 @@ fn shared_client(
         events: Some(events),
         http: crate::http::host_client(py, litellm_http::ClientVariant::Provider)?,
         environment,
-        credential_provider: credential_provider
+        credential_provider: spec
+            .credential_provider
             .as_ref()
             .map(|provider| -> PyResult<Arc<dyn CredentialSource>> {
                 Ok(Arc::new(PythonCredentialSource::new(
@@ -232,7 +199,7 @@ impl NativeRedisClient {
             breaker,
         } = settings;
         let default_ttl = number::seconds(default_ttl).map_err(seconds_error)?;
-        let breaker = breaker.as_ref().map(RedisBreaker::config).transpose()?;
+        let breaker = breaker.map(|breaker| breaker.get().0.clone());
         Ok(
             shared_client(py, redis_kwargs, namespace, breaker)?.map(|client| Self {
                 client,
@@ -247,16 +214,21 @@ impl NativeRedisClient {
     }
 }
 
-/// The breaker state of every native Redis client this process built, so the Prometheus state
-/// gauge counts them next to the Python `RedisCache` breakers.
-#[pyfunction]
-pub(crate) fn native_redis_breaker_states(py: Python<'_>) -> Vec<&'static str> {
-    live_clients(py)
-        .iter()
-        .filter_map(|shared| shared.client.upgrade())
-        .filter_map(|client| client.breaker_state())
-        .map(|state| state_label(&state))
-        .collect()
+/// The Redis `spec` names, whatever its namespace, or none when the Rust client cannot reach it.
+pub(crate) fn resolved_target(py: Python<'_>, spec: &RedisSpec) -> PyResult<Option<Target>> {
+    Ok(resolve_spec(py, spec)?.ok().map(|resolution| resolution.target))
+}
+
+// A live registry entry's client keeps its provider alive, so no live entry shares its address
+fn resolve_spec(
+    py: Python<'_>,
+    spec: &RedisSpec,
+) -> PyResult<Result<Resolution, litellm_redis_resolve::Error>> {
+    let handle = spec
+        .credential_provider
+        .as_ref()
+        .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
+    resolve(&spec.kwargs, handle, &py.import("os")?.getattr("environ")?)
 }
 
 /// What redis-py makes of the kwargs, with `REDIS_USERNAME` read from `environ` the way Python's Azure AD auth

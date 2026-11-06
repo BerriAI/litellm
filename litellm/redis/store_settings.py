@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_ENABLED,
@@ -7,6 +10,9 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
 )
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge._native import NativeRedisBreaker
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +29,7 @@ class RedisStoreSettings:
     redis_kwargs: Mapping[str, object]
     namespace: str | None
     default_ttl: int
-    breaker: RedisBreakerSettings | None
+    breaker: NativeRedisBreaker | None
 
 
 def breaker_settings() -> RedisBreakerSettings | None:
