@@ -112,6 +112,11 @@ class AmazonAnthropicClaudeMessagesConfig(
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
+    def model_specific_anthropic_betas(self, model: str) -> frozenset[str]:
+        if bedrock_supports_per_turn_control(model):
+            return frozenset({ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value})
+        return frozenset()
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def get_error_class(
@@ -630,12 +635,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        per_turn_control_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value
-        model_supported_betas: Final[frozenset[str]] = (
-            frozenset({per_turn_control_beta})
-            if per_turn_control_beta in user_beta_set and bedrock_supports_per_turn_control(model)
-            else frozenset()
-        )
+        model_supported_betas: Final = self.model_specific_anthropic_betas(model) & user_beta_set
         beta_provider: Final = self.beta_headers_provider
         filtered_betas: Final = sorted(
             {

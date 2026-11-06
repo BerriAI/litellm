@@ -2396,36 +2396,6 @@ def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_ou
     assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
 
 
-@pytest.mark.parametrize(
-    ("model", "headers", "forwarded"),
-    [
-        ("anthropic.claude-3-haiku-20240307-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
-        ("us.anthropic.claude-opus-4-1-20250805-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
-        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
-        ("eu.anthropic.claude-opus-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
-        ("global.anthropic.claude-sonnet-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
-        ("us.anthropic.claude-newfamily-6", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
-        ("us.anthropic.claude-sonnet-5-5", {}, False),
-    ],
-)
-def test_bedrock_invoke_transform_forwards_per_turn_control_beta_only_where_the_model_map_flags_it(
-    local_model_cost_map: None, local_beta_headers_config: None, model: str, headers: dict[str, str], forwarded: bool
-) -> None:
-    """On 2026-11-05 Bedrock InvokeModel answered 400 ``invalid beta flag`` to per-turn-control-2026-07-01 on Claude 3
-    Haiku and 200 on every Claude 4.5 and newer model a QA account reached in 13 regions."""
-    from litellm.types.router import GenericLiteLLMParams
-
-    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
-        model=model,
-        messages=[{"role": "user", "content": "hi"}],
-        anthropic_messages_optional_request_params={"max_tokens": 16, "stream": False},
-        litellm_params=GenericLiteLLMParams(),
-        headers=headers,
-    )
-
-    assert ("per-turn-control-2026-07-01" in result.get("anthropic_beta", ())) is forwarded
-
-
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
     """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
     4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
@@ -4144,6 +4114,42 @@ async def _send_bedrock_messages(
     except Exception as error:
         return bedrock, error
     return bedrock, None
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "headers", "forwarded"),
+    [
+        ("anthropic.claude-3-haiku-20240307-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("eu.anthropic.claude-opus-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("global.anthropic.claude-sonnet-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("us.anthropic.claude-newfamily-6", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("us.anthropic.claude-sonnet-5-5", {}, False),
+    ],
+)
+async def test_bedrock_invoke_messages_forward_per_turn_control_beta_only_where_the_model_map_flags_it(
+    model: str, headers: dict[str, str], forwarded: bool
+) -> None:
+    """On 2026-11-05 Bedrock InvokeModel answered 400 ``invalid beta flag`` to per-turn-control-2026-07-01 on Claude 3
+    Haiku and 200 on every Claude 4.5 and newer model a QA account reached in 13 regions."""
+    bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE),))
+
+    await litellm.anthropic_messages(
+        model=f"bedrock/invoke/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        extra_headers=headers,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+    )
+
+    (sent,) = bedrock.bodies
+    sent_betas: Final = TypeAdapter(tuple[str, ...]).validate_python(sent.get("anthropic_beta", ()))
+    assert ("per-turn-control-2026-07-01" in sent_betas) is forwarded
 
 
 _OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(

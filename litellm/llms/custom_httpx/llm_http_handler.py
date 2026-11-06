@@ -2642,6 +2642,7 @@ class BaseLLMHTTPHandler:
                 provider=custom_llm_provider,
                 api_base=affinity_api_base,
                 unlisted="drop" if provider_filters_betas else "forward",
+                keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model),
             )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
