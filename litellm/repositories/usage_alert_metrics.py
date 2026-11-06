@@ -352,6 +352,9 @@ class UsageAlertMetricsRepository:
         cursor: str | None = None,
         entity_ids: tuple[str, ...] | None = None,
     ) -> DailyMetricsPage:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         if entity_ids is not None and len(entity_ids) > _BATCH_SIZE:
             raise ValueError("Read at most 10 exact entities")
         if entity_ids == ():
@@ -368,8 +371,8 @@ class UsageAlertMetricsRepository:
             + "WITH entities AS MATERIALIZED (SELECT unnest($3::text[]) AS entity_id)"
             + query[query.index("\nSELECT entities") :]
         )
-        raw: Final = _ROWS.validate_python(
-            await self._database.query_raw(
+        async with db_span("daily_activity_query", sql_relation(query)):
+            result: Final = await self._database.query_raw(
                 exact_query if entity_ids is not None else query,
                 *(
                     arguments[:2]
@@ -378,7 +381,7 @@ class UsageAlertMetricsRepository:
                     else arguments
                 ),
             )
-        )
+        raw: Final = _ROWS.validate_python(result)
         return DailyMetricsPage(
             tuple(_reporting_id(scope, row) for row in raw),
             raw[-1].entity_id if raw else cursor,
