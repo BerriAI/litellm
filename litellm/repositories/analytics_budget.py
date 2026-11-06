@@ -102,13 +102,17 @@ class BoundedAnalyticsDatabase:
         self._admission = _BACKGROUND if background else _FOREGROUND
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if self._background:
+            remaining: Final = _remaining_seconds()
+            await asyncio.sleep(0.1 if remaining is None else min(0.1, remaining))
+            _remaining_seconds()
         if not self._admission.acquire(blocking=False):
             raise AnalyticsCapacityError("Analytics capacity is busy. Try again shortly")
         with defer_until_operations_finish(self._admission.release):
             try:
-                remaining: Final = _remaining_seconds()
+                available: Final = _remaining_seconds()
                 return await asyncio.wait_for(
-                    self._query(query, args), timeout=6.25 if remaining is None else min(6.25, remaining)
+                    self._query(query, args), timeout=6.25 if available is None else min(6.25, available)
                 )
             except EngineRequestError as error:
                 if error.response.status not in (503, 504):
