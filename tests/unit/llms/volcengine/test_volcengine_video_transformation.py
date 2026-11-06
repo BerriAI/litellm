@@ -1179,6 +1179,22 @@ def test_openrouter_image_conflicts_raise_or_keep_first_frame(other: object) -> 
     }
 
 
+@pytest.mark.parametrize("roles", [("first_frame", "last_frame"), ("last_frame", "first_frame")])
+def test_large_duplicate_frame_arrays_keep_first_images_in_input_order(roles: tuple[str, str]) -> None:
+    params: Final = cast(VideoCreateOptionalRequestParams, {
+        "frame_images": [
+            {"type": "image_url", "image_url": {"url": f"https://example.com/{index}.png"}, "frame_type": role}
+            for index, role in enumerate(roles * 5000)
+        ],
+    })
+    assert VolcEngineVideoConfig().map_openai_params(params, SEEDANCE_2_5, True) == {
+        "content": [
+            {"type": "image_url", "image_url": {"url": f"https://example.com/{index}.png"}, "role": role}
+            for index, role in enumerate(roles)
+        ],
+    }
+
+
 def test_openrouter_duration_conflict_raises_or_prefers_duration() -> None:
     config: Final = VolcEngineVideoConfig()
     with pytest.raises(UnsupportedParamsError, match="duration and seconds"):

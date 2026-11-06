@@ -73,6 +73,7 @@ def video_image_params(
             (),
         )
     roles: Final = tuple(item["frame_type"] for item in parsed_frames)
+    first_indices: Final = {role: roles.index(role) for role in frozenset(roles)}
     if len(roles) != len(frozenset(roles)) and not drop_params:
         raise UnsupportedParamsError(
             message="Duplicate frame_type, set drop_params=True to ignore it", model=model, llm_provider=provider
@@ -80,7 +81,7 @@ def video_image_params(
     frame_items: Final = tuple(
         {"type": item["type"], "image_url": item["image_url"], "role": item["frame_type"]}
         for index, item in enumerate(parsed_frames)
-        if item["frame_type"] not in roles[:index]
+        if index == first_indices[item["frame_type"]]
     )
     reference_items: Final = tuple(
         {"type": item["type"], "image_url": item["image_url"], "role": "reference_image"} for item in parsed_references
