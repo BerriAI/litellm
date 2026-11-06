@@ -1,15 +1,14 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, fields
 from datetime import date, datetime
-from types import SimpleNamespace
+from types import FunctionType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from fastapi import HTTPException
-from prisma.engine.utils import handle_response_errors
-from prisma.errors import DataError, PrismaError
+from prisma.errors import DataError, PrismaError, TableNotFoundError
 
 import litellm.proxy.management_endpoints.common_daily_activity as common_daily_activity_module
 from litellm.constants import USAGE_TOP_API_KEYS_DEFAULT
@@ -49,22 +48,16 @@ from litellm.types.repositories.daily_activity import (
 )
 
 
+def _raise_missing_error_meta() -> None:
+    raise AttributeError("'NoneType' object has no attribute 'get'")
+
+
 def _query_engine_crash_on_closed_connection() -> AttributeError:
+    raise_inside_query_engine: Final = FunctionType(
+        _raise_missing_error_meta.__code__, {"__name__": "prisma.engine.utils"}
+    )
     with pytest.raises(AttributeError) as crash:
-        handle_response_errors(
-            MagicMock(),
-            [
-                {
-                    "error": "Server has closed the connection.",
-                    "user_facing_error": {
-                        "is_panic": False,
-                        "message": "Server has closed the connection.",
-                        "meta": None,
-                        "error_code": "P1017",
-                    },
-                }
-            ],
-        )
+        raise_inside_query_engine()
     return crash.value
 
 
@@ -74,7 +67,6 @@ DATABASE_FAILURES: Final = pytest.mark.parametrize(
         DataError(
             {"user_facing_error": {"error_code": "P1001", "message": "Can't reach database server at `db:5432`"}}
         ),
-        DataError({"user_facing_error": {"error_code": "P2010", "message": "Raw query failed"}}),
         PrismaError("metadata unavailable"),
         httpx.ReadTimeout("the query engine stopped answering"),
         httpx.ConnectError("the query engine refused the connection"),
@@ -82,12 +74,30 @@ DATABASE_FAILURES: Final = pytest.mark.parametrize(
     ],
     ids=[
         "unreachable-database",
-        "rejected-query",
         "prisma-error",
         "engine-read-timeout",
         "engine-connect-error",
         "engine-crash-on-closed-connection",
     ],
+)
+
+NOT_DATABASE_OUTAGES: Final = pytest.mark.parametrize(
+    "bug",
+    [
+        TypeError("not a database failure"),
+        AttributeError("not a database failure"),
+        DataError({"user_facing_error": {"error_code": "P2010", "message": "not a database failure"}}),
+        TableNotFoundError(
+            {
+                "user_facing_error": {
+                    "error_code": "P2021",
+                    "message": "not a database failure",
+                    "meta": {"table": "LiteLLM_VerificationToken"},
+                }
+            }
+        ),
+    ],
+    ids=["type-error", "attribute-error", "rejected-query", "missing-table"],
 )
 
 
@@ -141,8 +151,8 @@ async def test_entity_metadata_outages_preserve_daily_spend_and_other_metadata(
         {} if user_failure or empty else {"user_email": "user@example.com", "user_alias": "User"}
     )
     assert entity.api_key_breakdown["key"].metrics.spend == 2.0
-    assert entity.api_key_breakdown["key"].metadata == KeyMetadata(
-        key_alias=None if key_failure or empty else "Alias", key_exists=not (key_failure or empty)
+    assert entity.api_key_breakdown["key"].metadata == (
+        KeyMetadata() if key_failure else KeyMetadata(key_alias=None if empty else "Alias", key_exists=not empty)
     )
 
 
@@ -192,7 +202,7 @@ async def test_usage_keeps_spend_when_the_first_key_lookup_hits_a_database_failu
     day: Final = result.results[0]
     assert result.metadata.total_spend == day.metrics.spend == 2.0
     assert day.breakdown.api_keys["key"].metrics.spend == 2.0
-    assert day.breakdown.api_keys["key"].metadata == KeyMetadata(key_alias=None, key_exists=False)
+    assert day.breakdown.api_keys["key"].metadata == KeyMetadata()
 
 
 @pytest.mark.asyncio
@@ -209,17 +219,84 @@ async def test_usage_keeps_spend_when_the_guardrail_lookup_hits_a_database_failu
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lookup", ["key_metadata", "user_metadata", "guardrail_spend"])
-@pytest.mark.parametrize("bug", [TypeError, AttributeError])
-async def test_usage_still_reports_a_lookup_bug_that_is_not_a_database_failure(
-    lookup: str, bug: type[Exception]
-) -> None:
+@NOT_DATABASE_OUTAGES
+async def test_usage_still_reports_a_lookup_bug_that_is_not_a_database_failure(lookup: str, bug: Exception) -> None:
     repository: Final = _usage_repository()
-    setattr(repository, lookup, AsyncMock(side_effect=bug("not a database failure")))
+    setattr(repository, lookup, AsyncMock(side_effect=bug))
 
     with pytest.raises(HTTPException) as error:
         await _get_daily_activity_aggregated(
             repository, _usage_scope(), include_entity_breakdown=True, include_guardrail_breakdown=True
         )
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Failed to fetch analytics: not a database failure"}
+
+
+def _daily_user_spend_prisma(key_lookup: AsyncMock) -> MagicMock:
+    prisma: Final = MagicMock()
+    records: Final = [_daily_user_spend_record(user_id="user", api_key="key", spend=7.0)]
+    prisma.db.litellm_dailyuserspend.count = AsyncMock(return_value=len(records))
+    prisma.db.litellm_dailyuserspend.find_many = AsyncMock(return_value=records)
+    prisma.db.litellm_verificationtoken.find_many = key_lookup
+    prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    return prisma
+
+
+async def _daily_user_activity(prisma: MagicMock, user_emails: AsyncMock) -> SpendAnalyticsPaginatedResponse:
+    return await get_daily_activity(
+        prisma_client=prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+        resolve_entity_metadata=user_emails,
+    )
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+@pytest.mark.parametrize(("key_failure", "email_failure"), [(True, False), (False, True)])
+async def test_daily_activity_keeps_spend_when_a_metadata_lookup_hits_a_database_failure(
+    failure: Exception, key_failure: bool, email_failure: bool
+) -> None:
+    key: Final = SimpleNamespace(token="key", key_alias="Alias", team_id=None, user_id=None, metadata=None)
+    prisma: Final = _daily_user_spend_prisma(
+        AsyncMock(side_effect=failure if key_failure else None, return_value=[key])
+    )
+    user_emails: Final = AsyncMock(
+        side_effect=failure if email_failure else None, return_value={"user": {"user_email": "user@example.com"}}
+    )
+
+    result: Final = await _daily_user_activity(prisma, user_emails)
+
+    day: Final = result.results[0]
+    assert result.metadata.total_spend == day.metrics.spend == 7.0
+    assert day.breakdown.api_keys["key"].metadata == (
+        KeyMetadata() if key_failure else KeyMetadata(key_alias="Alias", key_exists=True)
+    )
+    assert day.breakdown.entities["user"].metadata == ({} if email_failure else {"user_email": "user@example.com"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["key metadata", "user emails"])
+@NOT_DATABASE_OUTAGES
+async def test_daily_activity_still_reports_a_metadata_lookup_bug_that_is_not_a_database_failure(
+    lookup: str, bug: Exception
+) -> None:
+    prisma: Final = _daily_user_spend_prisma(
+        AsyncMock(side_effect=bug if lookup == "key metadata" else None, return_value=[])
+    )
+    user_emails: Final = AsyncMock(side_effect=bug if lookup == "user emails" else None, return_value={})
+
+    with pytest.raises(HTTPException) as error:
+        await _daily_user_activity(prisma, user_emails)
 
     assert error.value.status_code == 500
     assert error.value.detail == {"error": "Failed to fetch analytics: not a database failure"}

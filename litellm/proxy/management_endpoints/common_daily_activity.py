@@ -191,9 +191,11 @@ class _AggregatedSpendData(TypedDict):
     totals: ReadOnly[SpendMetrics]
 
 
-def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow], api_key: str | None) -> KeyMetadata:
+def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow] | None, api_key: str | None) -> KeyMetadata:
     if not api_key:
         return KeyMetadata(key_alias="Unattributed", key_exists=False)
+    if api_key_metadata is None:
+        return KeyMetadata()
     meta: Final = api_key_metadata.get(api_key)
     return KeyMetadata(
         key_alias=meta.key_alias if meta is not None else None,
@@ -309,7 +311,7 @@ def update_breakdown_metrics(
     record: DailySpendRecord,
     model_metadata: Mapping[str, dict[str, object]],
     provider_metadata: Mapping[str, dict[str, object]],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_id_field: str | None = None,
     entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
 ) -> BreakdownMetrics:
@@ -629,7 +631,7 @@ async def get_api_key_metadata(
 def _aggregate_spend_records_sync(
     *,
     records: Sequence[DailySpendRecord],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_id_field: str | None,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
 ) -> _AggregatedSpendData:
@@ -688,22 +690,10 @@ async def _aggregate_spend_records(
     The per-row loop is offloaded to a worker thread via asyncio.to_thread so
     a large result set doesn't peg the event loop.
     """
-    api_keys: Final[set[str]] = {
-        record.api_key for record in records if record.api_key and record.api_key != PTU_SENTINEL_API_KEY
-    }
-
-    api_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-        await repository.key_metadata(
-            frozenset(api_keys), spend_logs_window(frozenset(record.date for record in records))
-        )
-        if api_keys
-        else MappingProxyType({})
-    )
-
     return await asyncio.to_thread(
         _aggregate_spend_records_sync,
         records=records,
-        api_key_metadata=api_key_metadata,
+        api_key_metadata=await _key_metadata_unless_database_fails(repository, records),
         entity_id_field=entity_id_field,
         entity_metadata_field=entity_metadata_field,
     )
@@ -786,7 +776,7 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
 def _aggregate_grouping_sets_records_sync(
     *,
     records: Sequence[GroupingSetsRow],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
 ) -> _AggregatedSpendData:
     """Build the response from rollup rows produced by the GROUPING SETS query.
 
@@ -926,22 +916,20 @@ async def unless_database_fails(lookup: Awaitable[_T], fallback: _T, left_out: s
     try:
         return await lookup
     except Exception as exc:
-        if not (
-            PrismaDBExceptionHandler.is_prisma_error(exc)
-            or PrismaDBExceptionHandler.is_database_service_unavailable_error(exc)
-        ):
+        if not PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
             raise
         verbose_proxy_logger.warning("Returning daily activity without %s: %s", left_out, exc)
         return fallback
 
 
 async def _key_metadata_unless_database_fails(
-    repository: DailyActivityRepository, rows: Sequence[GroupingSetsRow] | Sequence[EntityRollupRow]
-) -> Mapping[str, KeyMetadataRow]:
+    repository: DailyActivityRepository,
+    rows: Sequence[GroupingSetsRow] | Sequence[EntityRollupRow] | Sequence[DailySpendRecord],
+) -> Mapping[str, KeyMetadataRow] | None:
     api_keys: Final = frozenset(row.api_key for row in rows if row.api_key and row.api_key != PTU_SENTINEL_API_KEY)
     return await unless_database_fails(
         repository.key_metadata(api_keys, spend_logs_window(frozenset(row.date for row in rows))),
-        MappingProxyType({}),
+        None,
         "its key metadata",
     )
 
@@ -1010,7 +998,13 @@ async def get_daily_activity(
         if resolve_entity_metadata is not None:
             resolved_entity_metadata = {
                 **(entity_metadata_field or {}),
-                **(await resolve_entity_metadata(daily_spend_data)),
+                **(
+                    await unless_database_fails(
+                        resolve_entity_metadata(daily_spend_data),
+                        MappingProxyType[str, dict[str, object]]({}),
+                        "its entity metadata",
+                    )
+                ),
             }
         aggregated: Final = await _aggregate_spend_records(
             repository=repository,
@@ -1057,7 +1051,7 @@ def _fold_entity_rollups_sync(
     *,
     results: Sequence[DailySpendData],
     entity_rows: Sequence[EntityRollupRow],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
