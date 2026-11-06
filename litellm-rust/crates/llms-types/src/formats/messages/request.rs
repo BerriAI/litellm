@@ -67,6 +67,7 @@ impl From<ContentBlockType> for String {
 
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
+#[serde(from = "ContentBlockWire")]
 pub struct ContentBlock {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub block_type: Option<ContentBlockType>,
@@ -94,6 +95,62 @@ pub struct ContentBlock {
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct ContentBlockWire {
+    #[serde(rename = "type", default)]
+    block_type: Option<ContentBlockType>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    tool_use_id: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
+    #[serde(default)]
+    content: Option<Value>,
+    #[serde(default)]
+    provider_specific_fields: Option<Value>,
+    #[serde(default, with = "serde_with::rust::double_option")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<CacheControl>"))]
+    cache_control: Option<Option<CacheControl>>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+impl From<ContentBlockWire> for ContentBlock {
+    fn from(wire: ContentBlockWire) -> Self {
+        let mut extra = wire.extra;
+        if wire.cache_control == Some(None) {
+            extra.insert("cache_control".to_owned(), Value::Null);
+        }
+        Self {
+            block_type: wire.block_type,
+            text: wire.text,
+            thinking: wire.thinking,
+            signature: wire.signature,
+            data: wire.data,
+            id: wire.id,
+            name: wire.name,
+            tool_use_id: wire.tool_use_id,
+            input: wire.input,
+            content: wire.content,
+            provider_specific_fields: wire.provider_specific_fields,
+            cache_control: wire.cache_control.flatten(),
+            extra,
+        }
+    }
 }
 
 impl ContentBlock {
@@ -430,6 +487,9 @@ mod tests {
     }))]
     #[case::provider_specific_fields(json!({"type": "tool_use", "id": "t", "name": "f", "input": {}, "provider_specific_fields": {"x": 1}}))]
     #[case::untyped(json!({"unknown": {"nested": true}}))]
+    #[case::text_with_null_citations_and_cache_control(json!({"type": "text", "text": "hi", "citations": null, "cache_control": null}))]
+    #[case::tool_use_with_null_cache_control(json!({"type": "tool_use", "id": "t", "name": "f", "input": {}, "cache_control": null}))]
+    #[case::tool_result_with_null_is_error_and_cache_control(json!({"type": "tool_result", "tool_use_id": "t", "content": "ok", "is_error": null, "cache_control": null}))]
     fn content_block_round_trips_unchanged(#[case] block: Value) {
         assert_eq!(round_trip::<ContentBlock>(&block), block);
     }
@@ -459,6 +519,17 @@ mod tests {
             (Some(16_u64), Some(true), vec!["safeguards"])
         );
         assert_eq!(serde_json::to_value(request).unwrap(), body);
+    }
+
+    #[test]
+    fn null_cache_control_is_absent_to_transforms_and_kept_on_the_wire() {
+        let block: ContentBlock =
+            serde_json::from_value(json!({"type": "text", "text": "hi", "cache_control": null}))
+                .unwrap();
+        assert_eq!(
+            (block.cache_control, block.extra.get("cache_control")),
+            (None, Some(&Value::Null))
+        );
     }
 
     #[test]
