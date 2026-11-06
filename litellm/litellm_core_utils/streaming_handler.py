@@ -2108,7 +2108,7 @@ class CustomStreamWrapper:
             {
                 **self.received_finish_choice_fields,
                 _upstream_choice_index(upstream_chunk): _upstream_choice_fields(
-                    upstream_chunk, STREAM_FINISH_CHOICE_FIELDS
+                    upstream_chunk, (*STREAM_FINISH_CHOICE_FIELDS, "provider_specific_fields")
                 ),
             }
         )

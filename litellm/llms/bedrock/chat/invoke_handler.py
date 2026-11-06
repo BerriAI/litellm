@@ -11,7 +11,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -711,6 +711,7 @@ class AWSEventStreamDecoder:
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
             usage: Usage | None = None
+            raw_stop_reason: Final = (as_str_mapping(chunk_data) or {}).get("stopReason")
             provider_specific_fields: dict = {}
             reasoning_content: str | None = None
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
@@ -734,8 +735,8 @@ class AWSEventStreamDecoder:
                 ) = self._handle_converse_delta_event(delta_obj, content_block_index)
             elif "contentBlockIndex" in chunk_data:  # stop block, no 'start' or 'delta' object
                 tool_use = self._handle_converse_stop_event(content_block_index)
-            elif "stopReason" in chunk_data:
-                finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+            elif isinstance(raw_stop_reason, str):
+                finish_reason = map_finish_reason(raw_stop_reason)
                 self._provider_reasoning_tokens = AmazonConverseConfig.thinking_tokens_from_additional_fields(
                     chunk_data.get("additionalModelResponseFields")
                 )
@@ -749,6 +750,12 @@ class AWSEventStreamDecoder:
                 self._thinking_ran = True
 
             trace: Final = chunk_data.get("trace")
+            choice_provider_specific_fields: Final = (
+                {"native_finish_reason": raw_stop_reason}
+                if isinstance(raw_stop_reason, str) and raw_stop_reason != finish_reason
+                else None
+            )
+
             carries_message_content: Final = bool(trace) or any(
                 key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason")
             )
@@ -759,6 +766,7 @@ class AWSEventStreamDecoder:
                     StreamingChoices(
                         finish_reason=finish_reason,
                         index=0,  # Always 0 - Bedrock never returns multiple choices
+                        provider_specific_fields=choice_provider_specific_fields,
                         delta=Delta(
                             content=text if carries_message_content else None,
                             role="assistant" if carries_message_content else None,

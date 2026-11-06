@@ -464,6 +464,13 @@ class ChunkProcessor:
             None,
         )
 
+    @staticmethod
+    def _choice_provider_specific_fields(chunk: "_BaseChunk") -> Mapping[str, object]:
+        choices: Final = chunk.get("choices")
+        if not choices:
+            return MappingProxyType({})
+        return object_mapping(_field_of(choices[0], "provider_specific_fields")) or MappingProxyType({})
+
     def build_base_response(
         self,
         chunks: Sequence["_BaseChunk"],
@@ -481,6 +488,10 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
+
+        choice_provider_specific_fields: Final[Mapping[str, builtins.object]] = dict(
+            chain.from_iterable(ChunkProcessor._choice_provider_specific_fields(chunk).items() for chunk in chunks)
+        )
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -508,6 +519,7 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
+                            "provider_specific_fields": choice_provider_specific_fields or None,
                             **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
