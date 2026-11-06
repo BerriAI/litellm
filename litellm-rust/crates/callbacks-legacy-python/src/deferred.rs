@@ -22,21 +22,37 @@ impl PendingSuccess {
         self.logger
             .enqueue_success(py, &self.response, &self.start, &self.end)
     }
+
+    pub(crate) fn sync_for_async_call(&self, py: Python<'_>) -> PyResult<()> {
+        self.logger
+            .sync_success_for_async_call(py, &self.response, &self.start, &self.end)
+    }
 }
 
 #[pyclass]
 pub(crate) struct PendingLogging {
     pub(crate) pending: Option<PendingSuccess>,
+    pub(crate) enqueues: bool,
 }
 
 #[pymethods]
 impl PendingLogging {
     fn release(slf: &Bound<'_, Self>, py: Python<'_>, success: bool) -> PyResult<()> {
-        let pending = slf.borrow_mut().pending.take();
+        let (pending, enqueues) = {
+            let mut slot = slf.borrow_mut();
+            (slot.pending.take(), slot.enqueues)
+        };
         if let Some(pending) = pending
             && success
         {
-            match pending.asynchronous(py) {
+            let released = pending.sync_for_async_call(py).and_then(|()| {
+                if enqueues {
+                    pending.asynchronous(py)
+                } else {
+                    Ok(())
+                }
+            });
+            match released {
                 Err(error) if error.is_instance_of::<PyException>(py) => {
                     error.write_unraisable(py, Some(pending.logger.object(py)));
                 }
@@ -87,6 +103,7 @@ mod tests {
                     start: py.None(),
                     end: Some(py.None()),
                 }),
+                enqueues: true,
             },
         )
         .unwrap();
@@ -121,8 +138,9 @@ marker.set('release')
 pending.release(True)
 pending.release(True)
 assert observed == ['release'], observed
-assert logger.names() == ['async_success_handler', 'enqueued'], logger.calls
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued'], logger.calls
 assert logger.calls[0][1] is response
+assert logger.calls[1][1] is response
 ",
             );
         });
@@ -182,7 +200,7 @@ logger.on_enqueue = on_enqueue
                 &locals,
                 c"
 pending.release(True)
-assert logger.names() == ['async_success_handler', 'enqueued', 'closed'], logger.calls
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued', 'closed'], logger.calls
 assert unraisable_from(logger) == ([] if propagates else [failure])
 ",
             );

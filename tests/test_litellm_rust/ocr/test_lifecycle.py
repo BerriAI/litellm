@@ -220,6 +220,39 @@ async def test_deferred_logging_requires_release_and_runs_at_most_once(server: R
         assert events[0].response is response
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_deferred_sync_success_callbacks_wait_for_release(server: RecordingServer, blocked: bool) -> None:
+    finished: Final = threading.Event()
+    observations: Final = []
+
+    class Observe(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observations.append(response_obj)
+            finished.set()
+
+    logger: Final = Logging(
+        model="mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="deferred-sync",
+        function_id="deferred-sync",
+        dynamic_success_callbacks=[Observe()],
+    )
+    logger._defer_async_logging = True
+    response: Final = await call_aocr(server, litellm_logging_obj=logger)
+    await drain_logging()
+    assert not logger._sync_success_scheduled
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
+    assert logger._sync_success_scheduled is not blocked
+    if not blocked:
+        assert await asyncio.to_thread(finished.wait, 5)
+        assert observations == [response]
+
+
 def test_sync_success_uses_executor_and_copied_caller_context(server: RecordingServer) -> None:
     context: Final = ContextVar("sync-lifecycle", default="missing")
     context.set("caller")
