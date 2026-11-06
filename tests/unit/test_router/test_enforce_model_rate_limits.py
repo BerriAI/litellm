@@ -24,6 +24,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import RouterCacheEnum
+from tests.unit.caching.test_redis_batch import FakeClient, FakeRedisCache
 
 TPM_DEPLOYMENT = {
     "tpm": 1000,
@@ -913,3 +914,54 @@ class TestDailyResetTime:
             router.cache.in_memory_cache.get_cache("daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-27")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
         )
         assert day_before is None
+
+
+class _RepliesAfterBothCharged(FakeRedisCache):
+    """Redis that answers the first increment only once the second was sent, and the second only once
+    the first attempt has checked its limit: the first attempt's local write-back lands on a count the
+    second attempt already raised."""
+
+    def __init__(self) -> None:
+        super().__init__(FakeClient(lambda command: None))
+        self.total = 0
+        self.sent = 0
+        self.both_sent = asyncio.Event()
+        self.first_checked = asyncio.Event()
+
+    async def async_increment_pipeline(  # pyright: ignore[reportIncompatibleMethodOverride]  # fake, no server
+        self, increment_list: list[RedisPipelineIncrementOperation], **kwargs: object
+    ) -> list[float]:
+        self.total += int(increment_list[0]["increment_value"])
+        answered: Final = float(self.total)
+        self.sent += 1
+        order: Final = self.sent
+        if order == 1:
+            await self.both_sent.wait()
+        if order == 2:
+            self.both_sent.set()
+            await self.first_checked.wait()
+        return [answered]
+
+
+@pytest.mark.asyncio
+async def test_two_attempts_charged_before_either_reply_lands_admit_exactly_the_rpm():
+    redis_cache = _RepliesAfterBothCharged()
+    dual_cache = DualCache()
+    dual_cache.attach_redis_cache(redis_cache)
+    check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
+    deployment = {"rpm": 1, "litellm_params": {"model": "gpt-4"}, "model_info": {"id": "race-id"}}
+
+    async def attempt() -> int:
+        try:
+            await _async_pre_call(check, deployment)
+        except litellm.RateLimitError:
+            return 429
+        return 200
+
+    attempts = {asyncio.ensure_future(attempt()) for _ in range(2)}
+    checked_first, still_charged = await asyncio.wait(attempts, return_when=asyncio.FIRST_COMPLETED)
+    redis_cache.first_checked.set()
+
+    assert [task.result() for task in checked_first] == [200]
+    assert await asyncio.gather(*still_charged) == [429]
+    assert redis_cache.total == 1
