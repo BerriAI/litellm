@@ -225,12 +225,20 @@ class _EchoedResponsesRequestParams(TypedDict, total=False):
 _ECHOED_PARAMS_ADAPTER: Final = TypeAdapter(_EchoedResponsesRequestParams)
 
 
-def _forced_mcp_server_label(tool_choice: object) -> str | None:
-    match tool_choice:
-        case {"type": "mcp", "server_label": str(server_label)} if server_label:
+def _mcp_server_label(tool: object) -> str | None:
+    match tool:
+        case {"type": "mcp", "server_label": str(server_label)}:
             return server_label
         case _:
             return None
+
+
+def _function_choice_for_a_sent_mcp_server(tool_choice: object, tools: Sequence[object]) -> object:
+    match tool_choice:
+        case {"type": "mcp", "server_label": str(server_label)} if server_label in map(_mcp_server_label, tools):
+            return {"type": "function", "name": server_label}
+        case _:
+            return tool_choice
 
 
 def _is_echoable(name: str, value: object) -> bool:
@@ -1015,12 +1023,6 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(tool_choice, str):
             return tool_choice
 
-        forced_mcp_server_label: Final = _forced_mcp_server_label(tool_choice)
-        if forced_mcp_server_label is not None:
-            return LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                {"type": "function", "name": forced_mcp_server_label}
-            )
-
         if isinstance(tool_choice, dict):
             tool_choice_type: Final = tool_choice.get("type")
 
@@ -1328,7 +1330,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                responses_api_request.get("tool_choice")
+                _function_choice_for_a_sent_mcp_server(responses_api_request.get("tool_choice"), tools)
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
