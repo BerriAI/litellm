@@ -1,19 +1,19 @@
 "use client";
 
 import { SortingState } from "@tanstack/react-table";
-import type { TFunction } from "i18next";
 import { Inbox } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
+import i18n from "@/i18n/i18n";
 import { Policy } from "@/components/policies/types";
 
 import { getPolicyTableColumns, PolicyRow } from "./PolicyTableColumns";
 
 /** One row per DB policy name plus one row per config policy, so a config policy never hides same-named DB versions; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
-function groupPoliciesByName(policies: Policy[], t: TFunction): PolicyRow[] {
-  const unnamed = t("policies.policyTable.unnamed");
+function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
+  const unnamed = i18n.t("policies.policyTable.unnamed");
   const dbPolicies = policies.filter((policy) => policy.definition_location !== "config");
   const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || unnamed)));
   const dbRows = names.map((policyName) => {
@@ -64,7 +64,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
-  const rows = useMemo(() => groupPoliciesByName(policies, t), [policies, t]);
+  const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
 
   const columns = useMemo(() => {
     const deps = { isAdmin, onViewClick, onEditClick, onDeleteClick, t };

@@ -9895,7 +9895,6 @@
         "batchResults": "Batch Results"
       },
       "results": {
-        "triggeredByError": "Error: {{message}}",
         "title": "Results",
         "export": "Export CSV",
         "falseNegativeHint": "Allowed content that should have been blocked",
