@@ -706,13 +706,17 @@ def test_background_answers_400_without_drop_params(background_request: Mapping[
 
 
 @pytest.mark.parametrize(
-    "drop_setting",
+    ("drop_setting", "global_drop_params"),
     [
-        pytest.param({"drop_params": True}, id="drop_params"),
-        pytest.param({"additional_drop_params": ["background"]}, id="additional_drop_params"),
+        pytest.param({"drop_params": True}, False, id="drop_params"),
+        pytest.param({"additional_drop_params": ["background"]}, False, id="additional_drop_params"),
+        pytest.param({}, True, id="litellm.drop_params"),
     ],
 )
-def test_dropped_background_never_reaches_the_responses_request(drop_setting: Mapping[str, object]) -> None:
+def test_dropped_background_never_reaches_the_responses_request(
+    drop_setting: Mapping[str, object], global_drop_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
         extra_kwargs={

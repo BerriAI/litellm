@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.tool_fields import drops_mcp_servers, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
 from litellm.responses.utils import auto_reasoning_summary
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -172,13 +172,6 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
     return extra_kwargs or {}
 
 
-def _drops_background(forwarded_kwargs: Mapping[str, object]) -> bool:
-    additional_drop_params: Final = forwarded_kwargs.get("additional_drop_params")
-    return drops_unsupported_params(forwarded_kwargs.get("drop_params")) or (
-        isinstance(additional_drop_params, list) and "background" in additional_drop_params
-    )
-
-
 def _requests_background(forwarded_kwargs: Mapping[str, object]) -> bool:
     extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body"))
     return forwarded_kwargs.get("background") is not None or (
@@ -191,7 +184,7 @@ def _without_background(extra_body: Mapping[str, object]) -> Mapping[str, object
 
 
 def _reject_background_mode(model: str, forwarded_kwargs: Mapping[str, object]) -> None:
-    if not _requests_background(forwarded_kwargs) or _drops_background(forwarded_kwargs):
+    if not _requests_background(forwarded_kwargs) or drop_policy(forwarded_kwargs).drops("background"):
         return
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     raise litellm.UnsupportedParamsError(
