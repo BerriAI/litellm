@@ -478,6 +478,7 @@ async def aresponses_api_with_mcp(
                     tool_server_map=tool_server_map,
                     served_tools=original_mcp_tools,
                     tool_calls=tool_calls,
+                    tool_choice=tool_choice,
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
                     mcp_server_auth_headers=mcp_server_auth_headers,
@@ -676,10 +677,12 @@ def _bridge_kwargs(
 
 
 def _refuse_a_choice_the_mcp_tool_run_would_ignore(
-    skip_mcp_handler: bool, tool_choice: object, custom_llm_provider: str | None, model: str
+    skip_mcp_handler: bool, tool_choice: object, custom_llm_provider: str | None, model: str, api_version: object
 ) -> None:
     if skip_mcp_handler:
-        refuse_unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, model)
+        refuse_unenforced_allowed_tools_tool_choice(
+            tool_choice, custom_llm_provider, model, api_version if isinstance(api_version, str) else None
+        )
 
 
 def _raise_untranslatable_responses_fields(
@@ -1775,6 +1778,7 @@ def responses(
                 tool_choice,
                 custom_llm_provider,
                 model,
+                kwargs.get("api_version"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped kwargs
             )
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),

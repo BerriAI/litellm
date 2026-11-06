@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Final, Literal
 
 from openai.types.chat.chat_completion_allowed_tool_choice_param import ChatCompletionAllowedToolChoiceParam
@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from litellm.exceptions import BadRequestError
 
 ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "litellm_proxy"})
+_FIRST_AZURE_API_VERSION_WITH_TOOL_CHOICE: Final = "2023-12-01"
+_TOOL_TYPES_THE_CALLER_RUNS: Final = frozenset({"function", "custom"})
 
 CHAT_ALLOWED_TOOLS_LAYOUT: Final = (
     '{"type": "allowed_tools", "allowed_tools": {"mode": "auto" | "required", "tools": [<at least one tool>]}}'
@@ -57,11 +59,19 @@ class _ToolChoiceType(BaseModel):
 _TOOL_CHOICE_TYPE: Final = TypeAdapter(_ToolChoiceType)
 
 
-def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
+def _declared_type(value: object) -> str | None:
     try:
-        return _TOOL_CHOICE_TYPE.validate_python(tool_choice).type == "allowed_tools"
+        return _TOOL_CHOICE_TYPE.validate_python(value).type
     except ValidationError:
-        return False
+        return None
+
+
+def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
+    return _declared_type(tool_choice) == "allowed_tools"
+
+
+def caller_runs_every_tool(tools: Iterable[object] | None) -> bool:
+    return all(_declared_type(tool) in _TOOL_TYPES_THE_CALLER_RUNS for tool in tools or ())
 
 
 def drops_unsupported_allowed_tools_tool_choice(
@@ -69,11 +79,14 @@ def drops_unsupported_allowed_tools_tool_choice(
     custom_llm_provider: str,
     model: str,
     drop_params: bool,
+    tools: Iterable[object] | None,
 ) -> bool:
     if not is_allowed_tools_tool_choice(tool_choice) or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
         return False
-    if drop_params:
+    if drop_params and caller_runs_every_tool(tools):
         return True
+    if drop_params:
+        raise _a_choice_drop_params_keeps(custom_llm_provider, model)
     raise BadRequestError(
         message=(
             "tool_choice type 'allowed_tools' is only supported for "
@@ -124,25 +137,75 @@ def parse_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsTool
             return _chat_layout(parsed)
 
 
-def unenforced_allowed_tools_tool_choice(tool_choice: object, custom_llm_provider: str | None) -> bool:
+def azure_api_version_takes_tool_choice(api_version: str) -> bool:
+    return api_version.count("-") < 2 or api_version >= _FIRST_AZURE_API_VERSION_WITH_TOOL_CHOICE
+
+
+def _azure_request_takes_tool_choice(api_version: str | None) -> bool:
+    import litellm
+    from litellm.secret_managers.main import get_secret_str
+
+    return azure_api_version_takes_tool_choice(
+        api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION") or litellm.AZURE_DEFAULT_API_VERSION
+    )
+
+
+def _enforces_allowed_tools(custom_llm_provider: str | None, api_version: str | None) -> bool:
+    if custom_llm_provider == "azure":
+        return _azure_request_takes_tool_choice(api_version)
+    return custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
+
+
+def unenforced_allowed_tools_tool_choice(
+    tool_choice: object, custom_llm_provider: str | None, api_version: str | None = None
+) -> bool:
     return is_allowed_tools_tool_choice(tool_choice) and (
-        custom_llm_provider not in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
+        not _enforces_allowed_tools(custom_llm_provider, api_version)
         or parse_allowed_tools_tool_choice(tool_choice) is None
     )
 
 
+def _a_choice_drop_params_keeps(custom_llm_provider: str | None, model: str) -> BadRequestError:
+    return BadRequestError(
+        message=(
+            f"This allowed_tools tool_choice can't be enforced on custom_llm_provider={custom_llm_provider}, and the "
+            "caller does not run every tool on this request, so drop_params does not drop it. Send only the allowed "
+            "tools in `tools` with tool_choice='auto' or 'required'."
+        ),
+        model=model,
+        llm_provider=custom_llm_provider or "",
+    )
+
+
 def refuse_unenforced_allowed_tools_tool_choice(
-    tool_choice: object, custom_llm_provider: str | None, model: str
+    tool_choice: object, custom_llm_provider: str | None, model: str, api_version: str | None = None
 ) -> None:
-    if unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider):
+    if unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, api_version):
+        raise _a_choice_drop_params_keeps(custom_llm_provider, model)
+
+
+def _allowed_tool_names(tool_choice: object) -> frozenset[object]:
+    parsed: Final = parse_allowed_tools_tool_choice(tool_choice)
+    if parsed is None:
+        return frozenset()
+    flattened: Final = tuple(_responses_allowed_tool(tool) for tool in parsed.allowed_tools.tools)
+    return frozenset(tool.get("name") for tool in flattened if tool is not None)
+
+
+def refuse_tool_calls_the_choice_excludes(tool_choice: object, tool_names: Iterable[str], model: str) -> None:
+    if not is_allowed_tools_tool_choice(tool_choice):
+        return
+    allowed: Final = _allowed_tool_names(tool_choice)
+    excluded: Final = tuple(name for name in tool_names if name not in allowed)
+    if excluded:
         raise BadRequestError(
             message=(
-                f"This allowed_tools tool_choice can't be enforced on custom_llm_provider={custom_llm_provider}, and "
-                "LiteLLM runs the tool calls on this request, so drop_params does not drop it. Send only the allowed "
-                "tools in `tools` with tool_choice='auto' or 'required'."
+                f"The model called {', '.join(excluded)}, which the allowed_tools tool_choice excludes, because this "
+                "request did not reach a model that enforces the choice. LiteLLM did not run the call. Send only the "
+                "allowed tools in `tools` with tool_choice='auto' or 'required'."
             ),
             model=model,
-            llm_provider=custom_llm_provider or "",
+            llm_provider="",
         )
 
 

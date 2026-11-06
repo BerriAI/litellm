@@ -74,12 +74,17 @@ def _bridged_request(
 
 
 def _with_the_tool_choice_sent(
-    responses_api_request: ResponsesAPIOptionalRequestParams, custom_llm_provider: str | None
+    responses_api_request: ResponsesAPIOptionalRequestParams,
+    custom_llm_provider: str | None,
+    request_kwargs: Mapping[str, object],
 ) -> ResponsesAPIOptionalRequestParams:
+    api_version: Final = request_kwargs.get("api_version")
     tool_choice: Final[object] = responses_api_request.get(  # pyright: ignore[reportUnknownMemberType]  # ToolChoice has an untyped member
         "tool_choice"
     )
-    if not unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider):
+    if not unenforced_allowed_tools_tool_choice(
+        tool_choice, custom_llm_provider, api_version if isinstance(api_version, str) else None
+    ):
         return responses_api_request
     return {**responses_api_request, "tool_choice": None}
 
@@ -139,7 +144,9 @@ class LiteLLMCompletionTransformationHandler:
             ),
             **_chat_verbosity(bridged_request),
         }
-        echoed_request: Final = _with_the_tool_choice_sent(bridged_request, custom_llm_provider)
+        echoed_request: Final = _with_the_tool_choice_sent(
+            bridged_request, custom_llm_provider, _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+        )
 
         if _is_async:
             return self.async_response_api_handler(
@@ -222,7 +229,9 @@ class LiteLLMCompletionTransformationHandler:
                 **_chat_verbosity(bridged.responses_api_request),
             },
             request_input=bridged.input,
-            responses_api_request=_with_the_tool_choice_sent(bridged.responses_api_request, custom_llm_provider),
+            responses_api_request=_with_the_tool_choice_sent(
+                bridged.responses_api_request, custom_llm_provider, request_kwargs
+            ),
             **request_kwargs,
         )
 

@@ -4,12 +4,15 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
+    drops_unsupported_allowed_tools_tool_choice,
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    refuse_tool_calls_the_choice_excludes,
     refuse_unenforced_allowed_tools_tool_choice,
     unenforced_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
@@ -184,3 +187,69 @@ def test_a_tool_runner_keeps_a_choice_the_provider_enforces_or_any_other_choice(
     tool_choice: object, custom_llm_provider: str
 ):
     assert not unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider)
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "tool_names"),
+    [(_FLAT_CHOICE, ("get_time",)), (_CHAT_LAYOUT, ("get_time", "apply_patch"))],
+)
+def test_a_tool_call_the_choice_lists_passes(tool_choice: object, tool_names: tuple[str, ...]):
+    assert refuse_tool_calls_the_choice_excludes(tool_choice, tool_names, "the-model") is None
+
+
+@pytest.mark.parametrize(
+    "tool_choice", [_FLAT_CHOICE, _CHAT_LAYOUT, {"type": "allowed_tools", "mode": "required", "tools": []}]
+)
+def test_a_tool_call_the_choice_does_not_list_is_refused(tool_choice: object):
+    with pytest.raises(BadRequestError, match=r"The model called .*get_weather") as exc:
+        refuse_tool_calls_the_choice_excludes(tool_choice, ("get_time", "get_weather"), "the-model")
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("tool_choice", ["required", None, {"type": "function", "function": {"name": "get_time"}}])
+def test_any_other_choice_leaves_the_tool_calls_alone(tool_choice: object):
+    assert refuse_tool_calls_the_choice_excludes(tool_choice, ("get_weather",), "the-model") is None
+
+
+@pytest.mark.parametrize(
+    ("api_version", "unenforced"),
+    [
+        ("2023-07-01-preview", True),
+        ("2023-11-30", True),
+        ("2023-12-01-preview", False),
+        ("2025-04-01-preview", False),
+        ("v1", False),
+    ],
+)
+def test_azure_counts_as_enforcing_only_on_a_version_that_takes_tool_choice(api_version: str, unenforced: bool):
+    assert unenforced_allowed_tools_tool_choice(_FLAT_CHOICE, "azure", api_version) is unenforced
+
+
+def test_azure_reads_the_same_api_version_fallback_as_the_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "api_version", "2023-07-01-preview")
+
+    assert unenforced_allowed_tools_tool_choice(_FLAT_CHOICE, "azure")
+
+
+_FUNCTION_TOOL: Final = {"type": "function", "function": {"name": "get_time"}}
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [_FUNCTION_TOOL, {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com"}],
+        [{"type": "web_search_20250305", "name": "web_search"}],
+        [{"googleSearch": {}}],
+        [{"type": ["function"]}],
+        ["get_time"],
+    ],
+)
+def test_drop_params_keeps_the_400_when_the_provider_could_run_a_tool(tools: list[object]):
+    with pytest.raises(BadRequestError, match="drop_params does not drop it"):
+        drops_unsupported_allowed_tools_tool_choice(_FLAT_CHOICE, "anthropic", "the-model", True, tools)
+
+
+@pytest.mark.parametrize("tools", [None, [], [_FUNCTION_TOOL, {"type": "custom", "custom": {"name": "patch"}}]])
+def test_drop_params_drops_the_choice_when_the_caller_runs_every_tool(tools: list[object] | None):
+    assert drops_unsupported_allowed_tools_tool_choice(_FLAT_CHOICE, "anthropic", "the-model", True, tools)
