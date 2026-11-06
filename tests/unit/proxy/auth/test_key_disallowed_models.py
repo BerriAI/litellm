@@ -52,6 +52,44 @@ def test_a_key_alias_that_a_global_alias_redirects_to_a_disallowed_model_is_refu
     _denied_model(error)
 
 
+def test_a_deployment_id_of_a_disallowed_model_group_is_refused_and_unlisted() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-denied",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fixture"},
+                "model_info": {"id": "deployment-of-denied"},
+            },
+            {
+                "model_name": "gpt-allowed",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fixture"},
+                "model_info": {"id": "deployment-of-allowed"},
+            },
+        ]
+    )
+    token: Final = _token(disallowed_models=("gpt-denied",))
+    with pytest.raises(ProxyException) as error:
+        ensure_key_may_call_model("deployment-of-denied", token, router)
+    _denied_model(error)
+    assert first_disallowed_model(["deployment-of-allowed"], token, router) is None
+    assert without_key_disallowed_models(["deployment-of-denied", "deployment-of-allowed"], token, router) == (
+        "deployment-of-allowed",
+    )
+
+
+@pytest.mark.parametrize(
+    "requested,refused",
+    [
+        pytest.param("openai/gpt-4o", True, id="matches-provider-wildcard"),
+        pytest.param("anthropic/claude", False, id="other-provider"),
+        pytest.param("openai", False, id="bare-provider-name"),
+    ],
+)
+def test_a_wildcard_entry_refuses_every_model_it_matches(requested: str, refused: bool) -> None:
+    token: Final = _token(disallowed_models=("openai/*",))
+    assert (first_disallowed_model([requested], token, None) == requested) is refused
+
+
 @pytest.mark.parametrize("disallowed", [None, (), ("gpt-other",)])
 def test_a_model_outside_disallowed_models_is_not_refused(disallowed: tuple[str, ...] | None) -> None:
     assert first_disallowed_model(["gpt-allowed"], _token(disallowed_models=disallowed), None) is None

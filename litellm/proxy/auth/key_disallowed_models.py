@@ -1,4 +1,5 @@
 from collections.abc import Collection, Iterable
+from fnmatch import fnmatchcase
 from typing import Final
 
 from fastapi import status
@@ -29,11 +30,36 @@ def _names_model_resolves_through(
         if llm_router is not None and model in llm_router.registry().aliases()
         else None
     )
+    deployment: Final = llm_router.registry().deployment(model) if llm_router is not None else None
+    deployment_names: Final = (
+        () if deployment is None else (deployment.model_name, deployment.model_info.team_public_model_name)
+    )
     return frozenset(
         name
-        for name in (model, after_team_alias, after_key_alias, after_global_alias, dispatched, router_alias_target)
+        for name in (
+            model,
+            after_team_alias,
+            after_key_alias,
+            after_global_alias,
+            dispatched,
+            router_alias_target,
+            *deployment_names,
+        )
         if name is not None
     )
+
+
+def _matches(name: str, entry: str) -> bool:
+    return name == entry or ("*" in entry and fnmatchcase(name, entry))
+
+
+def _is_disallowed(
+    model: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None, disallowed: frozenset[str]
+) -> bool:
+    names: Final = _names_model_resolves_through(model, valid_token, llm_router)
+    return any(
+        _matches(name, entry) for name in names for entry in disallowed
+    )  # comprehension-ok: the name x entry product is the match
 
 
 def first_disallowed_model(
@@ -44,7 +70,7 @@ def first_disallowed_model(
         return None
     requested: Final = (model,) if isinstance(model, str) else tuple(model)
     return next(
-        (m for m in requested if _names_model_resolves_through(m, valid_token, llm_router) & disallowed),
+        (m for m in requested if _is_disallowed(m, valid_token, llm_router, disallowed)),
         None,
     )
 
@@ -68,11 +94,7 @@ def without_key_disallowed_models(
     models: Iterable[str], valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
 ) -> tuple[str, ...]:
     disallowed: Final = key_disallowed_models(valid_token)
-    return tuple(
-        m
-        for m in models
-        if not disallowed or not _names_model_resolves_through(m, valid_token, llm_router) & disallowed
-    )
+    return tuple(m for m in models if not disallowed or not _is_disallowed(m, valid_token, llm_router, disallowed))
 
 
 def disallowed_models_removed_by(data: BaseModel | None, stored: Collection[str] | None) -> frozenset[str]:

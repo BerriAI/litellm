@@ -138,6 +138,11 @@ def test_adding_and_clearing_disallowed_models_takes_effect_on_the_next_request(
         assert info["disallowed_models"] == [grant.disallowed], info
         gateway.post("/key/update", {"key": key, "disallowed_models": []})
         _assert_served(gateway, key, grant.disallowed)
+        gateway.post("/key/update", {"key": key, "disallowed_models": [grant.disallowed]})
+        _assert_denied(gateway, key, {"model": grant.disallowed}, grant.disallowed)
+        gateway.post("/key/update", {"key": key, "disallowed_models": None})
+        assert _stored_disallowed_models(key) == [{"disallowed_models": []}]
+        _assert_served(gateway, key, grant.disallowed)
 
 
 def test_a_key_owner_cannot_remove_disallowed_models_but_can_add_them(gateway: Gateway) -> None:
@@ -177,3 +182,12 @@ def test_an_admin_of_the_keys_team_can_remove_disallowed_models(gateway: Gateway
         assert cleared.status_code == 200, f"{cleared.status_code} {cleared.text}"
         assert _stored_disallowed_models(key) == [{"disallowed_models": []}]
         _assert_served(gateway, key, disallowed)
+
+
+def test_a_deployment_id_cannot_reach_a_disallowed_model(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        deployment_id: Final = f"integration-deployment-{uuid.uuid4().hex}"
+        disallowed: Final = scenario.model(model_info={"id": deployment_id})
+        key: Final = scenario.key(disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": deployment_id}, deployment_id)
+        _assert_denied(gateway, key, {"model": scenario.model(), "fallbacks": [deployment_id]}, deployment_id)

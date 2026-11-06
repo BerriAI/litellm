@@ -3035,6 +3035,8 @@ async def prepare_key_update_data(
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
+    if "disallowed_models" in data_json and data_json["disallowed_models"] is None:
+        data_json["disallowed_models"] = []
     if _resends_stored_routes(data, existing_key_row):
         data_json.pop("allowed_routes", None)
     if (
