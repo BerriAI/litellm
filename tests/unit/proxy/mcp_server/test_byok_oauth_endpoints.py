@@ -20,6 +20,7 @@ import uuid
 from typing import Any, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -299,70 +300,80 @@ _AUTHORIZE_GET_PARAMS: Final = {
 }
 
 
-def _assert_redirects_to_login_and_back(resp) -> None:
+# Fixed expiry (2100-01-01) so the cookie fixtures do not depend on the host clock.
+_SESSION_COOKIE_EXP: Final = 4102444800
+
+
+def _assert_redirects_to_login_and_back(resp: httpx.Response) -> None:
     from urllib.parse import parse_qs, urlparse
 
     assert resp.status_code == 303
-    location = urlparse(resp.headers["location"])
+    location: Final = urlparse(resp.headers["location"])
     assert location.path == "/sso/key/generate"
-    return_to = parse_qs(location.query)["return_to"][0]
-    # Relative, same-origin path back to the exact authorize request.
+    return_to: Final = parse_qs(location.query)["return_to"][0]
     assert return_to.startswith("/v1/mcp/oauth/authorize?")
     assert parse_qs(urlparse(return_to).query) == {k: [v] for k, v in _AUTHORIZE_GET_PARAMS.items()}
 
 
-def test_authorize_get_without_session_redirects_to_login(unauthenticated_client):
+def test_authorize_get_without_session_redirects_to_login(unauthenticated_client: TestClient) -> None:
     """Without a UI session the POST would reject the form with 401
     ``login_required`` after the user typed the key, so the GET sends the
     browser to the UI login first, with a return path back to this page."""
     with patch("litellm.proxy.proxy_server.master_key", "test-master-key"):
-        resp = unauthenticated_client.get(
+        resp: Final = unauthenticated_client.get(
             "/v1/mcp/oauth/authorize", params=_AUTHORIZE_GET_PARAMS, follow_redirects=False
         )
     _assert_redirects_to_login_and_back(resp)
     assert "apiKey" not in resp.text
 
 
-def test_authorize_get_with_revoked_session_redirects_to_login(unauthenticated_client):
+def test_authorize_get_with_revoked_session_redirects_to_login(unauthenticated_client: TestClient) -> None:
     """A signature-valid cookie whose session key no longer resolves is not a session."""
     import jwt as _jwt
 
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    # Stand-in for the database: the revoked session key has no row. MCP
+    # servers stay config-only so the catalog does not query it.
+    fake_prisma_client: Final = MagicMock()
+    fake_prisma_client.get_data = AsyncMock(return_value=None)
+
     with (
         patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
-        patch(
-            "litellm.proxy.mcp_server.byok_oauth_endpoints._session_key_is_live",
-            new=AsyncMock(return_value=False),
-        ),
+        patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": ["models"]}),
     ):
-        cookie_jwt = _jwt.encode(
+        cookie_jwt: Final = _jwt.encode(
             {
                 "user_id": "browser-user-42",
                 "key": "sk-revoked-session-key",
                 "login_method": "sso",
-                "exp": int(time.time()) + 3600,
+                "exp": _SESSION_COOKIE_EXP,
             },
             "test-master-key",
             algorithm="HS256",
         )
-        resp = unauthenticated_client.get(
+        resp: Final = unauthenticated_client.get(
             "/v1/mcp/oauth/authorize",
             params=_AUTHORIZE_GET_PARAMS,
             cookies={"token": cookie_jwt},
             follow_redirects=False,
         )
     _assert_redirects_to_login_and_back(resp)
+    fake_prisma_client.get_data.assert_awaited()
 
 
-def test_authorize_get_with_session_cookie_renders_form(unauthenticated_client):
+def test_authorize_get_with_session_cookie_renders_form(unauthenticated_client: TestClient) -> None:
     import jwt as _jwt
 
     with patch("litellm.proxy.proxy_server.master_key", "test-master-key"):
-        cookie_jwt = _jwt.encode(
-            {"user_id": "browser-user-42", "login_method": "sso", "exp": int(time.time()) + 3600},
+        cookie_jwt: Final = _jwt.encode(
+            {"user_id": "browser-user-42", "login_method": "sso", "exp": _SESSION_COOKIE_EXP},
             "test-master-key",
             algorithm="HS256",
         )
-        resp = unauthenticated_client.get(
+        resp: Final = unauthenticated_client.get(
             "/v1/mcp/oauth/authorize",
             params=_AUTHORIZE_GET_PARAMS,
             cookies={"token": cookie_jwt},
@@ -372,9 +383,9 @@ def test_authorize_get_with_session_cookie_renders_form(unauthenticated_client):
     assert "Connect &amp; Authorize" in resp.text
 
 
-def test_authorize_get_validates_request_before_login_redirect(unauthenticated_client):
+def test_authorize_get_validates_request_before_login_redirect(unauthenticated_client: TestClient) -> None:
     """A malformed request is rejected outright rather than bounced through login."""
-    resp = unauthenticated_client.get(
+    resp: Final = unauthenticated_client.get(
         "/v1/mcp/oauth/authorize",
         params={**_AUTHORIZE_GET_PARAMS, "redirect_uri": "https://attacker.example.com/cb"},
         follow_redirects=False,
