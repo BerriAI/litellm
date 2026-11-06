@@ -4148,6 +4148,21 @@ def test_context_window_pre_call_check_on_a_caption_next_to_an_embedding_image(b
     assert "failed to count tokens" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_an_async_pre_call_check_reads_embedding_media_off_the_event_loop():
+    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+
+    router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2", window=20)
+    caption_and_images: Final = ["a red square", *[_EMBEDDING_IMAGE_INPUT] * 400]
+
+    deployment, took, lags = await timed_with_loop_lags(
+        lambda: router.select("embedder", {}, input=caption_and_images)
+    )
+
+    assert deployment["litellm_params"]["model"] == "vertex_ai/gemini-embedding-2"
+    assert_loop_stayed_free(took, lags)
+
+
 async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
     limit: Final = (
         litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
@@ -4376,6 +4391,14 @@ async def test_aembedding_skips_the_context_window_check_when_token_counting_is_
     assert response.data
 
 
+async def _until_every_count_slot_is_taken() -> None:
+    from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+
+    while _count_offload_limiter_for_this_loop().borrowed_tokens < TOKEN_COUNTER_MAX_CONCURRENT_COUNTS:
+        await asyncio.sleep(0)
+
+
 @pytest.mark.asyncio
 async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches():
     from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
@@ -4405,7 +4428,7 @@ async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches
         asyncio.create_task(router.aembedding(model="embed", input=batch))
         for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
     )
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
     chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
 
     first_done, _ = await asyncio.wait((chat, *batches), return_when=asyncio.FIRST_COMPLETED)
