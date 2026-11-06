@@ -800,6 +800,31 @@ def _as_float(value: object) -> float | None:
         return None
 
 
+def _entity_model_budget_entries(
+    model: str,
+    entity_budget: tuple[Litellm_EntityType, str | None, object],
+    model_access_groups: ModelAccessGroups,
+    team_id: str | None,
+) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
+    entity_type, entity_id, model_max_budget = entity_budget
+    if entity_id is None or not isinstance(model_max_budget, Mapping) or not model_max_budget:
+        return ()
+    return tuple(
+        (entity_type, entity_id, resolved)
+        for candidate in expand_model_latest_alias(model)
+        if (
+            resolved := resolve_model_budget(
+                model=candidate,
+                model_max_budget=model_max_budget,
+                model_access_groups=model_access_groups,
+                team_id=team_id,
+            )
+        )
+        is not None
+        and resolved.budget_config.budget_duration is not None
+    )
+
+
 def _resolve_entity_model_budgets(
     model: str,
     entity_budgets: Iterable[tuple[Litellm_EntityType, str | None, object]],
@@ -807,21 +832,14 @@ def _resolve_entity_model_budgets(
     team_id: str | None,
 ) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
     """Drop the scopes that do not budget `model`, keeping only what can be incremented."""
+    entries: Final = itertools.chain.from_iterable(
+        _entity_model_budget_entries(model, entity_budget, model_access_groups, team_id)
+        for entity_budget in entity_budgets
+    )
     return tuple(
         {
             (entity_type, entity_id, resolved.budget_model): (entity_type, entity_id, resolved)
-            for entity_type, entity_id, model_max_budget in entity_budgets
-            if entity_id is not None and isinstance(model_max_budget, Mapping) and model_max_budget
-            for candidate in expand_model_latest_alias(model)
-            for resolved in (
-                resolve_model_budget(
-                    model=candidate,
-                    model_max_budget=model_max_budget,
-                    model_access_groups=model_access_groups,
-                    team_id=team_id,
-                ),
-            )
-            if resolved is not None and resolved.budget_config.budget_duration is not None
+            for entity_type, entity_id, resolved in entries
         }.values()
     )
 

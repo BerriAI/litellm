@@ -52,10 +52,13 @@ def call(**kwargs: object) -> NativeCall:
         ("gpt-luna-latest", "openai", True),
         ("gemini/gemini-pro-latest", None, False),
         ("gpt-luna-latest", None, False),
+        ("anthropic/claude-opus-latest", None, True),
+        ("claude-opus-latest", "anthropic", True),
+        ("", None, False),
     ),
 )
 def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
-    assert chat_detectors.model_alias_map(call(model=model, custom_llm_provider=provider)) is expected
+    assert detectors.latest_alias(call(model=model, custom_llm_provider=provider)) is expected
 
 
 @pytest.mark.parametrize(

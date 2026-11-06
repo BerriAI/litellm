@@ -192,7 +192,8 @@ async def test_latest_alias_collision_charges_and_settles_one_counter_per_metric
         await handler.async_log_success_event(kwargs, ModelResponse(model=target, usage=usage), None, None)
     else:
         await handler.async_log_failure_event(kwargs, None, None, None)
-    assert await cache.async_get_cache(tpm_key) == (0 if event == "failure" else 5) + (0 if reservation else 1)
+    actual_tokens: Final = 5 if event == "success" or (event == "partial" and reservation) else 0
+    assert await cache.async_get_cache(tpm_key) == actual_tokens + (0 if reservation else 1)
     alias_key: Final = handler.create_rate_limit_keys(f"model_per_{scope}", f"{entity}:{alias}", "tokens")
     assert await cache.async_get_cache(alias_key) is None
     assert await handler.async_pre_call_hook(auth, cache, {"model": alias}, "acompletion") is None
@@ -270,9 +271,10 @@ async def test_latest_alias_collision_settles_the_target_team_limit_beside_the_k
         await handler.async_log_success_event(kwargs, ModelResponse(model=target, usage=usage), None, None)
     else:
         await handler.async_log_failure_event(kwargs, None, None, None)
+    actual_tokens: Final = 5 if reservation or event == "success" else 0
     for scope, entity in (("model_per_key", auth.api_key), ("model_per_team", auth.team_id)):
         counter: Final = handler.create_rate_limit_keys(scope, f"{entity}:{target}", "tokens")
-        assert await cache.async_get_cache(counter) == 5 + (0 if reservation else 1)
+        assert await cache.async_get_cache(counter) == actual_tokens + (0 if reservation else 1)
 
 
 @pytest.mark.asyncio
@@ -446,8 +448,81 @@ async def test_latest_alias_tpm_settles_both_counters(
         )
     else:
         await handler.async_log_failure_event(kwargs, None, None, None)
+    actual_tokens: Final = 5 if event == "success" or (event == "partial" and reservation) else 0
     for key in (*keys, handler.create_rate_limit_keys("api_key", auth.api_key, "tokens")):
-        assert int(await cache.async_get_cache(key) or 0) == (0 if event == "failure" else 5) + (0 if reservation else 1)
+        assert int(await cache.async_get_cache(key) or 0) == actual_tokens + (0 if reservation else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team", "project", "organization"))
+@pytest.mark.parametrize("request_alias", (False, True))
+@pytest.mark.parametrize("reservation_released", (False, True))
+async def test_failed_latest_alias_without_open_reservation_matches_direct_model_accounting(
+    scope: str,
+    request_alias: bool,
+    reservation_released: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", str(reservation_released).lower())
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        time_provider=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    alias: Final = "anthropic/claude-opus-latest"
+    target: Final = f"anthropic/{get_model_latest_aliases()['anthropic']['claude-opus-latest']}"
+    model: Final = alias if request_alias else target
+    limits: Final = {"model_tpm_limit": {alias: 10000, target: 10000}}
+    auth: Final = UserAPIKeyAuth(
+        api_key="failed-latest-key",
+        team_id="failed-latest-team",
+        project_id="failed-latest-project",
+        org_id="failed-latest-org",
+        tpm_limit=10000,
+        metadata=limits if scope == "key" else {},
+        team_metadata=limits if scope == "team" else {},
+        project_metadata=limits if scope == "project" else {},
+        organization_metadata=limits if scope == "organization" else {},
+    )
+    request_data: Final = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64}
+    await handler.async_pre_call_hook(auth, cache, request_data, "acompletion")
+    if reservation_released:
+        await handler.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("rejected"),
+            user_api_key_dict=auth,
+        )
+    entity: Final = {
+        "key": auth.api_key,
+        "team": auth.team_id,
+        "project": auth.project_id,
+        "organization": auth.org_id,
+    }[scope]
+    models: Final = (alias, target) if request_alias else (target,)
+    keys: Final = (
+        handler.create_rate_limit_keys("api_key", auth.api_key, "tokens"),
+        *(handler.create_rate_limit_keys(f"model_per_{scope}", f"{entity}:{name}", "tokens") for name in models),
+    )
+    await handler.async_log_failure_event(
+        {
+            "standard_logging_object": {
+                "model_group": model,
+                "metadata": {
+                    "user_api_key_hash": auth.api_key,
+                    "user_api_key_team_id": auth.team_id,
+                    "user_api_key_project_id": auth.project_id,
+                    "user_api_key_org_id": auth.org_id,
+                },
+            },
+            "litellm_params": {"metadata": {"model_group": model, "user_api_key_metadata": auth.metadata}},
+            "combined_usage_object": Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+        },
+        None,
+        None,
+        None,
+    )
+    for key in keys:
+        assert int(await cache.async_get_cache(key) or 0) == (0 if reservation_released else 1)
 
 
 @pytest.mark.asyncio

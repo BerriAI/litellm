@@ -5882,14 +5882,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
-            elif tpm_actual > 0:
-                failed_kwargs: Final = dict(failed_call)
-                failed_model: Final = get_model_group_from_litellm_kwargs(failed_kwargs)
-                if failed_model is not None and len(expand_model_latest_alias(failed_model)) > 1:
-                    pipeline_operations.extend(
-                        self._build_success_event_pipeline_operations(failed_kwargs, None, self.get_rate_limit_type())
-                    )
-
             # Settle project ITPM/OTPM reservations the same way: at the
             # recovered partial usage, or a full refund when there is none.
             itpm_operations: Final = (
