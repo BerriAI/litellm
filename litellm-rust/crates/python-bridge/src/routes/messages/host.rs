@@ -239,9 +239,9 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        response: litellm_inference_messages::MessagesBody,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
+        public_response(py, ROUTE_HOST_MODULE, &response)
     }
 
     fn encode_stream_head(
