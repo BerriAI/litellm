@@ -1,8 +1,10 @@
 """The policy table printed at boot keeps its terminal form in plain mode and is JSON when json_logs is on."""
 
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
+from io import StringIO
 from typing import Final
 
 import pytest
@@ -40,6 +42,15 @@ NO_ATTACHMENTS_WARNING: Final = (
 )
 
 
+class _Stream(StringIO):
+    def __init__(self, terminal: bool) -> None:
+        super().__init__()
+        self._terminal = terminal
+
+    def isatty(self) -> bool:
+        return self._terminal
+
+
 @pytest.mark.parametrize(
     ("attachments", "expected"),
     [
@@ -53,18 +64,24 @@ NO_ATTACHMENTS_WARNING: Final = (
     ],
     ids=["with-attachments", "without-attachments"],
 )
+@pytest.mark.parametrize("terminal", [True, False], ids=["terminal", "piped"])
 def test_policy_table_prints_unchanged_in_plain_mode(
     monkeypatch: pytest.MonkeyPatch,
-    capfd: pytest.CaptureFixture[str],
     attachments: Sequence[Mapping[str, object]] | None,
     expected: str,
+    terminal: bool,
 ) -> None:
-    """Operators without JSON logs keep the colored policy table byte for byte."""
+    """Operators without JSON logs keep the colored policy table byte for byte on a terminal, and the same text
+    without color codes on a piped stdout."""
     monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stdout: Final = _Stream(terminal)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", _Stream(terminal))
 
     _print_policies_on_startup(POLICIES, attachments)
 
-    assert capfd.readouterr() == (expected, "")
+    assert stdout.getvalue() == (expected if terminal else re.sub(r"\x1b\[\d+m", "", expected))
 
 
 def test_policy_table_is_one_json_record_in_json_mode(
@@ -98,8 +115,8 @@ def test_policy_table_is_one_json_record_in_json_mode(
 def test_missing_attachments_warning_is_a_second_json_record(
     monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    """Without attachments the table and the yellow warning are two INFO records on stdout, where the two
-    prints put them."""
+    """Without attachments the table and the yellow warning are an INFO and a WARNING record on stdout,
+    where the two prints put them."""
     monkeypatch.setattr(litellm, "json_logs", True)
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     turn_on_json()
@@ -113,4 +130,4 @@ def test_missing_attachments_warning_is_a_second_json_record(
         "\n".join(("LiteLLM Policy Engine: Loaded 1 policies", "", *POLICY_ROWS)),
         NO_ATTACHMENTS_WARNING,
     ]
-    assert {record["level"] for record in records} == {"INFO"}
+    assert [record["level"] for record in records] == ["INFO", "WARNING"]

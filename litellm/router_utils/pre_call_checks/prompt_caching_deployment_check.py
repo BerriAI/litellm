@@ -17,9 +17,9 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.routing_common_utils import deployment_ids_failed_in_request
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.bedrock.common_utils import bedrock_cache_point_ttl_supported, bedrock_capability_model
-from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import (
@@ -162,6 +162,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
                         return [deployment]
 
         return healthy_deployments
+
+    def exempt_from_message_redaction(self) -> bool:
+        return True
 
     async def async_log_success_event(
         self,

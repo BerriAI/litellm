@@ -15,9 +15,10 @@ ignore:
 flag_management:
   default_rules:
     carryforward: true
-  # Dead flags no CI job uploads anymore: their carried-forward sessions were
-  # measured against old revisions, and the stale line maps mark comment lines
-  # of since-edited files as missed, sinking patch coverage on unrelated PRs.
+  # Dead flags no CI job uploads anymore, and flags whose job is path-gated on
+  # PRs: their carried-forward sessions were measured against old revisions, and
+  # the stale line maps mark comment lines of since-edited files as missed,
+  # sinking patch coverage on unrelated PRs.
   individual_flags:
     - name: proxy-mgmt-behavior
       carryforward: false
@@ -98,6 +99,10 @@ flag_management:
     - name: proxy-db-budgets
       carryforward: false
     - name: proxy-db-endpoints-and-responses
+      carryforward: false
+    - name: roi-postgres
+      carryforward: false
+    - name: redis-compat
       carryforward: false
 
 component_management:

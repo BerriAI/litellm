@@ -122,6 +122,21 @@ async def _guardrail_block(
     return None
 
 
+def realtime_runner_guardrail(
+    callback: object,
+    check_data: Mapping[str, object],
+    event_hooks: Sequence["GuardrailEventHooks"],
+) -> "CustomGuardrail | None":
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    if not isinstance(callback, CustomGuardrail) or callback.use_native_lifecycle_hooks:
+        return None
+    runs: Final = any(
+        callback.should_run_guardrail(data=check_data, event_type=event_hook) for event_hook in event_hooks
+    )
+    return callback if runs else None
+
+
 async def realtime_guardrail_block(
     text: str,
     event_hooks: Sequence["GuardrailEventHooks"],
@@ -129,17 +144,10 @@ async def realtime_guardrail_block(
     user_api_key_dict: object | None,
     callbacks: Iterable[object],
 ) -> RealtimeGuardrailBlock | None:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-
     check_data: Final = {**request_data, "transcript": text, "stream": True}
-    guardrails: Final = {
-        id(callback): callback
-        for callback in callbacks
-        if isinstance(callback, CustomGuardrail) and not callback.use_native_lifecycle_hooks
-    }
+    runner_guardrails: Final = (realtime_runner_guardrail(callback, check_data, event_hooks) for callback in callbacks)
+    guardrails: Final = {id(guardrail): guardrail for guardrail in runner_guardrails if guardrail is not None}
     for guardrail in guardrails.values():
-        if not any(guardrail.should_run_guardrail(data=check_data, event_type=hook) for hook in event_hooks):
-            continue
         block = await _guardrail_block(guardrail, text, user_api_key_dict)
         if block is not None:
             return block

@@ -113,6 +113,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/model/us.anthropic.claude-sonnet-5/converse",
     expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
     expected_provider_request={
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
         "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
         "inferenceConfig": {"maxTokens": 64},
         "system": [{"text": "You are a terse assistant."}],

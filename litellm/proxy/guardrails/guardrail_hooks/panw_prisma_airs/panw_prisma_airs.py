@@ -27,6 +27,12 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    tool_calls_with_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
@@ -159,6 +165,20 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
+def _parse_bool_setting(name: str, value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        from litellm.secret_managers.main import str_to_bool
+
+        parsed: Final = str_to_bool(value)
+        if parsed is not None:
+            return parsed
+    raise ValueError(f"PANW Prisma AIRS: {name} must be true or false, got {value!r}")
+
+
 class PanwPrismaAirsHandler(CustomGuardrail):
     """
     LiteLLM Built-in Guardrail for Palo Alto Networks Prisma AI Runtime Security (AIRS).
@@ -185,6 +205,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     #: back would hand the caller exactly the text the operator declined to deliver.
     #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
     #: and it is one of the fields the ticket asks for.
+    #: The ``include_masked_response_on_block`` config opt-in lifts the withholding.
     _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
 
     def __init__(
@@ -197,6 +218,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         mask_on_block: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
+        include_masked_response_on_block: object = False,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
@@ -251,6 +273,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         self.http_client = http_client
         self.fallback_on_error = fallback_on_error
+        # The dashboard persists some fields as strings and Pydantic extras pass
+        # them through unvalidated, so a bare "false" must not be treated as truthy.
+        self.include_masked_response_on_block: Final[bool] = _parse_bool_setting(
+            "include_masked_response_on_block", include_masked_response_on_block
+        )
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
         # this handler) preserve whatever type the user supplied. A string
@@ -343,10 +370,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                             text_parts.append(str(choice.message.content))
 
                         # Extract tool call arguments
-                        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                            for tool_call in choice.message.tool_calls:
-                                if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-                                    text_parts.append(str(tool_call.function.arguments))
+                        for tool_call in tool_calls_with_server_tool_calls(choice.message):
+                            if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                                text_parts.append(str(tool_call.function.arguments))
 
                         # Extract function call arguments (legacy)
                         if hasattr(choice.message, "function_call") and choice.message.function_call:
@@ -735,6 +761,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     elif isinstance(content, list):
                         choice.message.content = self._mask_content_list(content, masked_text)
 
+                write_anthropic_server_tool_calls(
+                    choice.message,
+                    tuple(
+                        with_server_tool_call_arguments(server_tool_call, masked_text)
+                        for server_tool_call in anthropic_server_tool_call_params(choice.message)
+                    ),
+                )
+
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
@@ -769,12 +803,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
+        hidden_fields: Final = (
+            frozenset[str]() if self.include_masked_response_on_block else self._CLIENT_HIDDEN_SCAN_FIELDS
+        )
         return {
             "error": {
                 **{
                     key: value
                     for key, value in scan_result.items()
-                    if not key.startswith("_") and key not in self._CLIENT_HIDDEN_SCAN_FIELDS
+                    if not key.startswith("_") and key not in hidden_fields
                 },
                 "message": error_msg,
                 "type": "guardrail_violation",
@@ -1569,9 +1606,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             else:
                 # Tool calls now go out as ordinary prompt/response text, so a
                 # response-side scan reports the model's arguments under
-                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS already
-                # withholds. prompt_masked_data is the caller's own input again and
-                # must keep reaching them -- it is one of the fields LIT-5638 asks for.
+                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS withholds
+                # unless include_masked_response_on_block is on. prompt_masked_data is
+                # the caller's own input again and must keep reaching them -- it is one
+                # of the fields LIT-5638 asks for.
                 error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 

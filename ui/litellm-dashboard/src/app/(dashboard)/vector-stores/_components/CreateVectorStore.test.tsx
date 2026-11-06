@@ -18,6 +18,7 @@ vi.mock("@/components/vector_store_providers", () => ({
     AZURE_OPENAI: "Azure OpenAI",
     S3Vectors: "AWS S3 Vectors",
     Valkey: "Valkey",
+    OpenSearch: "Amazon OpenSearch",
   },
   vectorStoreProviderMap: {
     BEDROCK: "bedrock",
@@ -25,6 +26,7 @@ vi.mock("@/components/vector_store_providers", () => ({
     AZURE_OPENAI: "azure_openai",
     S3Vectors: "s3_vectors",
     Valkey: "valkey",
+    OpenSearch: "opensearch",
   },
   vectorStoreProviderLogoMap: {
     "Amazon Bedrock": "https://example.com/bedrock.png",
@@ -32,6 +34,7 @@ vi.mock("@/components/vector_store_providers", () => ({
     "Azure OpenAI": "https://example.com/azure.png",
     "AWS S3 Vectors": "https://example.com/aws.png",
     Valkey: "https://example.com/valkey.svg",
+    "Amazon OpenSearch": "https://example.com/aws.svg",
   },
   getProviderSpecificFields: vi.fn((provider: string) => {
     if (provider === "s3_vectors") {
@@ -254,7 +257,7 @@ describe("CreateVectorStore", () => {
     expect(screen.getByText("Vector Store Created Successfully")).toBeInTheDocument();
   });
 
-  it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {
+  it("should exclude search-only valkey and opensearch from the provider dropdown since they have no RAG ingestion", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
     const providerSelect = screen.getByRole("combobox");
@@ -267,6 +270,7 @@ describe("CreateVectorStore", () => {
       expect(screen.getByText("AWS S3 Vectors")).toBeInTheDocument();
     });
     expect(screen.queryByText("Valkey")).not.toBeInTheDocument();
+    expect(screen.queryByText("Amazon OpenSearch")).not.toBeInTheDocument();
   });
 
   it("should display S3 Vectors provider-specific fields when selected", async () => {
