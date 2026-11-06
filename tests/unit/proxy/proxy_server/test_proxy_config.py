@@ -6593,3 +6593,68 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+_CALLBACK_DEFINITION_CONFIG: Final = """
+model_list: []
+callback_settings:
+  arize_space_a:
+    callback_type: arize
+    arize_api_key: os.environ/QA_ARIZE_SPACE_A_KEY
+    arize_space_id: os.environ/QA_ARIZE_SPACE_A_SPACE
+"""
+
+
+@pytest.fixture
+def config_without_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "callback_settings", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("config_without_db")
+async def test_a_callback_definition_resolves_its_secrets_at_boot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QA_ARIZE_SPACE_A_KEY", "space-a-key-v1")
+    monkeypatch.setenv("QA_ARIZE_SPACE_A_SPACE", "space-a")
+    config_file: Final = tmp_path / "callbacks.yaml"
+    config_file.write_text(_CALLBACK_DEFINITION_CONFIG)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.callback_settings["arize_space_a"] == {
+        "callback_type": "arize",
+        "arize_api_key": "space-a-key-v1",
+        "arize_space_id": "space-a",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("config_without_db")
+async def test_a_callback_definition_whose_secret_is_missing_fails_boot_naming_the_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QA_ARIZE_SPACE_A_KEY", "space-a-key-v1")
+    monkeypatch.delenv("QA_ARIZE_SPACE_A_SPACE", raising=False)
+    config_file: Final = tmp_path / "callbacks.yaml"
+    config_file.write_text(_CALLBACK_DEFINITION_CONFIG)
+
+    with pytest.raises(ValueError, match=r"callback_settings\.arize_space_a\.arize_space_id"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.callback_settings == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("config_without_db")
+async def test_a_callback_definition_with_a_misspelled_field_fails_boot(tmp_path: Path) -> None:
+    config_file: Final = tmp_path / "callbacks.yaml"
+    config_file.write_text(
+        "model_list: []\ncallback_settings:\n  arize_space_a:\n    callback_type: arize\n    arize_api_kye: k\n"
+    )
+
+    with pytest.raises(ValueError, match="arize_api_kye"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))

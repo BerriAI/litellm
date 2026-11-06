@@ -168,6 +168,7 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.callback_config_validation import callback_definitions_error
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
@@ -5862,6 +5863,16 @@ def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key
     return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
+_CALLBACK_SETTINGS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _check_callback_definitions(callback_settings: Mapping[str, object]) -> None:
+    """Refuse to boot on a ``callback_settings`` definition a key could never use."""
+    definition_error: Final = callback_definitions_error(callback_settings)
+    if definition_error is not None:
+        raise ValueError(definition_error)
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -6785,6 +6796,7 @@ class ProxyConfig:
         ## Callback settings
         callback_settings: Final = config.get("callback_settings", {})
         if callback_settings:
+            _check_callback_definitions(_CALLBACK_SETTINGS.validate_python(callback_settings))
             litellm.callback_settings = callback_settings
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)

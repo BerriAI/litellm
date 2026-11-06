@@ -77,6 +77,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.callback_config_validation import callback_backend_name, callback_definition
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -1243,6 +1244,69 @@ def get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallba
 
 _get_validated_callback_metadata: Final = get_validated_callback_metadata
 
+_STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def resolved_key_callbacks(logging_entries: object, *, source: str) -> tuple[AddTeamCallback, ...]:
+    """A key's ``logging`` entries as the backends see them, each ``callback_settings`` reference swapped for its definition.
+
+    A reference is honoured only while no other entry on the key names its backend: every
+    entry's vars merge into one map per backend, so a sibling could point the definition's
+    credentials at its own host. The reference's own ``callback_vars`` are never read.
+    """
+    if not isinstance(logging_entries, Sequence) or isinstance(logging_entries, (str, bytes)):
+        return ()
+    entries: Final = tuple(
+        _STRING_KEYED_MAPPING.validate_python(item)
+        for item in _OBJECT_LIST_ADAPTER.validate_python(logging_entries)
+        if isinstance(item, Mapping)
+    )
+    backends: Final = tuple(_entry_backend(entry) for entry in entries)
+    return tuple(
+        callback
+        for entry, backend in zip(entries, backends, strict=True)
+        if (callback := _resolved_key_callback(entry, source=source, shared_backend=backends.count(backend) > 1))
+        is not None
+    )
+
+
+def _entry_backend(entry: Mapping[str, object]) -> str | None:
+    callback_name: Final = entry.get("callback_name")
+    return callback_backend_name(callback_name) if isinstance(callback_name, str) else None
+
+
+def _resolved_key_callback(entry: Mapping[str, object], *, source: str, shared_backend: bool) -> AddTeamCallback | None:
+    definition: Final = callback_definition(entry.get("callback_name"))
+    if definition is None:
+        return get_validated_callback_metadata(item=dict(entry), source=source)
+    if shared_backend:
+        verbose_proxy_logger.warning(
+            "Ignoring %s callback metadata naming callback_settings.%s: another entry on this key names the %s callback",
+            source,
+            _sanitize_for_log(definition.name),
+            _sanitize_for_log(definition.backend),
+        )
+        return None
+    reference: Final = get_validated_callback_metadata(item={**entry, "callback_vars": {}}, source=source)
+    if reference is None:
+        return None
+    return reference.model_copy(
+        update={"callback_name": definition.backend, "callback_vars": dict(definition.callback_vars)}
+    )
+
+
+def _validated_callbacks(logging_entries: Iterable[object], *, source: str) -> tuple[AddTeamCallback, ...]:
+    return tuple(
+        callback
+        for item in logging_entries
+        if (
+            callback := get_validated_callback_metadata(
+                item=dict(_STRING_KEYED_MAPPING.validate_python(item)), source=source
+            )
+        )
+        is not None
+    )
+
 
 class KeyAndTeamLoggingSettings:
     """
@@ -1276,10 +1340,7 @@ def get_dynamic_logging_metadata(
     # Key-based callbacks
     #########################################################################################
     if key_dynamic_logging_settings is not None:
-        for item in key_dynamic_logging_settings:
-            callback = get_validated_callback_metadata(item=item, source="key-level")
-            if callback is None:
-                continue
+        for callback in resolved_key_callbacks(key_dynamic_logging_settings, source="key-level"):
             callback_settings_obj = convert_key_logging_metadata_to_callback(
                 data=callback,
                 team_callback_settings_obj=callback_settings_obj,
@@ -1443,8 +1504,11 @@ def resolve_tenant_otel_destinations(
     disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
     callbacks: Final = tuple(
         callback
-        for item in entries
-        if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        for callback in (
+            resolved_key_callbacks(entries, source="otel-destination")
+            if key_entries is not None
+            else _validated_callbacks(entries, source="otel-destination")
+        )
         if callback.callback_name.lower() not in disabled
     )
     return tuple(

@@ -11443,3 +11443,111 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+_REFERENCE_ENTRY: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+_ARIZE_SPACE_A: Final = {
+    "callback_type": "arize",
+    "arize_api_key": "resolved-space-a-key",
+    "arize_space_id": "space-a",
+    "arize_otlp_protocol": "http/protobuf",
+    "excluded_services": "postgres,redis",
+}
+
+
+@pytest.fixture
+def arize_space_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callback_settings", {"arize_space_a": dict(_ARIZE_SPACE_A)})
+
+
+@pytest.fixture
+def otel_v2_on(monkeypatch: pytest.MonkeyPatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_ENDPOINT", "https://arize.internal.example/v1")
+    monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_key_logging_entry_naming_a_definition_runs_its_backend_with_the_definition_vars() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"logging": [_REFERENCE_ENTRY]}, team_metadata={})
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.success_callback == ["arize"]
+    assert not result.failure_callback
+    assert result.callback_vars == {
+        key: value for key, value in _ARIZE_SPACE_A.items() if key not in ("callback_type", "excluded_services")
+    }, "excluded_services is a destination-only var, which the destination test below covers"
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_the_vars_stored_on_a_reference_entry_never_reach_the_backend() -> None:
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"logging": [{**_REFERENCE_ENTRY, "callback_vars": {"arize_space_id": "attacker-space"}}]},
+        team_metadata={},
+    )
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None and result.callback_vars is not None
+    assert result.callback_vars["arize_space_id"] == "space-a"
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_reference_is_skipped_when_another_entry_on_the_key_names_its_backend() -> None:
+    """A stored inline entry for the same backend would merge its host or space with the definition's
+    credentials, so the definition's secrets stay out of the request instead."""
+    sibling: Final = {
+        "callback_name": "arize",
+        "callback_type": "success",
+        "callback_vars": {"arize_space_id": "attacker-space", "arize_api_key": "attacker-key"},
+    }
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-key", metadata={"logging": [_REFERENCE_ENTRY, sibling]}, team_metadata={}
+    )
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.callback_vars == sibling["callback_vars"]
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_team_logging_entry_naming_a_definition_is_not_resolved() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={"logging": [_REFERENCE_ENTRY]})
+
+    assert get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock()) is None
+
+
+@pytest.mark.usefixtures("arize_space_a", "otel_v2_on")
+def test_a_reference_resolves_to_the_same_otel_destination_as_the_inline_entry() -> None:
+    from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
+
+    inline: Final = {
+        "callback_name": "arize",
+        "callback_type": "success",
+        "callback_vars": {key: value for key, value in _ARIZE_SPACE_A.items() if key != "callback_type"},
+    }
+    referencing_key: Final = UserAPIKeyAuth(
+        api_key="hashed-key", team_id="team-a", metadata={"logging": [_REFERENCE_ENTRY]}, team_metadata={}
+    )
+    inline_key: Final = UserAPIKeyAuth(
+        api_key="other-key", team_id="team-a", metadata={"logging": [inline]}, team_metadata={}
+    )
+    plain_key_on_the_same_team: Final = UserAPIKeyAuth(
+        api_key="plain-key", team_id="team-a", metadata={}, team_metadata={}
+    )
+
+    resolved: Final = resolve_tenant_otel_destinations(referencing_key)
+
+    assert resolved == resolve_tenant_otel_destinations(inline_key)
+    assert len(resolved) == 1
+    assert resolved[0].headers["api_key"] == "resolved-space-a-key"
+    assert resolve_tenant_otel_destinations(plain_key_on_the_same_team) == ()

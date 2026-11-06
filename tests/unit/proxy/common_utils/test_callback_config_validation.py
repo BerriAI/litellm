@@ -3,11 +3,16 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.proxy.common_utils.callback_config_validation import (
+    callback_backend_name,
     callback_config_error,
+    callback_definition,
+    callback_definitions_error,
     conflicting_callback_var_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
+    logging_entry_keys,
     logging_metadata_config_error,
 )
 
@@ -499,3 +504,158 @@ def test_key_logging_entries_compare_excluded_services_by_parsed_value(
 def test_a_failure_only_entry_rejects_excluded_services() -> None:
     error: Final = callback_config_error("langfuse_otel", {"excluded_services": "redis"}, "failure")
     assert error is not None and "excluded_services" in error and "success_and_failure" in error
+
+
+_ARIZE_DEFINITION: Final = {
+    "callback_type": "arize",
+    "arize_api_key": "resolved-space-a-key",
+    "arize_space_id": "space-a",
+}
+
+
+@pytest.fixture
+def arize_space_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callback_settings", {"arize_space_a": dict(_ARIZE_DEFINITION)})
+
+
+@pytest.mark.parametrize(
+    ("callback_settings", "named_fields"),
+    [
+        ({"arize": {"callback_type": "arize", "arize_api_key": "k"}}, ("callback_settings.arize", "named after")),
+        (
+            {"space_a": {"callback_type": "not_a_callback"}},
+            ("callback_settings.space_a.callback_type", "not_a_callback"),
+        ),
+        ({"space_a": {"callback_type": "arize", "arize_api_key": None}}, ("callback_settings.space_a.arize_api_key",)),
+        ({"space_a": {"callback_type": "arize", "arize_api_key": ""}}, ("callback_settings.space_a.arize_api_key",)),
+        (
+            {"space_a": {"callback_type": "arize", "arize_space_id": "os.environ/UNSET"}},
+            ("callback_settings.space_a.arize_space_id", "secret manager"),
+        ),
+        ({"space_a": {"callback_type": "arize", "arize_api_kye": "k"}}, ("callback_settings.space_a", "arize_api_kye")),
+        (
+            {"space_a": {"callback_type": "arize", "arize_otlp_protocol": "carrier-pigeon"}},
+            ("callback_settings.space_a", "arize_otlp_protocol"),
+        ),
+    ],
+)
+def test_a_definition_a_key_could_never_use_fails_config_load(
+    callback_settings: dict[str, object], named_fields: tuple[str, ...]
+) -> None:
+    error: Final = callback_definitions_error(callback_settings)
+    assert error is not None
+    for fragment in named_fields:
+        assert fragment in error
+
+
+def test_a_definition_error_names_the_field_and_never_its_value() -> None:
+    error: Final = callback_definitions_error(
+        {
+            "space_a": {
+                "callback_type": "arize",
+                "arize_otlp_protocol": "carrier-pigeon",
+                "arize_api_key": "sk-super-secret",
+            }
+        }
+    )
+    assert error is not None and "arize_otlp_protocol" in error
+    assert "sk-super-secret" not in error
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+def test_callback_settings_without_a_referenceable_definition_pass_config_load() -> None:
+    assert (
+        callback_definitions_error(
+            {
+                "otel": {"message_logging": False, "excluded_services": ["postgres"]},
+                "my_api": {"callback_type": "generic_api", "url": "os.environ/UNSET"},
+                "space_a": {
+                    "callback_type": "arize",
+                    "arize_api_key": "k",
+                    "arize_space_id": 12345,
+                    "excluded_services": "postgres,redis",
+                },
+            }
+        )
+        is None
+    )
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_reference_resolves_to_its_definition_and_a_plain_name_does_not() -> None:
+    definition: Final = callback_definition("arize_space_a")
+    assert definition is not None
+    assert (definition.backend, dict(definition.callback_vars)) == (
+        "arize",
+        {"arize_api_key": "resolved-space-a-key", "arize_space_id": "space-a"},
+    )
+    assert callback_definition("arize") is None
+    assert callback_definition(None) is None
+    assert (callback_backend_name("arize_space_a"), callback_backend_name("langfuse")) == ("arize", "langfuse")
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_reference_entry_may_not_carry_callback_vars() -> None:
+    error: Final = logging_metadata_config_error(
+        {
+            "logging": [
+                {
+                    "callback_name": "arize_space_a",
+                    "callback_type": "success",
+                    "callback_vars": {"arize_space_id": "attacker-space"},
+                }
+            ]
+        }
+    )
+    assert error is not None and "arize_space_a" in error and "callback_vars" in error
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_reference_is_the_only_entry_for_its_backend() -> None:
+    sibling: Final = {"callback_name": "arize", "callback_type": "success", "callback_vars": {"arize_space_id": "x"}}
+    reference: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+    error: Final = logging_metadata_config_error({"logging": [reference, sibling]})
+    assert error is not None and "arize_space_a" in error and "arize" in error
+    assert logging_metadata_config_error({"logging": [sibling]}) is None
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_reference_sits_next_to_entries_for_other_backends() -> None:
+    assert (
+        logging_metadata_config_error(
+            {
+                "logging": [
+                    {"callback_name": "arize_space_a", "callback_type": "success"},
+                    {"callback_name": "arize_space_a", "callback_type": "failure", "callback_vars": {}},
+                    {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}},
+                ]
+            }
+        )
+        is not None
+    ), "two references to one definition still share its backend"
+    assert (
+        logging_metadata_config_error(
+            {
+                "logging": [
+                    {"callback_name": "arize_space_a", "callback_type": "success"},
+                    {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}},
+                ]
+            }
+        )
+        is None
+    )
+
+
+def test_logging_entry_keys_change_with_every_field_a_caller_could_edit() -> None:
+    entry: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {"b": "2", "a": "1"}}
+    reordered: Final = {
+        "callback_type": "success",
+        "callback_vars": {"a": "1", "b": "2"},
+        "callback_name": "arize_space_a",
+    }
+    assert logging_entry_keys([entry]) == logging_entry_keys([reordered])
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": "failure"}])
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_vars": {"a": "1"}}])
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_name": "arize"}])
+    assert logging_entry_keys([entry]) != logging_entry_keys([entry, entry])
+    assert logging_entry_keys(None) == logging_entry_keys("not-a-list") == ()

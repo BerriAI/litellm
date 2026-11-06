@@ -6,10 +6,14 @@ per-integration checks here.
 """
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+from typing import Final, TypeAlias, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
+from pydantic import TypeAdapter
+
+import litellm
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
@@ -21,6 +25,148 @@ _ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
+_GENERIC_API_CALLBACK_TYPE: Final = "generic_api"
+_CALLBACK_TYPE_FIELD: Final = "callback_type"
+_SECRET_REFERENCE_PREFIX: Final = "os.environ/"
+_STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+LoggingEntryKey: TypeAlias = tuple[str | None, str | None, tuple[tuple[str, str], ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class CallbackDefinition:
+    """A ``callback_settings`` entry a key's ``logging`` entry may reference by name.
+
+    ``backend`` is the callback it runs on and ``callback_vars`` the values the config
+    loader resolved at boot, secrets included, so the key stores only the name.
+    """
+
+    name: str
+    backend: str
+    callback_vars: Mapping[str, str]
+
+
+def callback_definition(callback_name: object) -> CallbackDefinition | None:
+    """The definition ``callback_name`` references, or None when it is a plain callback name."""
+    if not isinstance(callback_name, str):
+        return None
+    return _parsed_definition(callback_name, litellm.callback_settings.get(callback_name))
+
+
+def _parsed_definition(name: str, raw: object) -> CallbackDefinition | None:
+    if not isinstance(raw, Mapping):
+        return None
+    definition: Final = _STRING_KEYED_MAPPING.validate_python(raw)
+    backend: Final = definition.get(_CALLBACK_TYPE_FIELD)
+    if not isinstance(backend, str) or backend == _GENERIC_API_CALLBACK_TYPE:
+        return None
+    return CallbackDefinition(
+        name=name,
+        backend=backend,
+        callback_vars=MappingProxyType(
+            {
+                key: "" if value is None else str(value)
+                for key, value in definition.items()
+                if key != _CALLBACK_TYPE_FIELD
+            }
+        ),
+    )
+
+
+def callback_backend_name(callback_name: str) -> str:
+    """The callback a ``logging`` entry runs on: its definition's backend for a reference, else its own name."""
+    definition: Final = callback_definition(callback_name)
+    return callback_name if definition is None else definition.backend
+
+
+def callback_definitions_error(callback_settings: Mapping[str, object]) -> str | None:
+    """Why a ``callback_settings`` definition could never serve a key, checked at config load.
+
+    A typo in a field or secret name would otherwise surface only on the first request
+    of a key that already depends on the definition. Errors name the field, never its value.
+    """
+    definitions: Final = (
+        definition
+        for name, raw in callback_settings.items()
+        if (definition := _parsed_definition(name, raw)) is not None
+    )
+    return next((error for definition in definitions if (error := _definition_error(definition)) is not None), None)
+
+
+def _definition_error(definition: CallbackDefinition) -> str | None:
+    known_callbacks: Final = litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the registry of callback names has no public accessor
+    if definition.name in known_callbacks:
+        return (
+            f"callback_settings.{definition.name} is named after the {definition.name} callback, "
+            "so a key could not tell them apart"
+        )
+    if definition.backend not in known_callbacks:
+        return f"callback_settings.{definition.name}.callback_type {definition.backend!r} is not a known callback"
+    unresolved: Final = next(
+        (
+            key
+            for key, value in definition.callback_vars.items()
+            if value == "" or value.startswith(_SECRET_REFERENCE_PREFIX)
+        ),
+        None,
+    )
+    if unresolved is not None:
+        return (
+            f"callback_settings.{definition.name}.{unresolved} is empty or could not be resolved "
+            "from the secret manager"
+        )
+    return _definition_backend_error(definition)
+
+
+def _definition_backend_error(definition: CallbackDefinition) -> str | None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import AddTeamCallback
+
+    try:
+        validated: Final = AddTeamCallback.model_validate(
+            {"callback_name": definition.backend, "callback_vars": dict(definition.callback_vars)}
+        )
+    except ValidationError as e:
+        return f"callback_settings.{definition.name}: " + "; ".join(error["msg"] for error in e.errors())
+    error: Final = callback_config_error(definition.backend, validated.callback_vars)
+    return None if error is None else f"callback_settings.{definition.name}: {error}"
+
+
+def callback_reference_error(logging_entries: object) -> str | None:
+    """A ``callback_settings`` reference is a name only, and the only entry for its backend.
+
+    Every entry's vars merge into one map per backend at request time, so a value on the
+    reference or on a sibling naming the same backend could point the definition's
+    credentials somewhere else.
+    """
+    entries: Final = stored_callback_entries(logging_entries)
+    backends: Final = tuple(None if name is None else callback_backend_name(name) for name, _ in entries)
+    return next((error for error in _reference_errors(entries, backends) if error is not None), None)
+
+
+def _reference_errors(
+    entries: Sequence[tuple[str | None, Mapping[str, str]]], backends: Sequence[str | None]
+) -> Iterator[str | None]:
+    for (name, callback_vars), backend in zip(entries, backends, strict=True):
+        if name is None or callback_definition(name) is None:
+            continue
+        if callback_vars:
+            yield f"callback_settings.{name} is referenced by name only, so the entry may not carry callback_vars"
+        elif backends.count(backend) > 1:
+            yield (
+                f"callback_settings.{name} already provides the {backend} callback for this key, "
+                f"so no other {backend} entry may sit next to it"
+            )
+
+
+def logging_entry_keys(logging_entries: object) -> tuple[LoggingEntryKey, ...]:
+    """Every ``logging`` entry as a comparable value: name, event type and sorted vars, so no field changes unnoticed."""
+    entries: Final = _object_sequence(logging_entries) or ()
+    return tuple(
+        (_entry_callback_name(entry), _entry_callback_type(entry), tuple(sorted(_entry_callback_vars(entry).items())))
+        for entry in entries
+    )
 
 
 def callback_config_error(
@@ -279,6 +425,9 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = _object_sequence(metadata.get("logging"))
     if entries is None:
         return None
+    reference_error: Final = callback_reference_error(entries)
+    if reference_error is not None:
+        return reference_error
     entry_error: Final = next(
         (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
         None,
@@ -314,6 +463,14 @@ def _entry_callback_name(entry: object) -> str | None:
     match entry:
         case {"callback_name": str() as callback_name}:
             return callback_name
+        case _:
+            return None
+
+
+def _entry_callback_type(entry: object) -> str | None:
+    match entry:
+        case {"callback_type": str() as callback_type}:
+            return callback_type
         case _:
             return None
 

@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
+import litellm
+
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     LiteLLM_UserTable,
@@ -5496,3 +5498,42 @@ async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: 
 
     assert pbkdf2_on_event_loop == [False]
     assert data["password"].startswith("pbkdf2:")
+
+
+@pytest.mark.asyncio
+async def test_new_user_cannot_hand_its_auto_created_key_a_callback_reference_for_a_non_admin(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``/user/new`` writes ``metadata`` onto the key it auto-creates, so it runs the same admin gate as ``/key/generate``."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"arize_space_a": {"callback_type": "arize", "arize_api_key": "k", "arize_space_id": "s"}},
+    )
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(),
+        upsert=AsyncMock(),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    reference: Final = {"logging": [{"callback_name": "arize_space_a", "callback_type": "success"}]}
+
+    with pytest.raises(ProxyException) as exc:
+        await new_user(
+            data=NewUserRequest(user_email="bob@example.test", metadata=reference, send_invite_email=False),
+            user_api_key_dict=UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "callback_settings" in exc.value.message
+    table.create.assert_not_awaited()
+    table.upsert.assert_not_awaited()

@@ -67,7 +67,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
+from litellm.proxy.common_utils.callback_config_validation import (
+    callback_definition,
+    logging_entry_keys,
+    logging_metadata_config_error,
+)
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
@@ -433,6 +437,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decode_json_string_column(column: str, value: object) -> object:
@@ -933,12 +938,49 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
         raise HTTPException(status_code=400, detail={"error": error})
 
 
+def raise_on_unauthorized_callback_reference(
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """Only a proxy admin may point a key at a ``callback_settings`` definition or change the logging of a key holding one.
+
+    The definition carries the operator's credentials, so the team admins and members who
+    can otherwise edit key metadata may only send such a key's ``logging`` list back unchanged.
+    """
+    if metadata is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    requested: Final = logging_entry_keys(metadata.get("logging"))
+    stored: Final = logging_entry_keys(_stored_logging_entries(existing_metadata))
+    if requested == stored or not any(callback_definition(name) is not None for name, _, _ in (*requested, *stored)):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only a proxy admin can point a key at a callback_settings definition "
+                "or change the logging entries of a key that holds one"
+            )
+        },
+    )
+
+
+def _stored_logging_entries(existing_metadata: Mapping[str, object] | None) -> object:
+    """The stored ``logging`` list with its callback vars decrypted, since ciphertext never equals the plaintext sent back."""
+    if existing_metadata is None:
+        return None
+    decrypted: Final = _DECODED_JSON.validate_python(decrypt_callback_vars(existing_metadata))
+    return _STRING_KEYED_MAPPING.validate_python(decrypted).get("logging") if isinstance(decrypted, Mapping) else None
+
+
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest | UpdateKeyRequest,
     llm_router: Router | None,
     premium_user: bool,
     user_id: str | None = None,
+    existing_metadata: Mapping[str, object] | None = None,
 ) -> Literal[True]:
     """
     Check if user is allowed to make a key request, for this key
@@ -964,6 +1006,11 @@ def common_key_access_checks(
         models=data.models,
         llm_router=llm_router,
         premium_user=premium_user,
+    )
+    raise_on_unauthorized_callback_reference(
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_metadata,
     )
     return True
 
@@ -3773,6 +3820,7 @@ async def _validate_update_key_data(
         user_id=user_api_key_dict.user_id if acting_as_team_admin else existing_key_row.user_id,
         llm_router=llm_router,
         premium_user=premium_user,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -6651,6 +6699,11 @@ async def regenerate_key_fn(
             data,
             _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
             user_api_key_dict,
+        )
+        raise_on_unauthorized_callback_reference(
+            None if data is None else data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         )
 
         # check if user has permission to regenerate key

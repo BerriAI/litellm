@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -87,6 +88,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _validate_max_budget,
     _validate_reset_spend_value,
     _validate_update_key_data,
+    raise_on_unauthorized_callback_reference,
     can_modify_verification_token,
     check_org_key_model_specific_limits,
     check_team_key_model_specific_limits,
@@ -24243,3 +24245,187 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+_REFERENCE_ENTRY: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+_LANGFUSE_ENTRY: Final = {
+    "callback_name": "langfuse",
+    "callback_type": "success",
+    "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk-plain"},
+}
+
+
+@pytest.fixture
+def arize_space_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"arize_space_a": {"callback_type": "arize", "arize_api_key": "k", "arize_space_id": "s"}},
+    )
+
+
+def _non_admin() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-alice", user_id="alice")
+
+
+@pytest.mark.usefixtures("arize_space_a")
+class TestCallbackReferenceWriteGate:
+    def test_a_proxy_admin_may_point_a_key_at_a_definition(self) -> None:
+        admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+        assert raise_on_unauthorized_callback_reference({"logging": [_REFERENCE_ENTRY]}, admin) is None
+        assert (
+            raise_on_unauthorized_callback_reference(
+                {"logging": []}, admin, existing_metadata={"logging": [_REFERENCE_ENTRY]}
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"logging": [_REFERENCE_ENTRY]},
+            {"logging": [_LANGFUSE_ENTRY, _REFERENCE_ENTRY]},
+            {"logging": [{**_REFERENCE_ENTRY, "callback_vars": {}}]},
+        ],
+    )
+    def test_a_non_admin_cannot_point_a_key_at_a_definition(self, metadata: Mapping[str, object]) -> None:
+        with pytest.raises(HTTPException) as exc:
+            raise_on_unauthorized_callback_reference(metadata, _non_admin())
+        assert exc.value.status_code == 403
+        assert "callback_settings" in str(exc.value.detail)
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"note": "edited"},
+            {"logging": []},
+            {"logging": [{**_REFERENCE_ENTRY, "callback_type": "failure"}]},
+            {"logging": [{**_REFERENCE_ENTRY, "callback_name": "arize"}]},
+            {"logging": [_REFERENCE_ENTRY, _LANGFUSE_ENTRY]},
+            {"logging": [{**_LANGFUSE_ENTRY, "callback_vars": {"langfuse_host": "https://attacker.example"}}]},
+        ],
+    )
+    def test_a_non_admin_cannot_change_the_logging_of_a_key_holding_a_reference(
+        self, metadata: Mapping[str, object]
+    ) -> None:
+        with pytest.raises(HTTPException) as exc:
+            raise_on_unauthorized_callback_reference(
+                metadata, _non_admin(), existing_metadata={"logging": [_REFERENCE_ENTRY]}
+            )
+        assert exc.value.status_code == 403
+
+    def test_a_non_admin_may_edit_the_rest_of_the_metadata_when_the_logging_is_sent_back_unchanged(self) -> None:
+        stored: Final = encrypt_callback_vars({"note": "original", "logging": [_REFERENCE_ENTRY, _LANGFUSE_ENTRY]})
+        assert (
+            raise_on_unauthorized_callback_reference(
+                {"note": "edited", "logging": [_REFERENCE_ENTRY, _LANGFUSE_ENTRY]},
+                _non_admin(),
+                existing_metadata=stored,
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize("existing_metadata", [None, {}, {"logging": [_LANGFUSE_ENTRY]}])
+    def test_a_key_without_a_reference_keeps_the_logging_rules_it_had(
+        self, existing_metadata: Mapping[str, object] | None
+    ) -> None:
+        changed: Final = [
+            {**_LANGFUSE_ENTRY, "callback_type": "failure"},
+            {"callback_name": "datadog", "callback_vars": {}},
+        ]
+        assert (
+            raise_on_unauthorized_callback_reference(
+                {"logging": changed}, _non_admin(), existing_metadata=existing_metadata
+            )
+            is None
+        )
+        assert (
+            raise_on_unauthorized_callback_reference(
+                None, _non_admin(), existing_metadata={"logging": [_REFERENCE_ENTRY]}
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("arize_space_a")
+async def test_generate_key_with_a_callback_reference_is_admin_only() -> None:
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(metadata={"logging": [_REFERENCE_ENTRY]}),
+                user_api_key_dict=_non_admin(),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert exc.value.status_code == 403
+    assert "callback_settings" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("arize_space_a")
+async def test_generate_key_rejects_callback_vars_on_a_reference_for_everyone() -> None:
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(
+                    metadata={"logging": [{**_REFERENCE_ENTRY, "callback_vars": {"arize_space_id": "mine"}}]}
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert exc.value.status_code == 400
+    assert "callback_vars" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("arize_space_a")
+async def test_update_key_compares_the_sent_logging_against_the_stored_row() -> None:
+    existing_key_row: Final = MagicMock()
+    existing_key_row.user_id = "alice"
+    existing_key_row.token = "hashed_token"
+    existing_key_row.team_id = None
+    existing_key_row.metadata = {"logging": [_REFERENCE_ENTRY]}
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-test-key", metadata={"note": "edited"}),
+            existing_key_row=existing_key_row,
+            user_api_key_dict=_non_admin(),
+            llm_router=None,
+            premium_user=False,
+            prisma_client=AsyncMock(),
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "callback_settings" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("arize_space_a")
+async def test_regenerate_key_cannot_drop_a_reference_for_a_non_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import regenerate_key_fn
+
+    key_row: Final = MagicMock()
+    key_row.token = "hashed_token"
+    key_row.user_id = "alice"
+    key_row.team_id = None
+    key_row.metadata = {"logging": [_REFERENCE_ENTRY]}
+    prisma: Final = MagicMock()
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
+    prisma.db.litellm_verificationtoken.update = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master")
+
+    with pytest.raises(ProxyException) as exc:
+        await regenerate_key_fn(
+            key=None,
+            data=RegenerateKeyRequest(key="sk-test", metadata={"note": "edited"}),
+            user_api_key_dict=_non_admin(),
+            litellm_changed_by=None,
+        )
+    assert str(exc.value.code) == "403"
+    assert "callback_settings" in str(exc.value.message)
+    prisma.db.litellm_verificationtoken.update.assert_not_awaited()
