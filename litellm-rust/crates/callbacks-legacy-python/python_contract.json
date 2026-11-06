@@ -47,6 +47,9 @@
   "defers_async_logging": [
     "logger"
   ],
+  "claim_async_success_log": [
+    "logger"
+  ],
   "defer_success": [
     "logger",
     "pending"

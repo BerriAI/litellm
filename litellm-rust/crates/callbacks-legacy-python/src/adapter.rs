@@ -251,7 +251,7 @@ impl LegacyLogging {
         if !self.asynchronous {
             return pending().sync(py);
         }
-        if self.internal {
+        if self.internal || !logger.claim_async_success_log(py)? {
             return logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end);
         }
         let enqueues = self
@@ -2028,6 +2028,46 @@ logger._native_pending_logging.release(True)
                 .extract()
                 .unwrap();
             assert_eq!(names, expected);
+        });
+    }
+
+    #[rstest]
+    #[case::deferred(
+        c"logger._defer_async_logging = True",
+        c"logger._native_pending_logging.release(True)",
+        &["sync_success_for_async_call", "sync_success_for_async_call", "async_success_handler", "enqueued"]
+    )]
+    #[case::immediate(
+        c"",
+        c"",
+        &["async_success_handler", "enqueued", "sync_success_for_async_call", "sync_success_for_async_call"]
+    )]
+    fn a_fallback_attempt_on_the_same_logger_leaves_the_first_success_claimed(
+        #[case] script: &CStr,
+        #[case] release: &CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"refused = object()\nresponse = refused");
+            run(py, &locals, script);
+            let mut first = logged(py, &locals, true);
+            succeed(py, &locals, &mut first);
+            run(py, &locals, c"response = object()");
+            let mut fallback = logged(py, &locals, true);
+            succeed(py, &locals, &mut fallback);
+            run(py, &locals, release);
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+            run(
+                py,
+                &locals,
+                c"assert [value for name, value in logger.calls if name == 'async_success_handler'] == [refused]",
+            );
         });
     }
 
