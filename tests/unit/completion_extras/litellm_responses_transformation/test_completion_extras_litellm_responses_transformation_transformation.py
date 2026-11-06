@@ -6334,6 +6334,46 @@ def test_transform_request_maps_client_cache_control_for_an_alias_whose_base_mod
     assert marked == {("system", "Stable prefix"), ("user", "hi")}
 
 
+def _completion_marked_texts(model: str, model_info: Mapping[str, object]) -> set[tuple[object, object]]:
+    response_body: Final = {
+        "id": "resp_alias_marks",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_alias_marks",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        litellm.completion(
+            model=model,
+            messages=_client_marked_messages(),
+            api_key="sk-test",
+            model_info=model_info,
+            cache={"no-cache": True},
+        )
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    return {(role, text) for role, text, _ in _marked_parts_of(request_body["input"])}
+
+
+def test_completion_maps_client_cache_control_for_an_alias_whose_base_model_is_declared_in_model_info() -> None:
+    served_model_marks: Final = _completion_marked_texts("openai/responses/gpt-5.6", {})
+
+    assert served_model_marks
+    assert _completion_marked_texts("openai/responses/team-alias", {"base_model": "gpt-5.6"}) == served_model_marks
+
+
 def test_transform_request_leaves_client_cache_control_unmapped_for_a_deployment_that_does_not_read_breakpoints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
