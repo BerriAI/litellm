@@ -181,15 +181,15 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def _aws_filters(self, filters: object, drop_params: bool) -> Mapping[str, object] | None:
         if not isinstance(filters, dict):
             return self._invalid_filters(f"filters must be an object, got {type(filters).__name__}", drop_params)
+        if "operator" in filters:
+            return self._map_operator_filter(filters)
+        if "and" in filters or "or" in filters:
+            return self._map_and_or_filters(filters)
         if "type" in filters:
             try:
                 return _aws_retrieval_filter(_OPENAI_FILTER.validate_python(filters))
             except ValidationError as error:
                 return self._invalid_filters(_validation_reason(error), drop_params)
-        if "operator" in filters:
-            return self._map_operator_filter(filters)
-        if "and" in filters or "or" in filters:
-            return self._map_and_or_filters(filters)
         return filters
 
     @staticmethod
