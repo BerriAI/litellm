@@ -4843,6 +4843,7 @@ class SearchProviders(str, Enum):
     BING_GROUNDING = "bing_grounding"
     DEEPSEEK = "deepseek"
     XAI = "xai"
+    CLORO = "cloro"
 
 
 # Create a set of all search provider values for quick lookup
