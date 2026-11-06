@@ -222,6 +222,45 @@ describe("AddAutoRouterTab", () => {
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
+  it("starts Switchyard from the quick setup models and creates it for the selected team", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Admin" createScope="team-required" />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.change(screen.getByLabelText(/Auto Router Name/), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(screen.getByLabelText(/Auto Router Name/)).toHaveValue("stage-test"));
+    expect(handleAddSwitchyardSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    expect(await screen.findByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddSwitchyardSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddSwitchyardSubmit).mock.calls[0][0]).toMatchObject({
+      config: { models: { capable: "claude-opus-5-5", efficient: "claude-haiku-5-5" } },
+      modelInfo: { team_id: "team-1" },
+    });
+  });
+
+  it("forgets a tool semantics error once Switchyard is reopened from the saved settings", async () => {
+    renderAdvanced(<Harness />);
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.change(screen.getByLabelText("Tool semantics"), { target: { value: "{not json" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.getByLabelText("Tool semantics")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText(/Auto Router Name/), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddSwitchyardSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddSwitchyardSubmit).mock.calls[0][0].toolSemanticsError).toBeNull();
+  });
+
   it("creates the goal-selected latest OpenAI pair using its Bedrock deployment aliases", async () => {
     mockFetchAvailableModels.mockResolvedValue(
       ["small", "middle-old", "middle", "large"].map((model_group) => ({ model_group, mode: "chat" })),

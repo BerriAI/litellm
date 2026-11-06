@@ -9,9 +9,9 @@ const modelName = z
   .refine((name) => !name.startsWith("auto_router/"), "Select a concrete model");
 const optionsFields = {
   picker: z.enum(["efficient_first", "capable_first"]).default("efficient_first"),
-  confidence_threshold: threshold.optional(),
-  recent_window: positiveInteger.optional(),
-  tool_semantics: z.partialRecord(z.enum(["observe", "mutate", "plan", "new"]), z.array(z.string())).optional(),
+  confidence_threshold: threshold.nullish(),
+  recent_window: positiveInteger.nullish(),
+  tool_semantics: z.partialRecord(z.enum(["observe", "mutate", "plan", "new"]), z.array(z.string())).nullish(),
   only_on_wrong_signal_escalation: z.boolean().optional(),
 };
 const llmClassifierFields = {
@@ -19,21 +19,21 @@ const llmClassifierFields = {
   base_threshold: threshold.default(0.5),
   threshold_step: threshold.default(0),
   max_output_tokens: positiveInteger.default(4096),
-  recent_turn_window: positiveInteger.optional(),
+  recent_turn_window: positiveInteger.nullish(),
   response_format_type: z.enum(["json_schema", "json_object"]).default("json_schema"),
-  prompt: z.string().optional(),
+  prompt: z.string().nullish(),
 };
 const decisionClassifierFields = {
   kind: z.literal("decision"),
   cutoff: threshold.default(0.6),
-  instructions: z.string().optional(),
-  evidence: z.record(z.string(), z.unknown()).optional(),
+  instructions: z.union([z.string(), z.record(z.string(), z.unknown())]).nullish(),
+  evidence: z.record(z.string(), z.unknown()).nullish(),
 };
 const configFields = {
   algorithm: z.literal("stage_router").default("stage_router"),
-  models: z.object({ capable: modelName, efficient: modelName, judge: modelName.optional() }).strict(),
+  models: z.object({ capable: modelName, efficient: modelName, judge: modelName.nullish() }).strict(),
   options: z.object(optionsFields).strict().default({ picker: "efficient_first" }),
-  classifier: z.union([z.object(decisionClassifierFields).strict(), z.object(llmClassifierFields).strict()]).optional(),
+  classifier: z.union([z.object(decisionClassifierFields).strict(), z.object(llmClassifierFields).strict()]).nullish(),
 };
 export const switchyardConfigSchema = z
   .object(configFields)

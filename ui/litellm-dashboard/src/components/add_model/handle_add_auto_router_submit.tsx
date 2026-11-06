@@ -59,8 +59,13 @@ export const handleAddAutoRouterSubmit = async (
   }
 };
 
+export interface SwitchyardModelInfo {
+  team_id?: string;
+  access_groups?: string[];
+}
+
 export const handleAddSwitchyardSubmit = async (
-  draft: { name: string; config: SwitchyardConfig; toolSemanticsError: string | null },
+  draft: { name: string; config: SwitchyardConfig; toolSemanticsError: string | null; modelInfo: SwitchyardModelInfo },
   accessToken: string,
   resetForm: () => void,
   callback: () => void,
@@ -68,7 +73,10 @@ export const handleAddSwitchyardSubmit = async (
   const invalid = draft.toolSemanticsError ?? switchyardSaveError(draft.name, draft.config);
   if (invalid) return toast.fromError(invalid);
   try {
-    await modelCreateCall(accessToken, { ...switchyardRouterPayload(draft.name, draft.config), model_info: {} });
+    await modelCreateCall(accessToken, {
+      ...switchyardRouterPayload(draft.name, draft.config),
+      model_info: draft.modelInfo,
+    });
     toast.success(i18n.t("addModel.handleAddAutoRouterSubmit.created", { name: draft.name }));
     resetForm();
     callback();

@@ -23,6 +23,11 @@ interface Props {
   onToolSemanticsError: (error: string | null) => void;
 }
 
+const isStructured = (instructions: unknown): instructions is Record<string, unknown> =>
+  typeof instructions === "object" && instructions !== null;
+const instructionsText = (instructions: string | Record<string, unknown> | null | undefined): string =>
+  isStructured(instructions) ? JSON.stringify(instructions, null, 2) : instructions ?? "";
+
 export default function SwitchyardConfigFields({
   value,
   onChange,
@@ -251,7 +256,8 @@ export default function SwitchyardConfigFields({
                 <label htmlFor={`${id}-instructions`}>Decision instructions</label>
                 <Textarea
                   id={`${id}-instructions`}
-                  value={decision.instructions ?? ""}
+                  readOnly={isStructured(decision.instructions)}
+                  value={instructionsText(decision.instructions)}
                   placeholder="Use Switchyard’s built-in instructions"
                   onChange={(event) =>
                     onChange({

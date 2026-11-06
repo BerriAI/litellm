@@ -15,7 +15,7 @@ import {
   type SwitchyardConfig,
 } from "./switchyard_config";
 import SwitchyardConfigFields from "./SwitchyardConfigFields";
-import { handleAddSwitchyardSubmit } from "./handle_add_auto_router_submit";
+import { handleAddSwitchyardSubmit, type SwitchyardModelInfo } from "./handle_add_auto_router_submit";
 
 interface FieldsProps {
   accessToken: string;
@@ -56,30 +56,50 @@ export function SwitchyardModelFields({ accessToken, routerName, value, onChange
   );
 }
 
+interface StageSeed {
+  capable?: string;
+  efficient?: string;
+}
+
 export function useSwitchyardOption(accessToken: string, routerName: string, enabled: boolean) {
   const [selected, setSelected] = useState(false);
   const [config, setConfig] = useState(emptySwitchyardConfig);
   const [toolSemanticsError, setToolSemanticsError] = useState<string | null>(null);
+  const select = (seed: StageSeed) => {
+    setSelected(true);
+    setToolSemanticsError(null);
+    setConfig((current) => ({
+      ...current,
+      models: {
+        ...current.models,
+        capable: current.models.capable || seed.capable || "",
+        efficient: current.models.efficient || seed.efficient || "",
+      },
+    }));
+  };
   return {
     selected,
     deselect: () => setSelected(false),
-    option: enabled
-      ? {
-          selected,
-          onSelect: () => setSelected(true),
-          fields: (
-            <SwitchyardModelFields
-              accessToken={accessToken}
-              routerName={routerName}
-              value={config}
-              onChange={setConfig}
-              onToolSemanticsError={setToolSemanticsError}
-            />
-          ),
-        }
-      : undefined,
-    submit: (name: string, resetForm: () => void, onSuccess: () => void) =>
-      handleAddSwitchyardSubmit({ name, config, toolSemanticsError }, accessToken, resetForm, onSuccess),
+    option: (seed: StageSeed) =>
+      enabled
+        ? {
+            selected,
+            onSelect: () => select(seed),
+            fields: (
+              <SwitchyardModelFields
+                accessToken={accessToken}
+                routerName={routerName}
+                value={config}
+                onChange={setConfig}
+                onToolSemanticsError={setToolSemanticsError}
+              />
+            ),
+          }
+        : undefined,
+    submit: (name: string, modelInfo: SwitchyardModelInfo, resetForm: () => void, onSuccess: () => void) => {
+      const draft = { name, config, toolSemanticsError, modelInfo };
+      return handleAddSwitchyardSubmit(draft, accessToken, resetForm, onSuccess);
+    },
   };
 }
 

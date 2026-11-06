@@ -517,6 +517,23 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
+  const submitSwitchyard = async (name: string) => {
+    if (requiresTeamScope && !(await form.trigger(["auto_router_name", "team_id"]))) {
+      toast.fromError(t("addModel.addAutoRouterTab.requiredFieldsMissing"));
+      return;
+    }
+    const accessGroups = isMemberManaged ? undefined : form.getValues("model_access_group");
+    await switchyard.submit(
+      name,
+      {
+        ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
+        ...(accessGroups?.length ? { access_groups: accessGroups } : {}),
+      },
+      () => form.reset(EMPTY_FORM_VALUES),
+      handleOk,
+    );
+  };
+
   const handleAutoRouterSubmit = async () => {
     if (isSubmitting) return;
     const name = form.getValues("auto_router_name");
@@ -529,9 +546,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     setIsSubmitting(true);
     try {
-      await (switchyard.selected
-        ? switchyard.submit(name, () => form.reset(EMPTY_FORM_VALUES), handleOk)
-        : submitRecommendedRouter(name));
+      await (switchyard.selected ? submitSwitchyard(name) : submitRecommendedRouter(name));
     } finally {
       setIsSubmitting(false);
     }
@@ -669,7 +684,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               )}
 
               <AutoRouterClassifierTabs
-                switchyard={switchyard.option}
+                switchyard={switchyard.option({ capable: hard?.name, efficient: everyday?.name })}
                 value={complexityRouterConfig}
                 onChange={handleClassifierChange}
                 decisionModel={

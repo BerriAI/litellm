@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
@@ -53,19 +54,41 @@ async def _resolved(value: _T) -> _T:
     return value
 
 
-def _forwarded_header(name: str) -> bool:
+_SESSION_ALIASES: Final = frozenset(
+    {_SESSION_HEADER, "x-claude-code-session-id", "x-nemo-relay-session-id", "x-session-id", "session-id"}
+)
+_CODEX_TURN_METADATA_HEADER: Final = "x-codex-turn-metadata"
+
+
+def _forwarded_header(name: str, session_scoped: bool) -> bool:
     lowered: Final = name.lower()
+    if lowered in _SESSION_ALIASES or (lowered == _CODEX_TURN_METADATA_HEADER and not session_scoped):
+        return False
     return lowered in _FORWARDED_HEADERS or lowered.startswith(_FORWARDED_HEADER_PREFIXES)
+
+
+def _caller_key_hash(request_kwargs: Mapping[str, object]) -> str:
+    buckets: Final = (mapping(request_kwargs.get(name) or {}) for name in ("metadata", "litellm_metadata"))
+    return next((str(key) for bucket in buckets if (key := bucket.get("user_api_key_hash")) is not None), "")
+
+
+def _scoped_session(request_kwargs: Mapping[str, object]) -> str | None:
+    session: Final = parent_session_kwargs(request_kwargs).get("litellm_session_id")
+    if not session:
+        return None
+    return hashlib.sha256(f"{_caller_key_hash(request_kwargs)}\0{session}".encode()).hexdigest()
 
 
 def switchyard_headers(request_kwargs: Mapping[str, object]) -> Mapping[str, str]:
     proxy_request: Final = mapping(request_kwargs.get("proxy_server_request") or {})
     client: Final = mapping(proxy_request.get("headers") or {})
-    session: Final = parent_session_kwargs(request_kwargs).get("litellm_session_id")
-    return {
-        **{name.lower(): value for name, value in client.items() if isinstance(value, str) and _forwarded_header(name)},
-        **({_SESSION_HEADER: session} if session else {}),
+    session: Final = _scoped_session(request_kwargs)
+    forwarded: Final = {
+        name.lower(): value
+        for name, value in client.items()
+        if isinstance(value, str) and _forwarded_header(name, session is not None)
     }
+    return {**forwarded, **({_SESSION_HEADER: session} if session else {})}
 
 
 class SwitchyardRouter:

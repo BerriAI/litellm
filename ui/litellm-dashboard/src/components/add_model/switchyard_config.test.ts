@@ -7,6 +7,7 @@ import {
   stageConfidence,
   switchyardSaveError,
   switchyardConfigSchema,
+  switchyardRouterPayload,
   toggleClassifier,
 } from "./switchyard_config";
 
@@ -58,6 +59,33 @@ describe("Switchyard configuration", () => {
       classifier: { base_threshold: 0.4 },
     });
     expect(parsed.classifier).toMatchObject({ kind: "llm", base_threshold: 0.4 });
+  });
+  it("opens routers saved through the API with nulls and structured decision instructions", () => {
+    const instructions = { system: "Prefer the capable model for schema migrations" };
+    const unsetOptions = {
+      picker: "efficient_first",
+      confidence_threshold: null,
+      recent_window: null,
+      tool_semantics: null,
+    };
+    const apiSaved = {
+      algorithm: "stage_router",
+      models: { capable: "strong", efficient: "fast", judge: "decider" },
+      options: unsetOptions,
+      classifier: { kind: "decision", cutoff: 0.6, instructions, evidence: null },
+    };
+    const decision = switchyardConfigSchema.parse(apiSaved);
+    expect(switchyardSaveError("route", decision)).toBeNull();
+    expect(switchyardRouterPayload("route", decision).litellm_params.switchyard_router_config.classifier).toMatchObject(
+      {
+        instructions,
+      },
+    );
+    const plain = switchyardConfigSchema.parse({
+      models: { capable: "strong", efficient: "fast", judge: null },
+      classifier: null,
+    });
+    expect(switchyardSaveError("route", plain)).toBeNull();
   });
   it("accepts tool semantics that list only some categories", () => {
     expect(parseToolSemantics('{"observe": ["Grep"], "mutate": ["Deploy"]}')).toEqual({

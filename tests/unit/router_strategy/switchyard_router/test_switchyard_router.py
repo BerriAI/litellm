@@ -197,24 +197,36 @@ async def test_anthropic_tool_failure_marker_reaches_switchyard(marked: bool, ex
     ("request_kwargs", "expected"),
     [
         ({"litellm_session_id": "s1"}, ["strong", "strong", "strong", "fast"]),
-        ({"proxy_server_request": {"headers": {"X-Session-Id": "s1"}}}, ["strong", "strong", "strong", "fast"]),
+        (
+            {"proxy_server_request": {"headers": {"X-Session-Id": "s1", "session-id": "s1"}}},
+            ["strong", "fast", "fast", "fast"],
+        ),
         ({}, ["strong", "fast", "fast", "fast"]),
     ],
 )
 async def test_capable_hold_follows_the_session(request_kwargs: Mapping[str, object], expected: list[str]) -> None:
     switchyard: Final = router(config())
     turns: Final = (("CUDA out of memory",), *((("All tests passed",) * count) for count in (2, 3, 4)))
-    picks: Final = [
-        result.model
-        for results in turns
-        if (
-            result := await switchyard.async_pre_routing_hook(
-                "route", request_kwargs, transcript("acompletion", "bash", results), call_type="acompletion"
-            )
-        )
-        is not None
-    ]
+    picks: Final = [await pick(switchyard, request_kwargs, results) for results in turns]
     assert picks == expected
+
+
+async def pick(switchyard: SwitchyardRouter, request_kwargs: Mapping[str, object], results: tuple[str, ...]) -> str:
+    result: Final = await switchyard.async_pre_routing_hook(
+        "route", request_kwargs, transcript("acompletion", "bash", results), call_type="acompletion"
+    )
+    assert result is not None
+    return result.model
+
+
+@pytest.mark.asyncio
+async def test_a_session_hold_never_crosses_api_keys() -> None:
+    switchyard: Final = router(config())
+    owner: Final = {"litellm_session_id": "shared", "metadata": {"user_api_key_hash": "owner"}}
+    other: Final = {"litellm_session_id": "shared", "metadata": {"user_api_key_hash": "other"}}
+    assert await pick(switchyard, owner, ("CUDA out of memory",)) == "strong"
+    assert await pick(switchyard, other, ("All tests passed",) * 2) == "fast"
+    assert await pick(switchyard, owner, ("All tests passed",) * 2) == "strong"
 
 
 @pytest.mark.asyncio
