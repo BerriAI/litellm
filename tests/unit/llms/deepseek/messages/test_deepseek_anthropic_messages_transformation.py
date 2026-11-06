@@ -1,3 +1,5 @@
+import pytest
+
 import litellm
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -187,3 +189,78 @@ def test_deepseek_anthropic_messages_preserves_thinking_and_sanitizes_custom_too
         "input_schema": {"type": "object"},
     }
     assert request["tools"][1]["type"] == "web_search_20260209"
+
+
+def _tool_loop_history():
+    return [
+        {"role": "user", "content": "List the files in /tmp, then count them."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Listing them."},
+                {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"command": "ls /tmp"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt\nb.txt"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Count them.", "signature": "sig"},
+                {"type": "tool_use", "id": "toolu_2", "name": "bash", "input": {"command": "ls /tmp | wc -l"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "2"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "tool_use", "id": "toolu_4", "name": "bash", "input": {"command": "ls -a /tmp"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_4", "content": "a.txt\nb.txt"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "There are 2 files."}]},
+        {"role": "user", "content": "Now delete a.txt."},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_3", "name": "bash", "input": {"command": "rm /tmp/a.txt"}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_3", "content": ""}]},
+    ]
+
+
+def _transform(messages, thinking_params):
+    return DeepSeekAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="deepseek-v4-pro",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 100, **thinking_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_params",
+    [
+        {},
+        {"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        {"thinking": {"type": "adaptive"}},
+    ],
+    ids=["thinking_absent", "thinking_enabled", "thinking_adaptive"],
+)
+def test_deepseek_anthropic_messages_fills_empty_thinking_on_tool_use_turns(thinking_params):
+    messages = _tool_loop_history()
+
+    request = _transform(messages, thinking_params)
+
+    empty_thinking = {"type": "thinking", "thinking": ""}
+    expected = _tool_loop_history()
+    expected[1] = {**expected[1], "content": [empty_thinking, *expected[1]["content"]]}
+    expected[9] = {**expected[9], "content": [empty_thinking, *expected[9]["content"]]}
+    assert request["messages"] == expected
+    assert messages == _tool_loop_history()
+
+
+def test_deepseek_anthropic_messages_leaves_history_alone_when_thinking_disabled():
+    request = _transform(_tool_loop_history(), {"thinking": {"type": "disabled"}})
+
+    assert request["messages"] == _tool_loop_history()

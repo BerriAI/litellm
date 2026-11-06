@@ -15,14 +15,15 @@ from litellm.llms.anthropic.messages.native.transformation import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
-_TOOL_LIST: Final = TypeAdapter(list[object])
-_TOOL_FIELDS: Final = TypeAdapter(dict[object, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_OBJECT_FIELDS: Final = TypeAdapter(dict[object, object])
+_THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 
 def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
     if not isinstance(tool, dict):
         return None
-    fields: Final = _TOOL_FIELDS.validate_python(tool)
+    fields: Final = _OBJECT_FIELDS.validate_python(tool)
     if fields.get("type") == "custom":
         fields.pop("type", None)
         return fields
@@ -32,6 +33,31 @@ def _custom_tool_without_type(tool: object) -> Mapping[object, object] | None:
 def _sanitized_tool(tool: object) -> object:
     stripped: Final = _custom_tool_without_type(tool)
     return tool if stripped is None else stripped
+
+
+def _tool_turn_with_empty_thinking(message: object) -> Mapping[object, object] | None:
+    fields: Final = _OBJECT_FIELDS.validate_python(message)
+    content: Final = fields.get("content")
+    if not isinstance(content, list):
+        return None
+    blocks: Final = _OBJECT_LIST.validate_python(content)
+    block_types: Final = frozenset(_OBJECT_FIELDS.validate_python(block).get("type") for block in blocks)
+    if "tool_use" not in block_types or not block_types.isdisjoint(_THINKING_BLOCK_TYPES):
+        return None
+    return {**fields, "content": [{"type": "thinking", "thinking": ""}, *blocks]}
+
+
+def _with_empty_thinking(message: object) -> object:
+    filled: Final = _tool_turn_with_empty_thinking(message)
+    return message if filled is None else filled
+
+
+def _messages_with_empty_thinking(messages: object) -> Sequence[object]:
+    return [_with_empty_thinking(message) for message in _OBJECT_LIST.validate_python(messages)]
+
+
+def _thinking_disabled(thinking: object) -> bool:
+    return isinstance(thinking, dict) and _OBJECT_FIELDS.validate_python(thinking).get("type") == "disabled"
 
 
 class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -120,7 +146,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         if not isinstance(tools, list):
             return tools
 
-        return [_sanitized_tool(tool) for tool in _TOOL_LIST.validate_python(tools)]
+        return [_sanitized_tool(tool) for tool in _OBJECT_LIST.validate_python(tools)]
 
     def transform_anthropic_messages_request(
         self,
@@ -139,4 +165,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         )
         if "tools" in anthropic_messages_request:
             anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(anthropic_messages_request["tools"])
+        request_fields: Final = _OBJECT_FIELDS.validate_python(anthropic_messages_request)
+        if not _thinking_disabled(request_fields.get("thinking")):
+            anthropic_messages_request["messages"] = _messages_with_empty_thinking(request_fields["messages"])
         return anthropic_messages_request
