@@ -2803,3 +2803,54 @@ class TestRegistration:
             guardrail_class_registry["microsoft_purview"]
             is MicrosoftPurviewDLPGuardrail
         )
+
+
+class TestRawFramesInAStreamedResponse:
+    @staticmethod
+    def _streamed_text(content: str):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id="chatcmpl-raw-frame",
+            created=1,
+            model="gpt-4o",
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=content))],
+        )
+
+    async def _scan(self, items: list[object], check: AsyncMock) -> list[object]:
+        guardrail: Final = _make_guardrail()
+
+        async def upstream():
+            for item in items:
+                yield item
+
+        with patch.object(guardrail, "_check_content", check):
+            return [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                    response=upstream(),
+                    request_data={"metadata": {"user_id": "user-123"}},
+                )
+            ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    async def test_the_parsed_chunks_are_scanned_and_delivered_beside_a_raw_frame(self, position: int):
+        parsed: Final = [self._streamed_text("Hello"), self._streamed_text(" world")]
+        check: Final = AsyncMock(return_value={"policyActions": []})
+
+        delivered: Final = await self._scan([*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]], check)
+
+        assert [call.kwargs["text"] for call in check.call_args_list] == ["Hello world"]
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in delivered) == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_a_violation_is_raised_when_a_raw_frame_sits_beside_the_chunks(self):
+        parsed: Final = [self._streamed_text("SSN: 123-45"), self._streamed_text("-6789")]
+        blocked: Final = HTTPException(status_code=400, detail={"error": "Content blocked by policy"})
+
+        with pytest.raises(HTTPException) as raised:
+            await self._scan([parsed[0], b"data: [DONE]\n\n", parsed[1]], AsyncMock(side_effect=blocked))
+
+        assert raised.value is blocked

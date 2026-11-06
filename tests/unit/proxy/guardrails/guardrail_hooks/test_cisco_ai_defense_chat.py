@@ -3067,3 +3067,63 @@ def test_config_model_exposed():
         CiscoAIDefenseGuardrail.get_config_model() is CiscoAIDefenseGuardrailConfigModel
     )
     assert CiscoAIDefenseGuardrailConfigModel.ui_friendly_name() == "Cisco AI Defense"
+
+
+class TestCiscoAIDefenseRawFramesInAStream:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    async def test_the_parsed_chunks_are_inspected_and_delivered_beside_a_raw_frame(self, position):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        parsed = _make_streaming_chunks(["Hello", " world"])
+        stream = [*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]]
+
+        received, post_mock = await _streaming_setup(g, stream, cisco_response=_safe_response())
+
+        inspected = [message["content"] for message in post_mock.call_args.kwargs["json"]["messages"]]
+        assert inspected[-1] == "Hello world"
+        assert received == stream
+
+    @pytest.mark.asyncio
+    async def test_a_violation_withholds_the_chunks_when_a_raw_frame_sits_beside_them(self):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        parsed = _make_streaming_chunks(["Here is your SSN: ", "123-45-6789."])
+
+        received, post_mock = await _streaming_setup(
+            g, [parsed[0], b"data: [DONE]\n\n", parsed[1]], cisco_response=_violation_response()
+        )
+
+        assert post_mock.called
+        assert all(isinstance(chunk, str) and chunk.startswith("data: ") for chunk in received)
+        assert any('"error"' in chunk and "Cisco AI Defense" in chunk for chunk in received)
+
+    @pytest.mark.asyncio
+    async def test_a_data_line_after_a_carriage_return_is_inspected_and_delivered(self):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        parsed = _make_streaming_chunks(["Hello", " world"])
+        carried = '{"created": 1, "model": "m", "choices": [{"index": 0, "delta": {"content": " LEAKED-SECRET"}}]}'
+        stream = [parsed[0], f'event: message\rdata: {carried}\n\n'.encode(), parsed[1]]
+
+        received, post_mock = await _streaming_setup(g, stream, cisco_response=_safe_response())
+
+        inspected = [message["content"] for message in post_mock.call_args.kwargs["json"]["messages"]]
+        delivered = "".join(chunk.choices[0].delta.content or "" for chunk in received)
+        assert delivered == "Hello LEAKED-SECRET world"
+        assert delivered in inspected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("frame", [b"LEAKED-SECRET", b'data: {"choices": [{"text": "LEAKED-SECRET"}]}\n\n'])
+    async def test_a_frame_that_cannot_be_read_is_not_inspected_or_delivered(self, frame):
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
+        post_mock = AsyncMock(return_value=_safe_response())
+        delivered: list = []
+
+        with _patch_inspection_post(g, post_mock), pytest.raises(litellm.APIError):
+            async for chunk in g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter([*_make_streaming_chunks(["Hello"]), frame]),
+                request_data={"messages": [{"role": "user", "content": "hi"}]},
+            ):
+                delivered.append(chunk)
+
+        assert delivered == []
+        post_mock.assert_not_called()

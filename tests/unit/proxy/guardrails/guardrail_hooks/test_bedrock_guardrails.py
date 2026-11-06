@@ -8168,3 +8168,76 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
     assert upstream.calls.last.request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
+
+
+def _streamed_text(content: str) -> litellm.ModelResponseStream:
+    return litellm.ModelResponseStream(
+        id="tid",
+        choices=[
+            litellm.types.utils.StreamingChoices(
+                delta=litellm.types.utils.Delta(content=content, role="assistant"), index=0
+            )
+        ],
+        created=1,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+    )
+
+
+def _post_call_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-raw-frame",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+
+
+async def _streamed(items: list[object]):
+    for item in items:
+        yield item
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", [0, 1, 2])
+async def test_streaming_post_call_scans_the_parsed_chunks_beside_a_raw_frame(position: int):
+    guardrail: Final = _post_call_guardrail()
+    parsed: Final = [_streamed_text("Hello"), _streamed_text(" world")]
+    stream: Final = [*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]]
+
+    clean_scan: Final = {"action": "NONE", "assessments": [], "outputs": []}
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(return_value=clean_scan)) as mock_make:
+        delivered = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_streamed(stream), request_data={"messages": []}
+            )
+        ]
+
+    scanned: Final = [
+        call.kwargs["response"].choices[0].message.content
+        for call in mock_make.call_args_list
+        if call.kwargs.get("source") == "OUTPUT"
+    ]
+    assert scanned == ["Hello world"]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in delivered) == "Hello world"
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_still_blocks_a_violating_response_that_carries_a_raw_frame():
+    guardrail: Final = _post_call_guardrail()
+    violation: Final = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+    stream: Final = [_streamed_text("Hello"), b"data: [DONE]\n\n", _streamed_text(" world")]
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=violation)):
+        with pytest.raises(HTTPException) as blocked:
+            _ = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(), response=_streamed(stream), request_data={"messages": []}
+                )
+            ]
+
+    assert blocked.value is violation

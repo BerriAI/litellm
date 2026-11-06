@@ -1003,7 +1003,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             isinstance(event_type := getattr(chunk, "type", None), str) and event_type.startswith("response.")
             for chunk in all_chunks
         ):
-            return _StreamSurface.RESPONSES
+            has_raw_frame: Final = any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
+            return _StreamSurface.OPAQUE_SSE if has_raw_frame else _StreamSurface.RESPONSES
         return _StreamSurface.CHAT_COMPLETIONS
 
     @staticmethod
