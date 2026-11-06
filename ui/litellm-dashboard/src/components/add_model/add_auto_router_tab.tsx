@@ -432,8 +432,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       : simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
     switchyard.deselect();
-    setSelectedPreset(undefined);
+    if (advanced || effectiveClassifierType(config) === effectiveClassifierType(complexityRouterConfig)) {
+      setSelectedPreset(undefined);
+      setComplexityRouterConfig(config);
+      return;
+    }
     setComplexityRouterConfig(config);
+    setPrefillAttempted(simpleConfig !== null);
+    setAdvanced(true);
   };
   const jevRequestParams =
     effectiveClassifierType(complexityRouterConfig) === "jev"
@@ -662,64 +668,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </FormField>
               )}
 
-              {!advanced && (
-                <AutoRouterSimpleSetup
-                  customized={Boolean(solverOverrides.everyday || solverOverrides.hard)}
-                  hasSuggestions={Boolean(recommended || recommendSolverPair(solverModels, goal, "auto"))}
-                  onReset={() => setSolverOverrides({})}
-                  goal={goal}
-                  family={family}
-                  models={solverModels}
-                  everyday={everyday}
-                  hard={hard}
-                  waitingForTeam={requiresTeamScope && !watchedTeamId}
-                  loading={modelsLoading}
-                  error={inventoryUnavailable}
-                  notice={
-                    Object.keys(solverOverrides).length > 0
-                      ? t("addModel.addAutoRouterTab.choicesKept")
-                      : recommended?.notice ?? null
-                  }
-                  onGoalChange={setGoal}
-                  onFamilyChange={(next) => {
-                    setFamily(next);
-                    setSolverOverrides({});
-                  }}
-                  onModelChange={(role, model) =>
-                    setSolverOverrides({ everyday: everyday?.name, hard: hard?.name, [role]: model })
-                  }
-                  onAdvanced={openAdvanced}
-                  onRetry={() => {
-                    void refetchModels();
-                    void refetchDeployments();
-                  }}
-                />
-              )}
-              {advanced && (
-                <AutoRouterClassifierTabs
-                  switchyard={switchyard.option}
-                  value={complexityRouterConfig}
-                  onChange={handleClassifierChange}
-                  decisionModel={
-                    <DecisionModelSelect
-                      value={complexityRouterConfig}
-                      onChange={setComplexityRouterConfig}
-                      modelInfo={modelInfo}
-                      deployments={deployments}
-                    />
-                  }
-                  judgeModel={
-                    <ClassifierPrimarySettings
-                      section="judge"
-                      value={complexityRouterConfig}
-                      onChange={setComplexityRouterConfig}
-                      modelOptions={modelInfo
-                        .filter((model) => model.mode !== "embedding")
-                        .map((model) => ({ value: model.model_group, label: model.model_group }))}
-                      showValidationErrors={showValidationErrors}
-                    />
-                  }
-                >
+              <AutoRouterClassifierTabs
+                switchyard={switchyard.option}
+                value={complexityRouterConfig}
+                onChange={handleClassifierChange}
+                decisionModel={
+                  <DecisionModelSelect
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    modelInfo={modelInfo}
+                    deployments={deployments}
+                  />
+                }
+                judgeModel={
+                  <ClassifierPrimarySettings
+                    section="judge"
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    modelOptions={modelInfo
+                      .filter((model) => model.mode !== "embedding")
+                      .map((model) => ({ value: model.model_group, label: model.model_group }))}
+                    showValidationErrors={showValidationErrors}
+                  />
+                }
+              >
+                {advanced ? (
                   <FieldGroup>
                     {modelsUnverifiable && (
                       <p className="text-sm text-destructive">
@@ -731,21 +704,40 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     )}
                     {configurationForm}
                   </FieldGroup>
-                </AutoRouterClassifierTabs>
-              )}
-              {!advanced && routerAvailability.isError && (
-                <p className="mt-3 text-sm text-destructive" role="alert">
-                  {t("addModel.addAutoRouterTab.availabilityCheckFailed")}{" "}
-                  <Button type="button" variant="link" onClick={() => void routerAvailability.refetch()}>
-                    {t("addModel.addAutoRouterTab.retry")}
-                  </Button>
-                </p>
-              )}
-              {!advanced && routerAvailability.data?.error && (
-                <p className="mt-3 text-sm text-destructive" role="alert">
-                  {routerAvailability.data.error}
-                </p>
-              )}
+                ) : (
+                  <AutoRouterSimpleSetup
+                    customized={Boolean(solverOverrides.everyday || solverOverrides.hard)}
+                    hasSuggestions={Boolean(recommended || recommendSolverPair(solverModels, goal, "auto"))}
+                    onReset={() => setSolverOverrides({})}
+                    goal={goal}
+                    family={family}
+                    models={solverModels}
+                    everyday={everyday}
+                    hard={hard}
+                    waitingForTeam={requiresTeamScope && !watchedTeamId}
+                    loading={modelsLoading}
+                    error={inventoryUnavailable}
+                    notice={
+                      Object.keys(solverOverrides).length > 0
+                        ? t("addModel.addAutoRouterTab.choicesKept")
+                        : recommended?.notice ?? null
+                    }
+                    onGoalChange={setGoal}
+                    onFamilyChange={(next) => {
+                      setFamily(next);
+                      setSolverOverrides({});
+                    }}
+                    onModelChange={(role, model) =>
+                      setSolverOverrides({ everyday: everyday?.name, hard: hard?.name, [role]: model })
+                    }
+                    onAdvanced={openAdvanced}
+                    onRetry={() => {
+                      void refetchModels();
+                      void refetchDeployments();
+                    }}
+                  />
+                )}
+              </AutoRouterClassifierTabs>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                 <Tooltip>
                   <TooltipTrigger

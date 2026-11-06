@@ -15808,12 +15808,12 @@
       "menu": {
         "unlimited": "Unlimited"
       },
-      "title": "Choose your classifier",
-      "titleTooltip": "Choose how requests are evaluated and routed to your tiers",
-      "aboutClassifiers": "About classifiers",
+      "title": "Choose your routing strategy",
+      "titleTooltip": "Choose how each request is evaluated and which model it is routed to",
+      "aboutClassifiers": "About routing strategies",
       "families": {
         "heuristics": "Heuristics",
-        "heuristicsDescription": "Classify locally, with no API call",
+        "heuristicsDescription": "Default. Classify locally, with no API call",
         "llmDescription": "Use a judge model to choose a solver",
         "decisionModel": "Decisions Model",
         "decisionModelDescription": "Use a decision model to choose a tier"
@@ -16770,9 +16770,9 @@
       "hardDescription": "Your stronger model",
       "roleModel": "{{label}} model",
       "selectModel": "Select a deployed model",
-      "needTwoModels": "Two deployed models are needed. Add a model or use Advanced configuration.",
+      "needTwoModels": "Two deployed models are needed. Add a model or customize tiers and keywords.",
       "chooseTwoModels": "Choose two models to get started.",
-      "advancedConfiguration": "Advanced configuration"
+      "advancedConfiguration": "Customize tiers and keywords"
     },
     "routerConfigBuilder": {
       "removeUtterance": "Remove {{utterance}}",

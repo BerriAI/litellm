@@ -180,7 +180,7 @@ vi.mock("../common_components/team_dropdown", () => ({
 
 const renderAdvanced: typeof renderWithProviders = (...args) => {
   const result = renderWithProviders(...args);
-  fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
   return result;
 };
 
@@ -342,6 +342,25 @@ describe("AddAutoRouterTab", () => {
     },
   );
 
+  it("shows every strategy up front and carries the quick setup models into the one picked", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    renderWithProviders(<Harness />);
+    expect(await screen.findByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    expect(screen.getByRole("radio", { name: "Heuristics", exact: true })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.queryByRole("combobox", { name: "Everyday model" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+
+    fireEvent.click(screen.getByRole("radio", { name: "LLM", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Judge model" })).toBeInTheDocument();
+    expectTierModel("Simple", "claude-haiku-5-5");
+    expectTierModel("Reasoning", "claude-opus-5-5");
+  });
+
   it("carries Responses model choices from simple setup into Advanced tiers", async () => {
     const models = ["gpt-6-luna", "gpt-6-astra"];
     mockFetchAvailableModels.mockResolvedValue(models.map((model_group) => ({ model_group, mode: "responses" })));
@@ -358,7 +377,7 @@ describe("AddAutoRouterTab", () => {
     );
     expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
     expect(screen.queryByText(/Two deployed models are needed/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expectTierModel("Simple", "gpt-6-luna");
     expectTierModel("Reasoning", "gpt-6-astra");
   });
@@ -377,7 +396,7 @@ describe("AddAutoRouterTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
     expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("custom-fast");
     expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
-    fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expectTierModel("Simple", "custom-fast");
     expectTierModel("Reasoning", "claude-opus-5-5");
   });
@@ -412,7 +431,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     expect(await screen.findByText(/Two deployed models are needed/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expect(screen.getByText("Define your tiers")).toBeVisible();
   });
 
