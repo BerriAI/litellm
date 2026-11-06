@@ -68,6 +68,7 @@ import {
 import {
   CustomerRateLimitEditor,
   CustomerRateLimitEntry,
+  customerLimitsEqual,
   customerLimitsToRows,
   customerRowsToLimits,
 } from "../key_team_helpers/CustomerRateLimitEditor";
@@ -303,9 +304,15 @@ function KeyEditSession({
       // clears the stored limits ({} overwrites the metadata field).
       const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
       values.tag_rpm_limit = tag_rpm_limit;
-      const { customer_rpm_limit, customer_tpm_limit } = customerRowsToLimits(customerRateLimits);
-      values.customer_rpm_limit = customer_rpm_limit;
-      values.customer_tpm_limit = customer_tpm_limit;
+      const customerLimits = customerRowsToLimits(customerRateLimits);
+      values.customer_rpm_limit = customerLimits.customer_rpm_limit;
+      values.customer_tpm_limit = customerLimits.customer_tpm_limit;
+      const customerLimitsUnchanged = customerLimitsEqual(
+        customerLimits,
+        customerRowsToLimits(
+          customerLimitsToRows(keyData.metadata?.customer_rpm_limit, keyData.metadata?.customer_tpm_limit),
+        ),
+      );
 
       const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
       if (Object.keys(budgetFallbacks).length > 0) {
@@ -334,7 +341,11 @@ function KeyEditSession({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
-        [...Object.keys(dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        [
+          ...Object.keys(dirtyFields),
+          ...(budgetLimitsUnchanged ? [] : ["budget_limits"]),
+          ...(customerLimitsUnchanged ? [] : ["customer_rpm_limit", "customer_tpm_limit"]),
+        ],
       );
     } finally {
       setIsKeySaving(false);

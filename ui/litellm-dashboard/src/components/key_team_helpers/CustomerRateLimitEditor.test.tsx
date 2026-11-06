@@ -7,6 +7,7 @@ import {
   CustomerRateLimitEntry,
   customerLimitsToRows,
   customerRowsToLimits,
+  customerLimitsEqual,
 } from "./CustomerRateLimitEditor";
 
 function Harness({
@@ -99,5 +100,25 @@ describe("customerLimitsToRows", () => {
 
   it("returns no rows for missing metadata", () => {
     expect(customerLimitsToRows(undefined, null)).toStrictEqual([]);
+  });
+});
+
+describe("customerLimitsEqual", () => {
+  it("treats the same limits in a different row order as unchanged", () => {
+    expect(
+      customerLimitsEqual(
+        { customer_rpm_limit: { acme: 2, globex: 5 }, customer_tpm_limit: {} },
+        { customer_rpm_limit: { globex: 5, acme: 2 }, customer_tpm_limit: {} },
+      ),
+    ).toBe(true);
+  });
+
+  it("reports a changed, added or removed customer limit", () => {
+    const stored = { customer_rpm_limit: { acme: 2 }, customer_tpm_limit: { acme: 900 } };
+    expect(customerLimitsEqual(stored, { customer_rpm_limit: { acme: 3 }, customer_tpm_limit: { acme: 900 } })).toBe(
+      false,
+    );
+    expect(customerLimitsEqual(stored, { customer_rpm_limit: { acme: 2 }, customer_tpm_limit: {} })).toBe(false);
+    expect(customerLimitsEqual(stored, { ...stored, customer_rpm_limit: { acme: 2, globex: 1 } })).toBe(false);
   });
 });

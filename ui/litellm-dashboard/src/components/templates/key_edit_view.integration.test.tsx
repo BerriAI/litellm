@@ -2592,6 +2592,8 @@ describe("KeyEditView", () => {
     auto_rotate: false,
     rotation_interval: undefined,
     tag_rpm_limit: {},
+    customer_rpm_limit: {},
+    customer_tpm_limit: {},
   };
 
   describe("submit payload contract", () => {
@@ -3171,6 +3173,7 @@ describe("KeyEditView", () => {
       });
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("customer_rpm_limit", { acme: 7 });
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("customer_tpm_limit", { acme: 900 });
+      expect(onSubmitMock.mock.calls[0][1]).not.toContain("customer_rpm_limit");
     });
 
     it("clears a stored customer limit when its row is removed", async () => {
@@ -3188,6 +3191,9 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("customer_rpm_limit", {});
+      expect(onSubmitMock.mock.calls[0][1]).toEqual(
+        expect.arrayContaining(["customer_rpm_limit", "customer_tpm_limit"]),
+      );
     });
 
     const setRpmLimit = (value: string) => {

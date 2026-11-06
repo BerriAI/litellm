@@ -761,6 +761,7 @@ class RequestRateLimiterStash:
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+    customer_per_key_tpm_scope: tuple[str, str] | None = None
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
 
     def clear_reserved_tokens(self) -> None:
@@ -3219,13 +3220,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-    def _add_customer_per_key_rate_limit_descriptor(
+    def _customer_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        descriptors: list[RateLimitDescriptor],
-    ) -> None:
+    ) -> RateLimitDescriptor | None:
         """
-        Add a per-customer rpm/tpm descriptor scoped to the API key.
+        Per-customer rpm/tpm descriptor scoped to the API key.
 
         The counter is ``{api_key}:{customer}``, so one customer exhausting its
         allowance on this key never blocks the other customers on the key, nor
@@ -3234,23 +3234,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         customer: Final = user_api_key_dict.end_user_id
         if not user_api_key_dict.api_key or not customer:
-            return
+            return None
 
         rpm_limit: Final = get_key_customer_rpm_limit(user_api_key_dict).get(customer)
         tpm_limit: Final = get_key_customer_tpm_limit(user_api_key_dict).get(customer)
         if rpm_limit is None and tpm_limit is None:
-            return
+            return None
 
-        descriptors.append(
-            RateLimitDescriptor(
-                key="customer_per_key",
-                value=f"{user_api_key_dict.api_key}:{customer}",
-                rate_limit={
-                    "requests_per_unit": rpm_limit,
-                    "tokens_per_unit": tpm_limit,
-                    "window_size": self.window_size,
-                },
-            )
+        return RateLimitDescriptor(
+            key="customer_per_key",
+            value=f"{user_api_key_dict.api_key}:{customer}",
+            rate_limit={
+                "requests_per_unit": rpm_limit,
+                "tokens_per_unit": tpm_limit,
+                "window_size": self.window_size,
+            },
         )
 
     def _add_mcp_per_key_rate_limit_descriptor(
@@ -3671,10 +3669,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        self._add_customer_per_key_rate_limit_descriptor(
-            user_api_key_dict=user_api_key_dict,
-            descriptors=descriptors,
-        )
+        customer_descriptor: Final = self._customer_per_key_rate_limit_descriptor(user_api_key_dict=user_api_key_dict)
+        if customer_descriptor is not None:
+            descriptors.append(customer_descriptor)
 
         self._add_team_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_dict,
@@ -4500,6 +4497,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             for d in descriptors
             if d["key"] == "tag" and d["rate_limit"] is not None and d["rate_limit"].get("tokens_per_unit") is not None
         )
+        stash.customer_per_key_tpm_scope = next(
+            (
+                (d["key"], d["value"])
+                for d in descriptors
+                if d["key"] == "customer_per_key"
+                and d["rate_limit"] is not None
+                and d["rate_limit"].get("tokens_per_unit") is not None
+            ),
+            None,
+        )
         stash.socket_agent_windows = tuple(d for d in descriptors if d["key"] in _AGENT_DESCRIPTOR_KEYS)
 
         # Only check rate limits if we have descriptors with actual limits
@@ -5282,6 +5289,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         kwargs: object,
         model_group: str | None,
         tpm_limited_tags: Set[str] = frozenset(),
+        customer_per_key_scope: tuple[str, str] | None = None,
     ) -> list[tuple[str, str]]:
         """
         Enumerate every (scope_key, scope_value) pair that *might* carry a
@@ -5338,6 +5346,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if session_id:
                 targets.append(("agent_session", f"{agent_id}:{session_id}"))
         targets.extend(("tag", tag) for tag in sorted(tpm_limited_tags))
+        if customer_per_key_scope is not None:
+            targets.append(customer_per_key_scope)
         return targets
 
     def _build_reservation_aware_tpm_ops(
@@ -5514,6 +5524,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             standard_logging_metadata=standard_logging_metadata,
             kwargs=kwargs,
             tpm_limited_tags=_tpm_limited_tags(stash, kwargs),
+            customer_per_key_scope=stash.customer_per_key_tpm_scope if stash is not None else None,
             model_group=reconcile_model.group if reconcile_model is not None else None,
         )
         targets.extend(

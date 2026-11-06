@@ -39,6 +39,13 @@ const toNumberMap = (raw: unknown): Record<string, number> => {
   return out;
 };
 
+const sameLimitMap = (a: Record<string, number>, b: Record<string, number>): boolean =>
+  Object.keys(a).length === Object.keys(b).length &&
+  Object.entries(a).every(([customer, limit]) => b[customer] === limit);
+
+export const customerLimitsEqual = (a: CustomerRateLimits, b: CustomerRateLimits): boolean =>
+  sameLimitMap(a.customer_rpm_limit, b.customer_rpm_limit) && sameLimitMap(a.customer_tpm_limit, b.customer_tpm_limit);
+
 export const customerLimitsToRows = (
   customerRpmLimit?: unknown,
   customerTpmLimit?: unknown,

@@ -10131,33 +10131,39 @@ async def test_per_customer_rpm_limit_on_key_is_scoped_to_that_customer_v3(monke
     await call(other_key, "acme")
 
 
-def test_per_customer_descriptor_carries_rpm_and_tpm_for_the_requesting_customer_v3():
-    """
-    create_rate_limit_descriptors emits one customer_per_key descriptor keyed by
-    ``{api_key}:{customer}`` with that customer's rpm and tpm, and none when the
-    requesting customer has no configured limit.
-    """
-    api_key = hash_token("sk-per-customer-desc")
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
-    metadata = {"customer_rpm_limit": {"acme": 5}, "customer_tpm_limit": {"acme": 900, "globex": 50}}
+@pytest.mark.asyncio
+async def test_per_customer_tpm_limit_on_key_charges_actual_usage_after_the_call_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    _request_stash.set(None)
+    api_key = hash_token("sk-per-customer-tpm")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
+    metadata = {"customer_tpm_limit": {"acme": 100}}
 
-    def descriptors_for(customer: str) -> list[RateLimitDescriptor]:
-        descriptors = handler.create_rate_limit_descriptors(
+    async def call(customer: str) -> None:
+        await handler.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key=api_key, end_user_id=customer, metadata=metadata),
+            cache=local_cache,
             data={"model": "gpt-3.5-turbo", "user": customer},
-            rpm_limit_type=None,
-            tpm_limit_type=None,
-            model_has_failures=False,
+            call_type="",
         )
-        return [d for d in descriptors if d["key"] == "customer_per_key"]
 
-    (acme,) = descriptors_for("acme")
-    assert acme["value"] == f"{api_key}:acme"
-    assert acme["rate_limit"]["requests_per_unit"] == 5
-    assert acme["rate_limit"]["tokens_per_unit"] == 900
+    await call("acme")
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+            "model": "gpt-3.5-turbo",
+            "user": "acme",
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=60, completion_tokens=60, total_tokens=120)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
 
-    (globex,) = descriptors_for("globex")
-    assert globex["rate_limit"]["requests_per_unit"] is None
-    assert globex["rate_limit"]["tokens_per_unit"] == 50
-
-    assert descriptors_for("initech") == []
+    with pytest.raises(HTTPException) as exc_info:
+        await call("acme")
+    assert exc_info.value.status_code == 429
+    assert "customer_per_key" in str(exc_info.value.detail)
+    await call("globex")
