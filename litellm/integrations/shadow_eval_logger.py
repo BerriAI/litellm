@@ -40,6 +40,9 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.redis.stores.spend_counters import (
+    shadow_eval_counter,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -587,7 +590,7 @@ def _leg_eval_spend(sums: Mapping[str, object]) -> float:
 
 
 def _job_spend_counter_key(job_id: str) -> str:
-    return f"spend:shadow_eval:{job_id}"
+    return shadow_eval_counter(job_id)
 
 
 async def _job_spend_from_counter(counter_key: str, fallback_spend: float, max_budget: float) -> float:

@@ -54,6 +54,22 @@ class _FileChange(_Frozen):
     status: Literal["in_progress", "completed", "failed"]
 
 
+class _McpContentBlock(_Frozen):
+    text: str | None = None
+
+
+class _McpResult(_Frozen):
+    content: tuple[_McpContentBlock, ...]
+
+
+class _McpToolCall(_Frozen):
+    type: Literal["mcp_tool_call"]
+    server: str
+    tool: str
+    result: _McpResult | None
+    status: Literal["in_progress", "completed", "failed"]
+
+
 class _ErrorItem(_Frozen):
     type: Literal["error"]
     message: str
@@ -79,9 +95,12 @@ _Item = Annotated[
     Annotated[_AgentMessage, Tag("agent_message")]
     | Annotated[_CommandExecution, Tag("command_execution")]
     | Annotated[_FileChange, Tag("file_change")]
+    | Annotated[_McpToolCall, Tag("mcp_tool_call")]
     | Annotated[_ErrorItem, Tag("error")]
     | Annotated[_Unmodelled, Tag("unmodelled")],
-    Discriminator(_known_or_unmodelled(frozenset({"agent_message", "command_execution", "file_change", "error"}))),
+    Discriminator(
+        _known_or_unmodelled(frozenset({"agent_message", "command_execution", "file_change", "mcp_tool_call", "error"}))
+    ),
 ]
 
 
@@ -132,6 +151,13 @@ class Command:
 
 
 @dataclass(frozen=True, slots=True)
+class McpCall:
+    server: str
+    tool: str
+    output: str
+
+
+@dataclass(frozen=True, slots=True)
 class CodexError:
     message: str
     status_code: int | None
@@ -143,6 +169,7 @@ class CodexRun:
     thread_id: str | None
     commands: tuple[Command, ...]
     patched_files: tuple[Path, ...]
+    mcp_calls: tuple[McpCall, ...]
     answer: str
     usage: TokenUsage | None
     errors: tuple[CodexError, ...]
@@ -164,11 +191,19 @@ def codex_run(*, exit_code: int, stdout: str, stderr: str) -> CodexRun:
             if isinstance(item, _CommandExecution)
         ),
         patched_files=tuple(Path(change.path) for change in chain.from_iterable(patch.changes for patch in patches)),
+        mcp_calls=tuple(
+            _mcp_call(item) for item in items if isinstance(item, _McpToolCall) and item.status == "completed"
+        ),
         answer=answers[-1] if answers else "",
         usage=usages[-1] if usages else None,
         errors=tuple(_errors(events)),
         stderr=stderr,
     )
+
+
+def _mcp_call(item: _McpToolCall) -> McpCall:
+    blocks: Final = item.result.content if item.result else ()
+    return McpCall(server=item.server, tool=item.tool, output="".join(block.text or "" for block in blocks))
 
 
 def _errors(events: tuple[_Event, ...]) -> Iterator[CodexError]:

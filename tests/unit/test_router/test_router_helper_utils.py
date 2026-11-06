@@ -6,7 +6,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,8 +16,6 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import Router
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -32,6 +30,10 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
 )
+
+
+if TYPE_CHECKING:
+    from tests.unit.conftest import RouterRedis
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -308,14 +310,14 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
             "standard_logging_object": standard_logging_payload,
         }
 
-    tpm_key = await router.deployment_callback_on_success(
+    counter = await router.deployment_callback_on_success(
         kwargs=turn_kwargs("_aresponses_websocket"),
         completion_response=None,
         start_time=time.time(),
         end_time=time.time(),
     )
-    assert tpm_key is not None
-    assert await router.cache.async_get_cache(key=tpm_key) == 17
+    assert counter is not None
+    assert (await router.health().usage("gpt-5-mini"))[0] == 17
 
     realtime_key = await router.deployment_callback_on_success(
         kwargs=turn_kwargs("_arealtime"),
@@ -324,7 +326,7 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
         end_time=time.time(),
     )
     assert realtime_key is None
-    assert await router.cache.async_get_cache(key=tpm_key) == 17
+    assert (await router.health().usage("gpt-5-mini"))[0] == 17
 
 
 def _io_limited_router(kind: str, **litellm_params: object) -> Router:
@@ -558,7 +560,7 @@ async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
 
     # The IO deployment is no longer skipped: its TPM routing counter is tracked.
     assert tpm_key is not None
-    assert await router.cache.async_get_cache(key=tpm_key) == 100
+    assert (await router.get_model_group_usage("opus"))[0] == 100
 
 
 @pytest.mark.asyncio
@@ -888,49 +890,28 @@ async def test_increment_deployment_usage_for_response_skips_session_wrappers():
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in request_kwargs["litellm_metadata"]
 
 
-def _shared_redis_stub(store: dict) -> MagicMock:
-    from litellm.caching.redis_cache import RedisCache
-
-    async def increment_pipeline(increment_list, **kwargs):
-        for op in increment_list:
-            store[op["key"]] = store.get(op["key"], 0.0) + op["increment_value"]
-        return [store[op["key"]] for op in increment_list]
-
-    async def batch_get(keys, **kwargs):
-        return {key: store.get(key) for key in keys}
-
-    redis_stub = MagicMock(spec=RedisCache)
-    redis_stub.async_increment_pipeline = increment_pipeline
-    redis_stub.async_batch_get_cache = batch_get
-    return redis_stub
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
-    store: dict = {}
-    worker_a = _rpm_tpm_router("lit-3058-workers")
-    worker_b = _rpm_tpm_router("lit-3058-workers")
-    worker_a.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
-    worker_b.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+async def test_headers_reflect_usage_counted_by_earlier_requests():
+    router = _rpm_tpm_router("lit-3058-workers")
 
     messages = [{"role": "user", "content": "hi"}]
-    tokens_on_a = 0
+    earlier_tokens = 0
     for _ in range(3):
-        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
-        tokens_on_a += response.usage.total_tokens
+        response = await router.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        earlier_tokens += response.usage.total_tokens
 
-    response = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+    response = await router.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
     headers = _ratelimit_headers(response)
     assert headers["x-ratelimit-remaining-requests"] == 96
-    assert headers["x-ratelimit-remaining-tokens"] == 1000 - tokens_on_a - response.usage.total_tokens
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - earlier_tokens - response.usage.total_tokens
 
-    counted_tokens = tokens_on_a + response.usage.total_tokens
+    counted_tokens = earlier_tokens + response.usage.total_tokens
     for _ in range(2):
-        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        response = await router.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
         counted_tokens += response.usage.total_tokens
 
-    stream = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong", stream=True)
+    stream = await router.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong", stream=True)
     stream_headers = _ratelimit_headers(stream)
     assert stream_headers["x-ratelimit-remaining-requests"] == 93
     assert stream_headers["x-ratelimit-remaining-tokens"] == 1000 - counted_tokens
