@@ -3210,6 +3210,16 @@ def _streamed_json_mode_contents(
     return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
 
 
+@pytest.mark.parametrize("fragment", ["48420083852775e76508", "1e5", "123", " ", ""])
+def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragment: str) -> None:
+    fragments: Final = ('{"summary":"', fragment, '"}')
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "".join(fragments)
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
 def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
     fragments = (envelope[:9], envelope[9:40], envelope[40:])

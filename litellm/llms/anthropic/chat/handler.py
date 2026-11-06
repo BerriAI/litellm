@@ -1315,12 +1315,8 @@ class ModelResponseIterator:
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
-                # Track that we converted a response_format tool
-                self.converted_response_format_tool = True
+            self.converted_response_format_tool = True
+            return tool_use.get("function", {}).get("arguments") or "", None
 
         return text, tool_use
 
