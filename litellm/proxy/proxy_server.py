@@ -19206,6 +19206,7 @@ async def async_queue_request(
         data["metadata"]["user_api_key"] = logged_api_key
         data["metadata"]["user_api_key_hash"] = logged_api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
+        data["metadata"]["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
         _headers: Final = safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
