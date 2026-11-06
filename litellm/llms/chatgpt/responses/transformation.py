@@ -54,7 +54,7 @@ def _mentions_json(value: object) -> bool:
     match value:
         case str():
             return "json" in value.lower()
-        case {"content": object() as content}:
+        case {"role": "user" | "developer", "content": object() as content}:
             return _mentions_json(content)
         case {"text": object() as text}:
             return _mentions_json(text)
