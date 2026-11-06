@@ -46,6 +46,19 @@ def call(**kwargs: object) -> NativeCall:
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "expected"),
+    (
+        ("openai/gpt-luna-latest", None, True),
+        ("gpt-luna-latest", "openai", True),
+        ("gemini/gemini-pro-latest", None, False),
+        ("gpt-luna-latest", None, False),
+    ),
+)
+def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
+    assert chat_detectors.model_alias_map(call(model=model, custom_llm_provider=provider)) is expected
+
+
+@pytest.mark.parametrize(
     ("model", "provider", "tools", "expected"),
     (
         ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),

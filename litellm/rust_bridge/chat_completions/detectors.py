@@ -8,6 +8,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.rust_bridge.detectors import (
     agentic_loop_hook,
     api_base,
@@ -38,7 +39,10 @@ def model_list(request: NativeCall) -> bool:
 
 def model_alias_map(request: NativeCall) -> bool:
     """Python rewrites this model through the configured alias map."""
-    return bool(litellm.model_alias_map) and str(request.resolved["model"]) in litellm.model_alias_map
+    model: Final = str(request.resolved["model"])
+    return model in litellm.model_alias_map or is_model_latest_alias(
+        model, optional_str(request.resolved.get("custom_llm_provider"))
+    )
 
 
 def chat_retries_fallbacks(request: NativeCall) -> bool:
