@@ -1907,10 +1907,9 @@ class RustEndpoints:
         if self._scheduler is None:
             from litellm.scheduler import Scheduler
 
-            self._scheduler = (
-                Scheduler(polling_interval=self._polling_interval)  # pyright: ignore[reportArgumentType]  # as configured
-                if self._polling_interval is not None
-                else Scheduler()
+            self._scheduler = Scheduler(
+                polling_interval=self._polling_interval,  # pyright: ignore[reportArgumentType]  # as configured
+                redis_cache=self._core.routing_cache.redis_cache,
             )
         return self._scheduler
 

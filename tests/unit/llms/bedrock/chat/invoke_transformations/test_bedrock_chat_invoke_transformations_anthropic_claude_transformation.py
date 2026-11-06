@@ -2047,8 +2047,9 @@ def _invoke_chat_params(
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
 def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    local_model_cost_map, model, thinking_params
+    local_model_cost_map, model, thinking_params, monkeypatch
 ):
+    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
     )
@@ -2081,6 +2082,15 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
+
+
+def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None) -> None:
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "disabled"}}
+    )
+
+    assert AmazonAnthropicClaudeConfig().uses_native_output(model, optional_params, {})
 
 
 @pytest.mark.parametrize(

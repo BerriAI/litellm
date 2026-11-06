@@ -14,7 +14,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -58,6 +58,8 @@ interface UISettings {
 }
 
 interface CreateUserFormValues {
+  supply_user_id: boolean;
+  user_id?: string;
   user_email?: string;
   user_role: string;
   team_id?: string | null;
@@ -68,6 +70,8 @@ interface CreateUserFormValues {
 }
 
 const EMBEDDED_DEFAULTS: CreateUserFormValues = {
+  supply_user_id: false,
+  user_id: "",
   user_email: undefined,
   user_role: "internal_user_viewer",
   team_id: undefined,
@@ -76,6 +80,8 @@ const EMBEDDED_DEFAULTS: CreateUserFormValues = {
 };
 
 const STANDALONE_DEFAULTS: CreateUserFormValues = {
+  supply_user_id: false,
+  user_id: "",
   user_email: undefined,
   user_role: "internal_user_viewer",
   team_id: undefined,
@@ -95,11 +101,13 @@ const withoutCollapsedModels = (values: CreateUserFormValues, isPersonalKeyOpen:
   return rest;
 };
 
-const buildCreatePayload = (values: CreateUserFormValues): CreateUserFormValues & { organizations?: string[] } => {
+const buildCreatePayload = (values: CreateUserFormValues) => {
+  const { supply_user_id, user_id, ...fields } = values;
+  const apiValues = supply_user_id ? { ...fields, user_id: user_id?.trim() } : fields;
   const withModels =
     (!values.models || values.models.length === 0) && values.user_role !== "proxy_admin"
-      ? { ...values, models: ["no-default-models"] }
-      : values;
+      ? { ...apiValues, models: ["no-default-models"] }
+      : apiValues;
   if (!withModels.organization_ids) {
     return withModels;
   }
@@ -163,6 +171,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const defaultValues = isEmbedded ? EMBEDDED_DEFAULTS : STANDALONE_DEFAULTS;
   const form = useForm<CreateUserFormValues>({ defaultValues });
+  const supplyUserId = useWatch({ control: form.control, name: "supply_user_id" });
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -205,6 +214,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   };
 
   const handleCreate = async (formValues: CreateUserFormValues) => {
+    if (formValues.supply_user_id && !formValues.user_id?.trim()) {
+      form.setError("user_id", { message: "Enter a User ID" }, { shouldFocus: true });
+      return;
+    }
+    if (formValues.supply_user_id && formValues.user_id?.includes("\u0000")) {
+      form.setError("user_id", { message: "User ID must not contain NUL characters" }, { shouldFocus: true });
+      return;
+    }
     try {
       toast.info(t("users.createUser.toasts.makingApiCall"));
       if (!isEmbedded) {
@@ -253,6 +270,34 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     <FormField control={form.control} name="user_email" label={t("users.createUser.fields.userEmail")}>
       {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} />}
     </FormField>
+  );
+
+  const userIdField = (
+    <>
+      <FormField control={form.control} name="supply_user_id" label="Supply custom User ID" orientation="horizontal">
+        {({ id, value, onChange, onBlur }) => (
+          <Checkbox
+            id={id}
+            checked={value}
+            onCheckedChange={(checked) => {
+              onChange(checked);
+              form.resetField("user_id");
+            }}
+            onBlur={onBlur}
+          />
+        )}
+      </FormField>
+      {supplyUserId && (
+        <FormField
+          control={form.control}
+          name="user_id"
+          label="User ID"
+          description="A unique ID for this user. Leave the checkbox unchecked to generate one automatically."
+        >
+          {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} />}
+        </FormField>
+      )}
+    </>
   );
 
   const teamField = (
@@ -325,6 +370,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           <EmailInvitationsNotice />
           <FieldGroup>
             {userEmailField}
+            {userIdField}
             {roleField(t("users.createUser.fields.userRole"))}
             {teamField}
             {metadataField}
@@ -357,6 +403,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             <form onSubmit={form.handleSubmit(handleCreate)}>
               <FieldGroup>
                 {userEmailField}
+                {userIdField}
                 {roleField(
                   labelWithHint(t("users.createUser.fields.globalRole"), t("users.createUser.fields.globalRoleHint")),
                 )}
@@ -436,7 +483,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
                 </Collapsible>
               </FieldGroup>
 
-              <div className="mt-4 text-right">
+              <div className="sticky bottom-0 -mx-6 mt-4 -mb-6 flex justify-end border-t bg-popover px-6 py-4">
                 <Button type="submit">
                   <UserPlus />
                   {t("users.createUser.submitButton")}
