@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Mapping
-from typing import Final, Never, TypeAlias, cast  # noqa: TID251  # stdlib decoder produces the recursive JSON union
+from typing import Final, NoReturn, TypeAlias, cast  # noqa: TID251  # stdlib decoder produces the recursive JSON union
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -15,7 +15,7 @@ JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dic
 MAX_MESSAGE_BYTES: Final = 64 * 1024 * 1024
 
 
-def refuse_retrieval(uri: str) -> Never:
+def refuse_retrieval(uri: str) -> NoReturn:
     raise NoSuchResource(ref=uri)
 
 

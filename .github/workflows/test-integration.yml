@@ -58,7 +58,7 @@ jobs:
         with:
           version: "0.10.9"
       - name: Install proxy test dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --group dev --group proxy-dev
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --group dev --group proxy-dev --group e2e-dev
       - name: Run real Monty and validator workers
         run: uv run --no-sync pytest tests/integration/sandbox/test_monty_runtime.py -q
 
