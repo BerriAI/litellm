@@ -31,13 +31,16 @@ function familySummary(family: Family) {
 const enabledValue = (enabled: boolean | null) => (enabled === null ? "" : String(enabled));
 
 function policyUpdate(data: FormData, policy: Policy): PolicyUpdate | null {
-  const update: PolicyUpdate = { direction: policy.direction };
-  for (const field of NUMBER_FIELDS) {
+  const numbers = NUMBER_FIELDS.reduce<Partial<PolicyUpdate>>((fields, field) => {
     const value = String(data.get(`${policy.direction}-${field}`) ?? "");
-    if (value !== "" && Number(value) !== policy[field]) update[field] = Number(value);
-  }
+    return value !== "" && Number(value) !== policy[field] ? { ...fields, [field]: Number(value) } : fields;
+  }, {});
   const enabled = String(data.get(`${policy.direction}-enabled`) ?? "");
-  if (enabled !== "" && enabled !== enabledValue(policy.enabled)) update.enabled = enabled === "true";
+  const update: PolicyUpdate = {
+    direction: policy.direction,
+    ...numbers,
+    ...(enabled !== "" && enabled !== enabledValue(policy.enabled) ? { enabled: enabled === "true" } : {}),
+  };
   return Object.keys(update).length > 1 ? update : null;
 }
 
