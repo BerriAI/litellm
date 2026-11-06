@@ -454,6 +454,16 @@ def stream_success(
 
         executor.submit(contextvars.copy_context().run, asyncio.run, coroutine)
         return
+    cancelled: Final = asyncio.current_task()
+    if (
+        stream_teardown
+        and cancelled is not None
+        and cancelled.cancelling()
+        and logger.litellm_params.get("proxy_server_request")
+    ):
+        # the proxy's disconnect cleanup runs later in this task and stamps the 499 error_information this row carries
+        cancelled.add_done_callback(lambda _: enqueue_logging(coroutine))
+        return
     enqueue_logging(coroutine)
 
 

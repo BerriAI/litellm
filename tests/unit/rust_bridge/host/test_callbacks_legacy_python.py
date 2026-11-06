@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import inspect
 from collections.abc import Mapping
@@ -298,3 +299,43 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
     assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}
     assert head["litellm_call_id"] == "messages"
     assert "_response_ms" in head
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_stream_abandoned_mid_cancel_bills_after_the_disconnect_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+
+    logger: Final = _messages_logger()
+    logger.update_environment_variables(
+        litellm_params={"metadata": {}, "proxy_server_request": {"url": "/v1/messages"}}, optional_params={}
+    )
+
+    async def billing() -> None:
+        return None
+
+    events: Final[list[str]] = []
+    monkeypatch.setattr(PassThroughStreamingHandler, "_route_streaming_logging_to_handler", lambda **_: billing())
+    monkeypatch.setattr(legacy, "enqueue_logging", lambda coroutine: (events.append("billed"), coroutine.close()))
+    started: Final = asyncio.Event()
+    now: Final = datetime.datetime.now()
+
+    async def relay() -> None:
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            legacy.stream_success(logger, "/v1/messages", "anthropic", {}, [b"event: ping\n\n"], now, now, None, True)
+            await asyncio.sleep(0)
+            events.append("disconnect recorded")
+            raise
+
+    task: Final = asyncio.create_task(relay())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert events == ["disconnect recorded", "billed"]
