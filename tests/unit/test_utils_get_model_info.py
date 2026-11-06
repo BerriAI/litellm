@@ -390,7 +390,7 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
 
 def test_bedrock_native_output_default_reaches_only_versions_that_read_its_key(local_model_cost_map):
     flagged: Final = tuple(
-        key for key, row in litellm.model_cost.items() if row.get("bedrock_native_structured_output_by_default")
+        key for key, row in litellm.model_cost.items() if row.get("supports_bedrock_native_structured_output_by_default")
     )
 
     assert flagged

@@ -217,7 +217,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_native_streaming: bool | None
     supports_native_structured_output: bool | None
     supports_bedrock_native_structured_output: ReadOnly[bool | None]
-    bedrock_native_structured_output_by_default: ReadOnly[bool | None]
+    supports_bedrock_native_structured_output_by_default: ReadOnly[bool | None]
     supports_parallel_function_calling: bool | None
     supports_web_search: bool | None
     supports_reasoning: bool | None
