@@ -324,6 +324,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_DailyGatewayRequests",
         "LiteLLM_DailyGatewayFailedRequests",
         "LiteLLM_DailyRequestErrors",
+        "LiteLLM_UsageAlertFlush",
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
