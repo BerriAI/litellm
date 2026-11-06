@@ -295,9 +295,16 @@ def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "be
 def _bedrock_native_output_enabled(
     model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
 ) -> bool:
-    deployment_flag: Final = (model_info or {}).get("supports_native_structured_output")
+    deployment_info: Final = model_info or {}
+    deployment_flag: Final = deployment_info.get("supports_native_structured_output")
     if isinstance(deployment_flag, bool):
         return deployment_flag
+    return deployment_info.get("supports_bedrock_native_structured_output") is not False and (
+        bedrock_model_always_takes_native_output(model, custom_llm_provider)
+    )
+
+
+def bedrock_model_always_takes_native_output(model: str, custom_llm_provider: str = "bedrock") -> bool:
     return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
 
 
@@ -539,6 +546,18 @@ def json_object_or_none(value: object) -> Mapping[str, object] | None:
 
 
 BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def _response_format_json_schema(response_format: object) -> Mapping[str, object] | None:
+    json_schema: Final = json_object_or_none((json_object_or_none(response_format) or {}).get("json_schema"))
+    return json_object_or_none((json_schema or {}).get("schema"))
+
+
+def bedrock_batch_record_takes_native_output(model: str, response_format: object) -> bool:
+    schema: Final = _response_format_json_schema(response_format)
+    return bedrock_model_always_takes_native_output(model) and (
+        schema is None or schema_property_count(schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+    )
 
 
 def bedrock_cleaned_output_schema(

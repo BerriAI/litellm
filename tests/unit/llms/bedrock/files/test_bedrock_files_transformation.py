@@ -22,7 +22,7 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
@@ -2062,6 +2062,35 @@ class TestBedrockBatchAnthropicRowParams:
                     "type": "json_schema",
                     "json_schema": {"name": "weather", "schema": self.PARAMETERS},
                 },
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
+
+    @pytest.mark.parametrize("model", [MODEL, "bedrock/us.anthropic.claude-opus-5-5"])
+    @pytest.mark.parametrize(
+        ("property_count", "native_output"),
+        [(BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, True), (BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES + 1, False)],
+        ids=["at_the_limit", "over_the_limit"],
+    )
+    def test_json_schema_rows_wider_than_the_native_output_limit_keep_the_json_tool(
+        self, local_model_cost_map, model, property_count, native_output
+    ):
+        field_names: Final = tuple(f"field_{index:03d}" for index in range(property_count))
+        wide_schema: Final = {
+            "type": "object",
+            "properties": {name: {"type": "string"} for name in field_names},
+            "required": list(field_names),
+            "additionalProperties": False,
+        }
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Describe a ceramic coffee mug"}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "wide", "schema": wide_schema}},
             },
             model=model,
         )

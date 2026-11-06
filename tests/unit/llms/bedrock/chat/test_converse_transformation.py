@@ -5304,6 +5304,30 @@ def test_model_cost_native_output_defaults_hold_across_thinking_modes(
     assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}),
+        ("global.anthropic.claude-fable-5-1", {"thinking": {"type": "adaptive"}}),
+        ("us.anthropic.claude-sonnet-5", {"thinking": {"type": "disabled"}}),
+        ("us.anthropic.claude-haiku-5-5", None),
+        ("us.anthropic.claude-opus-5", None),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_deployment_opt_out_keeps_the_json_tool_on_models_that_default_to_native_output(
+    model: str, thinking_params: Mapping[str, object] | None, stream: bool
+) -> None:
+    optional_params, request = _converse_request_for_json_schema(
+        model, stream, thinking_params, model_info={"supports_bedrock_native_structured_output": False}
+    )
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert optional_params.get("fake_stream", False) is stream
+
+
 def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         200,

@@ -69,6 +69,7 @@ from litellm.utils import get_llm_provider, get_optional_params
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     BedrockError,
+    bedrock_batch_record_takes_native_output,
     deployment_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
@@ -1066,7 +1067,15 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
-            litellm_params: Final = without_bedrock_native_output_opt_in({})
+            litellm_params: Final = without_bedrock_native_output_opt_in(
+                {
+                    "model_info": {
+                        "supports_native_structured_output": bedrock_batch_record_takes_native_output(
+                            _invoke_route_model(model), optional_params.get("response_format")
+                        )
+                    }
+                }
+            )
             mapped_params = get_optional_params(
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
