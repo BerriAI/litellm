@@ -17,7 +17,7 @@ from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.types.router import AllowedFailsPolicy
 
 if TYPE_CHECKING:
-    from litellm.caching.caching import DualCache
+    from litellm.redis.stores.deployment_health import DeploymentHealthStore
     from litellm.router_config import RouterConfig
     from litellm.types.router import Deployment, DeploymentTypedDict
 
@@ -74,8 +74,8 @@ class HealthRouting:
             else None,
         }
 
-    def health_checks(self, cache: "DualCache") -> DeploymentHealthCache:
-        return DeploymentHealthCache(cache=cache, staleness_threshold=self.health_check_staleness)
+    def health_checks(self, store: "DeploymentHealthStore") -> DeploymentHealthCache:
+        return DeploymentHealthCache(store=store, staleness_threshold=self.health_check_staleness)
 
 
 def failover_document(plain: Mapping[str, object]) -> Mapping[str, object]:
