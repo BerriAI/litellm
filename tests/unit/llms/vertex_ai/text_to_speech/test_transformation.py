@@ -108,15 +108,21 @@ class TestVertexAITextToSpeechConfig:
             ("eu", "eu-texttospeech.googleapis.com"),
             ("europe-west4", "eu-texttospeech.googleapis.com"),
             ("europe-west1", "eu-texttospeech.googleapis.com"),
+            ("europe-west3", "eu-texttospeech.googleapis.com"),
+            ("europe-west8", "eu-texttospeech.googleapis.com"),
+            ("europe-west9", "eu-texttospeech.googleapis.com"),
             ("us", "us-texttospeech.googleapis.com"),
             ("us-central1", "us-texttospeech.googleapis.com"),
+            ("us-west5", "us-texttospeech.googleapis.com"),
         ],
     )
-    def test_get_complete_url_uses_regional_endpoint_for_vertex_location(self, vertex_location, expected_host):
+    def test_get_complete_url_uses_regional_endpoint_for_vertex_location(
+        self, vertex_location: str, expected_host: str
+    ) -> None:
         """A us or eu vertex_location selects the matching regional Cloud TTS endpoint"""
-        config = VertexAITextToSpeechConfig()
+        config: Final = VertexAITextToSpeechConfig()
 
-        url = config.get_complete_url(
+        url: Final = config.get_complete_url(
             model="vertex_ai/chirp",
             api_base=None,
             litellm_params={"vertex_location": vertex_location},
@@ -124,12 +130,14 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == f"https://{expected_host}/v1/text:synthesize"
 
-    @pytest.mark.parametrize("vertex_location", ["global", "europe-west2", "asia-northeast1", None])
-    def test_get_complete_url_keeps_global_endpoint_without_a_regional_match(self, vertex_location):
+    @pytest.mark.parametrize(
+        "vertex_location", ["global", "europe-west2", "asia-northeast1", "northamerica-northeast1", None]
+    )
+    def test_get_complete_url_keeps_global_endpoint_without_a_regional_match(self, vertex_location: str | None) -> None:
         """A global, unknown or missing location keeps the previous global endpoint"""
-        config = VertexAITextToSpeechConfig()
+        config: Final = VertexAITextToSpeechConfig()
 
-        url = config.get_complete_url(
+        url: Final = config.get_complete_url(
             model="vertex_ai/chirp",
             api_base=None,
             litellm_params={"vertex_location": vertex_location},
@@ -137,12 +145,12 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == "https://texttospeech.googleapis.com/v1/text:synthesize"
 
-    def test_get_complete_url_api_base_wins_over_vertex_location(self):
+    def test_get_complete_url_api_base_wins_over_vertex_location(self) -> None:
         """An explicit api_base takes precedence over the regional endpoint"""
-        config = VertexAITextToSpeechConfig()
+        config: Final = VertexAITextToSpeechConfig()
 
-        custom_url = "https://custom-tts-endpoint.example.com/v1/synthesize"
-        url = config.get_complete_url(
+        custom_url: Final = "https://custom-tts-endpoint.example.com/v1/synthesize"
+        url: Final = config.get_complete_url(
             model="vertex_ai/chirp",
             api_base=custom_url,
             litellm_params={"vertex_location": "eu"},
@@ -1910,9 +1918,11 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_with_a_numeric_speaking_rate_ret
     (
         ("us-central1", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("us-east5", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("us-west5", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("us", "https://us-texttospeech.googleapis.com/v1/text:synthesize"),
         ("europe-west4", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("europe-north1", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
+        ("europe-west9", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("eu", "https://eu-texttospeech.googleapis.com/v1/text:synthesize"),
         ("northamerica-northeast1", "https://northamerica-northeast1-texttospeech.googleapis.com/v1/text:synthesize"),
         ("global", _SYNTHESIZE_URL),

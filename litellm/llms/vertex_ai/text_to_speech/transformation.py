@@ -58,14 +58,37 @@ _STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
 _CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
     {
         **dict.fromkeys(
-            ("us", "us-central1", "us-east1", "us-east4", "us-east5", "us-south1", "us-west1", "us-west4"), "us"
+            (
+                "us",
+                "us-central1",
+                "us-east1",
+                "us-east4",
+                "us-east5",
+                "us-south1",
+                "us-west1",
+                "us-west4",
+                "us-west5",
+            ),
+            "us",
         ),
         **dict.fromkeys(
-            ("eu", "europe-central2", "europe-north1", "europe-southwest1", "europe-west1", "europe-west4"), "eu"
+            (
+                "eu",
+                "europe-central2",
+                "europe-north1",
+                "europe-southwest1",
+                "europe-west1",
+                "europe-west3",
+                "europe-west4",
+                "europe-west8",
+                "europe-west9",
+            ),
+            "eu",
         ),
         "northamerica-northeast1": "northamerica-northeast1",
     }
 )
+_CLOUD_TTS_MULTI_REGIONS: Final = frozenset(("us", "eu"))
 
 
 _DEFAULT_GEMINI_TTS_VOICE: Final = "Kore"
@@ -737,7 +760,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         location: Final = _JSON_OBJECT.validate_python(litellm_params).get("vertex_location")
         cloud_tts_location: Final = _CLOUD_TTS_LOCATIONS.get(location) if isinstance(location, str) else None
-        if cloud_tts_location is None:
+        if cloud_tts_location not in _CLOUD_TTS_MULTI_REGIONS:
             return self.TTS_API_URL
         return f"https://{cloud_tts_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
