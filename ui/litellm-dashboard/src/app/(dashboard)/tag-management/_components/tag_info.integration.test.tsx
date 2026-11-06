@@ -243,6 +243,21 @@ describe("TagInfoView save payload", () => {
     expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expect.objectContaining(expected));
   });
 
+  it("saves a tag that has no description instead of failing validation on the null", async () => {
+    mockTagInfoCall.mockResolvedValue({ "prod-tag": { ...tag, description: null } });
+    const { user } = await renderEditor();
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    fireEvent.change(await screen.findByLabelText("RPM Limit"), { target: { value: "30" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(screen.queryByText(/Invalid input/)).not.toBeInTheDocument();
+    expect(mockTagUpdateCall).toHaveBeenCalledWith(
+      "sk-test",
+      expect.objectContaining({ description: null, rpm_limit: 30 }),
+    );
+  });
+
   it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
     const { user } = await renderEditor();
 

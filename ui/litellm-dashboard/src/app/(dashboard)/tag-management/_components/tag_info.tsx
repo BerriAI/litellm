@@ -39,7 +39,7 @@ const optionalLimit = z
 
 const tagEditShape = {
   name: z.string().min(1, { error: () => i18n.t("tagManagement.editForm.validation.nameRequired") }),
-  description: z.string().optional(),
+  description: z.string().nullish(),
   models: z.array(z.string()).optional(),
   max_budget: z
     .union([z.string(), z.number()])
