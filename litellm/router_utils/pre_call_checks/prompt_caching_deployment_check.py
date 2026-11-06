@@ -30,7 +30,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     ResponseTools,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.common_utils import deployment_ids_failed_in_request
+from litellm.router_utils.common_utils import deployment_failed_in_request
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, ResponseInputParam
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import (
@@ -111,7 +111,7 @@ def _previous_response_model_id(request_data: Mapping[str, object]) -> str | Non
         if isinstance(previous_response_id, str)
         else None
     )
-    return None if model_id is None or model_id in deployment_ids_failed_in_request(request_data) else model_id
+    return None if model_id is None or deployment_failed_in_request(request_data, model_id) else model_id
 
 
 def _deployment_min_tokens(deployment: Mapping[str, Mapping[str, object]], fallback: int) -> int:
@@ -332,8 +332,8 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 pin_metadata[_RESPONSES_PIN_METADATA_KEY] = pin_token
 
             model_id_dict: Final = await prompt_cache.async_get_model_id_at(positions)
-            if model_id_dict is not None and model_id_dict["model_id"] not in deployment_ids_failed_in_request(
-                request_data or {}
+            if model_id_dict is not None and not deployment_failed_in_request(
+                request_data or {}, model_id_dict["model_id"]
             ):
                 model_id: Final = model_id_dict["model_id"]
                 for deployment in healthy_deployments:

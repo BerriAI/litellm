@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -30,6 +31,7 @@ _V = TypeVar("_V")
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_ATTEMPTS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
@@ -52,13 +54,36 @@ def as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
         return ()
 
 
-def deployment_ids_failed_in_request(request_kwargs: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(
-        (
-            *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
-            *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
-        )
+def deployment_failed_in_request(request_kwargs: Mapping[str, object], deployment_id: str) -> bool:
+    return (
+        deployment_id in as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids"))
+        or deployment_id in as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids"))
+        or _retry_breadcrumbs_cover(request_kwargs.get("litellm_metadata"), deployment_id)
+        or _retry_breadcrumbs_cover(request_kwargs.get("metadata"), deployment_id)
     )
+
+
+def _retry_breadcrumbs_cover(metadata: object, deployment_id: str) -> bool:
+    breadcrumbs: Final = as_str_mapping(metadata)
+    if breadcrumbs is None:
+        return False
+    attempts: Final = _as_attempts(breadcrumbs.get("previous_models"))
+    retry_count: Final = breadcrumbs.get("request_retry_count")
+    return (type(retry_count) is int and retry_count > len(attempts)) or any(
+        _attempt_deployment_id(attempt) == deployment_id for attempt in attempts
+    )
+
+
+def _as_attempts(value: object) -> tuple[object, ...]:
+    try:
+        return _ATTEMPTS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def _attempt_deployment_id(attempt: object) -> object:
+    record: Final = as_str_mapping(attempt)
+    return None if record is None else record.get("deployment_id")
 
 
 def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:

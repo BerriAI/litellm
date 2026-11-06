@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import uuid
+from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
@@ -19,7 +20,8 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
@@ -27,8 +29,10 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     _get_min_token_count_for_deployments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router import RETRY_BREADCRUMB_LIMIT
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import RoutingContext
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
@@ -343,6 +347,51 @@ async def test_async_filter_deployments_does_not_pin_to_a_deployment_that_failed
         messages=messages,
         request_kwargs=failed_in_request,
     ) == _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    "retry_breadcrumbs",
+    [
+        {"previous_models": ("not-a-record", {"deployment_id": None}, {"deployment_id": "dep-2"})},
+        {"previous_models": ({"deployment_id": "dep-1"},), "request_retry_count": 5},
+    ],
+    ids=["failed_record_beside_malformed_ones", "records_trimmed_past_the_breadcrumb_limit"],
+)
+async def test_async_filter_deployments_does_not_pin_to_a_deployment_an_earlier_attempt_failed_on(
+    metadata_key: str, retry_breadcrumbs: Mapping[str, object]
+):
+    cache: Final = DualCache()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    assert await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=_deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6"),
+        messages=messages,
+        request_kwargs={metadata_key: dict(retry_breadcrumbs)},
+    ) == _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_async_filter_deployments_keeps_the_pin_after_an_earlier_attempt_failed_on_another_deployment(
+    metadata_key: str,
+):
+    cache: Final = DualCache()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+    deployments: Final = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+
+    assert await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={metadata_key: {"previous_models": ({"deployment_id": "dep-1"},), "request_retry_count": 1}},
+    ) == [deployments[1]]
 
 
 @pytest.mark.asyncio
@@ -2040,8 +2089,16 @@ async def test_logger_serializing_the_request_metadata_never_sees_the_prompt_cac
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failed_in_request,expected_deployments",
-    [({}, ("dep-2",)), ({"_excluded_deployment_ids": ["dep-2"]}, ("dep-1", "dep-2"))],
-    ids=["previous_deployment_healthy", "previous_deployment_failed_this_request"],
+    [
+        ({}, ("dep-2",)),
+        ({"_excluded_deployment_ids": ["dep-2"]}, ("dep-1", "dep-2")),
+        ({"litellm_metadata": {"previous_models": ({"deployment_id": "dep-2"},)}}, ("dep-1", "dep-2")),
+    ],
+    ids=[
+        "previous_deployment_healthy",
+        "previous_deployment_failed_this_request",
+        "previous_deployment_failed_an_earlier_attempt",
+    ],
 )
 async def test_responses_continuation_turn_goes_to_the_deployment_that_answered_its_previous_response(
     failed_in_request: dict[str, object], expected_deployments: tuple[str, ...]
@@ -2068,3 +2125,225 @@ async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(b
     pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
 
     assert pinned == ("dep-1", "dep-2")
+
+
+def _router_with_one_deployment_per_place(model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": model, "api_key": "sk-fake", "tags": [place], "region_name": place},
+                "model_info": {"id": f"dep-{place}"},
+            }
+            for place in ("eu", "us")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        enable_tag_filtering=True,
+        enable_pre_call_checks=True,
+    )
+
+
+async def _serve_from_place(router: litellm.Router, surface: str, rule: str | None, place: str) -> str:
+    metadata_key: Final = "litellm_metadata" if surface == "responses" else "metadata"
+    routing_kwargs: Final[Mapping[str, object]] = (
+        {"allowed_model_region": place}
+        if rule == "region"
+        else {metadata_key: {"tags": [place]}}
+        if rule == "tags"
+        else {}
+    )
+    if surface == "responses":
+        responses_reply: Final = await router.aresponses(
+            model=MODEL_GROUP_ALIAS,
+            input=_marked_responses_input(),
+            instructions="Be terse.",
+            mock_response="ok",
+            **routing_kwargs,
+        )
+        return responses_reply._hidden_params["model_id"]
+    chat_reply: Final = await router.acompletion(
+        model=MODEL_GROUP_ALIAS,
+        messages=[{"role": "system", "content": [_marked(LONG_PROMPT)]}, {"role": "user", "content": "hello"}],
+        mock_response="ok",
+        **routing_kwargs,
+    )
+    return chat_reply._hidden_params["model_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+@pytest.mark.parametrize("rule", ["tags", "region"])
+async def test_pin_never_sends_a_request_where_its_tags_or_region_do_not_allow(surface: str, rule: str):
+    router: Final = _router_with_one_deployment_per_place(RESPONSES_BRIDGED_MODEL)
+    pinned: Final = await _serve_from_place(router, surface, None, "")
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    other_place: Final = "us" if pinned == "dep-eu" else "eu"
+
+    assert await _serve_from_place(router, surface, rule, other_place) == f"dep-{other_place}"
+
+
+class _DeploymentsDown(CustomLogger):
+    def __init__(self, down_deployment_ids: frozenset[str]) -> None:
+        super().__init__()
+        self.down_deployment_ids: Final = down_deployment_ids
+        self.attempted_deployment_ids: tuple[str, ...] = ()
+
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
+        deployment_id: Final = deployment["model_info"]["id"]
+        self.attempted_deployment_ids = (*self.attempted_deployment_ids, deployment_id)
+        if deployment_id in self.down_deployment_ids:
+            raise litellm.InternalServerError(message="deployment down", llm_provider="anthropic", model="claude")
+        return None
+
+
+def _router_with_a_pinned_backup_deployment(num_retries: int, deployment_tags: tuple[str, ...] = ()) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {
+                    "model": RESPONSES_BRIDGED_MODEL,
+                    "api_key": "sk-fake",
+                    "order": order,
+                    "tags": list(deployment_tags),
+                },
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id, order in (("dep-1", 1), ("dep-2", 2))
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        num_retries=num_retries,
+        retry_after=0,
+        disable_cooldowns=True,
+        enable_tag_filtering=bool(deployment_tags),
+    )
+
+
+async def _pin_to_backup_and_send(router: litellm.Router, surface: str, request_tags: tuple[str, ...] = ()) -> str:
+    check: Final = next(
+        callback for callback in router.optional_callbacks or () if isinstance(callback, PromptCachingDeploymentCheck)
+    )
+    if surface == "responses":
+        metadata: Final[dict[str, object]] = {}
+        await _read_responses_pin(
+            check,
+            {"input": _marked_responses_input(), "litellm_metadata": metadata},
+            models=(RESPONSES_BRIDGED_MODEL, RESPONSES_BRIDGED_MODEL),
+        )
+        await _log_responses_success(check, _marked_responses_input(), metadata, model_id="dep-2")
+        responses_reply: Final = await router.aresponses(
+            model=MODEL_GROUP_ALIAS,
+            input=_marked_responses_input(),
+            mock_response="ok",
+            litellm_metadata={"tags": list(request_tags)},
+        )
+        return responses_reply._hidden_params["model_id"]
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=router.prompt_caching_pin_cache).async_add_model_id(
+        model_id="dep-2", messages=messages, tools=None
+    )
+    chat_reply: Final = await router.acompletion(
+        model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok", metadata={"tags": list(request_tags)}
+    )
+    return chat_reply._hidden_params["model_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+async def test_retry_after_the_pinned_deployment_fails_goes_to_another_deployment(monkeypatch, surface: str):
+    deployments_down: Final = _DeploymentsDown(frozenset({"dep-2"}))
+    monkeypatch.setattr(litellm, "callbacks", [deployments_down])
+
+    assert await _pin_to_backup_and_send(_router_with_a_pinned_backup_deployment(num_retries=1), surface) == "dep-1"
+    assert deployments_down.attempted_deployment_ids == ("dep-2", "dep-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+async def test_retries_past_the_breadcrumb_limit_never_go_back_to_the_failed_pinned_deployment(
+    monkeypatch, surface: str
+):
+    deployments_down: Final = _DeploymentsDown(frozenset({"dep-1", "dep-2"}))
+    monkeypatch.setattr(litellm, "callbacks", [deployments_down])
+    num_retries: Final = RETRY_BREADCRUMB_LIMIT + 2
+
+    with pytest.raises(litellm.InternalServerError):
+        await _pin_to_backup_and_send(_router_with_a_pinned_backup_deployment(num_retries), surface)
+
+    attempts_before_the_order_fallback: Final = deployments_down.attempted_deployment_ids[: num_retries + 1]
+    assert attempts_before_the_order_fallback == ("dep-2", *("dep-1",) * num_retries)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+@pytest.mark.parametrize("request_tags", [("!us",), ("&eu",)], ids=["excluded_tag", "required_tag"])
+async def test_pin_holds_when_the_request_tags_only_constrain_the_deployments(
+    monkeypatch, surface: str, request_tags: tuple[str, ...]
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router: Final = _router_with_a_pinned_backup_deployment(num_retries=0, deployment_tags=("eu",))
+
+    assert await _pin_to_backup_and_send(router, surface, request_tags) == "dep-2"
+
+
+class _KeepOnlyModel:
+    def __init__(self, model: str) -> None:
+        self.model: Final = model
+
+    async def run(self, context: RoutingContext) -> RoutingContext:
+        return context.model_copy(update={"candidate_models": [self.model]})
+
+
+@pytest.mark.asyncio
+async def test_pin_never_sends_a_request_to_a_deployment_a_routing_plugin_removed(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": model, "api_key": "sk-fake"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id, model in (("dep-1", "anthropic/claude-opus-4-6"), ("dep-2", RESPONSES_BRIDGED_MODEL))
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+        plugins=[_KeepOnlyModel("anthropic/claude-opus-4-6")],
+    )
+    messages: Final = _messages(word_count=5000)
+    await PromptCachingCache(cache=router.prompt_caching_pin_cache).async_add_model_id(
+        model_id="dep-2", messages=messages, tools=None
+    )
+
+    reply: Final = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok")
+
+    assert reply._hidden_params["model_id"] == "dep-1"
+
+
+class _RouterOverridingTheCallbackFilter(litellm.Router):
+    async def async_callback_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: list[dict],
+        messages: list[AllMessageValues] | None,
+        parent_otel_span: Span | None,
+        request_kwargs: dict | None = None,
+        logging_obj: LiteLLMLogging | None = None,
+    ):
+        return healthy_deployments
+
+
+@pytest.mark.asyncio
+async def test_router_subclass_whose_callback_filter_skips_the_base_filter_still_pins_responses():
+    router: Final = _RouterOverridingTheCallbackFilter(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": RESPONSES_NATIVE_MODEL, "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-1", "dep-2")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input())) == 1

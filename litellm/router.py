@@ -9430,7 +9430,7 @@ class Router:
         """
         returned_healthy_deployments = healthy_deployments
         for _callback in litellm.callbacks:
-            if isinstance(_callback, CustomLogger):
+            if isinstance(_callback, CustomLogger) and not isinstance(_callback, PromptCachingDeploymentCheck):
                 try:
                     returned_healthy_deployments = await _callback.async_filter_deployments(
                         model=model,
@@ -14040,10 +14040,11 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
+        callback_messages: Final = cast(list[AllMessageValues], messages) if messages is not None else None
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
             healthy_deployments=healthy_deployments,
-            messages=(cast(list[AllMessageValues], messages) if messages is not None else None),
+            messages=callback_messages,
             request_kwargs=request_kwargs,
             parent_otel_span=parent_otel_span,
         )
@@ -14081,6 +14082,18 @@ class Router:
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
+
+        for prompt_caching_check in litellm.callbacks:
+            if isinstance(prompt_caching_check, PromptCachingDeploymentCheck) and not isinstance(
+                healthy_deployments, dict
+            ):
+                healthy_deployments = await prompt_caching_check.async_filter_deployments(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the CustomLogger filter contract is untyped
+                    model=model,
+                    healthy_deployments=[*healthy_deployments],
+                    messages=callback_messages,
+                    request_kwargs=request_kwargs,
+                    parent_otel_span=parent_otel_span,
+                )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
