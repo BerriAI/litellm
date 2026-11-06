@@ -1,13 +1,16 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func tagInfoBody(name string) string {
@@ -154,6 +157,68 @@ func TestResourceLiteLLMTagRead_404ClearsID(t *testing.T) {
 	}
 	if d.Id() != "" {
 		t.Fatalf("expected ID cleared on 404, got %q", d.Id())
+	}
+}
+
+func TestResourceLiteLLMTagRead_ModelMaxBudget(t *testing.T) {
+	const configured = `{"gpt-4":{"budget_duration":"1d","max_budget":10}}`
+	const changed = `{"gpt-4":{"budget_duration":"1d","max_budget":77}}`
+	for _, tc := range []struct {
+		name, budgetTable, prior, want string
+	}{
+		{"changed", `{"model_max_budget":` + changed + `}`, configured, changed},
+		{"imported", `{"model_max_budget":` + changed + `}`, "", changed},
+		{"string", `{"model_max_budget":"{\"gpt-4\":{\"budget_duration\":\"1d\",\"max_budget\":77}}"}`, configured, changed},
+		{"null", `{"model_max_budget":null}`, configured, ""},
+		{"empty", `{"model_max_budget":{}}`, configured, ""},
+		{"omitted", `{}`, configured, ""},
+		{"no budget", `null`, configured, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"prod":{"name":"prod","litellm_budget_table":%s}}`, tc.budgetTable)
+			}))
+			defer srv.Close()
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMTag().Schema, map[string]interface{}{
+				"name": "prod", "model_max_budget": tc.prior,
+			})
+			d.SetId("prod")
+			if err := resourceLiteLLMTagRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatal(err)
+			}
+			if got := d.Get("model_max_budget"); got != tc.want {
+				t.Fatalf("refreshed model_max_budget = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResourceLiteLLMTag_ModelMaxBudgetJSONDiff(t *testing.T) {
+	const configured = `{"gpt-4":{"max_budget":10.0,"budget_duration":"1d"}}`
+	for _, tc := range []struct {
+		name, remote string
+		wantDiff     bool
+	}{
+		{"equivalent", `{"gpt-4":{"budget_duration":"1d","max_budget":10}}`, false},
+		{"changed", `{"gpt-4":{"budget_duration":"1d","max_budget":77}}`, true},
+		{"cleared", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := resourceLiteLLMTag()
+			prior := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+				"name": "prod", "model_max_budget": tc.remote,
+			})
+			prior.SetId("prod")
+			diff, err := res.Diff(context.Background(), prior.State(), terraform.NewResourceConfigRaw(map[string]interface{}{
+				"name": "prod", "model_max_budget": configured,
+			}), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := diff != nil && diff.Attributes["model_max_budget"] != nil; got != tc.wantDiff {
+				t.Fatalf("model_max_budget has diff = %v, want %v", got, tc.wantDiff)
+			}
+		})
 	}
 }
 
