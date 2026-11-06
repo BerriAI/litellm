@@ -48,6 +48,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
+from litellm.proxy.common_utils.timezone_utils import budget_period_unchanged
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
@@ -1564,6 +1565,12 @@ async def _update_single_user_helper(
 
     if existing_user_row is not None:
         existing_user_row = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
+        if "budget_reset_at" in non_default_values and budget_period_unchanged(
+            non_default_values["budget_duration"],
+            existing_user_row.budget_duration,
+            existing_user_row.budget_reset_at,
+        ):
+            del non_default_values["budget_reset_at"]
 
     # Prevent budget self-escalation (GHSA-wvg4-6222-3q4r): non-admin callers
     # must not be able to raise their own budget/spend fields.

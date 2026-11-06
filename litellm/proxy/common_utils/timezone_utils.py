@@ -81,6 +81,12 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
 
 
+def budget_period_unchanged(
+    requested_duration: object, stored_duration: str | None, stored_reset_at: datetime | None
+) -> bool:
+    return isinstance(requested_duration, str) and requested_duration == stored_duration and stored_reset_at is not None
+
+
 def _is_persistable_budget_duration(budget_duration: str) -> bool:
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
