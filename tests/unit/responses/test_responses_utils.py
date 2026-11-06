@@ -17,6 +17,17 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
 class TestResponsesAPIRequestUtils:
+    def test_get_optional_params_drops_cache_salt_for_a_provider_that_does_not_accept_it(self) -> None:
+        result = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model="gpt-4o",
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                {"temperature": 0.7, "cache_salt": "salt-a"}
+            ),
+        )
+
+        assert result == {"temperature": 0.7}
+
     def test_get_optional_params_responses_api(self):
         """Test that optional parameters are correctly processed for responses API"""
         # Setup

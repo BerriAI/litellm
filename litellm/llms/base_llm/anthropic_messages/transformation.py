@@ -148,6 +148,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def is_native_messages_route(self) -> bool:
         return True
 
+    def supports_cache_salt(self) -> bool:
+        return False
+
     def handles_web_search_natively(self) -> bool:
         """
         Whether the upstream this config routes to executes ``web_search`` tools

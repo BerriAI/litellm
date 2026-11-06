@@ -628,7 +628,7 @@ def previous_response_client_ids(previous_response_id: str | None, kwargs: Mappi
     )
 
 
-_RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+_RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams)).difference({"cache_salt"})
 
 
 @dataclass(frozen=True, slots=True)

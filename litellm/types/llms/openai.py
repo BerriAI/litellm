@@ -1372,6 +1372,7 @@ class ResponsesAPIModeration(TypedDict, total=False):
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
+    cache_salt: str | None
     include: list[ResponseIncludable] | None
     instructions: str | None
     max_output_tokens: int | None

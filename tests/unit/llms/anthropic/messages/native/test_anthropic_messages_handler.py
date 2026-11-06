@@ -2716,3 +2716,66 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+class _RecordNativeMessages:
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, object]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.append(_JSON_BODY.validate_json(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": f"msg_{len(self.bodies)}",
+                "type": "message",
+                "role": "assistant",
+                "model": "granite",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_messages_passthrough_preserves_cache_salt_isolation_inputs() -> None:
+    upstream: Final = _RecordNativeMessages()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    requests: Final = (
+        {"cache_salt": "salt-a"},
+        {"cache_salt": "salt-b"},
+        {},
+        {"cache_salt": "salt-a"},
+    )
+
+    for kwargs in requests:
+        await litellm.anthropic_messages(
+            max_tokens=8,
+            messages=[{"role": "user", "content": "long prompt"}],
+            model="hosted_vllm/granite",
+            api_base="https://vllm.example.com/v1",
+            model_info={"supported_endpoints": ["/v1/messages"]},
+            client=client,
+            **kwargs,
+        )
+
+    assert [body.get("cache_salt") for body in upstream.bodies] == ["salt-a", "salt-b", None, "salt-a"]
+
+
+@pytest.mark.asyncio
+async def test_direct_anthropic_messages_still_drops_cache_salt() -> None:
+    upstream: Final = _RecordNativeMessages()
+
+    await litellm.anthropic_messages(
+        max_tokens=8,
+        messages=[{"role": "user", "content": "long prompt"}],
+        model="anthropic/claude-sonnet-4-6",
+        api_key="test-key",
+        cache_salt="salt-a",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+    )
+
+    assert "cache_salt" not in upstream.bodies[-1]

@@ -315,7 +315,13 @@ class ResponsesAPIRequestUtils:
 
         should_drop_params: Final = litellm.drop_params or drop_params is True
 
-        non_default_params: Final = cast(dict, response_api_optional_params)
+        filtered_response_api_optional_params: Final = (
+            response_api_optional_params
+            if responses_api_provider_config.supports_cache_salt()
+            else {key: value for key, value in response_api_optional_params.items() if key != "cache_salt"}
+        )
+
+        non_default_params: Final = cast(dict, filtered_response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),
@@ -329,7 +335,7 @@ class ResponsesAPIRequestUtils:
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
             _provider_mapped_params(
                 responses_api_provider_config,
-                response_api_optional_params,
+                filtered_response_api_optional_params,
                 model,
                 should_drop_params,
                 declared_reasoning_efforts,
