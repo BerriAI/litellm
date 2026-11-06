@@ -53,15 +53,13 @@ export const getSpendString = (value: number | null | undefined, decimals: numbe
     return "-";
   }
 
-  const formatted = formatNumberWithCommas(value, decimals, false, false);
-  const numericFormatted = Number(formatted.replace(/,/g, ""));
-
-  if (numericFormatted === 0) {
+  const halfSmallestUnit = 0.5 / 10 ** decimals;
+  if (Math.abs(value) < halfSmallestUnit) {
     const threshold = (1 / 10 ** decimals).toFixed(decimals);
     return `< $${threshold}`;
   }
 
-  return `$${formatted}`;
+  return `$${formatNumberWithCommas(value, decimals, false, false)}`;
 };
 
 export const formatPerSecondCost = (cost: number): string =>
