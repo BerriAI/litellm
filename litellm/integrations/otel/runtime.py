@@ -67,12 +67,16 @@ def phase_event(name: str, attributes: PhaseEventAttributes | None = None) -> No
     runtime[2](name, attributes)
 
 
-def seed_request_identity(user_api_key_dict: object, model: object = None) -> None:
-    """Seed request-identity Baggage at the auth boundary (no-op without V2)."""
+def seed_request_identity(user_api_key_dict: object, model: object = None, request_data: object = None) -> None:
+    """Seed request-identity Baggage (no-op without V2).
+
+    Auth seeds it as soon as the key resolves; the proxy pre-call hook seeds it again
+    with ``request_data`` once ``requester_metadata`` has been built from the body.
+    """
     runtime: Final = _otel_runtime()
     if runtime is None:
         return
-    runtime[1](user_api_key_dict, model=model)
+    runtime[1](user_api_key_dict, model=model, request_data=request_data)
 
 
 def phase_attributes(attributes: PhaseAttributes) -> None:
