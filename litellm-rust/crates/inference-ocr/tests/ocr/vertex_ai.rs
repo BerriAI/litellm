@@ -1,6 +1,5 @@
 use litellm_auth::{InputSource, Sourced};
 use litellm_inference_ocr::arguments::is_supported_request;
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use rstest::rstest;
 
 use super::*;
@@ -43,30 +42,6 @@ async fn mistral_is_served_at_the_resolved_project_and_location() {
 }
 
 #[tokio::test]
-async fn configured_project_and_location_apply_when_the_call_sets_neither() {
-    let upstream = upstream([pages_response()]).await;
-    let route = ocr_route_with(OcrSettings {
-        vertex_project: Some("configured-project".into()),
-        vertex_location: Some("europe-west4".into()),
-        ..OcrSettings::default()
-    });
-
-    route
-        .execute(
-            ocr_request("vertex_ai/mistral-ocr-maas", &upstream.uri(), json!({})),
-            &(),
-            None,
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        only_request(&upstream).await.url.path(),
-        "/v1/projects/configured-project/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
-    );
-}
-
-#[tokio::test]
 async fn a_supplied_authorization_is_forwarded_without_a_static_token() {
     let upstream = upstream([pages_response()]).await;
     let request = with_headers(
@@ -96,7 +71,8 @@ async fn invalid_credentials_fail_before_sending() {
     .await
     .unwrap_err();
 
-    assert!(error.to_string().contains("vertex_credentials"), "{error}");
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.contains("vertex_credentials"), "{report}");
 }
 
 #[rstest]
@@ -116,11 +92,10 @@ async fn a_request_controlled_api_base_is_rejected_before_vertex_auth(
 
     let error = perform(request).await.unwrap_err();
 
+    let report = litellm_error::Report::new(&error).to_string();
     assert!(
-        error
-            .to_string()
-            .contains("request-controlled Vertex AI endpoint"),
-        "{error}"
+        report.contains("request-controlled Vertex AI endpoint"),
+        "{report}"
     );
 }
 

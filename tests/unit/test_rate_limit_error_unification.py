@@ -22,11 +22,13 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
+from litellm.proxy.utils import InternalUsageCache
 
 
 class TestRateLimitErrorCategory:
@@ -336,10 +338,10 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
         with pytest.raises(ProxyRateLimitError) as exc_info:
             handler.raise_rate_limit_error(additional_details="key-over-rpm")
         e = exc_info.value
@@ -366,10 +368,10 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
         with pytest.raises(ProxyRateLimitError) as exc_info:
             handler.raise_rate_limit_error()  # no additional_details
         detail_str = str(exc_info.value.detail)
@@ -421,13 +423,12 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
     def test_parallel_request_limiter_v3_handle_rate_limit_error_raises(self):
         """v3 parallel_request_limiter's ``_handle_rate_limit_error`` must
         translate an OVER_LIMIT response into a ProxyRateLimitError."""
-        from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            _PROXY_MaxParallelRequestsHandler_v3,
+            PROXY_MaxParallelRequestsHandler_v3,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         # Minimal fabricated OVER_LIMIT response. The helper only reads a
         # handful of fields off `status` and ignores everything else.
         response = {
@@ -475,13 +476,13 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.max_iterations_limiter import (
-            _PROXY_MaxIterationsHandler,
+            PROXY_MaxIterationsHandler,
         )
         from litellm.proxy.utils import InternalUsageCache
         from litellm.types.agents import AgentResponse
 
         cache = DualCache()
-        handler = _PROXY_MaxIterationsHandler(
+        handler = PROXY_MaxIterationsHandler(
             internal_usage_cache=InternalUsageCache(cache),
         )
         user_api_key_dict = UserAPIKeyAuth(
@@ -531,10 +532,10 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.dynamic_rate_limiter import (
-            _PROXY_DynamicRateLimitHandler,
+            PROXY_DynamicRateLimitHandler,
         )
 
-        handler = _PROXY_DynamicRateLimitHandler(internal_usage_cache=MagicMock())
+        handler = PROXY_DynamicRateLimitHandler(internal_usage_cache=MagicMock())
         # check_available_usage returns (available_tpm, available_rpm,
         # model_tpm, model_rpm, active_projects). Setting available_tpm == 0
         # forces the TPM-exceeded raise.
@@ -570,12 +571,12 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
         cache = MagicMock()
         cache.async_batch_set_cache = AsyncMock(return_value=None)
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
         with pytest.raises(ProxyRateLimitError) as exc_info:
             await handler.check_key_in_limits(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-key"),
@@ -634,12 +635,12 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
         cache = MagicMock()
         cache.async_batch_set_cache = AsyncMock(return_value=None)
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
         with pytest.raises(ProxyRateLimitError) as exc_info:
             await handler.check_key_in_limits(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-key"),
@@ -692,12 +693,12 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
         cache = MagicMock()
         cache.async_batch_set_cache = AsyncMock(return_value=None)
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
         with pytest.raises(ProxyRateLimitError) as exc_info:
             await handler.check_key_in_limits(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-key"),
@@ -723,10 +724,10 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.dynamic_rate_limiter import (
-            _PROXY_DynamicRateLimitHandler,
+            PROXY_DynamicRateLimitHandler,
         )
 
-        handler = _PROXY_DynamicRateLimitHandler(internal_usage_cache=MagicMock())
+        handler = PROXY_DynamicRateLimitHandler(internal_usage_cache=MagicMock())
         # available_tpm > 0, available_rpm == 0 → RPM raise branch.
         handler.check_available_usage = AsyncMock(  # type: ignore[method-assign]
             return_value=(100, 0, 1000, 100, 1)
@@ -769,13 +770,13 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
 
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            _PROXY_DynamicRateLimitHandlerV3,
+            PROXY_DynamicRateLimitHandlerV3,
         )
 
         # Bypass __init__ — we want to inject a stub v3_limiter without
         # paying for the full handler setup.
-        handler = _PROXY_DynamicRateLimitHandlerV3.__new__(
-            _PROXY_DynamicRateLimitHandlerV3
+        handler = PROXY_DynamicRateLimitHandlerV3.__new__(
+            PROXY_DynamicRateLimitHandlerV3
         )
         v3_limiter = MagicMock()
         v3_limiter.window_size = 60
@@ -836,12 +837,12 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.max_budget_per_session_limiter import (
-            _PROXY_MaxBudgetPerSessionHandler,
+            PROXY_MaxBudgetPerSessionHandler,
         )
 
         internal_cache = MagicMock()
         internal_cache.async_get_cache = AsyncMock(return_value=10.0)
-        handler = _PROXY_MaxBudgetPerSessionHandler(
+        handler = PROXY_MaxBudgetPerSessionHandler(
             internal_usage_cache=internal_cache,
         )
         user_api_key_dict = UserAPIKeyAuth(
@@ -876,14 +877,14 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
 
         from litellm.proxy.hooks.batch_rate_limiter import (
             BatchFileUsage,
-            _PROXY_BatchRateLimiter,
+            PROXY_BatchRateLimiter,
         )
 
         # Inject a parallel_request_limiter mock with a usable window_size so
         # the helper's str(window_size) call doesn't NameError.
         parallel_limiter = MagicMock()
         parallel_limiter.window_size = 60
-        handler = _PROXY_BatchRateLimiter(
+        handler = PROXY_BatchRateLimiter(
             internal_usage_cache=MagicMock(),
             parallel_request_limiter=parallel_limiter,
         )
@@ -1117,10 +1118,10 @@ class TestProxyHooksWireTypeCorrectly:
         from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
         with pytest.raises(ProxyRateLimitError) as exc_info:
             handler.raise_rate_limit_error()
         assert exc_info.value.rate_limit_type == "concurrent_requests"
@@ -1129,10 +1130,10 @@ class TestProxyHooksWireTypeCorrectly:
         from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
+        handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
         with pytest.raises(ProxyRateLimitError) as exc_info:
             handler.raise_rate_limit_error(
                 additional_details="tpm-zero",
@@ -1171,14 +1172,13 @@ class TestProxyHooksWireTypeCorrectly:
         `map_v3_rate_limit_type(status["rate_limit_type"])` call site so
         coverage tools see the new wiring as exercised.
         """
-        from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            _PROXY_MaxParallelRequestsHandler_v3,
+            PROXY_MaxParallelRequestsHandler_v3,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=MagicMock(),
+        handler = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache()),
         )
         # Minimal RateLimitResponse + descriptors shape that the handler
         # reads. We only need one OVER_LIMIT status to drive the raise.
@@ -1222,14 +1222,13 @@ class TestProxyHooksWireTypeCorrectly:
 
     @pytest.mark.asyncio
     async def test_v3_limiter_max_parallel_requests_maps_to_concurrent(self):
-        from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            _PROXY_MaxParallelRequestsHandler_v3,
+            PROXY_MaxParallelRequestsHandler_v3,
         )
 
-        handler = _PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=MagicMock(),
+        handler = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache()),
         )
         response = {
             "overall_code": "OVER_LIMIT",
@@ -1269,12 +1268,12 @@ class TestProxyHooksWireTypeCorrectly:
 
         from litellm.proxy.hooks.batch_rate_limiter import (
             BatchFileUsage,
-            _PROXY_BatchRateLimiter,
+            PROXY_BatchRateLimiter,
         )
 
         prl = MagicMock()
         prl.window_size = 60
-        handler = _PROXY_BatchRateLimiter(
+        handler = PROXY_BatchRateLimiter(
             internal_usage_cache=MagicMock(),
             parallel_request_limiter=prl,
         )
@@ -1312,12 +1311,12 @@ class TestProxyHooksWireTypeCorrectly:
 
         from litellm.proxy.hooks.batch_rate_limiter import (
             BatchFileUsage,
-            _PROXY_BatchRateLimiter,
+            PROXY_BatchRateLimiter,
         )
 
         prl = MagicMock()
         prl.window_size = 60
-        handler = _PROXY_BatchRateLimiter(
+        handler = PROXY_BatchRateLimiter(
             internal_usage_cache=MagicMock(),
             parallel_request_limiter=prl,
         )
@@ -1558,7 +1557,7 @@ class TestBudgetExceededErrorLlmProviderEnrichment:
                 {"use_x_forwarded_for": False},
             ),
             patch(
-                "litellm.proxy.auth.auth_exception_handler._get_request_ip_address",
+                "litellm.proxy.auth.auth_exception_handler.get_request_ip_address",
                 return_value="127.0.0.1",
             ),
         ):

@@ -1,8 +1,9 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { CircleHelp } from "lucide-react";
 
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Providers, provider_map } from "@/components/provider_info_helpers";
+import { Providers } from "@/components/provider_info_helpers";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +17,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { InputGroupAddon } from "@/components/ui/input-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { DiscountConfig } from "./types";
 
 interface ProviderOption {
   value: string;
@@ -24,24 +24,20 @@ interface ProviderOption {
 }
 
 interface AddProviderFormProps {
-  discountConfig: DiscountConfig;
   selectedProvider: string | undefined;
   newDiscount: string;
+  modelPattern: string;
   onProviderChange: (provider: string | undefined) => void;
   onDiscountChange: (discount: string) => void;
+  onModelPatternChange: (value: string) => void;
   onAddProvider: () => void;
 }
 
 const PROVIDER_FIELD_ID = "add-provider-discount-provider";
+const MODEL_PATTERN_FIELD_ID = "add-provider-discount-model-pattern";
 const DISCOUNT_FIELD_ID = "add-provider-discount-percentage";
 
-const providerOptionsWithoutDiscount = (discountConfig: DiscountConfig): ProviderOption[] =>
-  Object.entries(Providers)
-    .filter(([providerEnum]) => {
-      const providerValue = provider_map[providerEnum as keyof typeof provider_map];
-      return !(providerValue && discountConfig[providerValue]);
-    })
-    .map(([value, label]) => ({ value, label }));
+const providerOptions = (): ProviderOption[] => Object.entries(Providers).map(([value, label]) => ({ value, label }));
 
 const selectedProviderOption = (selectedProvider: string | undefined): ProviderOption | null => {
   if (!selectedProvider) {
@@ -62,14 +58,16 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 );
 
 const AddProviderForm: React.FC<AddProviderFormProps> = ({
-  discountConfig,
   selectedProvider,
   newDiscount,
+  modelPattern,
   onProviderChange,
   onDiscountChange,
+  onModelPatternChange,
   onAddProvider,
 }) => {
-  const options = providerOptionsWithoutDiscount(discountConfig);
+  const { t } = useTranslation();
+  const options = providerOptions();
   const selectedOption = selectedProviderOption(selectedProvider);
 
   return (
@@ -78,7 +76,10 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor={PROVIDER_FIELD_ID}>
-              {labelWithHint("Provider", "Select the LLM provider you want to configure a discount for")}
+              {labelWithHint(
+                t("costTracking.addProviderForm.provider.label"),
+                t("costTracking.addProviderForm.provider.hint"),
+              )}
             </FieldLabel>
             <Combobox
               items={options}
@@ -87,7 +88,11 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
               itemToStringLabel={(option: ProviderOption) => option.label}
               isItemEqualToValue={(option: ProviderOption, value: ProviderOption) => option.value === value.value}
             >
-              <ComboboxInput id={PROVIDER_FIELD_ID} placeholder="Select provider" className="w-full">
+              <ComboboxInput
+                id={PROVIDER_FIELD_ID}
+                placeholder={t("costTracking.addProviderForm.provider.placeholder")}
+                className="w-full"
+              >
                 {selectedOption && (
                   <InputGroupAddon align="inline-start">
                     <Logo provider={selectedOption.value} label={selectedOption.label} className="w-5 h-5" />
@@ -95,7 +100,7 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
                 )}
               </ComboboxInput>
               <ComboboxContent>
-                <ComboboxEmpty>No providers found</ComboboxEmpty>
+                <ComboboxEmpty>{t("costTracking.addProviderForm.provider.empty")}</ComboboxEmpty>
                 <ComboboxList>
                   {(option: ProviderOption) => (
                     <ComboboxItem key={option.value} value={option}>
@@ -111,8 +116,27 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
           </Field>
 
           <Field>
+            <FieldLabel htmlFor={MODEL_PATTERN_FIELD_ID}>
+              {labelWithHint(
+                t("costTracking.addProviderForm.modelPattern.label"),
+                t("costTracking.addProviderForm.modelPattern.hint"),
+              )}
+            </FieldLabel>
+            <Input
+              id={MODEL_PATTERN_FIELD_ID}
+              placeholder="claude-*"
+              value={modelPattern}
+              onChange={(event) => onModelPatternChange(event.target.value)}
+              className="rounded-lg"
+            />
+          </Field>
+
+          <Field>
             <FieldLabel htmlFor={DISCOUNT_FIELD_ID}>
-              {labelWithHint("Discount Percentage", "Enter a percentage value (e.g., 5 for 5% discount)")}
+              {labelWithHint(
+                t("costTracking.addProviderForm.discount.label"),
+                t("costTracking.addProviderForm.discount.hint"),
+              )}
             </FieldLabel>
             <div className="flex items-center gap-2">
               <Input
@@ -129,7 +153,7 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
 
         <div className="flex items-center justify-end space-x-3 pt-6 border-t border-border">
           <Button type="submit" onClick={onAddProvider} disabled={!selectedProvider || !newDiscount}>
-            Add Provider Discount
+            {t("costTracking.addProviderForm.submit")}
           </Button>
         </div>
       </div>

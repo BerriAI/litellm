@@ -1,10 +1,14 @@
+import json
 import time
+from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
+import litellm
 from litellm.llms.manus.files.transformation import ManusFilesConfig
 from litellm.types.llms.openai import OpenAIFileObject
 
@@ -126,3 +130,72 @@ def test_list_files_response_rejects_malformed_listings_without_echoing_them(bod
 def test_list_files_response_rejects_a_file_the_file_object_cannot_hold():
     with pytest.raises(ValidationError, match="OpenAIFileObject"):
         _list_files({"data": [{"id": "file-1", "purpose": "not-a-purpose"}]})
+
+
+@pytest.mark.asyncio
+async def test_manus_file_create_retrieve_list_delete(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = "https://api.manus.im/v1"
+    file_id: Final = "file-123"
+    filename: Final = "test-file.txt"
+    content: Final = b"Manus unit file lifecycle"
+    file_response: Final = {
+        "id": file_id,
+        "object": "file",
+        "filename": filename,
+        "bytes": len(content),
+        "purpose": "assistants",
+        "created_at": "2024-01-02T03:04:05Z",
+        "status": "uploaded",
+    }
+    create_route: Final = respx_mock.post(f"{api_base}/files").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **file_response,
+                "upload_url": "https://uploads.example.com/file-123",
+            },
+        )
+    )
+    upload_route: Final = respx_mock.put("https://uploads.example.com/file-123").respond(status_code=200)
+    retrieve_route: Final = respx_mock.get(f"{api_base}/files/{file_id}").respond(json=file_response)
+    list_route: Final = respx_mock.get(f"{api_base}/files").respond(json={"object": "list", "data": [file_response]})
+    delete_route: Final = respx_mock.delete(f"{api_base}/files/{file_id}").respond(
+        json={"id": file_id, "object": "file", "deleted": True}
+    )
+
+    created: Final = await litellm.acreate_file(
+        file=(filename, content),
+        purpose="assistants",
+        custom_llm_provider="manus",
+        api_key="test-key",
+        api_base=api_base,
+    )
+    retrieved: Final = await litellm.afile_retrieve(
+        file_id=file_id,
+        custom_llm_provider="manus",
+        api_key="test-key",
+        api_base=api_base,
+    )
+    listed: Final = await litellm.afile_list(
+        custom_llm_provider="manus",
+        api_key="test-key",
+        api_base=api_base,
+    )
+    deleted: Final = await litellm.afile_delete(
+        file_id=file_id,
+        custom_llm_provider="manus",
+        api_key="test-key",
+        api_base=api_base,
+    )
+
+    assert json.loads(create_route.calls.last.request.content) == {"filename": filename}
+    assert create_route.calls.last.request.headers["API_KEY"] == "test-key"
+    assert upload_route.calls.last.request.content == content
+    assert (created.id, created.filename, created.status) == (file_id, filename, "uploaded")
+    assert (retrieved.id, retrieved.filename) == (file_id, filename)
+    assert tuple(file.id for file in listed) == (file_id,)
+    assert (deleted.id, deleted.deleted) == (file_id, True)
+    assert all(route.call_count == 1 for route in (create_route, upload_route, retrieve_route, list_route, delete_route))

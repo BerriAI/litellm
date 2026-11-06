@@ -7,22 +7,22 @@ import pytest
 pytest.importorskip("opentelemetry")
 
 from litellm.integrations.otel import (  # noqa: E402
-    GenAI,
     HTTP,
+    GenAI,
     LiteLLM,
     OpenTelemetryV2Config,
     promoted_baggage,
 )
-from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
-from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
+from litellm.integrations.otel.model.baggage import BAGGAGE_PROMOTED_KEYS  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
     ServiceSpanData,
 )
-from litellm.integrations.otel.model.baggage import BAGGAGE_PROMOTED_KEYS  # noqa: E402
 from litellm.integrations.otel.model.spans import SpanRole  # noqa: E402
+from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
+from litellm.integrations.otel.plumbing import providers  # noqa: E402
 
 
 def _payload():
@@ -63,9 +63,7 @@ def test_identity_promoted_onto_every_span():
     root = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions", ctx)
     root_ctx = ctx_mod.context_from_span(root, ctx)
     engine.emit(SpanRole.LLM_CALL, data, parent_context=root_ctx)
-    engine.emit(
-        SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx
-    )
+    engine.emit(SpanRole.GUARDRAIL, GuardrailSpanData("presidio", status="success"), root_ctx)
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), root_ctx)
     root.end()
 
@@ -161,9 +159,7 @@ def test_allowlisted_metadata_subkey_promoted_blob_excluded():
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), ctx)
     (span,) = exporter.get_finished_spans()
     # allowlisted metadata sub-key is promoted
-    assert (
-        span.attributes.get(f"{LiteLLM.METADATA_PREFIX}user_api_key_org_id") == "org1"
-    )
+    assert span.attributes.get(f"{LiteLLM.METADATA_PREFIX}user_api_key_org_id") == "org1"
     # non-allowlisted metadata is NOT promoted (no full-blob dumping)
     assert all("private_note" not in k for k in span.attributes)
 
@@ -208,6 +204,17 @@ def test_nested_metadata_key_promoted_under_caller_path():
     assert not any(k.startswith(f"{LiteLLM.METADATA_PREFIX}requester_metadata") for k in span.attributes)
 
 
+def test_llm_call_promoted_metadata_strips_requester_prefix_and_uses_allowlist():
+    payload = _payload()
+    payload["metadata"]["requester_metadata"] = {"trace_id": "trace-123"}
+    data = LLMCallSpanData.from_standard_logging_payload(
+        payload,
+        metadata_keys=("requester_metadata.trace_id", "user_api_key_org_id", "missing"),
+    )
+    assert data.promoted_metadata == {"trace_id": "trace-123", "user_api_key_org_id": "org1"}
+    assert LLMCallSpanData.from_standard_logging_payload(payload).promoted_metadata == {}
+
+
 def test_http_attributes_never_promoted():
     """Even if http.* is present in baggage, the processor must not stamp it on
     child spans (it belongs on the SERVER span only)."""
@@ -228,9 +235,7 @@ def test_http_attributes_never_promoted():
 
 def test_arbitrary_upstream_baggage_not_promoted():
     engine, exporter = _engine_and_exporter()
-    ctx = ctx_mod.set_request_baggage(
-        {LiteLLM.TEAM_ID: "t1", "some.upstream.key": "leak"}
-    )
+    ctx = ctx_mod.set_request_baggage({LiteLLM.TEAM_ID: "t1", "some.upstream.key": "leak"})
     engine.emit(SpanRole.SERVICE, ServiceSpanData("redis", call_type="set"), ctx)
     (span,) = exporter.get_finished_spans()
     assert span.attributes.get(LiteLLM.TEAM_ID) == "t1"

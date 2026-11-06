@@ -23,9 +23,9 @@ import pytest
 from litellm.constants import REDIS_SPEND_LOGS_BUFFER_KEY
 from litellm.proxy.utils import (
     MAX_SPEND_LOG_DRAIN_ITERATIONS,
-    _monitor_spend_logs_queue,
-    _raise_failed_update_spend_exception,
     drain_spend_logs_queue,
+    monitor_spend_logs_queue,
+    raise_failed_update_spend_exception,
     recover_parked_spend_logs,
     update_daily_tag_spend,
     update_spend,
@@ -111,15 +111,15 @@ async def test_update_daily_tag_spend_redis_path_when_buffered(
     writer = MagicMock()
     proxy_logging.db_spend_update_writer = writer
     writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
-    writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
-    writer._commit_daily_tag_spend_to_db = AsyncMock()
+    writer.redis_update_buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
+    writer.commit_daily_tag_spend_to_db = AsyncMock()
 
     await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
-    redis_kwargs = writer._commit_daily_tag_spend_to_db_with_redis.await_args.kwargs
+    redis_kwargs = writer.commit_daily_tag_spend_to_db_with_redis.await_args.kwargs
     pinned = {
-        "redis_calls": writer._commit_daily_tag_spend_to_db_with_redis.await_count,
-        "direct_calls": writer._commit_daily_tag_spend_to_db.await_count,
+        "redis_calls": writer.commit_daily_tag_spend_to_db_with_redis.await_count,
+        "direct_calls": writer.commit_daily_tag_spend_to_db.await_count,
         "redis_kwargs_keys": sorted(redis_kwargs.keys()),
         "redis_n_retries": redis_kwargs["n_retry_times"],
     }
@@ -139,13 +139,13 @@ async def test_update_daily_tag_spend_direct_path_when_no_redis(
     writer = MagicMock()
     proxy_logging.db_spend_update_writer = writer
     writer.redis_update_buffer = MagicMock()
-    writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=False)
-    writer._commit_daily_tag_spend_to_db_with_redis = AsyncMock()
-    writer._commit_daily_tag_spend_to_db = AsyncMock()
+    writer.redis_update_buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=False)
+    writer.commit_daily_tag_spend_to_db_with_redis = AsyncMock()
+    writer.commit_daily_tag_spend_to_db = AsyncMock()
 
     await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
-    assert writer._commit_daily_tag_spend_to_db.await_count == 1
-    assert writer._commit_daily_tag_spend_to_db_with_redis.await_count == 0
+    assert writer.commit_daily_tag_spend_to_db.await_count == 1
+    assert writer.commit_daily_tag_spend_to_db_with_redis.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -159,10 +159,10 @@ async def test_update_daily_tag_spend_logs_and_swallows_errors(
     proxy_logging = MagicMock()
     proxy_logging.db_spend_update_writer = MagicMock()
     proxy_logging.db_spend_update_writer.redis_update_buffer = MagicMock()
-    proxy_logging.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis = MagicMock(
+    proxy_logging.db_spend_update_writer.redis_update_buffer.should_commit_spend_updates_to_redis = MagicMock(
         return_value=False
     )
-    proxy_logging.db_spend_update_writer._commit_daily_tag_spend_to_db = AsyncMock(
+    proxy_logging.db_spend_update_writer.commit_daily_tag_spend_to_db = AsyncMock(
         side_effect=RuntimeError("commit boom")
     )
     await update_daily_tag_spend(prisma_client=mock_prisma_client, proxy_logging_obj=proxy_logging)
@@ -473,7 +473,7 @@ async def test_monitor_spend_logs_queue_invokes_job_when_queue_nonempty(
     monkeypatch.setattr(utils_mod, "update_spend_logs_job", _fake_job)
 
     with pytest.raises(asyncio.CancelledError):
-        await _monitor_spend_logs_queue(
+        await monitor_spend_logs_queue(
             prisma_client=mock_prisma_client,
             db_writer_client=None,
             proxy_logging_obj=proxy_logging,
@@ -510,7 +510,7 @@ async def test_monitor_spend_logs_queue_swallows_errors_and_backs_off(
     mock_prisma_client._spend_log_transactions_lock = bad_lock
 
     with pytest.raises(asyncio.CancelledError):
-        await _monitor_spend_logs_queue(
+        await monitor_spend_logs_queue(
             prisma_client=mock_prisma_client,
             db_writer_client=None,
             proxy_logging_obj=proxy_logging,
@@ -543,7 +543,7 @@ async def test_monitor_spend_logs_queue_flushes_as_soon_as_one_is_requested(
     monkeypatch.setattr(utils_mod, "update_spend_logs_job", _fake_job)
 
     monitor: Final = asyncio.create_task(
-        _monitor_spend_logs_queue(
+        monitor_spend_logs_queue(
             prisma_client=mock_prisma_client,
             db_writer_client=None,
             proxy_logging_obj=MagicMock(),
@@ -589,7 +589,7 @@ def test_monitor_spend_logs_queue_flush_survives_an_earlier_event_loop(
         mock_prisma_client.spend_log_transactions = []
 
         monitor: Final = asyncio.create_task(
-            _monitor_spend_logs_queue(
+            monitor_spend_logs_queue(
                 prisma_client=mock_prisma_client,
                 db_writer_client=None,
                 proxy_logging_obj=MagicMock(),
@@ -641,7 +641,7 @@ async def test_flush_requested_before_the_monitor_starts_costs_the_row_nothing(
     assert mock_prisma_client.spend_log_flush_requested is None
 
     monitor: Final = asyncio.create_task(
-        _monitor_spend_logs_queue(
+        monitor_spend_logs_queue(
             prisma_client=mock_prisma_client,
             db_writer_client=None,
             proxy_logging_obj=MagicMock(),
@@ -661,7 +661,7 @@ def test_raise_failed_update_spend_exception_emits_failure_handler() -> None:
 
     async def _runner() -> Any:
         try:
-            _raise_failed_update_spend_exception(
+            raise_failed_update_spend_exception(
                 e=RuntimeError("boom"),
                 start_time=0.0,
                 proxy_logging_obj=proxy_logging,
@@ -701,7 +701,7 @@ def test_raise_failed_update_spend_exception_raises_original_error() -> None:
     proxy_logging.failure_handler = AsyncMock()
 
     async def _runner() -> None:
-        _raise_failed_update_spend_exception(
+        raise_failed_update_spend_exception(
             e=ValueError("specific"),
             start_time=0.0,
             proxy_logging_obj=proxy_logging,
@@ -921,7 +921,7 @@ async def test_monitor_spend_logs_queue_pulls_parked_rows_before_each_flush(
     monkeypatch.setattr(utils_mod, "_wait_for_spend_log_flush_request", _poll)
 
     with pytest.raises(asyncio.CancelledError):
-        await _monitor_spend_logs_queue(
+        await monitor_spend_logs_queue(
             prisma_client=mock_prisma_client,
             db_writer_client=None,
             proxy_logging_obj=proxy_logging_with_redis,
@@ -983,6 +983,85 @@ async def test_update_spend_logs_job_requeues_whole_batch_when_postgres_is_out_o
         "queue_after": [row["request_id"] for row in mock_prisma_client.spend_log_transactions],
         "backoff_sleeps": sleeps,
     } == {"create_many_calls": 1, "queue_after": ["r1", "r2", "r3"], "backoff_sleeps": []}
+
+
+def _postgres_restarting() -> Exception:
+    """prisma's shape for Postgres SQLSTATE 57P03 while the server runs crash recovery after
+    a restart: a base ``DataError`` carrying only the connector message."""
+    from prisma.errors import DataError
+
+    return DataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": "Error in connector: Error querying the database: FATAL: the database system is starting up",
+                "backtrace": None,
+            }
+        }
+    )
+
+
+def _postgres_unreachable() -> Exception:
+    from prisma.errors import DataError
+
+    return DataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": "Can't reach database server at `db.internal`:`5432`",
+                "error_code": "P1001",
+            }
+        }
+    )
+
+
+def _postgres_terminated_session() -> Exception:
+    from prisma.errors import DataError
+
+    return DataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": "Error in connector: Error querying the database: FATAL: terminating connection due to "
+                "administrator command",
+                "meta": {"code": "57P01", "message": "terminating connection due to administrator command"},
+            }
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [_postgres_restarting(), _postgres_terminated_session()], ids=["57P03", "57P01"])
+async def test_update_spend_logs_job_keeps_every_row_while_postgres_restarts(
+    error: Exception,
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restarting server refuses or cuts every statement, so the batch is not bisected
+    into per-row drops: it is retried whole and then goes back to the queue head."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    proxy_logging: Final = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [
+        make_spend_log_row(request_id="r1"),
+        make_spend_log_row(request_id="r2"),
+        make_spend_log_row(request_id="r3"),
+        make_spend_log_row(request_id="r4"),
+    ]
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=error)
+
+    with suppress(Exception):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+
+    assert {
+        "create_many_calls": mock_prisma_client.db.litellm_spendlogs.create_many.await_count,
+        "queue_after": [row["request_id"] for row in mock_prisma_client.spend_log_transactions],
+    } == {"create_many_calls": 4, "queue_after": ["r1", "r2", "r3", "r4"]}
 
 
 def _tool_usage_transaction(request_id: str) -> object:
@@ -1175,6 +1254,53 @@ async def test_model_usage_flush_requeues_and_stops_the_job_when_postgres_is_out
         "queue_after": mock_prisma_client.model_usage_transactions,
         "autorouter_queue_after": len(mock_prisma_client.autorouter_turn_transactions),
     } == {"queue_after": [first, second], "autorouter_queue_after": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [_postgres_restarting(), _postgres_unreachable()], ids=["57P03", "P1001"])
+async def test_rollups_requeue_and_stop_the_job_while_postgres_cannot_take_writes(
+    error: Exception,
+    mock_prisma_client: MagicMock,
+) -> None:
+    """A server that is restarting or unreachable never saw the rollup batch, so the tool
+    usage increments are kept for the next flush, and the job stops before draining the
+    auto-router queue into the same outage."""
+    mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=error)
+    mock_prisma_client.spend_log_transactions = []
+    first, second = _tool_usage_transaction("r1"), _tool_usage_transaction("r2")
+    mock_prisma_client.tool_usage_transactions = [first, second]
+    mock_prisma_client.autorouter_turn_transactions = [MagicMock(name="autorouter_turn")]
+
+    with suppress(Exception):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert {
+        "queue_after": mock_prisma_client.tool_usage_transactions,
+        "autorouter_queue_after": len(mock_prisma_client.autorouter_turn_transactions),
+    } == {"queue_after": [first, second], "autorouter_queue_after": 1}
+
+
+@pytest.mark.asyncio
+async def test_rollups_drop_a_batch_whose_session_the_server_terminated(
+    mock_prisma_client: MagicMock,
+) -> None:
+    """A terminated session (57P01) may have committed before it was cut, and the rollup
+    increments are not idempotent, so the batch is dropped rather than counted twice."""
+    mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=_postgres_terminated_session())
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client.tool_usage_transactions = [_tool_usage_transaction("r1")]
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert mock_prisma_client.tool_usage_transactions == []
 
 
 @pytest.mark.asyncio

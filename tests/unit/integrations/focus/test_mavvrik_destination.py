@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +15,7 @@ from litellm.integrations.focus.destinations.mavvrik_destination import (
 )
 
 VALID_ENDPOINT = "https://api.mavvrik.ai/tenant123"
+_FOCUS_NOW: Final = datetime(2026, 2, 1, 0, 0, tzinfo=timezone.utc)
 
 
 def _make_window() -> FocusTimeWindow:
@@ -504,7 +506,6 @@ async def test_export_window_passes_max_rows_as_limit(monkeypatch):
 async def test_run_scheduled_export_catches_up_missed_dates():
     """If metricsMarker is 2 days behind, _run_scheduled_export exports missed dates first."""
     import polars as pl
-    from datetime import datetime, timedelta, timezone
     from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
         MavvrikFocusLogger,
     )
@@ -512,15 +513,15 @@ async def test_run_scheduled_export_catches_up_missed_dates():
         FocusMavvrikDestination,
     )
 
-    logger = MavvrikFocusLogger()
+    logger: Final = MavvrikFocusLogger(clock=lambda: _FOCUS_NOW)
 
     # metricsMarker = 3 days ago → 2 missed dates (day-2 and day-1) + today's run
-    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday = now - timedelta(days=1)
-    two_days_ago = now - timedelta(days=2)
-    three_days_ago = now - timedelta(days=3)
+    now: Final = _FOCUS_NOW
+    yesterday: Final = now - timedelta(days=1)
+    two_days_ago: Final = now - timedelta(days=2)
+    three_days_ago: Final = now - timedelta(days=3)
 
-    marker_ts = int(three_days_ago.timestamp())
+    marker_ts: Final = int(three_days_ago.timestamp())
 
     # Mock destination
     dest_mock = MagicMock(spec=FocusMavvrikDestination)
@@ -551,7 +552,6 @@ async def test_run_scheduled_export_catches_up_missed_dates():
 async def test_run_scheduled_export_no_catchup_when_marker_is_current():
     """If metricsMarker = yesterday, no catch-up needed — just export yesterday."""
     import polars as pl
-    from datetime import datetime, timedelta, timezone
     from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
         MavvrikFocusLogger,
     )
@@ -559,11 +559,11 @@ async def test_run_scheduled_export_no_catchup_when_marker_is_current():
         FocusMavvrikDestination,
     )
 
-    logger = MavvrikFocusLogger()
+    logger: Final = MavvrikFocusLogger(clock=lambda: _FOCUS_NOW)
 
-    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday = now - timedelta(days=1)
-    marker_ts = int(yesterday.timestamp())
+    now: Final = _FOCUS_NOW
+    yesterday: Final = now - timedelta(days=1)
+    marker_ts: Final = int(yesterday.timestamp())
 
     dest_mock = MagicMock(spec=FocusMavvrikDestination)
     dest_mock.get_metrics_marker = AsyncMock(return_value=marker_ts)
@@ -592,9 +592,9 @@ async def test_run_scheduled_export_skips_catchup_when_marker_is_unparseable():
         FocusMavvrikDestination,
     )
 
-    logger = MavvrikFocusLogger()
-    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday = now - timedelta(days=1)
+    logger: Final = MavvrikFocusLogger(clock=lambda: _FOCUS_NOW)
+    now: Final = _FOCUS_NOW
+    yesterday: Final = now - timedelta(days=1)
 
     dest_mock = MagicMock(spec=FocusMavvrikDestination)
     dest_mock.get_metrics_marker = AsyncMock(return_value="not-a-date")
@@ -706,7 +706,6 @@ def test_parse_metrics_marker_returns_none_for_garbage():
 async def test_catchup_capped_at_max_catchup_days():
     """Catch-up must not go further back than _MAX_CATCHUP_DAYS."""
     import polars as pl
-    from datetime import datetime, timedelta, timezone
     from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
         MavvrikFocusLogger,
     )
@@ -714,14 +713,14 @@ async def test_catchup_capped_at_max_catchup_days():
         FocusMavvrikDestination,
     )
 
-    logger = MavvrikFocusLogger()
-    max_days = MavvrikFocusLogger._MAX_CATCHUP_DAYS
+    logger: Final = MavvrikFocusLogger(clock=lambda: _FOCUS_NOW)
+    max_days: Final = MavvrikFocusLogger._MAX_CATCHUP_DAYS
 
-    now = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday = now - timedelta(days=1)
+    now: Final = _FOCUS_NOW
+    yesterday: Final = now - timedelta(days=1)
     # Marker is 30 days ago — well beyond the cap
-    thirty_days_ago = now - timedelta(days=30)
-    marker_ts = int(thirty_days_ago.timestamp())
+    thirty_days_ago: Final = now - timedelta(days=30)
+    marker_ts: Final = int(thirty_days_ago.timestamp())
 
     dest_mock = MagicMock(spec=FocusMavvrikDestination)
     dest_mock.get_metrics_marker = AsyncMock(return_value=marker_ts)
@@ -740,9 +739,55 @@ async def test_catchup_capped_at_max_catchup_days():
     assert db_mock.get_usage_data.call_count <= max_days
 
     # First catch-up date must not be earlier than (yesterday - max_days + 1)
-    earliest_allowed = yesterday - timedelta(days=max_days - 1)
-    first_call_start = db_mock.get_usage_data.call_args_list[0].kwargs["start_time_utc"]
+    earliest_allowed: Final = yesterday - timedelta(days=max_days - 1)
+    first_call_start: Final = db_mock.get_usage_data.call_args_list[0].kwargs["start_time_utc"]
     assert first_call_start.date() >= earliest_allowed.date()
+
+
+@pytest.mark.asyncio
+async def test_run_scheduled_export_uses_one_clock_read_across_midnight():
+    import polars as pl
+    from litellm.integrations.mavvrik_focus.mavvrik_focus_logger import (
+        MavvrikFocusLogger,
+    )
+    from litellm.integrations.focus.destinations.mavvrik_destination import (
+        FocusMavvrikDestination,
+    )
+
+    logger: Final = MavvrikFocusLogger(
+        clock=iter(
+            (
+                datetime(2026, 1, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                datetime(2026, 2, 1, 0, 0, 0, 1, tzinfo=timezone.utc),
+            )
+        ).__next__
+    )
+    marker_ts: Final = int(datetime(2026, 1, 28, 0, 0, tzinfo=timezone.utc).timestamp())
+    dest_mock: Final = MagicMock(spec=FocusMavvrikDestination)
+    dest_mock.get_metrics_marker = AsyncMock(return_value=marker_ts)
+    db_mock: Final = MagicMock()
+    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
+    engine_mock: Final = MagicMock()
+    engine_mock.database = db_mock
+    engine_mock.destination = dest_mock
+    logger._engine = engine_mock
+
+    await logger._run_scheduled_export()
+
+    windows: Final = tuple(
+        (call.kwargs["start_time_utc"], call.kwargs["end_time_utc"])
+        for call in db_mock.get_usage_data.call_args_list
+    )
+    assert windows == (
+        (
+            datetime(2026, 1, 29, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 1, 30, 0, 0, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 1, 30, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 1, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+        ),
+    )
 
 
 @pytest.mark.asyncio

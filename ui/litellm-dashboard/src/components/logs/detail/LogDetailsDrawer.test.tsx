@@ -1,3 +1,5 @@
+import userEvent from "@testing-library/user-event";
+import { copyToClipboard } from "@/utils/dataUtils";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -5,6 +7,11 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { sessionSpendLogsCall } from "../../networking";
 import { LogEntry } from "../types";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
+
+vi.mock("@/utils/dataUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
+  copyToClipboard: vi.fn(),
+}));
 
 vi.mock("../../networking", () => ({
   sessionSpendLogsCall: vi.fn(),
@@ -199,5 +206,20 @@ describe("LogDetailsDrawer session sidebar auto-router icon", () => {
     expect(routedRow.querySelector(".lucide-sparkles")).toBeNull();
     expect(directRow.querySelector(".lucide-sparkles")).not.toBeNull();
     expect(directRow.querySelector(".lucide-waypoints")).toBeNull();
+  });
+});
+
+describe("LogDetailsDrawer copying", () => {
+  it.each([true, false])("confirms a session id only when copying succeeds (%s)", async (success) => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    vi.mocked(copyToClipboard).mockReset().mockResolvedValue(success);
+    renderSessionDrawer();
+
+    const button = await screen.findByRole("button", { name: "Copy trace id" });
+    await user.click(button);
+
+    expect(copyToClipboard).toHaveBeenCalledWith("session-1");
+    expect(button.querySelector(".lucide-check") !== null).toBe(success);
   });
 });

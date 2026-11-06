@@ -1,7 +1,6 @@
 import base64
 import json
 import re
-import signal
 import threading
 import uuid
 from collections import Counter
@@ -449,11 +448,11 @@ def test_a_worker_killed_mid_burst_leaves_the_sibling_validating_provider_payloa
                 eventually(held.qsize, lambda size: size == len(calls), seconds=_GATE_SECONDS)
                 held_by: Final = {pid: _open_upstream_connections(pid, wire.url) for pid in workers}
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                victim: Final = psutil.Process(victim_pid)
-                victim.suspend()
-                victim.send_signal(signal.SIGKILL)
-                release.set()
-                outcomes: Final = tuple(future.result(timeout=60) for future in futures)
+                with owned.replacing_worker(victim_pid) as kill:
+                    kill.freeze()
+                    kill()
+                    release.set()
+                    outcomes: Final = tuple(future.result(timeout=60) for future in futures)
             assert sum(held_by.values()) == len(calls), held_by
             served: Final = tuple(
                 (call, response) for call, response in zip(calls, outcomes, strict=True) if response is not None

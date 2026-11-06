@@ -15,6 +15,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPServerHealth: vi.fn(),
   deleteMCPServer: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  getGatewayBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
   fetchMCPClientIp: vi.fn().mockResolvedValue(null),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
@@ -500,7 +501,7 @@ describe("MCPServers", () => {
 
     // Verify the API was called
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined, undefined, undefined);
   });
 
   it("should fetch and merge health status for servers", async () => {

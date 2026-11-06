@@ -56,6 +56,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.proxyEnv" . | nindent 12 }}
             {{- if .Values.liteadmin.enabled }}
             - name: LITELLM_ADMIN_AGENT_URL
@@ -147,9 +148,6 @@ spec:
             - name: npm
               mountPath: /.npm
           {{- end }}
-          {{- if .Values.billingMetrics.enabled }}
-            {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
-          {{- end }}
           {{- if include "litellm.collector.socketDir" . }}
             - name: collector-socket
               mountPath: {{ include "litellm.collector.socketDir" . }}
@@ -233,9 +231,6 @@ spec:
             items:
               - key: {{ .Values.proxyConfigMap.key | default "config.yaml" }}
                 path: "config.yaml"
-        {{- if .Values.billingMetrics.enabled }}
-        {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
-        {{- end }}
         {{- if include "litellm.collector.socketDir" . }}
         - name: collector-socket
           emptyDir:

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "@/lib/toast";
+import type { KeyResponse } from "../key_team_helpers/key_list";
 
 vi.mock("@/lib/toast", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -23,8 +24,16 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: mockUseAuthorized,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => ({ data: [] }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeamMemberBudgets", () => ({
+  useTeamMemberBudgets: vi.fn().mockReturnValue({}),
 }));
 
 // Networking: wire the hoisted fns so we can assert calls later
@@ -645,5 +654,62 @@ describe("KeyInfoView handleKeyUpdate soft_budget", () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(keyUpdateCallMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate organization", () => {
+  const keyListRow = { ...baseKeyData, org_id: "org-1" } as KeyResponse;
+
+  const adminAuth = {
+    accessToken: "access_abc",
+    userId: "user_1",
+    userRole: "Admin",
+    premiumUser: true,
+    token: "token_123",
+    userEmail: "test@example.com",
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  };
+
+  const renderKeyListRowSettings = () => {
+    mockUseAuthorized.mockReturnValue(adminAuth);
+    render(
+      <KeyInfoView keyId="tok_123" onClose={() => {}} keyData={keyListRow} onKeyDataUpdate={() => {}} teams={[]} />,
+    );
+    fireEvent.click(screen.getByText("Settings"));
+  };
+
+  const submitEditForm = (formValues: Record<string, unknown>) => {
+    fireEvent.click(screen.getByText("Edit Settings"));
+    Object.assign(globalThis, { __TEST_FORM_VALUES: formValues });
+    fireEvent.click(screen.getByText("Mock Submit"));
+  };
+
+  const shownOrganization = () => screen.getByText("Organization", { selector: "p" }).nextElementSibling;
+
+  it("should show no organization after a save clears the one a key list row carried as org_id", async () => {
+    keyUpdateCallMock.mockResolvedValueOnce({ ...baseKeyData, organization_id: null });
+    renderKeyListRowSettings();
+    expect(shownOrganization()).toHaveTextContent("org-1");
+
+    submitEditForm({ token: "tok_123", organization_id: null });
+
+    await waitFor(() => {
+      expect(shownOrganization()).toHaveTextContent("Not Set");
+    });
+    expect(keyUpdateCallMock.mock.calls[0][1]).toHaveProperty("organization_id", null);
+  });
+
+  it("should leave organization_id out of a save that keeps the key's organization", async () => {
+    keyUpdateCallMock.mockResolvedValueOnce({ ...baseKeyData, organization_id: "org-1" });
+    renderKeyListRowSettings();
+
+    submitEditForm({ token: "tok_123", organization_id: "org-1" });
+
+    await waitFor(() => {
+      expect(keyUpdateCallMock).toHaveBeenCalledTimes(1);
+    });
+    expect(keyUpdateCallMock.mock.calls[0][1]).not.toHaveProperty("organization_id");
+    expect(shownOrganization()).toHaveTextContent("org-1");
   });
 });

@@ -64,8 +64,8 @@ def _stream_content(event: dict[str, JsonValue]) -> str:
 
 
 def _clear_observations(upstream: httpx.Client) -> None:
-    response: Final = upstream.get("/__observations")
-    assert response.status_code == 200, response.text
+    response: Final = upstream.delete("/__observations")
+    assert response.status_code == 204, response.text
 
 
 def _observed_request_body(upstream: httpx.Client) -> dict[str, JsonValue]:

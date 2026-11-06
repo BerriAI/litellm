@@ -5,13 +5,46 @@ These tests validate the PublicAI configuration which is now JSON-based.
 PublicAI is an OpenAI-compatible provider with minor customizations.
 """
 
+import json
+from typing import Final
 from unittest.mock import patch
 
-
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.dynamic_config import create_config_class
+
+
+PUBLICAI_COMPLETION_RESPONSE: Final = {
+    "id": "publicai-completion",
+    "object": "chat.completion",
+    "created": 11111,
+    "model": "swiss-ai/apertus-8b-instruct",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello from PublicAI"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+}
+PUBLICAI_STREAMING_RESPONSE: Final = b"".join(
+    (
+        b'data: {"id":"publicai-stream-1","object":"chat.completion.chunk","created":11111,'
+        b'"model":"swiss-ai/apertus-8b-instruct","choices":[{"index":0,"delta":{"content":"Hello "},'
+        b'"finish_reason":null}]}\n\n',
+        b'data: {"id":"publicai-stream-2","object":"chat.completion.chunk","created":11111,'
+        b'"model":"swiss-ai/apertus-8b-instruct","choices":[{"index":0,"delta":{"content":"there"},'
+        b'"finish_reason":null}]}\n\n',
+        b'data: {"id":"publicai-stream-3","object":"chat.completion.chunk","created":11111,'
+        b'"model":"swiss-ai/apertus-8b-instruct","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+        b"data: [DONE]\n\n",
+    )
+)
 
 
 class TestPublicAIConfig:
@@ -137,3 +170,100 @@ class TestPublicAIConfig:
         )
 
         assert url == "https://custom.publicai.co/v1/chat/completions"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_publicai_content_list_conversion_reaches_provider_as_text(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.publicai.co/v1/chat/completions")
+    route.return_value = httpx.Response(200, json=PUBLICAI_COMPLETION_RESPONSE)
+
+    response: Final = litellm.completion(
+        model="publicai/swiss-ai/apertus-8b-instruct",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Say hello"}]}],
+        max_tokens=10,
+        api_key="test-api-key",
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "swiss-ai/apertus-8b-instruct",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "max_tokens": 10,
+    }
+    assert response.choices[0].message.content == "Hello from PublicAI"
+    assert response.usage is not None
+    assert response.usage.total_tokens == 7
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_publicai_parameter_mapping_reaches_provider_as_max_tokens(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.publicai.co/v1/chat/completions")
+    route.return_value = httpx.Response(200, json=PUBLICAI_COMPLETION_RESPONSE)
+
+    response: Final = litellm.completion(
+        model="publicai/swiss-ai/apertus-8b-instruct",
+        messages=[{"role": "user", "content": "Hi"}],
+        max_completion_tokens=5,
+        api_key="test-api-key",
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "swiss-ai/apertus-8b-instruct",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 5,
+    }
+    assert response.choices[0].message.content == "Hello from PublicAI"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_publicai_completion_basic_uses_provider_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.publicai.co/v1/chat/completions")
+    route.return_value = httpx.Response(200, json=PUBLICAI_COMPLETION_RESPONSE)
+    messages: Final = [{"role": "user", "content": "Say hello"}]
+
+    response: Final = litellm.completion(
+        model="publicai/swiss-ai/apertus-8b-instruct",
+        messages=messages,
+        max_tokens=10,
+        api_key="test-api-key",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "swiss-ai/apertus-8b-instruct",
+        "messages": messages,
+        "max_tokens": 10,
+    }
+    assert response.choices[0].message.content == "Hello from PublicAI"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_publicai_completion_with_streaming_uses_provider_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.publicai.co/v1/chat/completions")
+    route.return_value = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=PUBLICAI_STREAMING_RESPONSE,
+    )
+    messages: Final = [{"role": "user", "content": "Say hello"}]
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="publicai/swiss-ai/apertus-8b-instruct",
+            messages=messages,
+            max_tokens=10,
+            stream=True,
+            api_key="test-api-key",
+        )
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "swiss-ai/apertus-8b-instruct",
+        "messages": messages,
+        "max_tokens": 10,
+        "stream": True,
+    }
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks if chunk.choices[0].delta.content) == (
+        "Hello ",
+        "there",
+    )

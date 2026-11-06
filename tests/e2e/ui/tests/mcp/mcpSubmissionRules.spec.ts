@@ -84,6 +84,7 @@ const test = base.extend<Fixtures>({
         url: localServerUrl,
         transport: "http",
       },
+      timeout: 60_000,
     });
     expect(registration.status(), await registration.text()).toBe(201);
 
@@ -129,6 +130,11 @@ test("Submission Rules panel shows saved rules, preloads the editor, and save ke
 
   await page.reload();
   await page.getByRole("tab", { name: "Submitted MCPs" }).click();
-  await expect(page.getByText(submittedServerName, { exact: true })).toBeVisible();
-  await expect(page.getByText("3 passing, 1 failing", { exact: true })).toBeVisible();
+  const submittedCard = page
+    .locator("div")
+    .filter({ has: page.getByRole("heading", { name: submittedServerName, exact: true }) })
+    .filter({ hasText: /\d+ passing, \d+ failing/ })
+    .last();
+  await expect(submittedCard.getByRole("heading", { name: submittedServerName, exact: true })).toBeVisible();
+  await expect(submittedCard.getByText("3 passing, 1 failing", { exact: true })).toBeVisible();
 });

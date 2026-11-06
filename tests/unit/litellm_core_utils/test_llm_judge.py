@@ -7,11 +7,14 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_judge import (
+    attached_auth,
+    caller_team_for,
     extract_text_from_content,
     judge_acompletion,
     judge_target,
     parse_json_verdict,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 @pytest.mark.parametrize(
@@ -28,7 +31,7 @@ def test_parse_json_verdict_tolerates_fences_and_prose(raw, expected):
 
 
 def test_parse_json_verdict_rejects_non_object():
-    with pytest.raises(ValueError, match='judge response is not a JSON object'):
+    with pytest.raises(ValueError, match="judge response is not a JSON object"):
         parse_json_verdict('["not", "an", "object"]')
     with pytest.raises((json.JSONDecodeError, ValueError)):
         parse_json_verdict("no json here at all")
@@ -150,3 +153,175 @@ def test_judge_target_gives_one_identity_to_a_bare_public_name_and_a_prefixed_de
     )
 
     assert judge_target(router, "gpt-4o").models == judge_target(router, "fast-tier").models
+
+
+_TEAM_JUDGE: dict[str, object] = {
+    "model_name": "owner-judge-deployment",
+    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "team-judge"},
+}
+_SHARED_JUDGE: dict[str, object] = {
+    "model_name": "shared-judge",
+    "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+}
+_CATCH_ALL: dict[str, object] = {"model_name": "*", "litellm_params": {"model": "*"}}
+_TEAM_GPT_4O: dict[str, object] = {
+    "model_name": "owner-gpt-4o-deployment",
+    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "gpt-4o"},
+}
+_PROXY_WIDE_TEAM_JUDGE: dict[str, object] = {
+    "model_name": "team-judge",
+    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+}
+_PROXY_WIDE_CUSTOM_PROVIDER_JUDGE: dict[str, object] = {
+    "model_name": "team-judge",
+    "litellm_params": {"model": "in-house-judge", "custom_llm_provider": "openai", "api_key": "fake"},
+}
+_SHARED_PREFIX_WILDCARD: dict[str, object] = {"model_name": "wc/*", "litellm_params": {"model": "openai/*"}}
+_CUSTOM_PROVIDER_CATCH_ALL: dict[str, object] = {
+    "model_name": "*",
+    "litellm_params": {"model": "*", "custom_llm_provider": "openai"},
+}
+_CUSTOM_PROVIDER_PREFIX_WILDCARD: dict[str, object] = {
+    "model_name": "wc/*",
+    "litellm_params": {"model": "*", "custom_llm_provider": "openai"},
+}
+_TEAM_UNDER_CUSTOM_PROVIDER_PREFIX: dict[str, object] = {
+    "model_name": "owner-wc-in-house-deployment",
+    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/in-house-judge"},
+}
+_TEAM_UNDER_SHARED_PREFIX: dict[str, object] = {
+    "model_name": "owner-wc-deployment",
+    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/gpt-4o"},
+}
+_TEAM_PREFIX_WILDCARD: dict[str, object] = {
+    "model_name": "owner-wc-wildcard",
+    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/*"},
+}
+_TEAM_FIXED_UNDER_PREFIX_WILDCARD: dict[str, object] = {
+    "model_name": "owner-wc-fixed",
+    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/*"},
+}
+_TEAM_PUBLIC_WILDCARD: dict[str, object] = {
+    "model_name": "owner-openai-wildcard",
+    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "openai/*"},
+}
+_TEAM_FIXED_UNDER_PUBLIC_WILDCARD: dict[str, object] = {
+    "model_name": "owner-fixed-under-wildcard",
+    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "openai/*"},
+}
+_LEGACY_OWNER_SHARED_JUDGE: dict[str, object] = {
+    "model_name": "shared-judge",
+    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
+    "model_info": {"team_id": "owner"},
+}
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected_team"),
+    [
+        ({"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}, "owner"),
+        ({"litellm_metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}, "owner"),
+        (
+            {
+                "metadata": {"user_api_key_auth": {"team_id": "victim"}},
+                "litellm_metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")},
+            },
+            "owner",
+        ),
+        ({"metadata": {"user_api_key_team_id": "owner"}}, None),
+        ({"litellm_metadata": {"user_api_key_team_id": "owner"}}, None),
+        ({"metadata": {"user_api_key_auth": {"team_id": "owner"}}}, None),
+        ({}, None),
+        (None, None),
+    ],
+    ids=[
+        "auth-in-metadata",
+        "auth-in-litellm-metadata",
+        "forged-dict-beside-real-auth",
+        "forged-plain-team-id",
+        "forged-plain-team-id-litellm-metadata",
+        "forged-auth-dict",
+        "no-metadata",
+        "no-request-data",
+    ],
+)
+def test_attached_auth_reads_only_the_instance_the_proxy_attached(
+    request_data: object, expected_team: str | None
+) -> None:
+    auth = attached_auth(request_data)
+    assert (auth.team_id if auth is not None else None) == expected_team
+
+
+@pytest.mark.parametrize(
+    ("deployments", "model", "team_id", "expected"),
+    [
+        ((_TEAM_JUDGE, _SHARED_JUDGE), "team-judge", "owner", "owner"),
+        ((_TEAM_JUDGE, _SHARED_JUDGE), "team-judge", "other", None),
+        ((_TEAM_JUDGE, _SHARED_JUDGE), "team-judge", None, None),
+        ((_TEAM_JUDGE, _SHARED_JUDGE), "shared-judge", "owner", None),
+        ((_TEAM_JUDGE, _SHARED_JUDGE), "openai/gpt-4o", "owner", None),
+        ((_TEAM_JUDGE, _CATCH_ALL), "team-judge", "owner", None),
+        ((_TEAM_JUDGE, _CUSTOM_PROVIDER_CATCH_ALL), "team-judge", "owner", None),
+        ((_TEAM_GPT_4O,), "gpt-4o", "owner", None),
+        ((_TEAM_GPT_4O, _CATCH_ALL), "gpt-4o", "owner", None),
+        ((_TEAM_JUDGE, _PROXY_WIDE_TEAM_JUDGE), "team-judge", "owner", None),
+        ((_TEAM_JUDGE, _PROXY_WIDE_CUSTOM_PROVIDER_JUDGE), "team-judge", "owner", None),
+        ((_TEAM_UNDER_SHARED_PREFIX, _SHARED_PREFIX_WILDCARD), "wc/gpt-4o", "owner", None),
+        ((_TEAM_UNDER_CUSTOM_PROVIDER_PREFIX, _CUSTOM_PROVIDER_PREFIX_WILDCARD), "wc/in-house-judge", "owner", None),
+        ((_SHARED_JUDGE, _LEGACY_OWNER_SHARED_JUDGE), "shared-judge", "other", None),
+        ((_SHARED_JUDGE, _LEGACY_OWNER_SHARED_JUDGE), "shared-judge", "owner", None),
+        ((_LEGACY_OWNER_SHARED_JUDGE,), "shared-judge", "other", None),
+        ((_TEAM_PUBLIC_WILDCARD,), "openai/gpt-4o-mini", "owner", None),
+        ((_TEAM_PUBLIC_WILDCARD, _SHARED_JUDGE), "openai/gpt-4o", "owner", None),
+        ((_TEAM_PUBLIC_WILDCARD, _TEAM_FIXED_UNDER_PUBLIC_WILDCARD), "openai/gpt-4o-mini", "owner", None),
+        ((_TEAM_FIXED_UNDER_PUBLIC_WILDCARD,), "openai/gpt-4o-mini", "owner", None),
+        ((_TEAM_PREFIX_WILDCARD,), "wc/gpt-4o", "owner", None),
+        ((_TEAM_FIXED_UNDER_PREFIX_WILDCARD,), "wc/gpt-4o", "owner", None),
+        ((_TEAM_UNDER_SHARED_PREFIX, _TEAM_PREFIX_WILDCARD), "wc/gpt-4o", "owner", "owner"),
+    ],
+    ids=[
+        "team-model",
+        "other-team",
+        "teamless-key",
+        "shared-deployment",
+        "sdk-public-name",
+        "catch-all-wins-over-the-team-name",
+        "custom-provider-catch-all-wins-over-the-team-name",
+        "sdk-name-wins-over-the-team-name",
+        "sdk-name-through-a-catch-all-wins-over-the-team-name",
+        "proxy-wide-name-wins-over-the-team-name",
+        "proxy-wide-custom-provider-name-wins-over-the-team-name",
+        "shared-wildcard-name-wins-over-the-team-name",
+        "custom-provider-wildcard-name-wins-over-the-team-name",
+        "untagged-team-sees-fewer-shared-deployments",
+        "legacy-team-tag-on-a-shared-name",
+        "only-a-legacy-team-deployment",
+        "team-wildcard-over-a-public-name",
+        "team-wildcard-over-a-shared-deployments-model",
+        "team-wildcard-beside-a-fixed-team-model",
+        "team-wildcard-name-over-a-fixed-model",
+        "team-wildcard-over-a-name-nothing-else-serves",
+        "team-wildcard-name-over-a-fixed-model-nothing-else-serves",
+        "team-name-beside-its-own-wildcard",
+    ],
+)
+def test_caller_team_for_uses_the_team_only_where_it_has_its_own_deployment(
+    deployments: tuple[dict[str, object], ...], model: str, team_id: str | None, expected: str | None
+) -> None:
+    router = litellm.Router(model_list=[dict(deployment) for deployment in deployments])
+    assert caller_team_for(router, model, UserAPIKeyAuth(team_id=team_id)) == expected
+
+
+def test_caller_team_for_follows_an_alias_that_wins_over_the_team_name() -> None:
+    router = litellm.Router(
+        model_list=[dict(_TEAM_JUDGE), dict(_SHARED_JUDGE)], model_group_alias={"team-judge": "shared-judge"}
+    )
+    assert caller_team_for(router, "team-judge", UserAPIKeyAuth(team_id="owner")) is None

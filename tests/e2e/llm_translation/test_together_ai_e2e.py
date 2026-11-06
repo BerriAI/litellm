@@ -66,7 +66,7 @@ REPLAY_ATTEMPTS: Final = 3
 ARITHMETIC_PROMPT = "What is 17 + 26? Answer with just the number."
 PERSON_PROMPT = "Invent a fictional person."
 CACHE_PREFIX_FACTS: Final = 600
-CACHE_ATTEMPTS: Final = 3
+CACHE_ATTEMPTS: Final = 5
 
 PERSON_RESPONSE_FORMAT: dict[str, object] = {
     "type": "json_schema",

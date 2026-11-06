@@ -20,7 +20,10 @@ from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
-from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_access_object,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -30,6 +33,17 @@ from litellm.types.llms.base import LiteLLMBaseModel
 # reuses this exact statement to serialize /team/member_add and /team/delete against each
 # other and against this mirror, rather than defining a second, divergent lock on the same key.
 TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+
+# Every transaction that writes several user rows locks them through this first, so all of
+# them take user row locks in one shared order and none can wait on another in a cycle.
+USER_ROWS_LOCK_SQL: Final = (
+    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE'
+)
+
+DETACH_TEAM_FROM_USERS_SQL: Final = (
+    "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
+    " WHERE user_id = ANY($2::text[])"
+)
 
 _READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1'
 
@@ -99,7 +113,7 @@ async def invalidate_access_group_cache(access_group_id: str) -> None:
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    await _delete_cache_access_object(
+    await delete_cache_access_object(
         access_group_id=access_group_id,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

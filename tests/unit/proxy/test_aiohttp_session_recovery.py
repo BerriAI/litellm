@@ -51,7 +51,7 @@ async def test_add_shared_session_recreates_closed_session():
     ):
         with patch.object(
             proxy_server_module,
-            "_initialize_shared_aiohttp_session",
+            "initialize_shared_aiohttp_session",
             new_callable=AsyncMock,
             return_value=new_session,
         ) as mock_init:
@@ -83,7 +83,7 @@ async def test_add_shared_session_handles_recreation_failure():
     ):
         with patch.object(
             proxy_server_module,
-            "_initialize_shared_aiohttp_session",
+            "initialize_shared_aiohttp_session",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -112,7 +112,7 @@ async def test_add_shared_session_handles_recreation_exception():
     ):
         with patch.object(
             proxy_server_module,
-            "_initialize_shared_aiohttp_session",
+            "initialize_shared_aiohttp_session",
             new_callable=AsyncMock,
             side_effect=RuntimeError("connection pool exhausted"),
         ):
@@ -166,7 +166,7 @@ async def test_add_shared_session_concurrent_recreation_uses_lock():
     ):
         with patch.object(
             proxy_server_module,
-            "_initialize_shared_aiohttp_session",
+            "initialize_shared_aiohttp_session",
             new_callable=AsyncMock,
             side_effect=mock_init,
         ):

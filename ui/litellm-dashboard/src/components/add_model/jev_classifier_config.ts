@@ -1,4 +1,5 @@
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 import type { ClassifierType } from "./classifier_types";
 
 export const OSS_CLASSIFIER_MODELS = {
@@ -6,13 +7,35 @@ export const OSS_CLASSIFIER_MODELS = {
   bespoke: ["nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"],
 } as const;
 
+const OSS_CLASSIFIER_PROVIDERS = ["jev", "laya", "bespoke", "databricks"] as const;
+export type OssClassifierProvider = (typeof OSS_CLASSIFIER_PROVIDERS)[number];
+export const isOssClassifierProvider = (value: unknown): value is OssClassifierProvider =>
+  OSS_CLASSIFIER_PROVIDERS.some((provider) => provider === value);
+
+const DEFAULT_TIMEOUT_MS = 3000;
+const SERVING_ENDPOINT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+const DATABRICKS_AI_DECIDE_MODEL = "ai_decide";
+
+export const fixedClassifierModels = (provider: OssClassifierProvider | undefined): readonly string[] | undefined =>
+  provider === "laya" || provider === "bespoke" ? OSS_CLASSIFIER_MODELS[provider] : undefined;
+
+const defaultClassifierModel = (provider: OssClassifierProvider | undefined): string =>
+  fixedClassifierModels(provider)?.[0] ?? (provider === "databricks" ? DATABRICKS_AI_DECIDE_MODEL : "jev-latest");
+
+const isSupportedClassifierModel = (provider: OssClassifierProvider | undefined, model: string): boolean => {
+  if (provider === "databricks") return SERVING_ENDPOINT_NAME.test(model);
+  const fixed = fixedClassifierModels(provider);
+  return fixed === undefined || fixed.some((candidate) => candidate === model);
+};
+
 const jevClassifierConfigFields = {
+  deployment_name: z.preprocess((value) => value ?? undefined, z.string().trim().min(1).optional()),
   provider: z.preprocess(
     (value) => (value === "typesafe" ? "jev" : value),
-    z.enum(["jev", "laya", "bespoke"]).optional(),
+    z.enum(["jev", "laya", "bespoke", "databricks"]).optional(),
   ),
   model: z.string().trim().min(1).optional(),
-  timeout_ms: z.number().int().positive().default(3000),
+  timeout_ms: z.number().int().positive().default(DEFAULT_TIMEOUT_MS),
   instructions: z
     .string()
     .nullish()
@@ -24,23 +47,18 @@ const jevClassifierConfigFields = {
 
 export const jevClassifierConfigSchema = z
   .object(jevClassifierConfigFields)
-  .transform((config) => ({
-    ...config,
-    model:
-      config.model ??
-      (config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider][0] : "jev-latest"),
-  }))
+  .transform((config) => ({ ...config, model: config.model ?? defaultClassifierModel(config.provider) }))
   .refine(
-    (config) =>
-      !config.provider ||
-      config.provider === "jev" ||
-      OSS_CLASSIFIER_MODELS[config.provider].some((model) => model === config.model),
-    { error: "Select a supported classifier model", path: ["model"] },
+    (config) => config.deployment_name !== undefined || isSupportedClassifierModel(config.provider, config.model),
+    {
+      error: () => i18n.t("addModel.jevClassifierConfig.errors.unsupportedModel"),
+      path: ["model"],
+    },
   );
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
-export const defaultJevClassifierConfig = (provider: JevClassifierConfig["provider"] = "jev"): JevClassifierConfig =>
+export const defaultJevClassifierConfig = (provider: OssClassifierProvider = "jev"): JevClassifierConfig =>
   jevClassifierConfigSchema.parse({ provider });
 
 export const hydrateOssClassifier = (config: {
@@ -59,6 +77,7 @@ export const hydrateOssClassifier = (config: {
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  ...(config.deployment_name !== undefined && { deployment_name: config.deployment_name }),
   provider: config.provider ?? "jev",
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
@@ -68,3 +87,6 @@ export const normalizeJevClassifierConfig = (
     circuit_breaker_cooldown_seconds: config.circuit_breaker_cooldown_seconds,
   }),
 });
+
+export const decisionDeploymentName = (config: JevClassifierConfig | undefined): string | undefined =>
+  config?.deployment_name;

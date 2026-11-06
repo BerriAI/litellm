@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -246,6 +247,35 @@ async def test_add_new_member_links_default_team_budget_id():
     )
     create_data = team_membership_call_args.kwargs["data"]["create"]
     assert create_data["budget_id"] == test_default_budget_id
+
+
+@pytest.mark.asyncio
+async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_request() -> None:
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+    from litellm.types.tag_management import TagUpdateRequest
+
+    budget_update: Final = AsyncMock()
+    prisma_client: Final = cast(
+        PrismaClient,
+        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        budget_id: Final = await handle_budget_for_entity(
+            data=TagUpdateRequest(name="budget-tag", budget_id="budget-1", max_budget=20),
+            existing_budget_id="budget-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name="admin",
+        )
+
+    assert budget_id == "budget-1"
+    budget_update.assert_awaited_once_with(
+        where={"budget_id": "budget-1"},
+        data={"budget_id": "budget-1", "max_budget": 20.0, "updated_by": "admin"},
+    )
 
 
 @pytest.mark.parametrize(
@@ -817,6 +847,10 @@ async def test_add_new_member_with_user_email_links_default_budget():
     mock_prisma_client.db.litellm_budgettable.create.assert_not_called()
 
 
+def _as_stored(data: Mapping[str, object]) -> dict[str, object]:
+    return {k: json.loads(v) if k == "model_max_budget" and isinstance(v, str) else v for k, v in data.items()}
+
+
 class _FakeBudgetTable:
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, object]] = {}
@@ -829,14 +863,14 @@ class _FakeBudgetTable:
         self, *, data: Mapping[str, object], include: Mapping[str, bool] | None = None
     ) -> LiteLLM_BudgetTable:
         budget_id: Final = str(data.get("budget_id") or uuid.uuid4())
-        self.rows[budget_id] = {**data, "budget_id": budget_id}
+        self.rows[budget_id] = {**_as_stored(data), "budget_id": budget_id}
         return self._record(budget_id)
 
     async def find_unique(self, *, where: Mapping[str, str]) -> LiteLLM_BudgetTable | None:
         return self._record(where["budget_id"]) if where["budget_id"] in self.rows else None
 
     async def update(self, *, where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_BudgetTable:
-        self.rows[where["budget_id"]] = {**self.rows[where["budget_id"]], **data}
+        self.rows[where["budget_id"]] = {**self.rows[where["budget_id"]], **_as_stored(data)}
         return self._record(where["budget_id"])
 
 
@@ -899,7 +933,7 @@ class _FakeDb:
 async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.auth_checks import _check_team_member_budget
-    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+    from litellm.proxy.management_endpoints.common_utils import upsert_budget_and_membership
     from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
     from litellm.proxy.utils import ProxyLogging
 
@@ -922,7 +956,7 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
             default_team_budget_id=default_budget.budget_id,
         )
 
-    await _upsert_budget_and_membership(
+    await upsert_budget_and_membership(
         db,
         team_id=team_id,
         user_id="overridden",

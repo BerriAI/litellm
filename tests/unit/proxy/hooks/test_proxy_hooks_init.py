@@ -23,17 +23,17 @@ def test_managed_files_hook_registered():
     pytest.importorskip("litellm_enterprise")
     assert "managed_files" in PROXY_HOOKS
     hook_cls = get_proxy_hook("managed_files")
-    assert hook_cls.__name__ == "PROXY_LiteLLMManagedFiles"
+    assert hook_cls.__name__ == "_PROXY_LiteLLMManagedFiles"
 
 
 def test_managed_vector_stores_hook_registered():
     pytest.importorskip("litellm_enterprise")
     assert "managed_vector_stores" in PROXY_HOOKS
     hook_cls = get_proxy_hook("managed_vector_stores")
-    assert hook_cls.__name__ == "PROXY_LiteLLMManagedVectorStores"
+    assert hook_cls.__name__ == "_PROXY_LiteLLMManagedVectorStores"
 
 
-def test_isolation_module_does_not_pull_in_proxy_utils():
+def test_isolation_module_does_not_pull_in_proxy_utils(monkeypatch):
     """Layering guard: litellm.llms.* must not transitively import
     litellm.proxy.utils, which would reintroduce the import cycle."""
     import importlib
@@ -44,7 +44,7 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
         "litellm.proxy.management_endpoints.common_utils",
         "litellm.llms.base_llm.managed_resources.isolation",
     ]:
-        sys.modules.pop(mod, None)
+        monkeypatch.delitem(sys.modules, mod, raising=False)
 
     importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
     assert "litellm.proxy.utils" not in sys.modules

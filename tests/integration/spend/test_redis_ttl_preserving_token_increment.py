@@ -8,7 +8,7 @@ from redis import Redis
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
+    PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.caching import RedisPipelineIncrementOperation

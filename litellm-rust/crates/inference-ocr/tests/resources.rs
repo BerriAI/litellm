@@ -7,7 +7,7 @@ use std::sync::{
 
 use litellm_auth::AuthServices;
 use litellm_auth_gcp::{
-    CredentialSource, VertexAuth, VertexAuthFuture, VertexProviderLoader, VertexTokenSource,
+    CredentialSource, GcpAuthFuture, GcpProviderLoader, GcpTokenSource, VertexAuth,
 };
 use litellm_http::{HttpSettings, Resolution};
 use litellm_inference::resources::CoreResources;
@@ -20,28 +20,28 @@ use support::{ReceivedRequest, json_response, upstream};
 
 struct TokenSource(String);
 
-impl VertexTokenSource for TokenSource {
-    fn project_id(&self) -> VertexAuthFuture<'_, String> {
+impl GcpTokenSource for TokenSource {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
         Box::pin(async { Ok(self.0.clone()) })
     }
 
-    fn token(&self) -> VertexAuthFuture<'_, String> {
-        Box::pin(async { Ok(self.0.clone()) })
+    fn token(&self) -> GcpAuthFuture<'_, litellm_secret_value::SecretValue> {
+        Box::pin(async { Ok(litellm_secret_value::SecretValue::new(self.0.clone())) })
     }
 }
 
 #[derive(Default)]
 struct Loader(AtomicUsize);
 
-impl VertexProviderLoader for Loader {
-    fn load(&self, source: CredentialSource) -> VertexAuthFuture<'_, Arc<dyn VertexTokenSource>> {
+impl GcpProviderLoader for Loader {
+    fn load(&self, source: CredentialSource) -> GcpAuthFuture<'_, Arc<dyn GcpTokenSource>> {
         Box::pin(async move {
             self.0.fetch_add(1, Ordering::SeqCst);
             let identity = match source {
                 CredentialSource::Trusted(secret) => secret.expose().to_string(),
                 other => panic!("unexpected credential source: {other:?}"),
             };
-            Ok(Arc::new(TokenSource(identity)) as Arc<dyn VertexTokenSource>)
+            Ok(Arc::new(TokenSource(identity)) as Arc<dyn GcpTokenSource>)
         })
     }
 }
@@ -105,10 +105,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             owner,
             &http,
             Default::default(),
-            OcrSettings {
-                vertex_location: Some(location.into()),
-                ..OcrSettings::default()
-            },
+            OcrSettings::default(),
             Arc::new(RecordingSecrets::new([("VERTEXAI_CREDENTIALS", identity)])),
         );
         let request = decode_request(OcrWireRequest {
@@ -118,7 +115,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             api_base: Some(upstream.uri()),
             custom_llm_provider: None,
             extra_headers: None,
-            optional_params: Default::default(),
+            optional_params: json!({"vertex_location": location}).as_object().cloned().unwrap(),
             input_sources: Default::default(),
             timeout_seconds: Some(5.0),
         }).unwrap();

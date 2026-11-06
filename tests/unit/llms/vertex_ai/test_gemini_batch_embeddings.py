@@ -8,11 +8,15 @@ This test ensures that:
 """
 
 import json
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
+import httpx
+
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _filter_embed_params,
@@ -655,3 +659,163 @@ def test_batch_embeddings_response_has_correct_indices_and_order():
         assert (
             embedding.embedding == expected_values[i]
         ), f"embedding {i} has wrong values: {embedding.embedding}"
+
+
+CLIP_BLOCK = {
+    "type": "file",
+    "file": {
+        "file_data": "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA",
+        "video_metadata": {"fps": 2, "start_offset": "3s", "end_offset": "6s"},
+    },
+}
+CLIP_PART_METADATA = {"fps": 2.0, "startOffset": "3s", "endOffset": "6s"}
+
+
+def _mock_embedding_call(
+    response_json: dict[str, object],
+) -> tuple[AbstractContextManager[MagicMock], AbstractContextManager[MagicMock], MagicMock]:
+    mock_get_token: Final = patch(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._get_token_and_url"
+    )
+    mock_auth: Final = patch(
+        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._ensure_access_token",
+        side_effect=lambda *args, **kwargs: (None, "test-project"),
+    )
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = response_json
+    return mock_get_token, mock_auth, mock_response
+
+
+def test_gemini_batch_path_sends_file_block_video_metadata() -> None:
+    client: Final = HTTPHandler()
+    mock_get_token, mock_auth, mock_response = _mock_embedding_call(
+        {"embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}]}
+    )
+    with patch.object(client, "post", return_value=mock_response) as mock_post, mock_auth, mock_get_token as token:
+        token.return_value = (
+            {"x-goog-api-key": "test-key"},
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents",
+        )
+        response: Final = litellm.embedding(
+            model="gemini/gemini-embedding-2-preview",
+            input=[CLIP_BLOCK, "a solid color clip"],
+            api_key="test-key",
+            client=client,
+        )
+
+    request_body: Final = json.loads(mock_post.call_args.kwargs["data"])
+    clip_part: Final = request_body["requests"][0]["content"]["parts"][0]
+    assert clip_part["inline_data"]["mime_type"] == "video/mp4"
+    assert clip_part["video_metadata"] == CLIP_PART_METADATA
+    assert request_body["requests"][1]["content"]["parts"] == [{"text": "a solid color clip"}]
+    assert [row["index"] for row in response.data] == [0, 1]
+
+
+def test_vertex_embed_content_path_sends_file_block_video_metadata() -> None:
+    client: Final = HTTPHandler()
+    url: Final = "https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-embedding-2-preview:embedContent"
+    mock_get_token, mock_auth, mock_response = _mock_embedding_call({"embedding": {"values": [0.1, 0.2]}})
+    with patch.object(client, "post", return_value=mock_response) as mock_post, mock_auth, mock_get_token as token:
+        token.return_value = ({"Authorization": "Bearer test-token"}, url)
+        response: Final = litellm.embedding(
+            model="vertex_ai/gemini-embedding-2-preview",
+            input=[CLIP_BLOCK, "a solid color clip"],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            client=client,
+        )
+
+    data: Final = json.loads(mock_post.call_args.kwargs["data"])
+    assert data["content"]["parts"][0]["video_metadata"] == CLIP_PART_METADATA
+    assert data["content"]["parts"][1] == {"text": "a solid color clip"}
+    assert len(response.data) == 1
+
+
+def test_file_block_with_files_reference_is_resolved_through_the_files_api() -> None:
+    client: Final = HTTPHandler()
+    files_uri: Final = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+    mock_get_token, mock_auth, mock_response = _mock_embedding_call({"embeddings": [{"values": [0.1, 0.2]}]})
+    file_lookup: Final = MagicMock()
+    file_lookup.status_code = 200
+    file_lookup.json.return_value = {"mimeType": "video/mp4", "uri": files_uri}
+    with (
+        patch.object(client, "post", return_value=mock_response) as mock_post,
+        patch.object(client, "get", return_value=file_lookup) as mock_get,
+        mock_auth,
+        mock_get_token as token,
+    ):
+        token.return_value = (
+            {"x-goog-api-key": "test-key"},
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents",
+        )
+        litellm.embedding(
+            model="gemini/gemini-embedding-2-preview",
+            input=[{"type": "file", "file": {"file_id": "files/clip123", "video_metadata": {"fps": 1}}}],
+            api_key="test-key",
+            client=client,
+        )
+
+    assert mock_get.call_args.kwargs["url"] == "https://generativelanguage.googleapis.com/v1beta/files/clip123"
+    clip_part: Final = json.loads(mock_post.call_args.kwargs["data"])["requests"][0]["content"]["parts"][0]
+    assert clip_part == {
+        "file_data": {"mime_type": "video/mp4", "file_uri": files_uri},
+        "video_metadata": {"fps": 1.0},
+    }
+
+
+CLIP_BLOCK_WITH_DETAIL: Final = {"type": "file", "file": {**CLIP_BLOCK["file"], "detail": "high"}}
+
+
+def _recording_client(calls: list[httpx.Request], response_json: dict[str, object]) -> HTTPHandler:
+    def route(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=response_json)
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(route)))
+
+
+def test_gemini_drop_params_strips_the_block_keys_embeddings_do_not_take() -> None:
+    calls: Final[list[httpx.Request]] = []
+    client: Final = _recording_client(calls, {"embeddings": [{"values": [0.1, 0.2]}]})
+    response: Final = litellm.embedding(
+        model="gemini/gemini-embedding-2-preview",
+        input=[CLIP_BLOCK_WITH_DETAIL],
+        api_key="test-key",
+        client=client,
+        drop_params=True,
+    )
+    sent_part: Final = json.loads(calls[0].content)["requests"][0]["content"]["parts"][0]
+    assert sent_part["video_metadata"] == CLIP_PART_METADATA
+    assert "detail" not in calls[0].content.decode()
+    assert response.data[0].embedding == [0.1, 0.2]
+
+
+def test_gemini_block_detail_answers_400_without_drop_params() -> None:
+    calls: Final[list[httpx.Request]] = []
+    client: Final = _recording_client(calls, {"embeddings": [{"values": [0.1, 0.2]}]})
+    with pytest.raises(litellm.BadRequestError, match=r"file\.detail"):
+        litellm.embedding(
+            model="gemini/gemini-embedding-2-preview", input=[CLIP_BLOCK_WITH_DETAIL], api_key="test-key", client=client
+        )
+    assert calls == []
+
+
+def test_vertex_drop_params_strips_the_block_keys_embeddings_do_not_take() -> None:
+    client: Final = HTTPHandler()
+    url: Final = "https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-embedding-2-preview:embedContent"
+    mock_get_token, mock_auth, mock_response = _mock_embedding_call({"embedding": {"values": [0.1, 0.2]}})
+    with patch.object(client, "post", return_value=mock_response) as mock_post, mock_auth, mock_get_token as token:
+        token.return_value = ({"Authorization": "Bearer test-token"}, url)
+        litellm.embedding(
+            model="vertex_ai/gemini-embedding-2-preview",
+            input=[CLIP_BLOCK_WITH_DETAIL],
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            client=client,
+            drop_params=True,
+        )
+
+    data: Final = json.loads(mock_post.call_args.kwargs["data"])
+    assert data["content"]["parts"][0]["video_metadata"] == CLIP_PART_METADATA
+    assert "detail" not in mock_post.call_args.kwargs["data"]

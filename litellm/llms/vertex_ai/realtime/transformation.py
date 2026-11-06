@@ -5,8 +5,13 @@ Extends GeminiRealtimeConfig but adapts the WSS URL and auth header for the
 Vertex AI endpoint instead of Google AI Studio.
 
 URL pattern:
-  wss://{location}-aiplatform.googleapis.com/ws/
+  wss://{vertex host for the location}/ws/
       google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent
+
+The host is the one ``litellm.llms.vertex_ai.common_utils.get_vertex_base_url``
+resolves for the location: ``{region}-aiplatform.googleapis.com`` for a region,
+``aiplatform.{geo}.rep.googleapis.com`` for the ``us`` / ``eu`` multi-regions,
+and ``aiplatform.googleapis.com`` for ``global``.
 
 Auth: OAuth2 Bearer token (not an API key).
 """
@@ -16,11 +21,13 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
     VertexChirpRealtimeConfig,
     is_vertex_speech_to_text_model,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -32,14 +39,20 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     (they require async I/O) and injected at construction time.
     """
 
-    def __init__(self, access_token: str, project: str, location: str) -> None:
-        super().__init__()
+    def __init__(self, access_token: str, project: str, location: str, drop_params: bool = False) -> None:
+        super().__init__(drop_params=drop_params)
         self._access_token = access_token
         self._project = project
         self._location = location
 
     def _include_function_response_id(self) -> bool:
         return False
+
+    def _rejects_vad_tuning_with_detection_off(self) -> bool:
+        return False
+
+    def _rejects_undocumented_voices(self, model: str) -> bool:
+        return True
 
     # ------------------------------------------------------------------
     # URL
@@ -59,16 +72,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """
         if api_base:
             # Allow callers to supply a fully-qualified wss:// base URL.
-            base = api_base.rstrip("/")
-            base = base.replace("https://", "wss://").replace("http://", "ws://")
-            return f"{base}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+            base: Final = api_base.replace("https://", "wss://").replace("http://", "ws://")
+            return join_api_base(base, "ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent")
 
-        location: Final = self._location
-        if location == "global":
-            host = "aiplatform.googleapis.com"
-        else:
-            host = f"{location}-aiplatform.googleapis.com"
-
+        host: Final = get_vertex_base_url(self._location).removeprefix("https://")
         return f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
     # ------------------------------------------------------------------
@@ -159,7 +166,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # settings would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
         session_params = self._normalize_session_payload_for_mapping(session_params)
-        setup_config: Final = self.map_openai_params(optional_params={}, non_default_params=session_params)
+        setup_config: Final = self.map_openai_params(optional_params={}, non_default_params=session_params, model=model)
 
         # Use full Vertex AI model path
         setup_config["model"] = self._vertex_model_path(model)
@@ -173,15 +180,16 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # ``silence_duration_ms``). ``map_automatic_turn_detection`` sets
         # ``disabled=True`` whenever ``create_response`` is absent or
         # ``False``. Force ``disabled=False`` only when the client did
-        # not explicitly request ``create_response: False`` — that path
+        # not explicitly request ``create_response: False`` or
+        # ``turn_detection: null`` — the first of those paths
         # is how transcription guardrails suppress automatic responses,
         # and overriding it here would silently bypass the guardrail.
         # Vertex Live has no "VAD on, no auto-response" mode, so callers
         # that need that behaviour must accept that VAD is off.
         client_turn_detection: Final = session_params.get("turn_detection")
         client_disabled_auto_response: Final = (
-            isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False
-        )
+            "turn_detection" in session_params and client_turn_detection is None
+        ) or (isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False)
         realtime_input_config: Final = setup_config.setdefault("realtimeInputConfig", {})
         automatic_detection: Final = realtime_input_config.setdefault("automaticActivityDetection", {})
         if not client_disabled_auto_response:
@@ -247,11 +255,15 @@ def vertex_realtime_config(
     resolve_access_token: Callable[[], Awaitable[str]],
     project: str,
     location: str | None,
+    drop_params: bool,
 ) -> VertexAIRealtimeConfig | VertexChirpRealtimeConfig:
     if is_vertex_speech_to_text_model(model):
-        return VertexChirpRealtimeConfig(resolve_access_token=resolve_access_token, project=project, location=location)
+        return VertexChirpRealtimeConfig(
+            resolve_access_token=resolve_access_token, project=project, location=location, drop_params=drop_params
+        )
     return VertexAIRealtimeConfig(
         access_token=access_token,
         project=project,
         location=VertexBase.get_vertex_region(vertex_region=location, model=model),
+        drop_params=drop_params,
     )
