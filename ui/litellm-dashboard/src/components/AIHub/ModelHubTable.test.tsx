@@ -427,7 +427,7 @@ describe("ModelHubTable", () => {
     });
 
     it("shows each deployment's own prices, by service tier, in the model details", async () => {
-      const dialog = await openDetails({
+      const gpt5OnOpenAIAndAzure = {
         model_group: "gpt-5",
         providers: ["openai", "azure"],
         mode: "chat",
@@ -439,7 +439,8 @@ describe("ModelHubTable", () => {
           },
           { provider: "azure", costs: { input_cost_per_token: 2.75e-6 }, tiered_pricing: [] },
         ],
-      });
+      };
+      const dialog = await openDetails(gpt5OnOpenAIAndAzure);
 
       const openai = within(dialog).getByRole("region", { name: "OpenAI pricing" });
       expect(within(openai).getByRole("row", { name: /Input \/ 1M tokens/ })).toHaveTextContent("$2.50$5.00");
