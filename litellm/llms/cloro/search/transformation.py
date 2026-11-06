@@ -28,6 +28,11 @@ _STR_LIST: Final = TypeAdapter(list[str])
 
 CLORO_DEFAULT_COUNTRY: Final = "US"
 _CLORO_GOOGLE_ROUTE: Final = "v1/monitor/google"
+# The cost map prices the base call: one sync results page without the AI Overview, 5 credits.
+CLORO_BASE_QUERY_CREDITS: Final = 5
+# Reserved optional_params key that carries the credits cloro charged (X-Credits-Charged) to cost tracking.
+CLORO_CREDITS_CHARGED_PARAM: Final = "_cloro_credits_charged"
+_CREDITS_CHARGED_HEADER: Final = "X-Credits-Charged"
 
 
 class CloroSearchConfig(BaseSearchConfig):
@@ -83,7 +88,10 @@ class CloroSearchConfig(BaseSearchConfig):
         domains: Final = _domain_filter(optional_params.get("search_domain_filter"))
         country: Final = optional_params.get("country")
         unified: Final = self.get_supported_perplexity_optional_params()
-        passthrough: Final = {k: v for k, v in optional_params.items() if k not in unified}
+        # The reserved credits key is dropped: a caller-supplied value would set the cost of its own request
+        passthrough: Final = {
+            k: v for k, v in optional_params.items() if k not in unified and k != CLORO_CREDITS_CHARGED_PARAM
+        }
         return {
             **passthrough,
             "query": _with_site_filters(joined_query, domains),
@@ -101,7 +109,13 @@ class CloroSearchConfig(BaseSearchConfig):
         ``/goto`` redirect, cut to ``max_results``. Every other key of ``result``
         (``peopleAlsoAsk``, ``relatedSearches``, ``ads``, and ``aioverview`` when
         ``include={"aioverview": True}`` was sent) -> ``SearchResponse.provider_metadata``.
+        The ``X-Credits-Charged`` header goes to cost tracking, so ``pages`` and the AI Overview are billed.
         """
+        # Written also when the header is absent, so a caller-supplied value never prices the request
+        logging_obj.optional_params = {  # rebind-ok: cost tracking reads the reported credits from here
+            **logging_obj.optional_params,  # pyright: ignore[reportUnknownMemberType]  # Logging types it as a bare dict
+            CLORO_CREDITS_CHARGED_PARAM: _credits_charged(raw_response.headers.get(_CREDITS_CHARGED_HEADER)),
+        }
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         result: Final = _JSON_OBJECT.validate_python(response_json.get("result", {}))
         rows: Final = _JSON_OBJECTS.validate_python(result.get("organicResults", ()))
@@ -114,6 +128,23 @@ class CloroSearchConfig(BaseSearchConfig):
                 "provider_metadata": {key: value for key, value in result.items() if key != "organicResults"},
             }
         )
+
+
+def cloro_search_cost(price_per_query: float, credits_charged: object) -> float | None:
+    """Cost of the credits cloro reported, at the per-credit rate of the per-query price. None when not reported."""
+    if isinstance(credits_charged, bool) or not isinstance(credits_charged, int) or credits_charged < 0:
+        return None
+    return credits_charged * price_per_query / CLORO_BASE_QUERY_CREDITS
+
+
+def _credits_charged(header: str | None) -> int | None:
+    if header is None:
+        return None
+    try:
+        credits: Final = int(header.strip())
+    except ValueError:
+        return None
+    return credits if credits >= 0 else None
 
 
 def _domain_filter(raw: object) -> tuple[str, ...]:

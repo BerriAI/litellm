@@ -32,9 +32,12 @@ def _organic_row(position: int, link: str) -> dict[str, object]:
     }
 
 
-def _cloro_response(rows: list[dict[str, object]], **extra: object) -> httpx.Response:
+def _cloro_response(
+    rows: list[dict[str, object]], credits_charged: str | None = None, **extra: object
+) -> httpx.Response:
     return httpx.Response(
         200,
+        headers={} if credits_charged is None else {"X-Credits-Charged": credits_charged},
         json={"success": True, "result": {"organicResults": rows, "peopleAlsoAsk": PEOPLE_ALSO_ASK, **extra}},
     )
 
@@ -43,16 +46,11 @@ def _cloro_response(rows: list[dict[str, object]], **extra: object) -> httpx.Res
 async def test_asearch_sends_cloro_body_and_maps_results(monkeypatch):
     monkeypatch.setenv("CLORO_API_KEY", "test-cloro-key")
     monkeypatch.delenv("CLORO_API_BASE", raising=False)
-    mock_response: Final = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "success": True,
-        "result": {
-            "organicResults": [_organic_row(1, "https://example.com/1"), _organic_row(2, "https://example.com/2")],
-            "peopleAlsoAsk": PEOPLE_ALSO_ASK,
-            "aioverview": AI_OVERVIEW,
-        },
-    }
+    mock_response: Final = _cloro_response(
+        [_organic_row(1, "https://example.com/1"), _organic_row(2, "https://example.com/2")],
+        credits_charged="7",
+        aioverview=AI_OVERVIEW,
+    )
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -80,6 +78,8 @@ async def test_asearch_sends_cloro_body_and_maps_results(monkeypatch):
         ("Result 2", "https://example.com/2", "Snippet 2"),
     ]
     assert response.provider_metadata == {"peopleAlsoAsk": PEOPLE_ALSO_ASK, "aioverview": AI_OVERVIEW}
+    per_credit: Final[float] = litellm.model_cost["cloro/search"]["input_cost_per_query"] / 5
+    assert response._hidden_params["response_cost"] == pytest.approx(7 * per_credit)
 
 
 def test_country_defaults_to_us_because_cloro_requires_it():
@@ -144,19 +144,43 @@ def test_missing_api_key_raises(monkeypatch):
         CloroSearchConfig().validate_environment(headers={})
 
 
-def test_search_cost_comes_from_cost_map(monkeypatch):
+def _search_cost(monkeypatch: pytest.MonkeyPatch, response: httpx.Response, **params: object) -> tuple[float, object]:
+    """``litellm.search`` against a mocked cloro response: (response cost, JSON body sent to cloro)."""
     monkeypatch.setenv("CLORO_API_KEY", "test-cloro-key")
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", return_value=response) as mock_post:
+        result: Final = litellm.search(query="litellm", search_provider="cloro", **params)
+    return result._hidden_params["response_cost"], mock_post.call_args.kwargs["json"]
+
+
+def test_search_cost_comes_from_cost_map(monkeypatch):
     priced: Final[float] = litellm.model_cost["cloro/search"]["input_cost_per_query"]
     assert priced > 0
-    mock_response: Final = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "success": True,
-        "result": {"organicResults": [_organic_row(1, "https://example.com/1")]},
-    }
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
-        return_value=mock_response,
-    ):
-        response: Final = litellm.search(query="litellm", search_provider="cloro")
-    assert response._hidden_params["response_cost"] == pytest.approx(priced)
+    cost, _ = _search_cost(monkeypatch, _cloro_response([_organic_row(1, "https://example.com/1")]))
+    assert cost == pytest.approx(priced)
+
+
+@pytest.mark.parametrize(
+    ("credits_charged", "expected_credits"),
+    [("9", 9), ("7", 7), ("5", 5), ("0", 0), (None, 5), ("not-a-number", 5), ("-3", 5), ("7.5", 5)],
+)
+def test_search_cost_bills_the_credits_cloro_charged(monkeypatch, credits_charged, expected_credits):
+    """``X-Credits-Charged`` is billed at the cost map's per-credit rate (5 credits = one query), so
+    ``pages`` and ``include.aioverview`` reach spend. Without a valid header the per-query price applies."""
+    per_credit: Final[float] = litellm.model_cost["cloro/search"]["input_cost_per_query"] / 5
+    cost, body = _search_cost(
+        monkeypatch,
+        _cloro_response([_organic_row(1, "https://example.com/1")], credits_charged=credits_charged),
+        pages=2,
+        include={"aioverview": True},
+    )
+    assert body == {"query": "litellm", "country": "US", "pages": 2, "include": {"aioverview": True}}
+    assert cost == pytest.approx(expected_credits * per_credit)
+
+
+def test_caller_cannot_set_the_reported_credits(monkeypatch):
+    priced: Final[float] = litellm.model_cost["cloro/search"]["input_cost_per_query"]
+    cost, body = _search_cost(
+        monkeypatch, _cloro_response([_organic_row(1, "https://example.com/1")]), _cloro_credits_charged=0
+    )
+    assert "_cloro_credits_charged" not in body
+    assert cost == pytest.approx(priced)
