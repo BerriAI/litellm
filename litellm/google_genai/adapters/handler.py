@@ -72,11 +72,7 @@ class GenerateContentToCompletionHandler:
                 completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
 
         if isinstance(custom_logging_obj, LiteLLMLoggingObj):
-            completion_kwargs["success_callback"] = [
-                *(custom_logging_obj.dynamic_success_callbacks or ()),
-                *(custom_logging_obj.dynamic_async_success_callbacks or ()),
-            ]
-            completion_kwargs["failure_callback"] = list(custom_logging_obj.dynamic_failure_callbacks or ())
+            completion_kwargs["_dynamic_callback_context"] = custom_logging_obj
 
         if stream:
             completion_kwargs["stream"] = stream
