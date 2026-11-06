@@ -137,6 +137,40 @@ impl LegacyLogging {
         Some(params)
     }
 
+    // Compared as Python compares them, so a caller's `0` is kept over a typed float's `0.0`.
+    fn caller_value<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        sent: &Value,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self.call.lookup(py, name)? {
+            Some(value) if from_py::<Value>(&value).is_ok() && value.eq(to_py(py, sent)?)? => {
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // Python's Messages handler logs the caller's own optional params, not their typed copies.
+    fn as_called(&self, py: Python<'_>, context: &RequestContext) -> PyResult<RequestContext> {
+        let mut context = context.clone();
+        if self.operation != LoggingOperation::Messages {
+            return Ok(context);
+        }
+        for (name, sent) in context
+            .optional_params
+            .as_object_mut()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(value) = self.caller_value(py, name, sent)? {
+                *sent = from_py(&value)?;
+            }
+        }
+        Ok(context)
+    }
+
     /// Python times the provider exchange inside the async `AsyncHTTPHandler.post`; its sync
     /// client is untimed.
     fn close_api_window(&mut self, py: Python<'_>, end: f64) -> PyResult<()> {
@@ -450,6 +484,7 @@ impl LegacyLogging {
         wire: Box<WireRequest>,
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+        let context = &self.as_called(py, context)?;
         let logger = self.logger()?;
         logger.update_from_kwargs(
             py,
@@ -462,11 +497,16 @@ impl LegacyLogging {
             .into_bound(py)
             .cast_into::<PyDict>()?;
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
-            if let Some(value) = self.call.lookup(py, name)?
-                && from_py::<Value>(&value).is_ok_and(|caller| caller == *sent)
-            {
+            if let Some(value) = self.caller_value(py, name, sent)? {
                 body.set_item(name, value)?;
             }
+        }
+        if self.operation == LoggingOperation::Messages {
+            // Python's Messages handler merges its transformed request body into the call details.
+            logger
+                .object(py)
+                .getattr("model_call_details")?
+                .call_method1("update", (&body,))?;
         }
         let headers = PyDict::new(py);
         for (name, value) in &wire.headers {
@@ -565,6 +605,13 @@ impl LegacyLogging {
             details.set_item("cache_hit", true)?;
         }
         details.set_item("cache_key", self.cache_key.as_deref())?;
+        // The refresh above reset the details Python's handler took from its request body; a cache
+        // hit never reaches that handler, so it keeps the caller's.
+        if let (LoggingOperation::Messages, ResultSource::Provider, Some(request)) =
+            (self.operation, &facts.source, &self.request)
+        {
+            details.call_method1("update", (request.body.bind(py),))?;
+        }
         Ok(HookStep::Ready(()))
     }
 
