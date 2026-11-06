@@ -39,12 +39,6 @@ if TYPE_CHECKING:
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
 
 
-def _asks_for_json_object(request: Mapping[str, object]) -> bool:
-    text: Final = request.get("text")
-    text_format: Final = text.get("format") if isinstance(text, dict) else None
-    return isinstance(text_format, dict) and text_format.get("type") == "json_object"
-
-
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
@@ -91,10 +85,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
-        if existing_instructions and _asks_for_json_object(request) and base_instructions not in existing_instructions:
-            request["input"] = [{"role": "developer", "content": existing_instructions}, *request["input"]]
-            request["instructions"] = base_instructions
-        elif existing_instructions:
+        if existing_instructions:
             if base_instructions not in existing_instructions:
                 request["instructions"] = f"{base_instructions}\n\n{existing_instructions}"
         else:

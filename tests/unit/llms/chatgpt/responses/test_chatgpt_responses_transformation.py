@@ -5,7 +5,7 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 """
 
 import json
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -516,70 +516,6 @@ def test_chat_response_format_reaches_the_codex_backend_as_text_format(
     )
 
     assert json.loads(upstream.call_args.args[0].content)["text"]["format"] == expected_format
-
-
-_JSON_INSTRUCTION: Final = "Reply in JSON with the keys city and country."
-_CITY_QUESTION: Final = "Paris is the capital of France. Return the city and country."
-
-
-def _send_chat_with_system_instruction(text_format: dict[str, object], client: HTTPHandler) -> None:
-    litellm.completion(
-        model="chatgpt/gpt-5.5",
-        messages=[{"role": "system", "content": _JSON_INSTRUCTION}, {"role": "user", "content": _CITY_QUESTION}],
-        response_format=text_format,
-        client=client,
-    )
-
-
-def _send_responses_with_instructions(text_format: dict[str, object], client: HTTPHandler) -> None:
-    litellm.responses(
-        model="chatgpt/gpt-5.5",
-        instructions=_JSON_INSTRUCTION,
-        input=_CITY_QUESTION,
-        text={"format": text_format},
-        client=client,
-    )
-
-
-@pytest.mark.usefixtures("chatgpt_token_dir")
-@pytest.mark.parametrize("send", [_send_chat_with_system_instruction, _send_responses_with_instructions])
-def test_json_object_instructions_reach_the_codex_backend_as_an_input_message(
-    send: Callable[[dict[str, object], HTTPHandler], None],
-) -> None:
-    upstream: Final = _completed_codex_upstream('{"city": "Paris", "country": "France"}')
-
-    send({"type": "json_object"}, HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream))))
-
-    forwarded: Final = json.loads(upstream.call_args.args[0].content)
-    assert forwarded["input"][0] == {"role": "developer", "content": _JSON_INSTRUCTION}
-    assert _JSON_INSTRUCTION not in forwarded["instructions"]
-
-
-@pytest.mark.usefixtures("chatgpt_token_dir")
-@pytest.mark.parametrize(
-    ("send", "json_schema_format"),
-    [
-        (
-            _send_chat_with_system_instruction,
-            {"type": "json_schema", "json_schema": {"name": "city", "schema": _CITY_SCHEMA, "strict": True}},
-        ),
-        (
-            _send_responses_with_instructions,
-            {"type": "json_schema", "name": "city", "schema": _CITY_SCHEMA, "strict": True},
-        ),
-    ],
-)
-def test_json_schema_instructions_stay_in_the_codex_instructions(
-    send: Callable[[dict[str, object], HTTPHandler], None],
-    json_schema_format: dict[str, object],
-) -> None:
-    upstream: Final = _completed_codex_upstream('{"city": "Paris", "country": "France"}')
-
-    send(json_schema_format, HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream))))
-
-    forwarded: Final = json.loads(upstream.call_args.args[0].content)
-    assert forwarded["instructions"].endswith(_JSON_INSTRUCTION)
-    assert all(item.get("role") != "developer" for item in forwarded["input"])
 
 
 @pytest.mark.usefixtures("chatgpt_token_dir")
