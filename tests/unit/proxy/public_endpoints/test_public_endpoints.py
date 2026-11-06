@@ -532,6 +532,7 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
         ("PARALLEL_AI", "Parallel AI", LlmProviders.PARALLEL_AI),
         ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
         ("EMPIRIOLABS", "EmpirioLabs AI", LlmProviders.EMPIRIOLABS),
+        ("BUTLER", "Butler", LlmProviders.BUTLER),
     ),
 )
 def test_decisions_provider_fields(provider_key: str, display_name: str, provider: LlmProviders) -> None:
