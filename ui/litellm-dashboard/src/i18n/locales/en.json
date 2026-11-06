@@ -4,7 +4,6 @@
     "compactNumber": "{{val, compact}}",
     "usd": "{{val, usd}}",
     "relativeTime": "{{val, relativetime}}",
-    "duration": "{{val, duration}}",
     "date": "{{val, date}}",
     "monthDay": "{{val, monthday}}",
     "monthDayTime": "{{val, monthdaytime}}",

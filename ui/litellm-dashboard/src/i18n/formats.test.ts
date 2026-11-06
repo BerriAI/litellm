@@ -1,4 +1,3 @@
-import { DurationFormat as PolyfilledDurationFormat } from "@formatjs/intl-durationformat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { cachedFormat } from "./formats";
@@ -17,17 +16,6 @@ const strings = (node: Messages): readonly string[] => entries(node, "").map(([,
 const formatsInEnglish = [
   ...new Set(strings(en).flatMap((text) => [...text.matchAll(/\{\{\s*\w+\s*,\s*([^}]+?)\s*\}\}/g)].map(([, f]) => f))),
 ];
-
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
-
-const durationParts = (ms: number) => ({
-  days: Math.floor(ms / DAY),
-  hours: Math.floor(ms / HOUR) % 24,
-  minutes: Math.floor(ms / 60_000) % 60,
-  seconds: Math.floor(ms / 1_000) % 60,
-  milliseconds: ms % 1_000,
-});
 
 const useLanguage = async (language: string) => {
   i18n.addResourceBundle(language, "translation", {});
@@ -72,19 +60,6 @@ describe("format keys in English", () => {
   it("formats relative time in the unit the caller names", () => {
     expect(i18n.t("format.relativeTime", { val: -3 })).toBe("3 days ago");
     expect(i18n.t("format.relativeTime", { val: 2, range: "hour" })).toBe("in 2 hours");
-  });
-
-  it("formats durations from milliseconds as the largest whole units, dropping zero units", () => {
-    expect(i18n.t("format.duration", { val: 0 })).toBe("0s");
-    expect(i18n.t("format.duration", { val: -500 })).toBe("0s");
-    expect(i18n.t("format.duration", { val: 0.5 })).toBe("0s");
-    expect(i18n.t("format.duration", { val: Number.POSITIVE_INFINITY })).toBe("0s");
-    expect(i18n.t("format.duration", { val: 123.9 })).toBe("123ms");
-    expect(i18n.t("format.duration", { val: 59_000 })).toBe("59s");
-    expect(i18n.t("format.duration", { val: 60_000 })).toBe("1m");
-    expect(i18n.t("format.duration", { val: 75_000 })).toBe("1m 15s");
-    expect(i18n.t("format.duration", { val: 6 * HOUR + 12 * 60_000 })).toBe("6h 12m");
-    expect(i18n.t("format.duration", { val: 152 * DAY + 23 * HOUR })).toBe("152d 23h");
   });
 
   it("only names formatters that are registered", () => {
@@ -152,17 +127,5 @@ describe("format keys in another UI language", () => {
     expect(shown).not.toBe(
       new Intl.NumberFormat(language, { style: "currency", currency: localCurrency }).format(1234.5),
     );
-  });
-
-  it("matches the DurationFormat polyfill that browsers without it load", () => {
-    const languages = ["en", "de", "zh-CN", "ja", "ar"];
-    const durations = [1, 999, 59_000, 75_000, 3_723_004, 152 * DAY + 23 * HOUR];
-    const mismatches = languages.flatMap((lng) => {
-      const polyfill = new PolyfilledDurationFormat(lng, { style: "narrow" });
-      return durations
-        .map((ms) => [lng, ms, i18n.t("format.duration", { val: ms, lng }), polyfill.format(durationParts(ms))])
-        .filter(([, , ours, theirs]) => ours !== theirs);
-    });
-    expect(mismatches).toEqual([]);
   });
 });

@@ -1,4 +1,3 @@
-import { shouldPolyfill } from "@formatjs/intl-durationformat/should-polyfill.js";
 import i18n, { type InitOptions } from "i18next";
 import { initReactI18next } from "react-i18next";
 
@@ -23,10 +22,5 @@ const options: InitOptions = {
 void i18n.use(initReactI18next).init(options);
 
 if (i18n.services.formatter) registerFormats(i18n.services.formatter);
-
-if (shouldPolyfill())
-  void import("@formatjs/intl-durationformat/polyfill-force.js").then(() =>
-    i18n.emit("languageChanged", i18n.language),
-  );
 
 export default i18n;

@@ -1,4 +1,3 @@
-import type { DurationFormatConstructor } from "@formatjs/intl-durationformat";
 import type { Formatter } from "i18next";
 
 import { DEFAULT_LANGUAGE } from "./languages";
@@ -51,25 +50,6 @@ const NUMERIC_DATE_TIME = {
   second: "2-digit",
 } as const;
 
-const DURATION_UNITS = [
-  { unit: "days", size: 86_400_000, per: Infinity },
-  { unit: "hours", size: 3_600_000, per: 24 },
-  { unit: "minutes", size: 60_000, per: 60 },
-  { unit: "seconds", size: 1_000, per: 60 },
-  { unit: "milliseconds", size: 1, per: 1_000 },
-] as const;
-
-const durationRecord = (milliseconds: number) =>
-  Object.fromEntries(DURATION_UNITS.map(({ unit, size, per }) => [unit, Math.floor(milliseconds / size) % per]));
-
-const duration = cachedFormat((lng: string) => {
-  const DurationFormat: DurationFormatConstructor = Reflect.get(Intl, "DurationFormat");
-  const format = new DurationFormat(lng, { style: "narrow" });
-  const zero = new Intl.NumberFormat(lng, { style: "unit", unit: "second", unitDisplay: "narrow" }).format(0);
-  return (milliseconds: number) =>
-    (Number.isFinite(milliseconds) && format.format(durationRecord(Math.max(0, milliseconds)))) || zero;
-});
-
 const FORMATS = {
   number: cachedFormat((lng, options: Intl.NumberFormatOptions) => {
     const format = new Intl.NumberFormat(lng, { ...options, currency: USD.currency });
@@ -89,7 +69,6 @@ const FORMATS = {
       return (value: number) => format.format(value, options.range ?? "day");
     },
   ),
-  duration,
   date: dateFormat(DATE),
   monthday: dateFormat(MONTH_DAY),
   monthdaytime: dateFormat({ ...MONTH_DAY, ...CLOCK }),
