@@ -18,6 +18,7 @@ import pytest
 
 import litellm
 from litellm.router_core import RouterCore
+from litellm.router_python_host import Endpoint
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.construction_precall_helpers import CallbackHost, restoring_model_cost, windowed
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rust_core
@@ -53,6 +54,26 @@ UNSUPPORTED_MESSAGE: Final = (
     "`litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, or send "
     "allowed_openai_params=['response_format'] to pass them through"
 )
+
+
+class TokenizerHost(CallbackHost):
+    """Records each text the pre-call checks hand the tokenizer."""
+
+    __slots__ = ("tokenized",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tokenized: Final[list[object]] = []
+
+    def invoke(self, op: str) -> Endpoint:
+        if op != "token_counter":
+            return super().invoke(op)
+
+        def token_counter(**kwargs: object) -> int:  # kwargs-ok: litellm.token_counter's arguments
+            self.tokenized.append(kwargs.get("text"))
+            return litellm.token_counter(**kwargs)  # pyright: ignore[reportArgumentType]
+
+        return token_counter
 
 
 @pytest.fixture
@@ -277,6 +298,61 @@ async def test_an_embedding_image_stays_out_of_the_context_window_on_a_backend_t
         enable_pre_call_checks=True,
     )
     assert await _picked(core, times=2, input=EMBEDDING_IMAGE) == {"image"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "backend",
+    [
+        "bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+        "oci/cohere.embed-english-image-v3.0",
+        "empiriolabs/tongyi-embedding-vision-plus",
+        "voyage/voyage-multimodal-3.5",
+    ],
+)
+@pytest.mark.parametrize(
+    "embedding_input",
+    [pytest.param(EMBEDDING_IMAGE, id="image"), pytest.param(["a red car", EMBEDDING_IMAGE], id="caption-and-image")],
+)
+async def test_an_embedding_image_stays_out_of_the_context_window_on_every_backend_declaring_image_input(
+    make_core: MakeCore, backend: str, embedding_input: object
+) -> None:
+    window: Final = litellm.get_model_info(backend)["max_input_tokens"]
+    assert window is not None and litellm.token_counter(text=EMBEDDING_IMAGE) > window
+    core: Final = make_core(model_list=[deployment("g", "image", model=backend)], enable_pre_call_checks=True)
+    assert await _picked(core, times=2, input=embedding_input) == {"image"}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_batch_tokenizes_only_the_inputs_longer_than_the_smallest_window_in_bytes() -> None:
+    host: Final = TokenizerHost()
+    core: Final = rust_core(
+        host, model_list=[windowed("g", "small", 50), windowed("g", "big", 10000)], enable_pre_call_checks=True
+    )
+    at_the_window: Final = "word " * 10
+    over_it_in_bytes_only: Final = "word " * 20
+    assert len(at_the_window.encode()) == 50
+
+    picked: Final = await _picked(core, input=[at_the_window] * 2048 + [over_it_in_bytes_only])
+
+    assert picked == {"small", "big"}
+    assert set(host.tokenized) == {over_it_in_bytes_only}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_input_that_fits_the_window_in_characters_but_not_in_tokens_is_counted(
+    make_core: MakeCore,
+) -> None:
+    dense: Final = "\ua66e" * 40
+    assert len(dense) <= 50 < litellm.token_counter(text=dense)
+    assert await _picked(_small_and_big(make_core, small=50), times=10, input=["hi", dense]) == {"big"}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_input_with_a_lone_surrogate_is_counted(make_core: MakeCore) -> None:
+    unpaired: Final = "\ud800" + "word " * 20
+    assert litellm.token_counter(text=unpaired) > 10
+    assert await _picked(_small_and_big(make_core, small=10), times=10, input=["hi", unpaired]) == {"big"}
 
 
 @pytest.mark.asyncio

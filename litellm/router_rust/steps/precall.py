@@ -22,10 +22,10 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.token_counter import (
+    embedding_text_input,
     offload_token_count,
     served_openai_models,
     single_encoding_openai_model,
-    split_embedding_input_tokens,
 )
 from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
@@ -59,11 +59,14 @@ def count_tokens(
     request_kwargs: Mapping[str, object] | None,
     tokenizer_model: str,
     deployments: Sequence[Mapping[str, object]] = (),
+    fits_within: int = 0,
 ) -> int:
     """``_count_pre_call_check_tokens``: messages, or Responses input normalized to messages, plus
-    the tools and Anthropic ``system`` block the message list never carries. Embedding media an
-    item of ``deployments`` reads as media is left out of the input: it never counts as text. An
-    embedding batch (a list of texts, token IDs or token ID lists) counts as its longest input."""
+    the tools and Anthropic ``system`` block the message list never carries. Embedding media is left
+    out of the input when every item of ``deployments`` declares image embedding input. An
+    embedding batch (a list of texts, token IDs or token ID lists) counts as its longest input, and
+    a text of at most ``fits_within`` UTF-8 bytes counts as its byte length without the tokenizer:
+    a token is never shorter than a byte, so it fits any window of that size."""
     from litellm.llms.anthropic.messages.native.utils import anthropic_system_to_openai_message
 
     extras: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else MappingProxyType({})
@@ -81,8 +84,8 @@ def count_tokens(
             LiteLLMCompletionResponsesConfig,
         )
 
-        text_input, _ = split_embedding_input_tokens(input, partial(deployment_backend_models, deployments))
-        embedding_tokens: Final = _longest_embedding_input_tokens(host, text_input, tokenizer_model)
+        text_input: Final = embedding_text_input(input, partial(deployment_backend_models, deployments))
+        embedding_tokens: Final = _longest_embedding_input_tokens(host, text_input, tokenizer_model, fits_within)
         if embedding_tokens is not None:
             return embedding_tokens
         input_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # its input type is untyped
@@ -94,20 +97,28 @@ def count_tokens(
     raise ValueError("Either messages or input must be provided to count tokens")
 
 
-def _longest_embedding_input_tokens(host: "PythonHost", value: object, tokenizer_model: str) -> int | None:
+def _longest_embedding_input_tokens(
+    host: "PythonHost", value: object, tokenizer_model: str, fits_within: int
+) -> int | None:
     """An embedding model's context window bounds each input on its own, so a batch is never summed.
     None when ``value`` is not an embedding batch, which leaves it to the Responses input count."""
     items: Final = _items(value) if _is_list(value) else ()
     if not items:
         return None
-    if all(isinstance(item, str) for item in items):
+    texts: Final = tuple(item for item in items if isinstance(item, str))
+    if len(texts) == len(items):
         counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
-        return max(counter(model=tokenizer_model, text=item) for item in items)
+        return max(_text_tokens(counter, tokenizer_model, text, fits_within) for text in texts)
     if all(_is_token_id(item) for item in items):
         return _token_id_count(host, len(items))
     if all(_is_token_id_list(item) for item in items):
         return _token_id_count(host, max(len(_items(item)) for item in items))
     return None
+
+
+def _text_tokens(counter: Callable[..., int], tokenizer_model: str, text: str, fits_within: int) -> int:
+    size: Final = len(text.encode(errors="surrogatepass"))
+    return size if size <= fits_within else counter(model=tokenizer_model, text=text)
 
 
 def _is_token_id(value: object) -> bool:
@@ -279,6 +290,9 @@ class PreCallFacts:
     def _candidate_records(self) -> Sequence[Mapping[str, object]]:
         return tuple(self._record(id) for id in self._candidates)
 
+    def _fits_within(self) -> int:
+        return min((limit for limit in self._windows.values() if limit is not None), default=0)
+
     def _count(self) -> int | None:
         try:
             return count_tokens(
@@ -288,6 +302,7 @@ class PreCallFacts:
                 self._request,
                 self._tokenizer_model(),
                 self._candidate_records(),
+                self._fits_within(),
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -304,6 +319,7 @@ class PreCallFacts:
                 self._request,
                 self._tokenizer_model(),
                 self._candidate_records(),
+                self._fits_within(),
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
