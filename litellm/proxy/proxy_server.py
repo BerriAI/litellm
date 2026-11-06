@@ -14813,6 +14813,7 @@ async def _try_provider_token_count(
     context_management: CountContextManagement | None = None,
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    anthropic_beta: str | None = None,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14841,6 +14842,7 @@ async def _try_provider_token_count(
             context_management=context_management,
             chat_params=chat_params,
             request_options=request_options,
+            anthropic_beta=anthropic_beta,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -14921,6 +14923,32 @@ async def _provider_token_count(
             pinned_count_model.region,
         )
     return failure
+
+
+def _retried_without_rejected_options(
+    count_with: "partial[Awaitable[TokenCountResponse | ProviderCountFailure | None]]",
+    request_options: Mapping[str, JsonValue],
+) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]]:
+    if not request_options:
+        return count_with
+    return partial(_count_retrying_without_options, count_with)
+
+
+async def _count_retrying_without_options(
+    count_with: "partial[Awaitable[TokenCountResponse | ProviderCountFailure | None]]",
+    model: str,
+    region: str | None,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    counted: Final = await count_with(model, region)
+    if not (isinstance(counted, ProviderCountFailure) and counted.rejected_request):
+        return counted
+    verbose_proxy_logger.warning(
+        "Token count for %s answered %s with the request's thinking, tool, and output options, "
+        "so it counts again without them",
+        model,
+        counted.status_code,
+    )
+    return await count_with(model, region, request_options=MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -15335,6 +15363,7 @@ async def count_request_tokens(
     litellm_call_id: str | None = None,
     client_oauth_token: str | None = None,
     request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    anthropic_beta: str | None = None,
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -15355,6 +15384,7 @@ async def count_request_tokens(
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
         request_options=request_options,
+        anthropic_beta=anthropic_beta,
     )
     return await logged_token_count(
         _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
@@ -15398,6 +15428,7 @@ async def _count_request_tokens(
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
     request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    anthropic_beta: str | None = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -15474,6 +15505,7 @@ async def _count_request_tokens(
     )
     if isinstance(chat_count, ChatCountBridgeError):
         raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+    counted_options: Final = _count_request_options(request_options, count_deployment, sent_params)
     ladder: Final = (
         None
         if provider_counter is None
@@ -15485,27 +15517,33 @@ async def _count_request_tokens(
                 routed_deployment,
                 request.model,
             )
-            or partial(
-                _try_provider_token_count,
-                provider_counter,
-                custom_llm_provider,
-                messages=(
-                    [dict(message) for message in chat_count.messages]
-                    if chat_count is not None
-                    else [{"role": "user", "content": prompt}]
-                    if prompt_as_message
-                    else request_messages
+            or _retried_without_rejected_options(
+                partial(
+                    _try_provider_token_count,
+                    provider_counter,
+                    custom_llm_provider,
+                    messages=(
+                        [dict(message) for message in chat_count.messages]
+                        if chat_count is not None
+                        else [{"role": "user", "content": prompt}]
+                        if prompt_as_message
+                        else request_messages
+                    ),
+                    contents=None if prompt_as_message else contents,
+                    deployment=count_deployment,
+                    request_model=request.model,
+                    tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
+                    system=system,
+                    messages_format=messages_format,
+                    output_format=output_format,
+                    context_management=_count_context_management(
+                        context_management, request.model, request_litellm_params
+                    ),
+                    chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+                    request_options=counted_options,
+                    anthropic_beta=anthropic_beta,
                 ),
-                contents=None if prompt_as_message else contents,
-                deployment=count_deployment,
-                request_model=request.model,
-                tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
-                system=system,
-                messages_format=messages_format,
-                output_format=output_format,
-                context_management=_count_context_management(context_management, request.model, request_litellm_params),
-                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
-                request_options=_count_request_options(request_options, count_deployment, sent_params),
+                counted_options,
             ),
             model_to_use=model_to_use,
             request_model=request.model,

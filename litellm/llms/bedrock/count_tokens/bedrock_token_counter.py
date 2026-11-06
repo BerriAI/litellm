@@ -2,7 +2,7 @@
 Bedrock Token Counter implementation using the CountTokens API.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final
@@ -117,21 +117,19 @@ class BedrockTokenCounter(BaseTokenCounter):
     ) -> bool:
         return custom_llm_provider == LlmProviders.BEDROCK.value
 
-    async def _count_with(
-        self,
-        handler: BedrockCountTokensHandler | BedrockMantleCountTokensHandler,
-        tokenizer_type: str,
-        request_data: Mapping[str, object],
-        litellm_params: dict[str, object],
-        resolved_model: str,
-    ) -> CountTokensOutcome:
+    def _count_on_mantle(
+        self, request_data: Mapping[str, object], litellm_params: Mapping[str, object], resolved_model: str
+    ) -> Awaitable[Mapping[str, JsonValue]]:
+        return self._mantle_handler.handle_count_tokens_request(
+            request_data=dict(request_data),
+            litellm_params=dict(litellm_params),
+            resolved_model=resolved_model,
+            client=self._client,
+        )
+
+    async def _count_with(self, count: Awaitable[Mapping[str, JsonValue]], tokenizer_type: str) -> CountTokensOutcome:
         try:
-            result: Final = await handler.handle_count_tokens_request(
-                request_data=dict(request_data),
-                litellm_params=litellm_params,
-                resolved_model=resolved_model,
-                client=self._client,
-            )
+            result: Final = await count
             reply: Final = _CountTokensReply.model_validate(result)
         except BedrockError as e:
             verbose_logger.debug(
@@ -157,6 +155,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
         request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+        anthropic_beta: str | None = None,
     ) -> TokenCountResponse | None:
         if not messages:
             return None
@@ -182,14 +181,15 @@ class BedrockTokenCounter(BaseTokenCounter):
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
         sent_messages: Final = messages if translated is None else translated.messages
+        sent_tools: Final = tools if translated is None else translated.tools
         claude_options: Final = (
             claude_count_options(
                 counted_model,
                 LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
                 sent_messages,
-                tools if translated is None else translated.tools,
+                sent_tools,
                 request_options,
-                context_management,
+                anthropic_beta,
                 deployment,
             )
             if is_mantle_claude_model(resolved_model)
@@ -197,29 +197,37 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, primary_tokenizer)
-        counted_messages: Final = sent_messages if claude_options.messages is None else claude_options.messages
+        invoke_fields: Final = _invoke_fields(claude_options)
         runtime_request: Final = {
-            **(
-                _request_data(model_to_use, counted_messages, tools, system)
-                if translated is None
-                else _request_data(model_to_use, counted_messages, translated.tools, translated.system)
+            **_request_data(
+                model_to_use,
+                sent_messages if claude_options.messages is None else claude_options.messages,
+                sent_tools if claude_options.messages is None else claude_options.tools,
+                system if translated is None else translated.system,
             ),
-            **_invoke_fields(claude_options),
+            **invoke_fields,
         }
         mantle_request: Final = runtime_request if translated is None else {**runtime_request, **translated.options}
 
         primary: Final = (
             await self._count_with(
-                self._mantle_handler, primary_tokenizer, mantle_request, litellm_params, resolved_model
+                self._count_on_mantle(mantle_request, litellm_params, resolved_model), primary_tokenizer
             )
             if use_mantle
             else await self._count_with(
-                self._runtime_handler, primary_tokenizer, runtime_request, litellm_params, resolved_model
+                self._runtime_handler.handle_count_tokens_request(
+                    request_data=dict(runtime_request),
+                    litellm_params=litellm_params,
+                    resolved_model=resolved_model,
+                    client=self._client,
+                    input_type="invokeModel" if invoke_fields else None,
+                ),
+                primary_tokenizer,
             )
         )
         outcome: Final = (
             await self._count_with(
-                self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
+                self._count_on_mantle(mantle_request, litellm_params, resolved_model), MANTLE_TOKENIZER_TYPE
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
             else primary

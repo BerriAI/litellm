@@ -65,6 +65,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
         request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+        anthropic_beta: str | None = None,
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
@@ -110,7 +111,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 pass
 
         claude_options: Final = claude_count_options(
-            model_to_use, LlmProviders.AZURE_AI, messages, tools, request_options, context_management, deployment
+            model_to_use, LlmProviders.AZURE_AI, messages, tools, request_options, anthropic_beta, deployment
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, "azure_ai_anthropic_api")
@@ -142,7 +143,9 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 api_key=api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
-                tools=tools,
+                tools=tools
+                if claude_options.messages is None
+                else [dict(tool) for tool in claude_options.tools or ()] or None,
                 system=system,
                 optional_params={**count_options, **claude_options.options},
                 betas=claude_options.betas,

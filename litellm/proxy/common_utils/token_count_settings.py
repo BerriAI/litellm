@@ -72,6 +72,10 @@ class ProviderCountFailure:
     def denied_in_region(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in REGION_DENIED_STATUSES
 
+    @property
+    def rejected_request(self) -> bool:
+        return 400 <= self.status_code < 500 and self.status_code != 429
+
     def with_hint(self, hint: str) -> "ProviderCountFailure":
         if self.rejected_before_provider_call:
             return self

@@ -336,7 +336,7 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
 
 
 _COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
-_COUNTED_REQUEST_OPTIONS: Final = ("thinking", "tool_choice", "output_config", "output_format")
+_COUNTED_REQUEST_OPTIONS: Final = ("thinking", "tool_choice", "output_config", "output_format", "context_management")
 
 
 class _CountTokensBodyOptions(TypedDict):
@@ -429,6 +429,7 @@ async def count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            anthropic_beta=request.headers.get("anthropic-beta"),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:

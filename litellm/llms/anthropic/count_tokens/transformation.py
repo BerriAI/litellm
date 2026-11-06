@@ -29,7 +29,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
-from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
@@ -337,11 +337,25 @@ class ClaudeCountOptions:
     options: Mapping[str, JsonValue]
     betas: tuple[str, ...]
     messages: tuple[Mapping[str, JsonValue], ...] | None
+    tools: tuple[Mapping[str, JsonValue], ...] | None
 
 
-NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=(), messages=None)
+NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=(), messages=None, tools=None)
 _COUNTED_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _MAX_TOKENS_ABOVE_ANY_BUDGET: Final = 2**31 - 1
+
+
+def _with_provider_betas(headers: Mapping[str, str], provider: str) -> Mapping[str, str]:
+    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+
+    beta_header: Final = headers.get("anthropic-beta")
+    if beta_header is None:
+        return headers
+    supported: Final = filter_and_transform_beta_headers(
+        [beta.strip() for beta in beta_header.split(",") if beta.strip()], provider
+    )
+    other_headers: Final = {name: value for name, value in headers.items() if name != "anthropic-beta"}
+    return {**other_headers, "anthropic-beta": ",".join(supported)} if supported else other_headers
 
 
 def claude_count_options(
@@ -350,18 +364,14 @@ def claude_count_options(
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]] | None,
     request_options: Mapping[str, JsonValue],
-    context_management: CountContextManagement | None,
+    anthropic_beta: str | None,
     deployment: Mapping[str, object] | None,
 ) -> ClaudeCountOptions | ChatCountTranslationError:
-    sent: Final = {
-        **{name: value for name, value in request_options.items() if value is not None},
-        **({} if context_management is None else {"context_management": context_management.spec}),
-    }
+    sent: Final = {name: value for name, value in request_options.items() if value is not None}
     if not sent:
         return NO_CLAUDE_COUNT_OPTIONS
-    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
     from litellm.exceptions import BadRequestError
-    from litellm.llms.anthropic.common_utils import AnthropicError, context_management_betas
+    from litellm.llms.anthropic.common_utils import AnthropicError
     from litellm.types.router import GenericLiteLLMParams
     from litellm.utils import ProviderConfigManager
 
@@ -372,37 +382,39 @@ def claude_count_options(
     deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
     leading_system, conversation = split_leading_system_run(messages)
     sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
-    sent_tools: Final = copy.deepcopy([dict(tool) for tool in tools or ()])
+    sent_params: Final = {
+        **copy.deepcopy(sent),
+        **({"tools": copy.deepcopy([dict(tool) for tool in tools])} if tools else {}),
+    }
+    beta_headers: Final = messages_config.headers_with_anthropic_betas(
+        {"anthropic-beta": anthropic_beta} if anthropic_beta else {}, sent_params, sent_conversation
+    )
+    sent_headers: Final = dict(
+        _with_provider_betas(beta_headers, provider.value)
+        if messages_config.should_filter_anthropic_beta_headers()
+        else beta_headers
+    )
     try:
         request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
             model=model,
             messages=sent_conversation,
-            anthropic_messages_optional_request_params={
-                **copy.deepcopy(sent),
-                **({"tools": sent_tools} if sent_tools else {}),
-                "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET,
-            },
+            anthropic_messages_optional_request_params={**sent_params, "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET},
             litellm_params=GenericLiteLLMParams.model_validate(
                 {
                     "drop_params": deployment_params.get("drop_params"),
                     "model_info": resolved_deployment.get("model_info"),
                 }
             ),
-            headers={},
+            headers=sent_headers,
         )
     except (AnthropicError, BadRequestError) as e:
         return ChatCountTranslationError(message=str(e.message))
     transformed: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
-    options: Final = _count_options(transformed)
-    betas: Final = sorted(context_management_betas(options.get("context_management")))
     return ClaudeCountOptions(
-        options=options,
-        betas=tuple(
-            filter_and_transform_beta_headers(betas, provider.value)
-            if messages_config.should_filter_anthropic_beta_headers()
-            else betas
-        ),
+        options=_count_options(transformed),
+        betas=messages_config.sent_anthropic_betas(sent_headers, _INFERENCE_PARAMS.validate_python(request)),
         messages=(*_COUNTED_MESSAGES.validate_python(leading_system), *transformed["messages"]),
+        tools=transformed.get("tools"),
     )
 
 

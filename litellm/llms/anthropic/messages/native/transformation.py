@@ -413,6 +413,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages=messages,
         )
 
+    def headers_with_anthropic_betas(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        messages: Sequence[object],
+    ) -> Mapping[str, str]:
+        return self._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared beta step takes and returns bare dicts
+            headers=dict(headers),
+            optional_params=dict(optional_params),
+            messages=messages,
+        )
+
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(
         model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str

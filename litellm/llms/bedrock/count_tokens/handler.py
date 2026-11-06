@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
+from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig, BedrockCountTokensInputType
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 
@@ -29,6 +29,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         litellm_params: dict[str, Any],
         resolved_model: str,
         client: AsyncHTTPHandler | None = None,
+        input_type: BedrockCountTokensInputType | None = None,
     ) -> dict[str, Any]:
         """
         Handle a CountTokens request using existing LiteLLM patterns.
@@ -43,7 +44,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         """
         try:
             # Validate the request
-            self.validate_count_tokens_request(request_data)
+            self.validate_count_tokens_request(request_data, input_type)
 
             verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
@@ -58,7 +59,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Retrieved AWS region: %s", aws_region_name)
 
             # Transform request to Bedrock format (supports both Converse and InvokeModel)
-            bedrock_request: Final = self.transform_anthropic_to_bedrock_count_tokens(request_data=request_data)
+            bedrock_request: Final = self.transform_anthropic_to_bedrock_count_tokens(
+                request_data=request_data, input_type=input_type
+            )
 
             verbose_logger.debug("Transformed request: %s", bedrock_request)
 

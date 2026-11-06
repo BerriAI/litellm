@@ -2016,8 +2016,7 @@ async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vert
             contents=None,
             deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
             tools=tools,
-            request_options=options,
-            context_management=CountContextManagement(spec=context_edits, drop_invalid_edits=False),
+            request_options={**options, "context_management": context_edits},
         )
 
     assert result is not None

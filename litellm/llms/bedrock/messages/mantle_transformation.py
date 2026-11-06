@@ -18,6 +18,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
@@ -69,6 +70,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return False
+
+    def sent_anthropic_betas(self, headers: Mapping[str, str], request: Mapping[str, object]) -> tuple[str, ...]:
+        return BaseAnthropicMessagesConfig.sent_anthropic_betas(self, headers, request)
 
     def get_complete_url(
         self,

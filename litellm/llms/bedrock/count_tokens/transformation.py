@@ -7,7 +7,7 @@ to AWS Bedrock's CountTokens API format and vice versa.
 
 import re
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import JsonValue
 
@@ -19,9 +19,7 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 # max_tokens field; CountTokens only counts input, so it has no effect
 # on any generation.
 DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS: Final = 1024
-_INVOKE_MODEL_ONLY_FIELDS: Final = frozenset(
-    ("thinking", "tool_choice", "output_config", "context_management", "anthropic_beta")
-)
+BedrockCountTokensInputType: TypeAlias = Literal["converse", "invokeModel"]
 
 
 def _invoke_model_max_tokens(thinking: JsonValue) -> int:
@@ -86,7 +84,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
     - Response: {"inputTokens": <number>}
     """
 
-    def _detect_input_type(self, request_data: Mapping[str, JsonValue]) -> Literal["converse", "invokeModel"]:
+    def _detect_input_type(self, request_data: Mapping[str, JsonValue]) -> BedrockCountTokensInputType:
         """
         Detect whether to use 'converse' or 'invokeModel' input format.
 
@@ -97,8 +95,6 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             'converse' or 'invokeModel'
         """
         messages: Final = request_data.get("messages")
-        if not _INVOKE_MODEL_ONLY_FIELDS.isdisjoint(request_data):
-            return "invokeModel"
         if isinstance(messages, list):
             # Anthropic content blocks carry a "type" key ({"type": "text", ...});
             # Converse blocks don't ({"text": ...}, {"toolUse": ...}). Converse
@@ -119,6 +115,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
     def transform_anthropic_to_bedrock_count_tokens(
         self,
         request_data: Mapping[str, JsonValue],
+        input_type: BedrockCountTokensInputType | None = None,
     ) -> dict[str, JsonValue]:
         """
         Transform request to Bedrock CountTokens format.
@@ -149,9 +146,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             }
         }
         """
-        input_type: Final = self._detect_input_type(request_data)
-
-        if input_type == "converse":
+        if (input_type or self._detect_input_type(request_data)) == "converse":
             return self._transform_to_converse_format(request_data)
         else:
             return self._transform_to_invoke_model_format(request_data)
@@ -270,13 +265,12 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"input_tokens": input_tokens}
 
-    def validate_count_tokens_request(self, request_data: Mapping[str, JsonValue]) -> None:
+    def validate_count_tokens_request(
+        self, request_data: Mapping[str, JsonValue], input_type: BedrockCountTokensInputType | None = None
+    ) -> None:
         """
         Validate the incoming count tokens request.
         Supports both Converse and InvokeModel input formats.
-
-        Args:
-            request_data: The request payload
 
         Raises:
             ValueError: If the request is invalid
@@ -284,9 +278,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if not request_data.get("model"):
             raise ValueError("model parameter is required")
 
-        input_type: Final = self._detect_input_type(request_data)
-
-        if input_type == "converse":
+        if (input_type or self._detect_input_type(request_data)) == "converse":
             # Validate Converse format (messages-based)
             messages: Final = request_data.get("messages", [])
             if not messages:

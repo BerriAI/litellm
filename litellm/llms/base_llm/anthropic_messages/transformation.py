@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -126,6 +126,18 @@ class BaseAnthropicMessagesConfig(ABC):
         For all other providers, this is a no-op and we just return the headers
         """
         return headers, None
+
+    def headers_with_anthropic_betas(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        messages: Sequence[object],
+    ) -> Mapping[str, str]:
+        return headers
+
+    def sent_anthropic_betas(self, headers: Mapping[str, str], request: Mapping[str, object]) -> tuple[str, ...]:
+        beta_header: Final = next((value for name, value in headers.items() if name.lower() == "anthropic-beta"), "")
+        return tuple(sorted(frozenset(beta.strip() for beta in beta_header.split(",")) - {""}))
 
     def should_filter_anthropic_beta_headers(self) -> bool:
         """

@@ -1,5 +1,8 @@
 import base64
 import json
+from typing import Final
+
+import pytest
 
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
@@ -51,6 +54,28 @@ def test_detect_input_type_converse_blocks_route_to_converse():
 
     request = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
     assert config._detect_input_type(request) == "converse"
+
+
+@pytest.mark.parametrize(
+    "option",
+    (
+        {"thinking": {"type": "enabled", "budget_tokens": 2000}},
+        {"tool_choice": {"type": "auto"}},
+        {"output_config": {"effort": "low"}},
+    ),
+)
+def test_pass_through_body_with_string_content_is_counted_as_converse_whatever_options_it_carries(
+    option: dict[str, object],
+) -> None:
+    request: Final = {
+        "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "messages": [{"role": "user", "content": "hi"}],
+        **option,
+    }
+
+    result: Final = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(request)
+
+    assert result["input"] == {"converse": {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}}
 
 
 def test_transform_to_invoke_model_format_base64_encodes_body():

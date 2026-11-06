@@ -10,7 +10,10 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import CountContextManagement
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_EFFORT_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+)
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -350,29 +353,36 @@ _THINKING_AND_TOOL_CHOICE: Final[dict[str, JsonValue]] = {
 _WEATHER_TOOL: Final[dict[str, JsonValue]] = {"name": "get_weather", "input_schema": {"type": "object"}}
 
 
-async def _messages_inference_and_count(deployment_model: str, model_to_use: str) -> tuple[_Bedrock, _Bedrock]:
+_CONTEXT_EDITING_OPTIONS: Final[dict[str, JsonValue]] = {**_THINKING_AND_TOOL_CHOICE, "context_management": _CONTEXT_EDITS}
+
+
+async def _messages_inference_and_count(
+    deployment_model: str,
+    model_to_use: str,
+    request_options: Mapping[str, JsonValue] = _CONTEXT_EDITING_OPTIONS,
+    tool: Mapping[str, JsonValue] = _WEATHER_TOOL,
+    runtime: tuple[int, Mapping[str, object]] = (200, {"inputTokens": 412}),
+) -> tuple[_Bedrock, _Bedrock]:
     credentials: Final = DEPLOYMENT["litellm_params"]
     inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
     await litellm.anthropic_messages(
         model=deployment_model,
         messages=MESSAGES,
-        tools=[_WEATHER_TOOL],
+        tools=[dict(tool)],
         max_tokens=4096,
-        context_management=_CONTEXT_EDITS,
         client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
-        **_THINKING_AND_TOOL_CHOICE,
+        **request_options,
         **credentials,
     )
-    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
     result: Final = await _counter(bedrock).count_tokens(
         model_to_use=model_to_use,
         messages=MESSAGES,
         contents=None,
         deployment={"litellm_params": {**credentials, "model": deployment_model}},
         request_model="claude",
-        tools=[_WEATHER_TOOL],
-        request_options=_THINKING_AND_TOOL_CHOICE,
-        context_management=CountContextManagement(spec=_CONTEXT_EDITS, drop_invalid_edits=False),
+        tools=[dict(tool)],
+        request_options=request_options,
     )
     assert result is not None
     assert result.error is False
@@ -417,6 +427,79 @@ async def test_mantle_count_sends_the_options_context_edits_and_beta_mantle_infe
     assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
     assert "anthropic_beta" not in counted
     assert bedrock.requests[0].headers["anthropic-beta"] == inference.requests[0].headers["anthropic-beta"]
+
+
+_DISPLAY_THINKING: Final[dict[str, JsonValue]] = {"thinking": {"type": "adaptive", "display": "updates"}}
+
+
+def _sent_betas(request: httpx.Request) -> tuple[str, ...]:
+    return tuple(sorted(request.headers["anthropic-beta"].split(",")))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "request_options", "expected_beta"),
+    (
+        (
+            "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0",
+            {"output_config": {"effort": "low"}},
+            ANTHROPIC_EFFORT_BETA_HEADER,
+        ),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", _DISPLAY_THINKING, ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER),
+    ),
+    ids=("effort", "thinking_display"),
+)
+async def test_runtime_count_sends_the_betas_invoke_inference_sends(
+    deployment_model: str, request_options: dict[str, JsonValue], expected_beta: str
+) -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        deployment_model, deployment_model.removeprefix("bedrock/invoke/"), request_options
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted_betas: Final = _invoke_body(bedrock.requests[0]).get("anthropic_beta")
+    assert counted_betas == _JSON_BODY.validate_json(inference.requests[0].content).get("anthropic_beta")
+    assert isinstance(counted_betas, list) and expected_beta in counted_betas
+
+
+@pytest.mark.asyncio
+async def test_invoke_count_retried_on_mantle_sends_the_betas_invoke_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/invoke/us.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-opus-5-5",
+        _DISPLAY_THINKING,
+        runtime=(400, UNSUPPORTED),
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    sent_betas: Final = _JSON_BODY.validate_json(inference.requests[0].content).get("anthropic_beta")
+    assert isinstance(sent_betas, list)
+    assert _sent_betas(bedrock.requests[1]) == tuple(sorted(sent_betas))
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in sent_betas
+
+
+@pytest.mark.asyncio
+async def test_mantle_count_sends_the_thinking_display_beta_mantle_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock_mantle/us.anthropic.claude-opus-5-5", "bedrock_mantle/us.anthropic.claude-opus-5-5", _DISPLAY_THINKING
+    )
+
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)
+    assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0])
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in _sent_betas(bedrock.requests[0])
+
+
+@pytest.mark.asyncio
+async def test_runtime_count_sends_the_tools_invoke_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/invoke/us.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-opus-5-5",
+        _THINKING_AND_TOOL_CHOICE,
+        tool={**_WEATHER_TOOL, "eager_input_streaming": True},
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    assert _invoke_body(bedrock.requests[0])["tools"] == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
 
 
 _CITY_SCHEMA: Final[dict[str, JsonValue]] = {

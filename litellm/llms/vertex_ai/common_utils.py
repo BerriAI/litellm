@@ -1453,6 +1453,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
         request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+        anthropic_beta: str | None = None,
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         import copy
@@ -1519,7 +1520,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 sent_messages,
                 tools,
                 request_options,
-                context_management,
+                anthropic_beta,
                 deployment,
             )
             if isinstance(claude_options, ChatCountTranslationError):
@@ -1556,7 +1557,9 @@ class VertexAITokenCounter(BaseTokenCounter):
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
                     system=system,
-                    tools=tools,
+                    tools=tools
+                    if claude_options.messages is None
+                    else [dict(tool) for tool in claude_options.tools or ()] or None,
                     count_options={**count_options, **claude_options.options},
                     betas=claude_options.betas,
                 )

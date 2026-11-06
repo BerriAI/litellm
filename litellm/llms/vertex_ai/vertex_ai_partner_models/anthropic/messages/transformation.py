@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, context_management_betas
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -51,6 +51,11 @@ def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool
     )
 
 
+def _is_web_search(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return isinstance(tool_type, str) and tool_type.startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value)
+
+
 def _without_version_header(headers: Mapping[str, str]) -> dict[str, str]:  # mutable-ok: the caller sends these headers
     return {name: value for name, value in headers.items() if name.lower() != _VERSION_HEADER_VERTEX_READS_FROM_BODY}
 
@@ -94,10 +99,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             project_id=vertex_ai_project,
             custom_llm_provider="vertex_ai",
         )
-        return self._finalize_vertex_messages_environment(
+        vertex_headers, vertex_api_base = self._finalize_vertex_messages_environment(
             headers,
             model,
-            messages,
             optional_params,
             api_base,
             access_token,
@@ -105,6 +109,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             vertex_ai_project,
             vertex_ai_location,
         )
+        return dict(self.headers_with_anthropic_betas(vertex_headers, optional_params, messages)), vertex_api_base
 
     async def avalidate_anthropic_messages_environment(
         self,
@@ -122,10 +127,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             project_id=vertex_ai_project,
             custom_llm_provider="vertex_ai",
         )
-        return self._finalize_vertex_messages_environment(
+        vertex_headers, vertex_api_base = self._finalize_vertex_messages_environment(
             headers,
             model,
-            messages,
             optional_params,
             api_base,
             access_token,
@@ -133,12 +137,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             vertex_ai_project,
             vertex_ai_location,
         )
+        return dict(self.headers_with_anthropic_betas(vertex_headers, optional_params, messages)), vertex_api_base
 
     def _finalize_vertex_messages_environment(
         self,
         headers: Mapping[str, str],
         model: str,
-        messages: Sequence[object],
         optional_params: dict,  # mutable-ok: preserves the existing provider optional-parameter contract
         api_base: str | None,
         access_token: str,
@@ -162,38 +166,47 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         request_headers["content-type"] = "application/json"
 
-        # Add beta headers for Vertex AI
-        tools: Final = optional_params.get("tools", [])
-        beta_values: Final[set[str]] = set()
-
-        # Get existing beta headers if any
-        existing_beta: Final = request_headers.get("anthropic-beta")
-        if existing_beta:
-            beta_values.update(b.strip() for b in existing_beta.split(","))
-
-        beta_values.update(context_management_betas(optional_params.get("context_management")))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # optional_params is the config contract's bare dict
-
-        # Check for web search tool
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
-                break
-
-        # Check for tool search tools - Vertex AI uses different beta header
-        anthropic_model_info: Final = AnthropicModelInfo()
-        if anthropic_model_info.is_tool_search_used(tools):
-            beta_values.add(get_tool_search_beta_header("vertex_ai"))
-
-        if optional_params.get("safeguards") is not None:
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
-
-        if messages_carry_output_config(messages):
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
-
-        if beta_values:
-            request_headers["anthropic-beta"] = ",".join(beta_values)
-
         return request_headers, api_base
+
+    def headers_with_anthropic_betas(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        messages: Sequence[object],
+    ) -> Mapping[str, str]:
+        tools: Final = tuple(
+            tool for tool in map(as_str_mapping, iter_items(optional_params.get("tools") or ())) if tool is not None
+        )
+        existing_betas: Final = (headers.get("anthropic-beta") or "").split(",")
+        beta_values: Final = frozenset(
+            (
+                *(beta.strip() for beta in existing_betas if beta.strip()),
+                *context_management_betas(optional_params.get("context_management")),  # pyright: ignore[reportArgumentType]  # optional_params is the config contract's untyped request body
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value,)
+                    if any(map(_is_web_search, tools))
+                    else ()
+                ),
+                *(
+                    (get_tool_search_beta_header("vertex_ai"),)
+                    if AnthropicModelInfo().is_tool_search_used(list(tools))
+                    else ()
+                ),
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,)
+                    if optional_params.get("safeguards") is not None
+                    else ()
+                ),
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value,)
+                    if messages_carry_output_config(messages)
+                    else ()
+                ),
+            )
+        )
+        if not beta_values:
+            return headers
+        return {**headers, "anthropic-beta": ",".join(sorted(beta_values))}
 
     def get_complete_url(
         self,

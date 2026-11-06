@@ -51,6 +51,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
         request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+        anthropic_beta: str | None = None,
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         """
@@ -96,7 +97,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 pass
 
         claude_options: Final = claude_count_options(
-            model_to_use, LlmProviders.ANTHROPIC, messages, tools, request_options, context_management, deployment
+            model_to_use, LlmProviders.ANTHROPIC, messages, tools, request_options, anthropic_beta, deployment
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, "anthropic_api")
@@ -138,7 +139,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 else [dict(message) for message in claude_options.messages],
                 auth_header=auth_header,
                 api_base=api_base,
-                tools=tools,
+                tools=tools
+                if claude_options.messages is None
+                else [dict(tool) for tool in claude_options.tools or ()] or None,
                 system=system,
                 optional_params={**count_options, **claude_options.options},
                 betas=claude_options.betas,

@@ -76,6 +76,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_ANTHROPIC_BETAS: Final = TypeAdapter(tuple[str, ...])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -104,6 +105,17 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
+
+    def headers_with_anthropic_betas(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        messages: Sequence[object],
+    ) -> Mapping[str, str]:
+        return headers
+
+    def sent_anthropic_betas(self, headers: Mapping[str, str], request: Mapping[str, object]) -> tuple[str, ...]:
+        return _ANTHROPIC_BETAS.validate_python(request.get("anthropic_beta") or ())
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
