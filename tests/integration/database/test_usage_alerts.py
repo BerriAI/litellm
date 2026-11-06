@@ -18,6 +18,27 @@ from litellm.types.proxy.usage_alerts import (
 )
 
 
+@pytest.mark.asyncio(loop_scope="session")
+async def test_alert_resource_labels_bound_legacy_display_values(db: ManagementDatabase) -> None:
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    identity: Final = "label-bound-" + uuid4().hex
+    scope: Final = UsageAlertRuleInput(
+        name="Display label", scope_type="user", scope_id=identity, metric="spend", direction="increase"
+    )
+    await repository.database.query_raw(
+        'INSERT INTO "LiteLLM_UserTable" (user_id,user_alias) VALUES ($1,repeat(chr(128640),65536))', identity
+    )
+    try:
+        labels: Final = await repository.resource_labels((scope,))
+        assert labels == {("user", identity): chr(128640) * 256}
+        stored: Final = await repository.database.query_raw(
+            'SELECT length(user_alias) AS characters FROM "LiteLLM_UserTable" WHERE user_id=$1', identity
+        )
+        assert stored[0]["characters"] == 65536
+    finally:
+        await repository.database.query_raw('DELETE FROM "LiteLLM_UserTable" WHERE user_id=$1', identity)
+
+
 def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         owner: Final = scenario.user(user_role="internal_user")

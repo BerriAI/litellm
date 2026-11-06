@@ -463,12 +463,12 @@ class UsageAlertsRepository:
                 """WITH scopes AS (
                     SELECT DISTINCT scope_type,scope_id,key_id FROM jsonb_to_recordset($1::jsonb)
                     AS x(scope_type text,scope_id text,key_id text)
-                ) SELECT s.scope_type,s.scope_id,CASE s.scope_type
+                ) SELECT s.scope_type,s.scope_id,LEFT(CASE s.scope_type
                     WHEN 'key' THEN COALESCE(NULLIF(k.key_alias,''),NULLIF(k.key_name,''))
                     WHEN 'team' THEN NULLIF(t.team_alias,'')
                     WHEN 'user' THEN COALESCE(NULLIF(u.user_alias,''),NULLIF(u.user_email,''))
                     WHEN 'model' THEN s.scope_id WHEN 'provider' THEN s.scope_id
-                    WHEN 'deployment' THEN 'Gateway' END AS label
+                    WHEN 'deployment' THEN 'Gateway' END,256) AS label
                 FROM scopes s LEFT JOIN "LiteLLM_VerificationToken" k ON s.scope_type='key' AND k.token=s.key_id
                     LEFT JOIN "LiteLLM_TeamTable" t ON s.scope_type='team' AND t.team_id=s.scope_id
                     LEFT JOIN "LiteLLM_UserTable" u ON s.scope_type='user' AND u.user_id=s.scope_id""",
