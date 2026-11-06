@@ -4048,7 +4048,7 @@ def get_optional_params_image_gen(
 
     custom_handler: Final = (
         ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
-        if custom_llm_provider not in LlmProvidersSet
+        if custom_llm_provider not in ("bedrock", "vertex_ai", "azure_ai", "black_forest_labs", "litellm_proxy")
         else None
     )
     if provider_config is not None:

@@ -489,3 +489,22 @@ async def test_custom_images_map_handler_errors_after_forwarding_params(
         with pytest.raises(litellm.RateLimitError, match="image quota exhausted"):
             call(**request, **({"image": b"input-image"} if operation == "edit" else {}))
     assert custom_image_params_handler.requests[0]["user"] == "reject"
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("with_params", [False, True])
+@pytest.mark.asyncio
+async def test_custom_images_receive_params_for_builtin_names_without_image_support(
+    custom_image_params_handler: CustomImageParamsLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, with_params: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "anthropic", "custom_handler": custom_image_params_handler}]
+    )
+    litellm.utils.custom_llm_setup()
+    supplied: Final = {"n": 2, "size": "1024x1024"} if with_params else {}
+    request: Final = dict(model="anthropic/custom-image-model", prompt="draw", **supplied)
+    result: Final = await litellm.aimage_generation(**request) if is_async else litellm.image_generation(**request)
+    received: Final = custom_image_params_handler.requests[0]
+    assert {key: received[key] for key in ("n", "size") if key in received} == supplied
+    assert result.data[0].b64_json == "aW1hZ2U="

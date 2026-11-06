@@ -541,7 +541,9 @@ def test_get_optional_params_image_gen():
 
 
 @pytest.mark.parametrize("with_params", [False, True])
-def test_image_params_keep_builtin_mapping_when_custom_name_collides(monkeypatch, with_params):
+def test_image_params_keep_builtin_mapping_when_custom_name_collides(
+    monkeypatch: pytest.MonkeyPatch, with_params: bool
+) -> None:
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "aiml", "custom_handler": CustomLLM()}])
     supplied: Final = {"n": 2, "size": "1024x1024"} if with_params else {}
     result: Final = get_optional_params_image_gen(
@@ -550,7 +552,7 @@ def test_image_params_keep_builtin_mapping_when_custom_name_collides(monkeypatch
     assert result == ({"num_images": 2, "image_size": {"width": 1024, "height": 1024}} if with_params else {})
 
 
-def test_image_params_keep_builtin_validation_when_custom_name_collides(monkeypatch):
+def test_image_params_keep_builtin_validation_when_custom_name_collides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "aiml", "custom_handler": CustomLLM()}])
     with pytest.raises(litellm.UnsupportedParamsError, match="quality"):
         get_optional_params_image_gen(
