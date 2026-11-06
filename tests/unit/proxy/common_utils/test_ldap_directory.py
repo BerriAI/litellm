@@ -156,7 +156,8 @@ def test_omitted_membership_attribute_is_an_empty_roster_with_complete_read_perm
 
 def test_ldap_attribute_names_are_case_insensitive():
     connection = Connection(
-        [entry("group", CN=["project-a"], MEMBER=[ALICE])], {ALICE: [entry(ALICE, MAIL=["a@example.org"])]}
+        [entry("group", CN=["project-a"], MEMBER=[ALICE])],
+        {ALICE: [entry(ALICE, MAIL=["a@example.org"], OBJECTCLASS=["InetOrgPerson"])]},
     )
     assert read_directory(SETTINGS, connection) == (DirectoryGroup("project-a", "project-a", ("a@example.org",)),)
 
@@ -167,12 +168,23 @@ def test_ldap_attribute_names_are_case_insensitive():
         (),
         (user("one@example.org"), user("two@example.org")),
         (entry(ALICE, mail=["one@example.org"], objectClass=["groupOfNames"]),),
+        (entry(ALICE, mail=["one@example.org"], objectClass=["top", "groupOfMembers"]),),
+        (entry(ALICE, mail=["one@example.org"], objectClass=["top", "groupOfURLs"]),),
+        (entry(ALICE, mail=["one@example.org"]),),
         (entry(ALICE, mail=[], objectClass=["person"]),),
     ],
 )
 def test_incomplete_or_nested_member_does_not_become_empty_group(members: Sequence[Mapping[str, object]]):
     result = read_directory(SETTINGS, Connection([group(member=[ALICE])], {ALICE: members}))
     assert isinstance(result, tuple) and isinstance(result[0], DirectoryError)
+
+
+@pytest.mark.parametrize("object_class", ["person", "inetOrgPerson", "organizationalPerson", "user", "posixAccount"])
+def test_standard_user_object_classes_resolve_as_members(object_class: str):
+    connection = Connection(
+        [group(member=[ALICE])], {ALICE: [entry(ALICE, mail=["a@example.org"], objectClass=["top", object_class])]}
+    )
+    assert read_directory(SETTINGS, connection) == (DirectoryGroup("project-a", "project-a", ("a@example.org",)),)
 
 
 def test_duplicate_ids_are_rejected_even_when_one_group_cannot_resolve_members():

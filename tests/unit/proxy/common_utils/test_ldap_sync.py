@@ -10,10 +10,9 @@ from litellm.proxy.common_utils.ldap_directory import DirectoryError, DirectoryG
 from litellm.proxy.common_utils.ldap_sync import LDAPSync, resolve_user_ids
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from tests.unit.proxy.common_utils.test_ldap_directory import ALICE, Connection, group, user
+from tests.unit.proxy.common_utils.test_ldap_directory import ALICE, Connection, entry, group, user
 from tests.unit.proxy.management_helpers.test_team_roster_sync import (
     TEAM,
-    _PausedDeleteRedisCache,  # pyright: ignore[reportPrivateUsage]  # event-controlled Redis boundary
     _FakePrisma,  # pyright: ignore[reportPrivateUsage]  # reuse the transactional database fake
     _member,  # pyright: ignore[reportPrivateUsage]  # shared roster fixtures
     _team,  # pyright: ignore[reportPrivateUsage]  # shared roster fixtures
@@ -181,7 +180,7 @@ async def test_bad_group_does_not_prevent_later_healthy_group_from_syncing():
         memberships=[(TEAM, "bob")],
     )
     connection: Final = Connection([group("broken", member=[ALICE]), group(TEAM, member=[])])
-    await job_for(prisma, connection).run()
+    await job_for(prisma, connection, SETTINGS.model_copy(update={"allow_empty_groups": True})).run()
     assert set(prisma.writer_db.litellm_teamtable.rows) == {TEAM}
     assert prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles == []
     assert prisma.writer_db.litellm_teammembership.rows == []
@@ -229,7 +228,7 @@ async def test_failed_team_creation_does_not_block_later_groups(monkeypatch: pyt
     )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     connection: Final = Connection([group(UI_TEAM_ID, member=[]), group(TEAM, member=[])])
-    await job_for(prisma, connection).run()
+    await job_for(prisma, connection, SETTINGS.model_copy(update={"allow_empty_groups": True})).run()
     assert set(prisma.writer_db.litellm_teamtable.rows) == {TEAM}
     assert prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles == []
     assert prisma.writer_db.litellm_usertable.rows["bob"].teams == []
@@ -237,27 +236,90 @@ async def test_failed_team_creation_does_not_block_later_groups(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_cancelled_job_finishes_committed_revocation_and_stops_before_next_group(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+async def test_time_budget_stops_between_teams_without_interrupting_a_write(monkeypatch: pytest.MonkeyPatch):
+    prisma: Final = _FakePrisma(users=[_user("alice")], teams=[_team()])
+    connection: Final = Connection(
+        [group(TEAM, member=[ALICE]), group("later", member=[ALICE])], {ALICE: [user("alice")]}
+    )
+    job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
+    job.time_budget_seconds = 0.5
+    original: Final = job.sync_group
+    started: list[str] = []  # mutable-ok: records which teams began syncing
 
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", None)
+    async def slow_sync_group(group: DirectoryGroup) -> None:
+        started.append(group.team_id)
+        await asyncio.sleep(1)
+        await original(group)
+
+    monkeypatch.setattr(job, "sync_group", slow_sync_group)
+    await job.run()
+    assert started == [TEAM]
+    assert [member.user_id for member in prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles] == ["alice"]
+    assert set(prisma.writer_db.litellm_teamtable.rows) == {TEAM}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group_attributes", "settings_update"),
+    [
+        ({}, {}),
+        ({"member": []}, {}),
+        ({"member": [ALICE]}, {"litellm_match_field": "sso_user_id"}),
+    ],
+    ids=["member_attribute_hidden", "empty_member_list", "no_litellm_user_matches"],
+)
+async def test_group_resolving_to_no_users_keeps_a_populated_team_by_default(
+    group_attributes: Mapping[str, object], settings_update: Mapping[str, object]
+):
     prisma: Final = _FakePrisma(
         users=[_user("bob", TEAM)],
         teams=[_team(_member("bob"))],
         memberships=[(TEAM, "bob")],
-        tokens=[{"token": "bob-key", "user_id": "bob", "team_id": TEAM}],
+        tokens=[{"token": "bob-team-key", "user_id": "bob", "team_id": TEAM}],
     )
-    redis: Final = _PausedDeleteRedisCache({"bob-key": {"token": "bob-key"}})
-    cache: Final = UserApiKeyCache()
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # dict-backed Redis boundary
-    connection: Final = Connection([group(TEAM, member=[]), group("later", member=[])])
-    job: Final = asyncio.create_task(job_for(prisma, connection, cache=cache).run())
-    await redis.reached.wait()
+    connection: Final = Connection([group(TEAM, **group_attributes)], {ALICE: [user("alice")]})
+    await job_for(prisma, connection, SETTINGS.model_copy(update=dict(settings_update))).run()
+    assert prisma.transactions == 0
+    assert [member.user_id for member in prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles] == ["bob"]
+    assert prisma.writer_db.litellm_verificationtoken.rows == [
+        {"token": "bob-team-key", "user_id": "bob", "team_id": TEAM}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_allow_empty_groups_removes_every_member_of_an_emptied_group():
+    prisma: Final = _FakePrisma(
+        users=[_user("bob", TEAM)],
+        teams=[_team(_member("bob"))],
+        memberships=[(TEAM, "bob")],
+        tokens=[{"token": "bob-team-key", "user_id": "bob", "team_id": TEAM}],
+    )
+    connection: Final = Connection([group(TEAM, member=[])])
+    await job_for(prisma, connection, SETTINGS.model_copy(update={"allow_empty_groups": True})).run()
+    assert prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles == []
     assert prisma.writer_db.litellm_verificationtoken.rows == []
-    _ = job.cancel()
-    asyncio.get_running_loop().call_soon(redis.release.set)
-    with pytest.raises(asyncio.CancelledError):
-        await job
-    assert "bob-key" not in redis.entries
-    assert set(prisma.writer_db.litellm_teamtable.rows) == {TEAM}
-    assert prisma.transactions == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("object_class", ["groupOfMembers", "groupOfURLs", "groupOfEntries"])
+async def test_nested_group_of_any_class_keeps_the_team_and_its_keys(object_class: str):
+    nested: Final = "cn=eng,ou=groups,dc=example,dc=org"
+    prisma: Final = _FakePrisma(
+        users=[_user("alice", TEAM), _user("bob", TEAM)],
+        teams=[_team(_member("alice"), _member("bob"))],
+        memberships=[(TEAM, "alice"), (TEAM, "bob")],
+        tokens=[{"token": "bob-team-key", "user_id": "bob", "team_id": TEAM}],
+    )
+    connection: Final = Connection(
+        [group(TEAM, member=[ALICE, nested])],
+        {ALICE: [user("alice")], nested: [entry(nested, mail=["eng"], objectClass=["top", object_class])]},
+    )
+    await job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"})).run()
+    assert prisma.transactions == 0
+    assert [member.user_id for member in prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles] == [
+        "alice",
+        "bob",
+    ]
+    assert prisma.writer_db.litellm_verificationtoken.rows == [
+        {"token": "bob-team-key", "user_id": "bob", "team_id": TEAM}
+    ]

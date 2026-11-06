@@ -35127,6 +35127,11 @@ export interface components {
         };
         /** LDAPSyncSettings */
         LDAPSyncSettings: {
+            /**
+             * Allow Empty Groups
+             * @default false
+             */
+            allow_empty_groups: boolean;
             /** Bind Dn */
             bind_dn?: string | null;
             /** Bind Password */

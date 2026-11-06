@@ -21,6 +21,7 @@ class LDAPSyncSettings(BaseModel):
     litellm_match_field: Literal["user_email", "user_id", "sso_user_id"] = "user_email"
     interval_minutes: float = Field(default=30, ge=0.1, allow_inf_nan=False)
     dry_run: bool = False
+    allow_empty_groups: bool = False
     bind_dn: str | None = None
     bind_password: SecretStr | None = None
     ca_cert_path: str | None = None

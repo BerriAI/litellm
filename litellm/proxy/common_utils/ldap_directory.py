@@ -14,6 +14,7 @@ from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 _ITEMS: Final = TypeAdapter(Iterable[object])
 _STRINGS: Final = TypeAdapter(tuple[StrictStr, ...])
 _GROUP_CLASSES: Final = frozenset({"group", "groupofnames", "groupofuniquenames", "posixgroup"})
+_PERSON_CLASSES: Final = frozenset({"person", "organizationalperson", "inetorgperson", "user", "posixaccount"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,8 +211,9 @@ def _resolve_member(
     if len(entries) != 1:
         return DirectoryError("LDAP member lookup was missing or ambiguous")
     entry: Final = entries[0]
-    if _GROUP_CLASSES.intersection(value.lower() for value in _values(entry, "objectClass")):
-        return DirectoryError("Nested LDAP groups are not supported")
+    object_classes: Final = frozenset(value.lower() for value in _values(entry, "objectClass"))
+    if object_classes & _GROUP_CLASSES or not object_classes & _PERSON_CLASSES:
+        return DirectoryError("LDAP member is not a user entry")
     identity: Final = _one(entry, settings.user_match_attribute)
     return identity if identity is not None else DirectoryError("LDAP member identity is missing or multivalued")
 

@@ -96,6 +96,7 @@ class LDAPSync:
         self.directory_connection = directory_connection
         self.settings = settings
         self.lease_seconds = math.ceil(settings.interval_minutes * 60) - 1
+        self.time_budget_seconds = min(600, self.lease_seconds / 2)
         self.prisma_client = prisma_client
         self.pod_lock_manager = pod_lock_manager
         self.user_api_key_cache = user_api_key_cache
@@ -109,12 +110,21 @@ class LDAPSync:
             verbose_proxy_logger.warning("LDAP sync skipped team_id=%s: %s", group.team_id, member_ids.reason)
             return
         team: Final = await self.teams.find_by_id(group.team_id, id_field="team_id")
-        if self.settings.dry_run:
-            existing: Final[frozenset[str]] = (
-                frozenset(member.user_id for member in team.members_with_roles if member.user_id is not None)
-                if team is not None
-                else frozenset()
+        existing: Final[frozenset[str]] = (
+            frozenset(member.user_id for member in team.members_with_roles if member.user_id is not None)
+            if team is not None
+            else frozenset()
+        )
+        if not member_ids and existing and not self.settings.allow_empty_groups:
+            # An unreadable or misconfigured membership attribute looks exactly like an empty group.
+            verbose_proxy_logger.warning(
+                "LDAP sync skipped team_id=%s: group resolved to no LiteLLM users but the team has %d members; "
+                "set allow_empty_groups to remove them",
+                group.team_id,
+                len(existing),
             )
+            return
+        if self.settings.dry_run:
             verbose_proxy_logger.info(
                 "LDAP sync dry_run team_id=%s create_team=%s add=%s remove=%s",
                 group.team_id,
@@ -155,20 +165,33 @@ class LDAPSync:
         )
 
     async def _sync(self) -> None:
+        loop: Final = asyncio.get_running_loop()
+        deadline: Final = loop.time() + self.time_budget_seconds
         cancellation: Final = Event()
         directory_settings: Final = self.settings.model_copy(
             update={"timeout_seconds": min(self.settings.timeout_seconds, max(1, self.lease_seconds // 4))}
         )
         try:
-            snapshot: Final = await asyncio.to_thread(
-                read_directory, directory_settings, connection=self.directory_connection, stop=cancellation
+            # Only the read is cancelled on timeout; it performs no writes.
+            snapshot: Final = await asyncio.wait_for(
+                asyncio.to_thread(
+                    read_directory, directory_settings, connection=self.directory_connection, stop=cancellation
+                ),
+                timeout=self.time_budget_seconds,
             )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.warning("LDAP sync timed out reading the directory; retrying next interval")
+            return
         finally:
             cancellation.set()
         if isinstance(snapshot, DirectoryError):
             verbose_proxy_logger.warning("LDAP sync aborted: %s", snapshot.reason)
             return
         for group in snapshot:
+            # Stop between teams rather than cancelling a team's write midway.
+            if loop.time() >= deadline:
+                verbose_proxy_logger.warning("LDAP sync reached its time budget; remaining groups retry next interval")
+                return
             if isinstance(group, DirectoryError):
                 verbose_proxy_logger.warning("LDAP sync skipped group_dn=%s: %s", group.group_dn, group.reason)
                 continue
@@ -189,10 +212,7 @@ class LDAPSync:
             is not True
         ):
             return
-        try:
-            await asyncio.wait_for(self._sync(), timeout=min(600, self.lease_seconds / 2))
-        except asyncio.TimeoutError:
-            verbose_proxy_logger.warning("LDAP sync timed out; retrying next interval")
+        await self._sync()
 
 
 def initialize_ldap_sync(

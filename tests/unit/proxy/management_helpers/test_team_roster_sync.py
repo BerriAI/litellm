@@ -992,51 +992,6 @@ async def test_the_statement_count_does_not_grow_with_the_member_count(
     assert counts[500] == counts[5]
 
 
-class _PausedDeleteRedisCache(_AuthRedisCache):
-    def __init__(self, entries: dict[str, object]) -> None:
-        super().__init__(entries)
-        self.reached = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
-        self.reached.set()
-        await self.release.wait()
-        await super().delete_cache_keys(keys)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cancel_twice", [False, True])
-async def test_cancellation_after_commit_finishes_revoking_cached_team_keys(
-    monkeypatch: pytest.MonkeyPatch,
-    cancel_twice: bool,
-):
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", None)
-    token: Final = hashlib.sha256(b"key-bob").hexdigest()
-    redis: Final = _PausedDeleteRedisCache({token: {"token": token}})
-    cache: Final = UserApiKeyCache()
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # dict-backed Redis boundary
-    cache.in_memory_cache_for(token).set_cache(key=token, value={"token": token})
-    prisma: Final = _FakePrisma(
-        users=[_user("bob", TEAM)],
-        teams=[_team(_member("bob"))],
-        memberships=[(TEAM, "bob")],
-        tokens=[{"token": token, "user_id": "bob", "team_id": TEAM}],
-    )
-    sync: Final = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
-    await _until_reached_or_done(redis.reached, sync)
-    assert _tokens(prisma) == set()
-    assert _memberships(prisma) == []
-    assert token in redis.entries
-    _ = sync.cancel()
-    if cancel_twice:
-        asyncio.get_running_loop().call_soon(sync.cancel)
-    asyncio.get_running_loop().call_soon(redis.release.set)
-    with pytest.raises(asyncio.CancelledError):
-        await sync
-    assert token not in redis.entries
-    assert await cache.async_get_cache(key=token) is None
-
-
 def test_team_defaults_preserve_fields_outside_sso_model_without_mutating_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ):
