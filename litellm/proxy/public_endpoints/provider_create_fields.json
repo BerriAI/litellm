@@ -894,7 +894,7 @@
         "key": "api_key",
         "label": "API Key",
         "placeholder": null,
-        "tooltip": "Bearer token from CGW_API_KEY",
+        "tooltip": "Bearer token from CLOUDGPU_API_KEY",
         "required": true,
         "field_type": "password",
         "options": null,

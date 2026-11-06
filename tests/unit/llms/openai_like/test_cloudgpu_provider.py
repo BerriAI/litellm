@@ -17,15 +17,15 @@ def test_cloudgpu_json_config_exists():
     assert JSONProviderRegistry.exists("cloudgpu")
     cfg = JSONProviderRegistry.get("cloudgpu")
     assert cfg.base_url == CLOUDGPU_BASE
-    assert cfg.api_key_env == "CGW_API_KEY"
-    assert cfg.api_base_env == "CGW_API_BASE"
+    assert cfg.api_key_env == "CLOUDGPU_API_KEY"
+    assert cfg.api_base_env == "CLOUDGPU_API_BASE"
 
 
 def test_cloudgpu_provider_resolution(monkeypatch: pytest.MonkeyPatch):
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-    monkeypatch.setenv("CGW_API_KEY", "cloudgpu-test-key")
-    monkeypatch.delenv("CGW_API_BASE", raising=False)
+    monkeypatch.setenv("CLOUDGPU_API_KEY", "cloudgpu-test-key")
+    monkeypatch.delenv("CLOUDGPU_API_BASE", raising=False)
 
     model, provider, api_key, api_base = get_llm_provider(
         model=CLOUDGPU_MODEL, custom_llm_provider=None, api_base=None, api_key=None
@@ -40,7 +40,7 @@ def test_cloudgpu_provider_resolution(monkeypatch: pytest.MonkeyPatch):
 def test_cloudgpu_explicit_credentials_win(monkeypatch: pytest.MonkeyPatch):
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-    monkeypatch.setenv("CGW_API_KEY", "cloudgpu-env-key")
+    monkeypatch.setenv("CLOUDGPU_API_KEY", "cloudgpu-env-key")
 
     _, provider, api_key, api_base = get_llm_provider(
         model=CLOUDGPU_MODEL,
