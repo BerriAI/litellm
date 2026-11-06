@@ -37,18 +37,9 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     invalid_type_message,
-    is_object_schema,
     is_present_non_string,
     is_unhashable_value_behind,
     sanitize_input_schema_for_anthropic,
-    schema_fragment_ref,
-    schema_grammar_branch_count,
-    schema_has_lookaround_pattern,
-    schema_has_open_object,
-    schema_has_unresolvable_ref,
-    schema_optional_property_count,
-    schema_string_formats,
-    schema_union_property_count,
     unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -58,6 +49,17 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     format_pdf_links,
     inline_remote_image_urls,
     is_unformatted_pdf_link_image,
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    is_object_schema,
+    schema_fragment_ref,
+    schema_grammar_branch_count,
+    schema_has_lookaround_pattern,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_optional_property_count,
+    schema_string_formats,
+    schema_union_property_count,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     message_field,
@@ -827,11 +829,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return cls._raise_invalid_reasoning_effort(model, value, llm_provider)
 
     def get_supported_openai_params(self, model: str):
+        sampling_params: Final = ("temperature", "top_p") if self._supports_sampling_params(model) else ()
         params: Final = [
             "stream",
             "stop",
-            "temperature",
-            "top_p",
+            *sampling_params,
             "max_tokens",
             "max_completion_tokens",
             "tools",

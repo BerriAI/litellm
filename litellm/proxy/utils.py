@@ -313,6 +313,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.errors import UniqueViolationError
     from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig, LiteLLM_VerificationTokenInclude
 
@@ -5559,6 +5560,25 @@ _LOCK_TEAMS_BY_ID_SQL: Final = (
 )
 
 
+def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
+    match metadata:
+        case {"target": ["user_id"]}:
+            return f"User with id {user_id} already exists"
+        case {"target": ["sso_user_id"]}:
+            return "User with this sso_user_id already exists"
+        case _:
+            return "User conflicts with an existing unique value"
+
+
+def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, *, allow_existing: bool) -> NoReturn:
+    if allow_existing:
+        raise error
+    raise HTTPException(
+        status_code=409,
+        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+    ) from error
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6446,12 +6466,15 @@ class PrismaClient:
         max_tries=3,  # maximum number of retries
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
+        giveup=lambda exc: isinstance(exc, HTTPException) and exc.status_code == 409,
     )
     @log_db_metrics
     async def insert_data(
         self,
         data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
+        *,
+        allow_existing_user: bool = True,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6487,14 +6510,20 @@ class PrismaClient:
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
+                from prisma.errors import UniqueViolationError
+
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    new_user_row: Final = await UserRepository(self).upsert_user(
+                        db_data, allow_existing=allow_existing_user
+                    )
                     if new_user_row is None:
                         raise HTTPException(
                             status_code=403,
                             detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
                         )
+                except UniqueViolationError as e:
+                    _raise_user_unique_conflict(e, db_data["user_id"], allow_existing=allow_existing_user)
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"

@@ -8,9 +8,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
-from httpx import Headers
 import pytest
 import respx
+from httpx import Headers
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -24,20 +24,22 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature,
+)
 from litellm.llms.anthropic.chat import ModelResponseIterator
-from litellm.llms.anthropic.common_utils import AnthropicError, process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
+from litellm.llms.anthropic.common_utils import AnthropicError, process_anthropic_headers
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
-from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -9067,9 +9069,10 @@ async def test_anthropic_api_max_completion_tokens(model: str):
 
 
 def test_anthropic_tool_cache_control():
-    from litellm.utils import return_raw_request
-    from litellm.types.utils import CallTypes
     import json
+
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
 
     tool_content = "Result: 4. " * 1000
     messages = [
@@ -11047,3 +11050,24 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
     assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
     assert json.dumps(body).count('"cache_control"') == 4
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
+def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
+    local_model_cost_map, model: str
+):
+    """What get_supported_openai_params says about temperature/top_p must match what
+    map_openai_params does with them under drop_params, so a caller that pre-flights
+    from the list is never told a param is fine that the request path then drops."""
+    config = AnthropicConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    sent = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
+    assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)

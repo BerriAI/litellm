@@ -208,7 +208,6 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.rust_bridge.catalog import Target
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     CallTypes,
@@ -335,10 +334,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.caching.redis_batch import (
-    active_post_call_redis_batch,
-    drain_post_call_redis_batches,
-)
+from litellm.caching.redis_batch import drain_post_call_redis_batches
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -624,9 +620,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     get_management_object_ttl,
     model_access_group_cache_key,
-    model_access_group_spend_counter_key,
     project_cache_key,
-    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
@@ -891,6 +885,23 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import (
+    SPEND_COUNTERS_TARGET,
+    SpendCounterStore,
+    end_user_counter,
+    is_unavailable,
+    key_counter,
+    key_window_counter,
+    model_access_group_counter,
+    org_counter,
+    project_counter,
+    tag_counter,
+    team_counter,
+    team_member_counter,
+    team_window_counter,
+    user_counter,
+)
 from litellm.router import router_arguments
 from litellm.router_config import build_router_config
 
@@ -977,7 +988,6 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
-    SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
     active_spend_counter_batch,
     forget_spend_counter,
@@ -3152,6 +3162,24 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
+_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE: Final = 10
+
+
+def spend_counter_redis_ttl() -> int:
+    """Redis TTL for spend counters. A counter that expires before its spend is flushed to the DB reseeds from a
+    stale-low row and re-admits a key that is over budget, so it must outlive many batch-write intervals."""
+    batch_write_at: Final = (
+        proxy_batch_write_at if isinstance(proxy_batch_write_at, (int, float)) else PROXY_BATCH_WRITE_AT
+    )
+    configured_redis_ttl: Final = int(litellm.default_redis_ttl) if litellm.default_redis_ttl is not None else 0
+    return max(
+        SPEND_COUNTER_REDIS_TTL_SECONDS,
+        int(_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE * batch_write_at),
+        configured_redis_ttl,
+    )
+
+
+spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters(), spend_counter_redis_ttl)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 saml_sso_cache: Final = DualCache(default_in_memory_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS)
 model_max_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
@@ -3344,21 +3372,6 @@ async def _drain_spend_event_producer_on_shutdown() -> None:
 SPEND_DB_FLOOR_CACHE_TTL_SECONDS: Final = 5
 SPEND_RESET_FENCE_TTL_SECONDS: Final = 2 * SPEND_DB_FLOOR_CACHE_TTL_SECONDS
 SPEND_DB_FLOOR_MARKER_PREFIX: Final = "spend_db_floor:"
-_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE: Final = 10
-
-
-def spend_counter_redis_ttl() -> int:
-    """Redis TTL for spend counters. A counter that expires before its spend is flushed to the DB reseeds from a
-    stale-low row and re-admits a key that is over budget, so it must outlive many batch-write intervals."""
-    batch_write_at: Final = (
-        proxy_batch_write_at if isinstance(proxy_batch_write_at, (int, float)) else PROXY_BATCH_WRITE_AT
-    )
-    configured_redis_ttl: Final = int(litellm.default_redis_ttl) if litellm.default_redis_ttl is not None else 0
-    return max(
-        SPEND_COUNTER_REDIS_TTL_SECONDS,
-        int(_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE * batch_write_at),
-        configured_redis_ttl,
-    )
 
 
 def _fail_closed_budget_enforcement() -> bool:
@@ -3479,33 +3492,18 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     in-memory copy is guarded by a read-compare-write with no await in between,
     so it is atomic within the worker.
     """
-    cached: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    needs_update = True
-    if cached is not None:
-        try:
-            needs_update = float(cached) < db_spend
-        except (TypeError, ValueError):
-            needs_update = True
-    if needs_update:
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
-    if spend_counter_cache.redis_cache is not None:
-        forget_spend_counter(counter_key)
-        try:
-            repaired: Final = await spend_counter_cache.redis_cache.async_set_max(
-                key=counter_key,
-                value=db_spend,
-                ttl=spend_counter_redis_ttl(),
-                fence_key=spend_counter_cache.redis_cache.reset_fence_key(counter_key),
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to repair stale spend counter %s in Redis",
-                counter_key,
-                exc_info=True,
-            )
-            return
-        if repaired is not None:
-            record_spend_counter_value(counter_key, repaired)
+    forget_spend_counter(counter_key)
+    try:
+        repaired: Final = await spend_counter_store.set_max(counter_key, db_spend)
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to repair stale spend counter %s in Redis",
+            counter_key,
+            exc_info=True,
+        )
+        return
+    if repaired is not None:
+        record_spend_counter_value(counter_key, repaired)
 
 
 async def reseed_spend_counter_from_db(counter_key: str) -> bool:
@@ -3602,19 +3600,8 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
         if batched is not None:
             return batched
 
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            redis_val: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-            return (float(redis_val) if redis_val is not None else None), True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
-                counter_key,
-                e,
-            )
-
-    in_memory_val: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    return (float(in_memory_val) if in_memory_val is not None else None), False
+    value, authoritative = await spend_counter_store.read(counter_key)
+    return (float(value) if value is not None else None), authoritative
 
 
 async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
@@ -3629,7 +3616,7 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
     # Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend: Final = await SpendCounterReseed.coalesced(
         prisma_client=prisma_client,
-        spend_counter_cache=spend_counter_cache,
+        spend_counter_store=spend_counter_store,
         counter_key=counter_key,
     )
     if db_spend is not None:
@@ -3656,7 +3643,7 @@ async def increment_spend_counters(
     """
     Atomically increment spend counters for budget enforcement.
 
-    Uses spend_counter_cache (DualCache with Redis backend when available)
+    Uses spend_counter_store (Redis when available, this worker's memory behind it)
     so counters are shared across all pods. Budget check functions read
     from these counters via get_current_spend() (Redis-first).
 
@@ -3664,7 +3651,7 @@ async def increment_spend_counters(
     updated before the next request's auth check runs.
     """
     with spend_counter_batch_scope(
-        spend_counter_cache.redis_cache,
+        spend_counter_store,
         counter_keys=post_call_counter_keys(
             token=token,
             team_id=team_id,
@@ -3831,7 +3818,11 @@ async def _increment_spend_counters_batched(
         window_reset_at: Final = (
             window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
         )
-        window_counter: Final = f"spend:{entity_type.value}:{entity_id}:window:{duration}"
+        window_counter: Final = (
+            key_window_counter(entity_id, str(duration))
+            if entity_type is Litellm_EntityType.KEY
+            else team_window_counter(entity_id, str(duration))
+        )
         window_start: Final = get_budget_window_start(window)
         pending_window: Final = (
             await _prepare_window_spend_counter_increment(
@@ -3894,7 +3885,7 @@ async def _increment_spend_counters_batched(
         hashed_token: Final = (
             hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
         )
-        key_counter_key: Final = f"spend:key:{hashed_token}"
+        key_counter_key: Final = key_counter(hashed_token)
         key_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
             if key_counter_key in reserved_counter_keys
@@ -3910,7 +3901,7 @@ async def _increment_spend_counters_batched(
         return key_pending + await _cached_window_increments(Litellm_EntityType.KEY, hashed_token, hashed_token)
 
     async def _team_scope(scope_team_id: str) -> tuple[_SpendScopeItem, ...]:
-        team_counter_key: Final = f"spend:team:{scope_team_id}"
+        team_counter_key: Final = team_counter(scope_team_id)
         team_pending: Final[tuple[PendingSpendIncrement, ...]] = (
             ()
             if team_counter_key in reserved_counter_keys
@@ -3930,7 +3921,7 @@ async def _increment_spend_counters_batched(
     async def _team_member_scope(
         scope_user_id: str, scope_team_id: str
     ) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
+        team_member_counter_key: Final = team_member_counter(scope_user_id, scope_team_id)
         if team_member_counter_key in reserved_counter_keys:
             return ()
         return (
@@ -3942,7 +3933,7 @@ async def _increment_spend_counters_batched(
         )
 
     async def _user_scope(scope_user_id: str) -> tuple[PendingSpendIncrement | BaseException, ...]:
-        user_counter_key: Final = f"spend:user:{scope_user_id}"
+        user_counter_key: Final = user_counter(scope_user_id)
         if user_counter_key in reserved_counter_keys:
             return ()
         return (
@@ -4105,7 +4096,7 @@ async def _prepare_end_user_and_tag_spend_increments(
             coro
             for coro in (
                 _prepare_unreserved_spend_counter_increment(
-                    counter_key=f"spend:end_user:{end_user_id}",
+                    counter_key=end_user_counter(end_user_id),
                     source_cache_key=end_user_cache_key(end_user_id),
                     increment=response_cost,
                     reserved_counter_keys=reserved_counter_keys,
@@ -4114,7 +4105,7 @@ async def _prepare_end_user_and_tag_spend_increments(
                 else None,
                 *(
                     _prepare_unreserved_spend_counter_increment(
-                        counter_key=f"spend:tag:{tag_name}",
+                        counter_key=tag_counter(tag_name),
                         source_cache_key=tag_cache_key(tag_name),
                         increment=response_cost,
                         reserved_counter_keys=reserved_counter_keys,
@@ -4150,7 +4141,7 @@ async def _prepare_model_access_group_spend_increments(
     results: Final = await asyncio.gather(
         *(
             _prepare_unreserved_spend_counter_increment(
-                counter_key=model_access_group_spend_counter_key(group),
+                counter_key=model_access_group_counter(group),
                 source_cache_key=model_access_group_cache_key(group),
                 increment=response_cost,
                 reserved_counter_keys=reserved_counter_keys,
@@ -4171,7 +4162,7 @@ async def _prepare_org_spend_increment(
         return ()
 
     pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=f"spend:org:{org_id}",
+        counter_key=org_counter(org_id),
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
@@ -4188,7 +4179,7 @@ async def _prepare_project_spend_increment(
         return ()
 
     pending: Final = await _prepare_unreserved_spend_counter_increment(
-        counter_key=project_spend_counter_key(project_id),
+        counter_key=project_counter(project_id),
         source_cache_key=project_cache_key(project_id),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
@@ -4223,7 +4214,7 @@ async def _prepare_spend_counter_increment(
     pipelined Redis call.
 
     On first access per pod:
-    1. Check spend_counter_cache (in-memory -> Redis via DualCache)
+    1. Check spend_counter_store (Redis, then this worker's memory)
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
@@ -4328,7 +4319,7 @@ async def ensure_spend_counter_initialized(
         # Shares the per-counter lock with get_current_spend.
         db_spend: Final = await SpendCounterReseed.coalesced(
             prisma_client=prisma_client,
-            spend_counter_cache=spend_counter_cache,
+            spend_counter_store=spend_counter_store,
             counter_key=counter_key,
             require_cache_warm=True,
         )
@@ -4369,7 +4360,7 @@ async def ensure_window_spend_counter_initialized(
 
     window_spend: Final = await SpendCounterReseed.coalesced_window(
         prisma_client=prisma_client,
-        spend_counter_cache=spend_counter_cache,
+        spend_counter_store=spend_counter_store,
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
@@ -4395,29 +4386,13 @@ async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
         batched_value, _ = batched
         if batched_value is None:
             return False
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=batched_value)
+        spend_counter_store.set_local(counter_key, batched_value)
         return True
 
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            current_value: Final[object] = await spend_counter_cache.redis_cache.async_get_cache(
-                key=counter_key,
-            )
-            if current_value is None:
-                return False
-            spend_counter_cache.in_memory_cache.set_cache(
-                key=counter_key,
-                value=current_value,
-            )
-            return True
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "Unable to read Redis spend counter %s before initialization, falling back to in-memory: %s",
-                counter_key,
-                e,
-            )
-
-    return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
+    current_value, from_redis = await spend_counter_store.read(counter_key)
+    if from_redis and current_value is not None:
+        spend_counter_store.set_local(counter_key, current_value)
+    return current_value is not None
 
 
 async def increment_spend_counter(counter_key: str, increment: float):
@@ -4429,10 +4404,10 @@ async def increment_spend_counter(counter_key: str, increment: float):
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def refresh_spend_counter_ttl(counter_key: str) -> bool:
-    if spend_counter_cache.redis_cache is None:
+    if not spend_counter_store.has_redis:
         return False
     try:
-        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key, ttl=spend_counter_redis_ttl())
+        return await spend_counter_store.refresh_ttl(counter_key)
     except Exception as e:
         verbose_proxy_logger.debug("spend counter TTL refresh skipped for %s: %s", counter_key, e)
         return False
@@ -4440,26 +4415,17 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
 
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def increment_spend_counter_cache(counter_key: str, increment: float) -> float | None:
-    if spend_counter_cache.redis_cache is not None:
+    if spend_counter_store.has_redis:
         try:
-            current_value: Final = await spend_counter_cache.redis_cache.async_increment(
-                key=counter_key,
-                value=increment,
-                ttl=spend_counter_redis_ttl(),
-                refresh_ttl=True,
-            )
+            current_value: Final = await spend_counter_store.increment(counter_key, increment)
         except Exception:
-            await invalidate_spend_counter(counter_key=counter_key)
+            forget_spend_counter(counter_key)
             raise
-        spend_counter_cache.in_memory_cache.set_cache(
-            key=counter_key,
-            value=current_value,
-        )
         record_spend_counter_value(counter_key, float(current_value))
         return current_value
 
     return await SpendCounterReseed.increment_in_memory(
-        spend_counter_cache=spend_counter_cache, counter_key=counter_key, increment=increment
+        spend_counter_store=spend_counter_store, counter_key=counter_key, increment=increment
     )
 
 
@@ -4469,10 +4435,8 @@ _increment_spend_counter_cache: Final = increment_spend_counter_cache
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_spend_counter(counter_key: str) -> None:
     forget_spend_counter(counter_key)
-    spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
-    if spend_counter_cache.redis_cache is not None:
-        with contextlib.suppress(Exception):
-            await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
+    with contextlib.suppress(Exception):
+        await spend_counter_store.delete((counter_key,))
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
@@ -4486,9 +4450,11 @@ _SPEND_COUNTER_STORE_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError
 def _spend_counter_keys_in_memory(prefix: str) -> frozenset[str]:
     floor_prefix: Final = f"{SPEND_DB_FLOOR_MARKER_PREFIX}{prefix}"
     cached_keys: Final = _IN_MEMORY_COUNTER_KEYS.validate_python(tuple(spend_counter_cache.in_memory_cache.cache_dict))
-    return frozenset(
-        key.removeprefix(SPEND_DB_FLOOR_MARKER_PREFIX) for key in cached_keys if key.startswith((prefix, floor_prefix))
+    counters: Final = (key for key in spend_counter_store.snapshot() if key.startswith(prefix))
+    floors: Final = (
+        key.removeprefix(SPEND_DB_FLOOR_MARKER_PREFIX) for key in cached_keys if key.startswith(floor_prefix)
     )
+    return frozenset((*counters, *floors))
 
 
 async def _spend_counter_keys_in_redis(redis_cache: RedisCache, prefix: str) -> frozenset[str] | Exception:
@@ -4507,24 +4473,29 @@ def _keys_per_reset_pipeline(max_batch_size: int) -> int:
 _KEYS_PER_RESET_PIPELINE: Final = _keys_per_reset_pipeline(DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE)
 
 
-async def _write_reset_pipeline(
-    redis_cache: RedisCache, batch: Sequence[str], value: float, ttl: int
-) -> Exception | None:
-    """The fences go first, so a repair that lands between a fence and its counter already finds the fence."""
+async def _write_reset_batch(redis_cache: RedisCache, batch: Sequence[str], value: float) -> Exception | None:
+    """The fences go first, so a repair that lands between a fence and its counter already finds the fence. The
+    counters go through ``spend_counter_store``, the client every request increments them with, so a reset reads as
+    written only once that client accepts writes again."""
     fences: Final = tuple((redis_cache.reset_fence_key(key), 1, SPEND_RESET_FENCE_TTL_SECONDS) for key in batch)
     try:
-        return await redis_cache.async_set_cache_pipeline_with_ttls((*fences, *((key, value, ttl) for key in batch)))
+        fenced: Final = await redis_cache.async_set_cache_pipeline_with_ttls(fences)
     except RedisCircuitBreakerOpenError as e:
         return e
+    if fenced is not None:
+        return fenced
+    written: Final = await asyncio.gather(
+        *(spend_counter_store.set(key, value, memory_ttl=60) for key in batch), return_exceptions=True
+    )
+    return next((outcome for outcome in written if isinstance(outcome, Exception)), None)
 
 
 async def _write_spend_counters_to_redis(
     redis_cache: RedisCache, keys: Sequence[str], value: float
 ) -> Exception | None:
-    ttl: Final = spend_counter_redis_ttl()
     for start in range(0, len(keys), _KEYS_PER_RESET_PIPELINE):
         if (
-            lost := await _write_reset_pipeline(redis_cache, keys[start : start + _KEYS_PER_RESET_PIPELINE], value, ttl)
+            lost := await _write_reset_batch(redis_cache, keys[start : start + _KEYS_PER_RESET_PIPELINE], value)
         ) is not None:
             return lost
     return None
@@ -4546,7 +4517,7 @@ async def set_spend_counters_with_floor_and_broadcast(counter_keys: Collection[s
         return None
     floor_keys: Final = tuple(f"{SPEND_DB_FLOOR_MARKER_PREFIX}{key}" for key in keys)
     for key, floor_key in zip(keys, floor_keys, strict=True):
-        spend_counter_cache.in_memory_cache.set_cache(key=key, value=value, ttl=60)
+        spend_counter_store.set_local(key, value, 60)
         spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
     redis_cache: Final = spend_counter_cache.redis_cache
     lost: Final = None if redis_cache is None else await _write_spend_counters_to_redis(redis_cache, keys, value)
@@ -4596,51 +4567,22 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
     try:
         await increment_spend_counters_pipeline(pending=pending)
     except Exception as e:
-        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e):
+        if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e) or is_unavailable(e):
             return
         raise
 
 
 def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
-    """Post-call increments ride the request's post-call pipeline with the other counters. Each counter's
-    new value lands in memory when the pipeline settles; a failed one is invalidated so no reader trusts a
+    """Post-call increments ride the request's native post-call pipeline with the other counters. Each counter's
+    new value lands in memory when the pipeline settles; a failed one is dropped everywhere so no reader trusts a
     counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
-    redis_cache: Final = spend_counter_cache.redis_cache
-    if redis_cache is None or not pending:
-        return False
-    batch: Final = active_post_call_redis_batch(redis_cache)
-    if batch is None:
-        return False
-    ttl: Final = spend_counter_redis_ttl()
-    with service_target(SPEND_COUNTERS_TARGET):
-        for item in pending:
-            batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
-    return True
-
-
-def _settle_spend_counter_increment(item: PendingSpendIncrement) -> Callable[[asyncio.Future[float]], Awaitable[None]]:
-    async def settle(future: asyncio.Future[float]) -> None:
-        if not future.cancelled() and future.exception() is None:
-            current_value: Final = float(future.result())
-            spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
-            record_spend_counter_value(item.counter_key, current_value)
-            return
-        if future.cancelled():
-            if spend_counter_cache.in_memory_cache.get_cache(key=item.counter_key) is not None:
-                spend_counter_cache.in_memory_cache.increment_cache(key=item.counter_key, value=item.increment)
-            return
-        verbose_proxy_logger.warning(
-            "Spend counter %s increment did not land in the post-call pipeline; invalidating it", item.counter_key
-        )
-        await invalidate_spend_counter(counter_key=item.counter_key)
-
-    return settle
+    return spend_counter_store.increment_many_post_call(tuple((item.counter_key, item.increment) for item in pending))
 
 
 async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
     failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
-    if spend_counter_cache.redis_cache is None:
+    if not spend_counter_store.has_redis:
         return await run_spend_counter_pipeline(pending=pending)
     try:
         return await run_spend_counter_pipeline(pending=pending)
@@ -4655,26 +4597,21 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     happens to counters whose increment may or may not have landed when the pipeline fails."""
     if not pending:
         return ()
-    redis_cache: Final = spend_counter_cache.redis_cache
-    if redis_cache is None:
+    if not spend_counter_store.has_redis:
         return tuple(
             [
                 await SpendCounterReseed.increment_in_memory(
-                    spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
+                    spend_counter_store=spend_counter_store, counter_key=item.counter_key, increment=item.increment
                 )
                 for item in pending
             ]
         )
-    ttl: Final = spend_counter_redis_ttl()
-    increment_list: Final = [
-        RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
-        for item in pending
-    ]
-    results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
-    for item, current_value in zip(pending, results or ()):
-        spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
-        record_spend_counter_value(item.counter_key, float(current_value))
-    return tuple(float(current_value) for current_value in results or ())
+    totals: Final = await spend_counter_store.increment_many(
+        tuple((item.counter_key, item.increment) for item in pending)
+    )
+    for item, current_value in zip(pending, totals, strict=True):
+        record_spend_counter_value(item.counter_key, current_value)
+    return totals
 
 
 _CachedSpendObjectT = TypeVar(
@@ -4697,15 +4634,9 @@ def _add_spend_to_locally_cached_object(
     )
 
 
-async def _add_spend_to_shared_global_proxy_spend(
-    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
-) -> float | None:
-    if cache.redis_cache is None:
-        return None
+async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> float | None:
     try:
-        return await cache.redis_cache.async_increment_if_present(
-            key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=response_cost, parent_otel_span=parent_otel_span
-        )
+        return await cache.increment_if_present(GLOBAL_PROXY_SPEND_CACHE_KEY, response_cost)
     except Exception as e:
         verbose_proxy_logger.warning(
             "Spend tracking - failed to add spend to the global proxy spend in Redis. "
@@ -4716,11 +4647,9 @@ async def _add_spend_to_shared_global_proxy_spend(
         return None
 
 
-async def _add_spend_to_global_proxy_spend(
-    cache: UserApiKeyCache, response_cost: float, parent_otel_span: Span | None
-) -> None:
+async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
     local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
-    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost, parent_otel_span)
+    shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
     local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
     if not isinstance(local_total, (int, float)):
         return
@@ -4836,7 +4765,7 @@ async def update_cache(
     if litellm.max_budget <= 0:
         return
     with service_target(SPEND_COUNTERS_TARGET):
-        await _add_spend_to_global_proxy_spend(target, response_cost, parent_otel_span)
+        await _add_spend_to_global_proxy_spend(target, response_cost)
 
 
 def run_ollama_serve():
@@ -5559,6 +5488,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         redis_cache,
         default_redis_ttl=litellm.default_redis_ttl,
     )
+    spend_counter_store.attach_redis(connect(redis_cache))
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
@@ -7465,6 +7395,11 @@ class ProxyConfig:
                     )
                 )
 
+            if "spend_logs_prompt_storage" in general_settings:
+                _ = ConfigGeneralSettings.model_validate(
+                    MappingProxyType({"spend_logs_prompt_storage": typed_general_settings["spend_logs_prompt_storage"]})
+                )
+
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
@@ -9194,6 +9129,7 @@ class ProxyConfig:
             user_api_key_cache=user_api_key_cache,
             additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
             counter_cache=spend_counter_cache.in_memory_cache,
+            spend_counters=spend_counter_store,
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()

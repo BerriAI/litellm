@@ -13,13 +13,13 @@ Coverage:
 
 import base64
 import logging
-from typing import Any, Dict, List, Optional
 from importlib import import_module
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     _decode_vector_store_ids_in_tools,
     update_responses_tools_with_model_file_ids,
 )
@@ -476,6 +476,7 @@ class TestManagedFilesVectorStoreAccess:
         from litellm_enterprise.proxy.hooks.managed_files import (
             PROXY_LiteLLMManagedFiles as ManagedFiles,
         )
+
         from litellm.proxy._types import CallTypes
 
         # If call_type is acompletion, the vector_store check branch isn't reached.

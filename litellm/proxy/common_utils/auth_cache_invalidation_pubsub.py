@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -16,6 +16,13 @@ from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # leg
     pubsub_capable_client,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+
+
+class SpendCounterCopies(Protocol):
+    """This worker's memory copies of the spend counters, which a broadcast SET or delete reaches too."""
+
+    def apply_broadcast(self, cache_key: str, new_value: float | None, ttl: float | None) -> None: ...
+
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -210,7 +217,7 @@ def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache"
 
 
 def _drop_from_memory(cache_key: str, user_api_key_cache: "UserApiKeyCache") -> None:
-    user_api_key_cache.delete_from_memory(cache_key)
+    user_api_key_cache.delete_local(cache_key)
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
@@ -263,7 +270,14 @@ class AuthCacheInvalidationSubscriber:
     a delete reaches every additional cache. Writing a reset's thousands of counters into every
     additional cache would evict what the others hold, the BYOK credentials among them."""
 
-    __slots__ = ("_additional_in_memory_caches", "_counter_cache", "_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = (
+        "_additional_in_memory_caches",
+        "_counter_cache",
+        "_redis_cache",
+        "_spend_counters",
+        "_task",
+        "_user_api_key_cache",
+    )
 
     def __init__(
         self,
@@ -271,11 +285,13 @@ class AuthCacheInvalidationSubscriber:
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
         counter_cache: "InMemoryCache | None" = None,
+        spend_counters: SpendCounterCopies | None = None,
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
         self._counter_cache = counter_cache
+        self._spend_counters: Final = spend_counters
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -330,6 +346,9 @@ class AuthCacheInvalidationSubscriber:
         parsed: Final = _message_from_data(data)
         if parsed is None:
             return
+        if self._spend_counters is not None:
+            for cache_key in parsed.cache_keys:
+                self._spend_counters.apply_broadcast(cache_key, parsed.new_value, parsed.ttl)
         if parsed.new_value is not None:
             if self._counter_cache is None:
                 return

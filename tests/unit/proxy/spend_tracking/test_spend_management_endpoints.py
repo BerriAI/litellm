@@ -21,6 +21,7 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.db.fake_prisma_engine import (
     ReadTargetOf,
     statement_timeout_error,
@@ -8338,8 +8339,12 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
 
 
 def _spend_counter_cache_for_reset(
-    monkeypatch: pytest.MonkeyPatch, *, scan_results: object, lost_write: Exception | None = None
-) -> MagicMock:
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    scan_results: object,
+    lost_write: Exception | None = None,
+    failing: frozenset[str] = frozenset(),
+) -> tuple[MagicMock, FakeSpendCounters]:
     from litellm.caching.in_memory_cache import InMemoryCache
 
     mock_prisma_client: Final = MagicMock()
@@ -8353,33 +8358,34 @@ def _spend_counter_cache_for_reset(
 
     mock_prisma_client.tx = transaction
     monkeypatch.setattr(ps, "prisma_client", mock_prisma_client)
+    spend: Final = FakeSpendCounters(
+        memory={"spend:key:aaa": 0.5, "spend:key:aaa:window:1d": 0.3, "spend:team:t1": 0.5, "spend:user:u1": 0.5},
+        failing=failing,
+    )
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
     spend_counter_cache: Final = MagicMock()
     spend_counter_cache.in_memory_cache = InMemoryCache()
-    spend_counter_cache.in_memory_cache.set_cache(key="spend:key:aaa", value=0.5)
     spend_counter_cache.in_memory_cache.set_cache(key="spend_db_floor:spend:key:aaa", value=0.5)
     spend_counter_cache.in_memory_cache.set_cache(key="spend_db_floor:spend:key:floored", value=0.9)
-    spend_counter_cache.in_memory_cache.set_cache(key="spend:key:aaa:window:1d", value=0.3)
-    spend_counter_cache.in_memory_cache.set_cache(key="spend:team:t1", value=0.5)
-    spend_counter_cache.in_memory_cache.set_cache(key="spend:user:u1", value=0.5)
     spend_counter_cache.redis_cache.namespace = "ns"
     spend_counter_cache.redis_cache.reset_fence_key = lambda key: f"{{ns:{key}}}:reset_fence"
     spend_counter_cache.redis_cache.async_scan_iter = AsyncMock(side_effect=scan_results)
     spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls = AsyncMock(return_value=lost_write)
     monkeypatch.setattr(ps, "spend_counter_cache", spend_counter_cache)
     monkeypatch.setattr(ps, "publish_auth_cache_invalidations", AsyncMock())
-    return spend_counter_cache
+    return spend_counter_cache, spend
 
 
 _RESET_KEY_COUNTERS: Final = ("spend:key:aaa", "spend:key:bbb", "spend:key:floored")
 _RESET_TEAM_COUNTERS: Final = ("spend:team:sales:window:east", "spend:team:t1")
 
 
-def _reset_pipeline(counters: tuple[str, ...]) -> tuple[tuple[str, float, int], ...]:
-    """Every fence is SET before any counter, so a repair racing the pipeline already finds its fence."""
-    return (
-        *((f"{{ns:{counter}}}:reset_fence", 1, ps.SPEND_RESET_FENCE_TTL_SECONDS) for counter in counters),
-        *((counter, 0.0, ps.spend_counter_redis_ttl()) for counter in counters),
-    )
+def _reset_fences(counters: tuple[str, ...]) -> tuple[tuple[str, int, int], ...]:
+    return tuple((f"{{ns:{counter}}}:reset_fence", 1, ps.SPEND_RESET_FENCE_TTL_SECONDS) for counter in counters)
+
+
+def _reset_writes(spend: FakeSpendCounters, counters: tuple[str, ...]) -> list[str]:
+    return [f"SET {counter} 0.0 {spend.counter_ttl}" for counter in counters]
 
 
 def _reset_broadcasts(counters: tuple[str, ...]) -> tuple[object, object]:
@@ -8403,7 +8409,7 @@ async def test_global_spend_reset_sets_every_key_and_team_counter_and_its_floor_
     everywhere, fences each counter against that repair, and leaves budget-window counters, which the reset
     does not touch in the DB, alone. A window counter is told by its trailing duration, so a team whose id
     merely contains ``:window:`` is still reset."""
-    spend_counter_cache: Final = _spend_counter_cache_for_reset(
+    spend_counter_cache, spend = _spend_counter_cache_for_reset(
         monkeypatch,
         scan_results=[
             ["ns:spend:key:aaa", "ns:spend:key:bbb", "ns:spend:key:bbb:window:1d"],
@@ -8419,16 +8425,17 @@ async def test_global_spend_reset_sets_every_key_and_team_counter_and_its_floor_
         {"pattern": "spend:team:", "count": 500, "unbounded": True},
     ]
     assert [c.args for c in spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_args_list] == [
-        (_reset_pipeline(_RESET_KEY_COUNTERS),),
-        (_reset_pipeline(_RESET_TEAM_COUNTERS),),
+        (_reset_fences(_RESET_KEY_COUNTERS),),
+        (_reset_fences(_RESET_TEAM_COUNTERS),),
     ]
+    assert spend.commands == [*_reset_writes(spend, _RESET_KEY_COUNTERS), *_reset_writes(spend, _RESET_TEAM_COUNTERS)]
     in_memory: Final = spend_counter_cache.in_memory_cache
     reset_counters: Final = (*_RESET_KEY_COUNTERS, *_RESET_TEAM_COUNTERS)
-    assert [in_memory.get_cache(key=counter) for counter in reset_counters] == [0.0] * 5
+    assert [ps.spend_counter_store.get_local(counter) for counter in reset_counters] == [0.0] * 5
     assert [in_memory.get_cache(key=f"spend_db_floor:{counter}") for counter in reset_counters] == [0.0] * 5
-    assert in_memory.get_cache(key="spend:key:aaa:window:1d") == 0.3
-    assert in_memory.get_cache(key="spend:team:t1:window:1d") is None
-    assert in_memory.get_cache(key="spend:user:u1") == 0.5
+    assert ps.spend_counter_store.get_local("spend:key:aaa:window:1d") == 0.3
+    assert ps.spend_counter_store.get_local("spend:team:t1:window:1d") is None
+    assert ps.spend_counter_store.get_local("spend:user:u1") == 0.5
     assert ps.publish_auth_cache_invalidations.await_args_list == [
         *_reset_broadcasts(_RESET_KEY_COUNTERS),
         *_reset_broadcasts(_RESET_TEAM_COUNTERS),
@@ -8441,7 +8448,7 @@ async def test_global_spend_reset_answers_500_after_resetting_the_rows_and_this_
 ) -> None:
     """The counters Redis holds for the other pods stay at the old spend for the whole counter TTL when the
     scan fails, so the reset says so instead of reporting success, after resetting what this pod knows."""
-    spend_counter_cache: Final = _spend_counter_cache_for_reset(monkeypatch, scan_results=ConnectionError("redis down"))
+    spend_counter_cache, spend = _spend_counter_cache_for_reset(monkeypatch, scan_results=ConnectionError("redis down"))
 
     with pytest.raises(ProxyException) as raised:
         await spend_management_endpoints.global_spend_reset()
@@ -8451,10 +8458,14 @@ async def test_global_spend_reset_answers_500_after_resetting_the_rows_and_this_
     ps.prisma_client.db.litellm_verificationtoken.update_many.assert_awaited_once_with(data={"spend": 0.0}, where={})
     ps.prisma_client.db.litellm_teamtable.update_many.assert_awaited_once_with(data={"spend": 0.0}, where={})
     assert [c.args for c in spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_args_list] == [
-        (_reset_pipeline(("spend:key:aaa", "spend:key:floored")),),
-        (_reset_pipeline(("spend:team:t1",)),),
+        (_reset_fences(("spend:key:aaa", "spend:key:floored")),),
+        (_reset_fences(("spend:team:t1",)),),
     ]
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:aaa") == 0.0
+    assert spend.commands == [
+        *_reset_writes(spend, ("spend:key:aaa", "spend:key:floored")),
+        *_reset_writes(spend, ("spend:team:t1",)),
+    ]
+    assert ps.spend_counter_store.get_local("spend:key:aaa") == 0.0
     assert spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:key:floored") == 0.0
 
 
@@ -8466,7 +8477,7 @@ async def test_global_spend_reset_answers_500_when_the_redis_counter_write_is_lo
     resets the teams, this pod, and the broadcast, then reports the loss so the admin retries."""
     from redis.exceptions import ConnectionError as RedisConnectionError
 
-    spend_counter_cache: Final = _spend_counter_cache_for_reset(
+    spend_counter_cache, spend = _spend_counter_cache_for_reset(
         monkeypatch,
         scan_results=[["ns:spend:key:aaa"], ["ns:spend:team:t1"]],
         lost_write=RedisConnectionError("redis down"),
@@ -8479,11 +8490,33 @@ async def test_global_spend_reset_answers_500_when_the_redis_counter_write_is_lo
     assert raised.value.message.startswith("Spend was reset, but the cached spend counters could not be reset in Redis")
     assert "redis down" in raised.value.message
     assert spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_count == 2
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:team:t1") == 0.0
+    assert spend.commands == []
+    assert ps.spend_counter_store.get_local("spend:team:t1") == 0.0
     assert ps.publish_auth_cache_invalidations.await_args_list == [
         *_reset_broadcasts(("spend:key:aaa", "spend:key:floored")),
         *_reset_broadcasts(("spend:team:t1",)),
     ]
+
+
+@pytest.mark.asyncio
+async def test_global_spend_reset_answers_500_while_the_spend_counter_store_refuses_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fences and the counters go through two Redis clients with their own circuit breakers. A reset that
+    read as written while the counter store still refused writes would drop the next request's increment, so the
+    retry has to keep answering 500 until the store every request increments accepts the reset."""
+    spend_counter_cache, spend = _spend_counter_cache_for_reset(
+        monkeypatch, scan_results=[["ns:spend:key:aaa"], ["ns:spend:team:t1"]], failing=frozenset({"set"})
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await spend_management_endpoints.global_spend_reset()
+
+    assert raised.value.code == "500"
+    assert raised.value.message.startswith("Spend was reset, but the cached spend counters could not be reset in Redis")
+    assert spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_count == 2
+    assert ps.spend_counter_store.get_local("spend:key:aaa") == 0.0
+    assert ps.spend_counter_store.get_local("spend:team:t1") == 0.0
 
 
 def test_spend_calculate_rejection_body_is_openai_shaped(client):

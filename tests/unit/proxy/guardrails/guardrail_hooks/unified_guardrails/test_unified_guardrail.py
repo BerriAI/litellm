@@ -3291,3 +3291,21 @@ async def test_pass_through_guardrail_text_is_the_client_body_without_the_inject
     texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
     assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
     assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_lets_responses_compact_through_without_a_translation() -> None:
+    handler: Final = UnifiedLLMGuardrails()
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-5.4-mini",
+        "input": [{"role": "user", "content": "Remember the number 42."}],
+    }
+
+    result: Final = await handler.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), call_type="acompact_responses"
+    )
+
+    assert result is data
+    assert guardrail.apply_calls == []

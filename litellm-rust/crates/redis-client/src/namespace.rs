@@ -11,7 +11,7 @@ impl Namespace {
         self.0.as_deref()
     }
 
-    pub(crate) fn apply(&self, key: &str) -> String {
+    pub fn apply(&self, key: &str) -> String {
         match &self.0 {
             Some(namespace) if !is_prefixed(key, namespace) => {
                 format!("{namespace}:{key}")
