@@ -234,6 +234,17 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             data["litellm_metadata"] = user_metadata
 
 
+_CALL_TYPE_VALUES: Final = frozenset(member.value for member in CallTypes)
+
+
+def _logged_call_type(data: Mapping[str, object]) -> CallTypesLiteral | None:
+    logging_obj: Final = data.get("litellm_logging_obj")
+    logged: Final = getattr(logging_obj, "call_type", None) if logging_obj is not None else None
+    if not isinstance(logged, str) or logged not in _CALL_TYPE_VALUES:
+        return None
+    return cast(CallTypesLiteral, logged)
+
+
 class UnifiedLLMGuardrails(CustomLogger):
     def __init__(
         self,
@@ -389,17 +400,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             call_type = infer_call_type(call_type=None, completion_response=response)
 
         if call_type is None:
-            litellm_logging_obj: Final = data.get("litellm_logging_obj")
-            logging_call_type: Final = (
-                getattr(litellm_logging_obj, "call_type", None) if litellm_logging_obj is not None else None
-            )
-            if logging_call_type in (
-                CallTypes.pass_through.value,
-                CallTypes.allm_passthrough_route.value,
-                CallTypes.ocr.value,
-                CallTypes.aocr.value,
-            ):
-                call_type = logging_call_type
+            call_type = _logged_call_type(data)
 
         if call_type is None:
             verbose_proxy_logger.warning(
