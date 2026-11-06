@@ -36,11 +36,15 @@ def _sanitized_tool(tool: object) -> object:
 
 
 def _tool_turn_with_empty_thinking(message: object) -> Mapping[object, object] | None:
+    if not isinstance(message, dict):
+        return None
     fields: Final = _OBJECT_FIELDS.validate_python(message)
     content: Final = fields.get("content")
     if not isinstance(content, list):
         return None
     blocks: Final = _OBJECT_LIST.validate_python(content)
+    if not all(isinstance(block, dict) for block in blocks):
+        return None
     block_types: Final = frozenset(_OBJECT_FIELDS.validate_python(block).get("type") for block in blocks)
     if "tool_use" not in block_types or not block_types.isdisjoint(_THINKING_BLOCK_TYPES):
         return None

@@ -264,3 +264,16 @@ def test_deepseek_anthropic_messages_leaves_history_alone_when_thinking_disabled
     request = _transform(_tool_loop_history(), {"thinking": {"type": "disabled"}})
 
     assert request["messages"] == _tool_loop_history()
+
+
+def test_deepseek_anthropic_messages_passes_malformed_turns_through_unchanged():
+    malformed_turn = {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {"command": "ls"}}, "oops"],
+    }
+    tail = _tool_loop_history()[8:]
+
+    request = _transform(["hello", malformed_turn, *tail], {})
+
+    filled_turn = {**tail[1], "content": [{"type": "thinking", "thinking": ""}, *tail[1]["content"]]}
+    assert request["messages"] == ["hello", malformed_turn, tail[0], filled_turn, tail[2]]
