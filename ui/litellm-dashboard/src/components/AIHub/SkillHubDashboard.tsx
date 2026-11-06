@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { DataTable } from "@/components/shared/DataTable";
 import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
-import SkillDetail from "@/components/claude_code_plugins/skill_detail";
+import SkillDetail, { legacySkillDetail } from "@/components/claude_code_plugins/skill_detail";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -98,7 +98,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   if (selectedSkill) {
     return (
       <SkillDetail
-        skill={selectedSkill}
+        skill={legacySkillDetail(selectedSkill)}
         onBack={() => setSelectedSkill(null)}
         isAdmin={isAdmin}
         accessToken={accessToken}

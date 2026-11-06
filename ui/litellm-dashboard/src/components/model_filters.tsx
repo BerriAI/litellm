@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
 import ModelHubProviders from "@/components/AIHub/ModelHubProviders";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   showProviderFilter = true,
   variant = "dashboard",
 }) => {
+  const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [internalProvider, setInternalProvider] = useState<string>("");
   const selectedProvider = controlledProvider ?? internalProvider;
@@ -187,8 +189,8 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
             <Search className="size-4" />
           </InputGroupAddon>
           <InputGroupInput
-            aria-label="Search models"
-            placeholder="Search model names..."
+            aria-label={t("modelFilters.searchLabel")}
+            placeholder={t("modelFilters.searchPlaceholder")}
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
           />
@@ -201,22 +203,22 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
           />
         )}
         <ChatFilterSelect
-          label="Model type"
-          emptyLabel="All types"
+          label={t("modelFilters.modelType")}
+          emptyLabel={t("modelFilters.allTypes")}
           options={getUniqueModes(modelHubData)}
           value={selectedMode}
           onValueChange={changeMode}
         />
         <ChatFilterSelect
-          label="Model capability"
-          emptyLabel="All capabilities"
+          label={t("modelFilters.modelCapability")}
+          emptyLabel={t("modelFilters.allCapabilities")}
           options={getUniqueFeatures(modelHubData)}
           value={selectedFeature}
           onValueChange={setSelectedFeature}
         />
         {hasActiveFilters && (
           <Button variant="ghost" onClick={resetFilters} className="chat-model-filter-clear">
-            Clear Filters
+            {t("modelFilters.clearFilters")}
           </Button>
         )}
       </div>
@@ -226,10 +228,10 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const filtersContent = (
     <div className="flex flex-wrap gap-4 items-center">
       <div>
-        <p className="text-sm font-medium mb-2">Search Models:</p>
+        <p className="text-sm font-medium mb-2">{t("modelFilters.searchModels")}</p>
         <input
           type="text"
-          placeholder="Search model names..."
+          placeholder={t("modelFilters.searchPlaceholder")}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="border rounded-sm px-3 py-2 w-64 h-10 text-sm"
@@ -237,14 +239,14 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
       </div>
       {showProviderFilter && (
         <div>
-          <p className="text-sm font-medium mb-2">Provider:</p>
+          <p className="text-sm font-medium mb-2">{t("modelFilters.provider")}</p>
           <select
             value={selectedProvider}
             onChange={(e) => changeProvider(e.target.value)}
             className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-40 h-10"
           >
             <option value="" className="text-sm text-muted-foreground">
-              All Providers
+              {t("modelFilters.allProviders")}
             </option>
             {modelHubData &&
               getUniqueProviders(modelHubData).map((provider) => (
@@ -256,14 +258,14 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         </div>
       )}
       <div>
-        <p className="text-sm font-medium mb-2">Mode:</p>
+        <p className="text-sm font-medium mb-2">{t("modelFilters.mode")}</p>
         <select
           value={selectedMode}
           onChange={(e) => changeMode(e.target.value)}
           className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-32 h-10"
         >
           <option value="" className="text-sm text-muted-foreground">
-            All Modes
+            {t("modelFilters.allModes")}
           </option>
           {modelHubData &&
             getUniqueModes(modelHubData).map((mode) => (
@@ -274,14 +276,14 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         </select>
       </div>
       <div>
-        <p className="text-sm font-medium mb-2">Features:</p>
+        <p className="text-sm font-medium mb-2">{t("modelFilters.features")}</p>
         <select
           value={selectedFeature}
           onChange={(e) => setSelectedFeature(e.target.value)}
           className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-48 h-10"
         >
           <option value="" className="text-sm text-muted-foreground">
-            All Features
+            {t("modelFilters.allFeatures")}
           </option>
           {modelHubData &&
             getUniqueFeatures(modelHubData).map((feature) => (
@@ -299,7 +301,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
             onClick={resetFilters}
             className="text-info hover:text-info/80 text-sm underline h-10 flex items-center"
           >
-            Clear Filters
+            {t("modelFilters.clearFilters")}
           </button>
         </div>
       )}

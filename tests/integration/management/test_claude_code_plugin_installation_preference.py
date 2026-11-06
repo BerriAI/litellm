@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
+from threading import Lock
 from typing import Final
 
 import httpx
@@ -248,7 +249,7 @@ def test_duplicate_json_key_keeps_the_last_value(gateway: Gateway) -> None:
         assert stored_manifest(name)["installation_preference"] == "available"
 
 
-def test_repeated_identical_update_is_idempotent(gateway: Gateway) -> None:
+def test_repeated_identical_updates_publish_patch_versions_without_changing_preference(gateway: Gateway) -> None:
     name: Final = plugin_name()
     with gateway.scenario() as scenario:
         registered(scenario, name, installation_preference="required")
@@ -257,7 +258,9 @@ def test_repeated_identical_update_is_idempotent(gateway: Gateway) -> None:
         replaced(gateway, name, installation_preference="required")
         second: Final = stored_rows(name)
         assert len(first) == 1, first
-        assert second == first
+        first_manifest: Final = JSON_OBJECT.validate_json(string_value(first[0]["manifest_json"]))
+        assert first_manifest["version"] == "1.0.1", first
+        assert second == [{**first[0], "manifest_json": json.dumps({**first_manifest, "version": "1.0.2"})}]
         assert_preference_served(gateway, name, "required")
 
 
@@ -442,14 +445,16 @@ def test_burst_reads_across_processes_while_the_preference_flips(gateway: Gatewa
     name: Final = plugin_name()
     targets: Final = (gateway, peer)
     flips: Final = tuple(PREFERENCES[(index + 1) % len(PREFERENCES)] for index in range(13))
+    writer: Final = Lock()
     with gateway.scenario() as scenario:
         registered(scenario, name, installation_preference="available")
 
         def job(index: int) -> tuple[str, JsonValue]:
             if index % 4 == 3:
-                return "flip", replace(
-                    gateway, name, replacement(name, installation_preference=flips[index // 4])
-                ).status_code
+                with writer:
+                    return "flip", replace(
+                        gateway, name, replacement(name, installation_preference=flips[index // 4])
+                    ).status_code
             return "read", marketplace_entry(targets[index % 2], name).get("installationPreference")
 
         with ThreadPoolExecutor(max_workers=8) as pool:

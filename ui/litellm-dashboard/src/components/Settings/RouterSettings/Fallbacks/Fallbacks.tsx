@@ -2,7 +2,7 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { ArrowRight, Pencil, Play, Trash2 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import openai from "openai";
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -133,7 +133,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
   }
 }
 
-function fallbacksWriteHint(source: RouterSettingsSource | null, ownedByConfig: boolean): string | undefined {
+function fallbacksWriteHint(source: RouterSettingsSource | null, ownedByConfig: boolean): ParseKeys | undefined {
   if (ownedByConfig) return CONFIG_OWNED_HINT;
   if (source === null) return SOURCE_UNKNOWN_HINT;
   return undefined;
@@ -276,7 +276,8 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   // Admin Viewer follows the read-parity rule: see fallbacks, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
   const ownedByConfig = routerSettingsSource !== null && isOwnedByConfig(routerSettingsSource, "fallbacks");
-  const writeHint = fallbacksWriteHint(routerSettingsSource, ownedByConfig);
+  const writeHintKey = fallbacksWriteHint(routerSettingsSource, ownedByConfig);
+  const writeHint = writeHintKey === undefined ? undefined : t(writeHintKey);
   const canWrite = canModify && writeHint === undefined;
   const writeActionClass = (hoverClass: string) =>
     canWrite ? `${iconWrapperClass} cursor-pointer ${hoverClass}` : `${iconWrapperClass} cursor-not-allowed opacity-50`;

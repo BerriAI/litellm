@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { z } from "zod";
 import {
   EMPTY_DAILY_ACTIVITY_METADATA,
@@ -15,8 +16,7 @@ type SpendMetrics = components["schemas"]["SpendMetrics"];
 
 export { UsageClient } from "../components/overview/agentCatalog";
 export const CLIENT_REQUEST_LIMIT = 1000;
-export const INCOMPLETE_CLIENT_USAGE =
-  "Narrow the date range to fewer than 1,000 requests to see complete client usage";
+export const INCOMPLETE_CLIENT_USAGE: ParseKeys = "usage.clientUsage.errors.narrowRange";
 
 const count = z.number().int().nonnegative();
 const cacheDetailsSchema = z.object({
@@ -191,7 +191,7 @@ export function clientUsageFromLogs(response: unknown, scope: ClientUsageScope):
   if (!parsed.success) return emptyClientUsage(i18n.t("usage.clientUsage.errors.incompleteData"));
   const page = parsed.data;
   if (page.total_is_capped || page.total_pages > 1 || page.total > CLIENT_REQUEST_LIMIT) {
-    return emptyClientUsage(INCOMPLETE_CLIENT_USAGE);
+    return emptyClientUsage(i18n.t(INCOMPLETE_CLIENT_USAGE));
   }
   if (page.data.length !== page.total) return emptyClientUsage(i18n.t("usage.clientUsage.errors.incompleteData"));
   if (scope.userId && page.data.some((row) => row.user !== scope.userId)) {

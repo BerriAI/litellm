@@ -58,8 +58,8 @@ const USAGE_COST_FIELDS = [
 const REVALIDATED_WHEN_PTU_COUNT_CHANGES = [PTU_RATE_FIELD, PTU_START_FIELD, ...USAGE_COST_FIELDS];
 
 const PRICING_MODEL_ITEMS = [
-  { value: "per_token", label: "Per Million Tokens" },
-  { value: "per_second", label: "Per Second" },
+  { value: "per_token", labelKey: "addModel.advancedSettings.pricingModels.perToken" },
+  { value: "per_second", labelKey: "addModel.advancedSettings.pricingModels.perSecond" },
 ] as const;
 
 const validateNumber = (_: unknown, value: unknown) => {
@@ -320,7 +320,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 >
                   {(control) => (
                     <Select
-                      items={PRICING_MODEL_ITEMS}
+                      items={PRICING_MODEL_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
                       value={(control.value as "per_token" | "per_second" | undefined) ?? "per_token"}
                       onValueChange={handlePricingModelChange(control.onChange)}
                     >
@@ -330,7 +330,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       <SelectContent>
                         {PRICING_MODEL_ITEMS.map((item) => (
                           <SelectItem key={item.value} value={item.value}>
-                            {item.label}
+                            {t(item.labelKey)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -490,7 +490,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
 
             <MountedFormField
               name="cache_control"
-              label={labelWithHint(CACHE_CONTROL_LABEL, CACHE_CONTROL_TOOLTIP)}
+              label={labelWithHint(t(CACHE_CONTROL_LABEL), t(CACHE_CONTROL_TOOLTIP))}
               className="mb-4"
             >
               {(control) => (
