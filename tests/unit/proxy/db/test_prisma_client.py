@@ -367,6 +367,98 @@ def test_token_refresh_keeps_the_reader_url_params_separate_from_the_writer(azur
     assert os.environ["DATABASE_URL"].endswith("?max_idle_connection_lifetime=45")
 
 
+def _db_url_with_token(token: str, query: str = "") -> str:
+    return f"postgresql://u:{urllib.parse.quote(token, safe='')}@pg.postgres.database.azure.com:5432/litellm_db{query}"
+
+
+def _record_db_url_at_connect(wrapper: PrismaWrapper) -> list[str | None]:
+    seen: list[str | None] = []
+
+    async def _connect() -> None:
+        seen.append(os.environ.get("DATABASE_URL"))
+
+    wrapper._original_prisma.connect = _connect
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_respawned_worker_connects_with_a_fresh_token_instead_of_the_inherited_one(azure_env, monkeypatch):
+    """uvicorn respawns workers from the parent process, whose env still holds the URL
+    the CLI minted at container start. Once that token expires the new worker's first
+    connect is refused with P1010 (issue #49963)."""
+    monkeypatch.setenv("DATABASE_URL", _db_url_with_token(_entra_jwt(-60), "?connection_limit=10"))
+    new_token = _entra_jwt(3600)
+    wrapper = _azure_wrapper(new_token)
+    seen = _record_db_url_at_connect(wrapper)
+
+    await wrapper.connect()
+
+    assert len(seen) == 1
+    assert urllib.parse.quote(new_token, safe="") in seen[0]
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(seen[0]).query) == {"connection_limit": ["10"]}
+
+
+@pytest.mark.asyncio
+async def test_connect_keeps_a_token_with_runway_left(azure_env, monkeypatch):
+    inherited = _db_url_with_token(_entra_jwt(3600))
+    monkeypatch.setenv("DATABASE_URL", inherited)
+    wrapper = _azure_wrapper(_entra_jwt(7200))
+    seen = _record_db_url_at_connect(wrapper)
+
+    await wrapper.connect()
+
+    assert seen == [inherited]
+
+
+@pytest.mark.asyncio
+async def test_connect_still_tries_the_inherited_url_when_the_mint_fails(azure_env, monkeypatch):
+    from litellm.proxy.db.token_auth import AzureEntraTokenAuth
+
+    inherited = _db_url_with_token(_entra_jwt(-60))
+    monkeypatch.setenv("DATABASE_URL", inherited)
+
+    def _entra_is_down() -> str:
+        raise RuntimeError("IMDS unreachable")
+
+    wrapper = PrismaWrapper(original_prisma=MagicMock(), token_auth=AzureEntraTokenAuth(token_provider=_entra_is_down))
+    seen = _record_db_url_at_connect(wrapper)
+
+    await wrapper.connect()
+
+    assert seen == [inherited]
+
+
+@pytest.mark.asyncio
+async def test_connect_leaves_the_reader_url_to_its_own_mint(azure_env, monkeypatch):
+    from litellm.proxy.db.token_auth import IAMEndpoint
+
+    pinned = _db_url_with_token(_entra_jwt(-60))
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", pinned)
+    reader = _azure_wrapper(
+        _entra_jwt(3600),
+        db_url_env_var="DATABASE_URL_READ_REPLICA",
+        iam_endpoint=IAMEndpoint(host="replica", port="5432", user="r", name="litellm_db", schema=None),
+        recreate_uses_datasource=True,
+    )
+    _record_db_url_at_connect(reader)
+
+    await reader.connect()
+
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == pinned
+
+
+@pytest.mark.asyncio
+async def test_connect_leaves_a_password_database_url_alone(monkeypatch):
+    password_url = "postgresql://u:hunter2@pg:5432/litellm_db"
+    monkeypatch.setenv("DATABASE_URL", password_url)
+    wrapper = PrismaWrapper(original_prisma=MagicMock())
+    seen = _record_db_url_at_connect(wrapper)
+
+    await wrapper.connect()
+
+    assert seen == [password_url]
+
+
 def test_azure_entra_refresh_is_scheduled_off_the_jwt_expiry(azure_env):
     """Without reading `exp` this falls back to a fixed 600s interval, which silently
     outlives a token and breaks every reconnect after it lapses (issue #29661)."""
