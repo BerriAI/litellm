@@ -13,7 +13,6 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import TypeAdapter
-
 from redis.exceptions import RedisError
 
 from litellm._internal_context import with_service_target

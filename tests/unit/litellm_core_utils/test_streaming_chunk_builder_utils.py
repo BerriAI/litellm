@@ -18,7 +18,6 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Delta,
     Function,
-    GenericStreamingChunk,
     ModelResponseStream,
     PromptTokensDetails,
     ServerToolUse,
