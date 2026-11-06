@@ -10,12 +10,12 @@ export interface Tag {
   created_by?: string;
   updated_by?: string;
   litellm_budget_table?: {
-    max_budget?: number;
+    max_budget?: number | null;
     soft_budget?: number;
-    tpm_limit?: number;
-    rpm_limit?: number;
+    tpm_limit?: number | null;
+    rpm_limit?: number | null;
     max_parallel_requests?: number;
-    budget_duration?: string;
+    budget_duration?: string | null;
     model_max_budget?: any;
   };
 }

@@ -25,12 +25,17 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
 
+const isBlank = (value: string | number | null | undefined): value is "" | null | undefined =>
+  value == null || value === "";
+const isNonnegativeNumber = (value: string | number): boolean => Number.isFinite(Number(value)) && Number(value) >= 0;
+const isNonnegativeInteger = (value: string | number): boolean => Number.isInteger(Number(value)) && Number(value) >= 0;
+
 const optionalLimit = z
   .union([z.string(), z.number()])
-  .refine((value) => value === "" || (Number.isInteger(Number(value)) && Number(value) >= 0), {
+  .nullish()
+  .refine((value) => isBlank(value) || isNonnegativeInteger(value), {
     error: () => i18n.t("tagManagement.editForm.validation.limitNonnegativeInteger"),
-  })
-  .optional();
+  });
 
 const tagEditShape = {
   name: z.string().min(1, { error: () => i18n.t("tagManagement.editForm.validation.nameRequired") }),
@@ -38,10 +43,10 @@ const tagEditShape = {
   models: z.array(z.string()).optional(),
   max_budget: z
     .union([z.string(), z.number()])
-    .refine((value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0), {
+    .nullish()
+    .refine((value) => isBlank(value) || isNonnegativeNumber(value), {
       error: () => i18n.t("tagManagement.editForm.validation.budgetNonnegative"),
-    })
-    .optional(),
+    }),
   budget_duration: z.string().nullish(),
   tpm_limit: optionalLimit,
   rpm_limit: optionalLimit,
@@ -51,9 +56,9 @@ const tagEditSchema = z.object(tagEditShape);
 
 type TagEditFormValues = z.output<typeof tagEditSchema>;
 
-const numericPayload = (value: string | number | undefined): number | null | undefined => {
+const numericPayload = (value: string | number | null | undefined): number | null | undefined => {
   if (value === undefined) return undefined;
-  if (value === "") return null;
+  if (isBlank(value)) return null;
   return Number(value);
 };
 

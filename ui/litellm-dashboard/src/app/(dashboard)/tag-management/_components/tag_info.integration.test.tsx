@@ -182,10 +182,8 @@ describe("TagInfoView save payload", () => {
     fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value: "120" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    expect(mockTagUpdateCall).toHaveBeenCalledWith(
-      "sk-test",
-      expect.objectContaining({ tpm_limit: 50000, rpm_limit: 120, max_budget: 10, budget_duration: "7d" }),
-    );
+    const expected = { tpm_limit: 50000, rpm_limit: 120, max_budget: 10, budget_duration: "7d" };
+    expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expect.objectContaining(expected));
   });
 
   it("sends null for a cleared TPM limit so the proxy drops it", async () => {
@@ -225,6 +223,24 @@ describe("TagInfoView save payload", () => {
     expect(await screen.findByLabelText("TPM Limit")).toHaveValue(1000);
     expect(screen.getByLabelText("RPM Limit")).toHaveValue(60);
     expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(10);
+  });
+
+  it("saves a tag whose budget row has null fields instead of failing validation on the nulls", async () => {
+    mockTagInfoCall.mockResolvedValue({
+      "prod-tag": {
+        ...tag,
+        litellm_budget_table: { max_budget: null, budget_duration: null, tpm_limit: 1000, rpm_limit: null },
+      },
+    });
+    const { user } = await renderEditor();
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    fireEvent.change(await screen.findByLabelText("RPM Limit"), { target: { value: "30" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(screen.queryByText(/Invalid input/)).not.toBeInTheDocument();
+    const expected = { max_budget: null, tpm_limit: 1000, rpm_limit: 30, budget_duration: null };
+    expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expect.objectContaining(expected));
   });
 
   it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
