@@ -14,8 +14,8 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2
 # image, so it does not need a FIPS base.
 ARG UI_BUILD_IMAGE=node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
 # Checksum from https://www.pgbouncer.org/downloads/
-ARG PGBOUNCER_VERSION=1.25.2
-ARG PGBOUNCER_SHA256=924ad35113fd0a71c8e2dbe85b5d03445532e2b7b37a9f8a48983beea238b332
+ARG PGBOUNCER_VERSION=1.26.0
+ARG PGBOUNCER_SHA256=afd25dd61ee6775d37b40629b87ce08736b3e6955f3057bb212e410fbf21c71d
 
 FROM $UV_IMAGE AS uvbin
 
@@ -45,6 +45,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 WORKDIR /ui
 
 COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+COPY ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
 
 COPY ui/litellm-dashboard/ ./
@@ -65,7 +66,9 @@ RUN --mount=type=secret,id=cgr-token \
     gcc \
     python-3.13 \
     python-3.13-dev \
+    rust \
     openssl \
+    libssl3 \
     openssl-dev \
     nodejs \
     npm \
@@ -81,10 +84,12 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock ./
 COPY enterprise/pyproject.toml enterprise/
 COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+COPY packaging/litellm-proxy/pyproject.toml packaging/litellm-proxy/
 
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
+    --group admin-mcp \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
@@ -98,9 +103,11 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-RUN uv sync --frozen --no-default-groups --no-editable \
+# litellm-proxy, the opt-in Rust forwarding server, is left out of this image.
+RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
+    --group admin-mcp \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
@@ -115,6 +122,8 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+ARG LITELLM_RELEASE_TAG=""
+ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 
 USER root
 
@@ -123,7 +132,7 @@ USER root
 # pinned Chainguard repo.
 RUN --mount=type=secret,id=cgr-token \
     HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
-    apk add --no-cache bash openssl openssl-fips-test tzdata nodejs python-3.13 libsndfile libevent
+    apk add --no-cache bash openssl libssl3 openssl-fips-test tzdata nodejs python-3.13 libsndfile libevent
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app

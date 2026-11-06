@@ -2,7 +2,7 @@
 # Build-time gate for the FIPS image. Allowlist logic: every ELF in the final
 # layers must be accounted for, either present in fips_elf_inventory.txt
 # (reviewed as crypto-free or linked against the validated system
-# libcrypto.so.3) or waived below when it bundles its own crypto
+# libcrypto.so.3 or .4) or waived below when it bundles its own crypto
 # implementation. A binary that is neither fails the build, so a new native
 # dependency cannot ship without review, whatever crypto it embeds.
 #
@@ -35,7 +35,7 @@ crypto_markers() {
   if grep -aq 'BoringSSL' "$1"; then m="BoringSSL"; fi
   if grep -aq 'AWS-LC' "$1"; then m="${m:+$m,}AWS-LC"; fi
   if grep -Eaq 'OpenSSL [0-9]+\.[0-9]+\.[0-9]+' "$1"; then
-    if ! objdump -p "$1" 2>/dev/null | grep -q 'NEEDED.*libcrypto\.so\.3'; then
+    if ! objdump -p "$1" 2>/dev/null | grep -Eq 'NEEDED.*libcrypto\.so\.[34]'; then
       m="${m:+$m,}bundled-OpenSSL"
     fi
   fi
