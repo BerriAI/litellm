@@ -1,4 +1,6 @@
-import asyncio, base64, importlib, uuid
+import asyncio
+import base64
+import importlib
 import json
 import logging
 import os
@@ -6,8 +8,10 @@ import re
 import sys
 import time
 import types
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -16,62 +20,49 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_completion_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     _EMPTY_TEXT_PLACEHOLDER,
+    BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
     anthropic_messages_pt,
-    convert_to_anthropic_tool_result,
-    convert_to_gemini_tool_call_result,
-    convert_to_ollama_image,
-    encode_tool_call_id_with_signature,
-    function_call_prompt,
-    get_thought_signature_from_tool,
-    get_tool_calls_from_response,
-    make_valid_bedrock_tool_name,
-    ollama_pt,
-    parse_mime_type,
-    sanitize_messages_for_tool_calling,
-    THOUGHT_SIGNATURE_SEPARATOR,
-)
-from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
-from litellm.types.utils import ChatCompletionMessageToolCall, Function
-from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    function_setup,
-    Rules,
-    validate_and_fix_openai_messages,
-)
-from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
+    convert_to_anthropic_tool_result,
+    convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     convert_url_to_base64,
     create_anthropic_image_param,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
+    get_tool_calls_from_response,
     has_tool_with_name,
     llama_2_chat_pt,
+    make_valid_bedrock_tool_name,
+    ollama_pt,
+    parse_mime_type,
     prompt_factory,
+    response_schema_prompt,
+    sanitize_anthropic_tool_use_id,
+    sanitize_messages_for_tool_calling,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
-    get_completion_messages,
 )
-from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
-from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
-from litellm.types.llms.openai import AllMessageValues
-from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
 from litellm.llms.codestral.completion.handler import CodestralTextCompletion
@@ -79,10 +70,19 @@ from litellm.llms.ollama.completion.transformation import OllamaConfig
 from litellm.llms.petals.completion import handler as petals_handler
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.llms.vllm.completion import handler as vllm_handler
 from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
-from litellm.types.utils import ModelResponse, TextCompletionResponse
-
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, TextCompletionResponse
+from litellm.utils import (
+    Rules,
+    _invalidate_model_cost_lowercase_map,
+    function_setup,
+    validate_and_fix_openai_messages,
+)
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
 USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
@@ -3460,8 +3460,8 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
     This test creates a schema with multiple nested $defs that reference each other
     to verify the fix prevents memory explosion while still correctly resolving refs.
     """
-    import sys
     import copy
+    import sys
 
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
@@ -7852,7 +7852,7 @@ def test_anthropic_messages_pt_with_bash_tool_result_in_provider_specific_fields
 
 def test_parse_tool_call_arguments_valid_json():
     """Test that valid JSON is parsed correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7862,7 +7862,7 @@ def test_parse_tool_call_arguments_valid_json():
 
 def test_parse_tool_call_arguments_empty_input():
     """Test that None/empty input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7872,7 +7872,7 @@ def test_parse_tool_call_arguments_empty_input():
 
 def test_parse_tool_call_arguments_malformed_json():
     """Test that malformed JSON raises ValueError with context."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -7918,7 +7918,7 @@ def test_convert_to_anthropic_tool_invoke_malformed_json():
 
 def test_attempt_json_repair_missing_closing_brace():
     """Repair JSON truncated with a missing closing brace (issue #22312)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7934,7 +7934,7 @@ def test_attempt_json_repair_missing_closing_brace():
 
 def test_attempt_json_repair_missing_bracket_and_brace():
     """Repair JSON truncated with both missing ] and }."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7946,7 +7946,7 @@ def test_attempt_json_repair_missing_bracket_and_brace():
 
 def test_attempt_json_repair_trailing_comma():
     """Repair JSON with a trailing comma before missing close."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7958,7 +7958,7 @@ def test_attempt_json_repair_trailing_comma():
 
 def test_attempt_json_repair_returns_none_for_unterminated_string():
     """Cannot repair an unterminated string — returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7967,7 +7967,7 @@ def test_attempt_json_repair_returns_none_for_unterminated_string():
 
 def test_attempt_json_repair_returns_none_for_valid_json():
     """Valid JSON has no unmatched brackets — returns None (no repair needed)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7976,7 +7976,7 @@ def test_attempt_json_repair_returns_none_for_valid_json():
 
 def test_attempt_json_repair_returns_none_for_empty():
     """Empty / whitespace input returns None."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7986,7 +7986,7 @@ def test_attempt_json_repair_returns_none_for_empty():
 
 def test_attempt_json_repair_interleaved_nesting():
     """Repair JSON with interleaved {} and [] nesting."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -7998,7 +7998,7 @@ def test_attempt_json_repair_interleaved_nesting():
 
 def test_attempt_json_repair_deeply_nested():
     """Repair deeply nested truncated JSON."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         _attempt_json_repair,
     )
 
@@ -8010,7 +8010,7 @@ def test_attempt_json_repair_deeply_nested():
 
 def test_parse_tool_call_arguments_whitespace_only():
     """Whitespace-only input returns empty dict."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8020,7 +8020,7 @@ def test_parse_tool_call_arguments_whitespace_only():
 
 def test_parse_tool_call_arguments_non_object_json():
     """Non-object JSON (list, string, number) is returned as-is (no wrapping)."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8030,7 +8030,7 @@ def test_parse_tool_call_arguments_non_object_json():
 
 def test_parse_tool_call_arguments_repairs_truncated_json():
     """parse_tool_call_arguments should repair truncated JSON instead of raising."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 
@@ -8041,7 +8041,7 @@ def test_parse_tool_call_arguments_repairs_truncated_json():
 
 def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     """parse_tool_call_arguments raises ValueError when repair also fails."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         parse_tool_call_arguments,
     )
 

@@ -2,6 +2,7 @@ import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import type { ParseKeys } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -28,9 +29,9 @@ type ViewMode = "chart" | "table";
 
 const LIMIT_OPTIONS = TOP_MODEL_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
 const VIEW_OPTIONS = [
-  { value: "table", label: "Table View" },
-  { value: "chart", label: "Chart View" },
-] as const satisfies readonly { value: ViewMode; label: string }[];
+  { value: "table", labelKey: "usage.topModelView.viewOptions.table" },
+  { value: "chart", labelKey: "usage.topModelView.viewOptions.chart" },
+] as const satisfies readonly { value: ViewMode; labelKey: ParseKeys }[];
 
 const BAR_COLOR = "#2b3fd6";
 const QUIET_HEADER = { headerClassName: "font-normal" };
@@ -100,7 +101,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         <Segmented
           label={t("usage.topModelView.viewModeLabel")}
           value={modelViewMode}
-          options={VIEW_OPTIONS}
+          options={VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
           onChange={setModelViewMode}
         />
       </div>

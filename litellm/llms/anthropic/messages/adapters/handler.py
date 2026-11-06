@@ -123,10 +123,9 @@ def _extract_proxy_litellm_metadata(
 
 def _requested_router(kwargs: Mapping[str, object]) -> "Router | None":
     from litellm.router import Router
-    from litellm.router_python_core import PythonCore
 
     requested: Final = kwargs.get("litellm_router")
-    return requested if isinstance(requested, (Router, PythonCore)) else None  # pyright: ignore[reportReturnType]  # the router passes its core, which carries Router's members
+    return requested if isinstance(requested, Router) else None
 
 
 def request_safeguards_evaluator(

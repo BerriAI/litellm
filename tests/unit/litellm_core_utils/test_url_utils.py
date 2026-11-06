@@ -16,9 +16,23 @@ from litellm.litellm_core_utils.url_utils import (
     encode_url_path_segment,
     encode_url_path_segments,
     ensure_api_route,
+    is_https_url_with_host,
     join_api_base,
     validate_url,
 )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    (
+        ("https://example.com/path", True),
+        ("http://example.com/path", False),
+        ("https:///path", False),
+        ("https://[", False),
+    ),
+)
+def test_is_https_url_with_host(url: str, expected: bool) -> None:
+    assert is_https_url_with_host(url) is expected
 
 
 @pytest.fixture

@@ -288,10 +288,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             </SelectTrigger>
             <SelectContent>
               {allCallbacks.map((callbackName) => {
-                const description = callbackInfo[callbackName]?.description;
+                const descriptionKey = callbackInfo[callbackName]?.descriptionKey;
                 return (
                   <SelectItem key={callbackName} value={callbackName}>
-                    <SimpleTooltip content={description} side="right">
+                    <SimpleTooltip content={descriptionKey ? t(descriptionKey) : undefined} side="right">
                       <div className="flex items-center space-x-2">
                         <Logo
                           src={callbackInfo[callbackName]?.logo}
@@ -383,10 +383,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       </SelectTrigger>
                       <SelectContent>
                         {supportedCallbacks.map((callbackName) => {
-                          const description = callbackInfo[callbackName]?.description;
+                          const descriptionKey = callbackInfo[callbackName]?.descriptionKey;
                           return (
                             <SelectItem key={callbackName} value={callbackName}>
-                              <SimpleTooltip content={description} side="right">
+                              <SimpleTooltip content={descriptionKey ? t(descriptionKey) : undefined} side="right">
                                 <div className="flex items-center space-x-2">
                                   <Logo
                                     src={callbackInfo[callbackName]?.logo}
