@@ -942,7 +942,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         model), so `input`, `instructions`, `max_output_tokens` and the tool
         params translate identically in batch and real time.
         """
-        return responses_batch_body_to_chat_body(openai_request_body)
+        chat_body: Final = responses_batch_body_to_chat_body(openai_request_body)
+        drop_params: Final = openai_request_body.get("drop_params")
+        if drop_params is None:
+            return chat_body
+        return _frozen_mapping(chain(chat_body.items(), (("drop_params", drop_params),)))
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
@@ -1038,7 +1042,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
         return {
             "messages": messages,
-            **optional_params,
+            **{k: v for k, v in optional_params.items() if k != "drop_params"},
         }
 
     def _resolve_batch_record_model_and_provider(
