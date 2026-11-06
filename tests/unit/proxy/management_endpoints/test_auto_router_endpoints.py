@@ -75,24 +75,24 @@ def _router() -> Router:
     return Router(model_list=ROUTER_MODEL_LIST)
 
 
-class RecordingRouter(Router):
+def _recording_router(classified_tier: str) -> tuple[Router, list[dict]]:
     """A real router that records the classifier calls the endpoint makes instead of sending them.
 
     Injected at the same `proxy_server.llm_router` boundary the endpoint reads, so model resolution
     and the key's model-access checks still run against a genuine Router.
     """
+    recorded_calls: Final[list[dict]] = []
 
-    def __init__(self, classified_tier: str) -> None:
-        super().__init__(model_list=ROUTER_MODEL_LIST)
-        self.classified_tier = classified_tier
-        self.recorded_calls: list[dict] = []
-
-    async def acompletion(self, model, messages, stream=False, **kwargs):
-        self.recorded_calls.append({"model": model, "messages": messages, **kwargs})
+    async def record(model, messages, stream=False, **kwargs):
+        recorded_calls.append({"model": model, "messages": messages, **kwargs})
         return ModelResponse(
-            choices=[Choices(message=Message(content=f'{{"tier": "{self.classified_tier}"}}'))],
+            choices=[Choices(message=Message(content=f'{{"tier": "{classified_tier}"}}'))],
             model=model,
         )
+
+    router: Final = Router(model_list=ROUTER_MODEL_LIST)
+    router.acompletion = AsyncMock(side_effect=record)
+    return router, recorded_calls
 
 
 def _request_from(body: Mapping[str, object], **config_overrides: object) -> AutoRouterRoutingTestRequest:
@@ -137,7 +137,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
     """The variable half of the classifier call this body produces."""
     from litellm.proxy import proxy_server
 
-    router = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     await preview_auto_router_routing(
@@ -145,7 +145,7 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
         data=_request_from(body, classifier_type="llm", classifier_llm_config={"model": "classifier-model"}),
         user_api_key_dict=ADMIN,
     )
-    return router.recorded_calls[0]["messages"][1]["content"]
+    return recorded_calls[0]["messages"][1]["content"]
 
 
 @pytest.mark.parametrize(
@@ -2710,7 +2710,7 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
 async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typesafe(
     monkeypatch: pytest.MonkeyPatch, denial: str | None
 ) -> None:
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.test")
@@ -2765,7 +2765,7 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
             assert response.routing_decision["cause"] == "jev_classifier"
             assert response.routed_model == "cheap-model"
             assert evaluation.call_count == 1
-        assert router.recorded_calls == []
+        assert recorded_calls == []
         await handler.client.aclose()
 
 
@@ -2775,7 +2775,7 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
     ["allowed", "credential-free", "team-admin-environment", "missing", "blocked", "key", "budget", "team", "not-router"],
 )
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     stored_key: Final = "synthetic-server-jev-key"
     monkeypatch.setenv("SAVED_JEV_KEY", stored_key)
     monkeypatch.setenv("SAVED_JEV_BASE", "https://saved-jev.test")
@@ -2876,7 +2876,7 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
             assert stored_key not in result.model_dump_json()
         assert evaluation.call_count == (1 if case in ("allowed", "credential-free", "team-admin-environment") else 0)
-        assert router.recorded_calls == []
+        assert recorded_calls == []
         await handler.client.aclose()
 
 
@@ -3513,7 +3513,7 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
 
     auth_module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
     actor: Final = _configure_member_preview(monkeypatch).model_copy(update={"metadata": {"tags": ["key-tag"]}})
-    router: Final = RecordingRouter("SIMPLE")
+    router, recorded_calls = _recording_router("SIMPLE")
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
     async def check_and_tag(
@@ -3547,13 +3547,13 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
     if over_budget:
         with pytest.raises(litellm.BudgetExceededError):
             await preview_auto_router_routing(data, actor, http_request)
-        assert router.recorded_calls == []
+        assert recorded_calls == []
     else:
         await preview_auto_router_routing(data, actor, http_request)
-        assert len(router.recorded_calls) == 1
-        assert router.recorded_calls[0]["metadata"]["user_api_key_team_id"] == "member-preview-team"
-        assert router.recorded_calls[0]["metadata"]["user_api_key_user_id"] == "preview-member"
-        assert set(router.recorded_calls[0]["metadata"]["tags"]) == {"key-tag", "header-tag"}
+        assert len(recorded_calls) == 1
+        assert recorded_calls[0]["metadata"]["user_api_key_team_id"] == "member-preview-team"
+        assert recorded_calls[0]["metadata"]["user_api_key_user_id"] == "preview-member"
+        assert set(recorded_calls[0]["metadata"]["tags"]) == {"key-tag", "header-tag"}
     checks.assert_awaited_once()
     assert checks.await_args.kwargs["user_api_key_auth_obj"].team_id == "member-preview-team"
     assert checks.await_args.kwargs["route"] == "/auto_router/test_routing"

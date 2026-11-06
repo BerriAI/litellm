@@ -11,8 +11,10 @@ from litellm.llms.bedrock.common_utils import(
     NativeOutputFallback,
     bedrock_native_output_is_opt_in,
     bedrock_strict_tools_fallback,
+    bedrock_model_name_without_provider,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
+    for_bedrock_json_tool_retry,
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
     is_bedrock_native_output_rejection,
@@ -302,6 +304,26 @@ def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
     assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5") == "mantle"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("bedrock/us.openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("global.openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("bedrock/converse/eu.anthropic.claude-sonnet-5-5", "claude-sonnet-5-5"),
+        ("us-east-1/openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("openai.gpt-5.5", "gpt-5.5"),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama4-scout-17b", "llama4-scout-17b"),
+        ("us.deepseek.r1-v1:0", "r1-v1:0"),
+        ("moonshotai.kimi-k2-thinking", "kimi-k2-thinking"),
+        ("bedrock/qwen.qwen3-32b-v1:0", "qwen3-32b-v1:0"),
+        ("gpt-5.5", "gpt-5.5"),
+        ("arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123", "abc123"),
+    ],
+)
+def test_bedrock_model_name_without_provider_strips_routing_region_and_provider_prefixes_only(model, expected):
+    assert bedrock_model_name_without_provider(model) == expected
 
 
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
@@ -2328,6 +2350,10 @@ def test_bedrock_capability_model_reads_base_model_only_for_application_profile_
 
 _FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
 _COMPILE_REJECTION: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_GRAMMAR_REJECTION: Final = (
+    "The model returned the following errors: The compiled grammar is too large, which would cause performance issues. "
+    "Simplify your tool schemas or reduce the number of strict tools."
+)
 _SCHEMA_PATTERN_REJECTION: Final = (
     "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
     "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
@@ -2340,6 +2366,7 @@ _SCHEMA_PATTERN_REJECTION: Final = (
     [
         (400, f'{{"message":"{_FORMAT_REJECTION}"}}', True),
         (400, f'{{"message":"{_COMPILE_REJECTION}"}}', True),
+        (400, _GRAMMAR_REJECTION, True),
         (400, f'{{"message":"{_SCHEMA_PATTERN_REJECTION}"}}', True),
         (400, "Malformed input request: #: extraneous key [output_config] is not permitted", False),
         (400, "The model returned the following errors: messages.0.content: Field required", False),
@@ -2349,6 +2376,7 @@ _SCHEMA_PATTERN_REJECTION: Final = (
     ids=[
         "format_not_permitted",
         "schema_too_complex",
+        "compiled_grammar_too_large",
         "schema_pattern_too_complex",
         "other_key_not_permitted",
         "other_400",
@@ -2365,7 +2393,7 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
 @pytest.mark.parametrize(
     ("model", "model_info", "expected"),
     [
-        ("us.anthropic.claude-opus-4-8", None, True),
+        ("us.anthropic.claude-opus-4-8", None, False),
         ("global.anthropic.claude-sonnet-5", None, True),
         ("us-gov.anthropic.claude-opus-4-8", None, False),
         ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
@@ -2389,8 +2417,42 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
         "us.anthropic.claude-opus-4-8", model_info=deployment_model_info(turned_off)
     )
     assert turned_off["api_base"] == "https://bedrock.example"
-    assert deployment_model_info(turned_off)["id"] == "deployment-1"
+    assert deployment_model_info(turned_off) == {
+        "id": "deployment-1",
+        "supports_bedrock_native_structured_output": False,
+    }
     assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+    native_default: Final = without_bedrock_native_output_opt_in(
+        {"model_info": {"supports_native_structured_output": True}}
+    )
+    assert deployment_model_info(native_default) == {
+        "supports_native_structured_output": True,
+        "supports_bedrock_native_structured_output": False,
+    }
+
+
+def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_model_cost_map: None) -> None:
+    litellm_params: Final = {
+        "model_info": {
+            "id": "deployment-1",
+            "supports_native_structured_output": True,
+            "supports_bedrock_native_structured_output": True,
+        }
+    }
+
+    retry_params: Final = for_bedrock_json_tool_retry(litellm_params)
+
+    assert deployment_model_info(retry_params) == {
+        "id": "deployment-1",
+        "supports_native_structured_output": False,
+        "supports_bedrock_native_structured_output": False,
+    }
+    assert litellm_params["model_info"] == {
+        "id": "deployment-1",
+        "supports_native_structured_output": True,
+        "supports_bedrock_native_structured_output": True,
+    }
 
 
 def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():
