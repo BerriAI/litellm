@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.tool_descriptions import scanned_request_tools
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     MCP_GUARDRAIL_CALL_TYPES,
@@ -296,6 +297,11 @@ class UnifiedLLMGuardrails(CustomLogger):
         _ensure_litellm_metadata(data, user_api_key_dict)
 
         await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+
+        if event_type is GuardrailEventHooks.pre_call:
+            scanned: Final = await scanned_request_tools(guardrail_to_apply, data, data.get("litellm_logging_obj"))  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # hook data is an untyped dict
+            if scanned is not None:
+                data["tools"] = list(scanned)  # rebind-ok: pre_call hooks rewrite the request dict in place
 
         data = await endpoint_translation.process_input_messages(
             data=data,
