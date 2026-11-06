@@ -137,3 +137,13 @@ def tls_sink(tmp_path: Path) -> Iterator[TlsSink]:
     server.shutdown()
     server.server_close()
     thread.join(timeout=5)
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()

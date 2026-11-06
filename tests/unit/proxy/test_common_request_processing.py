@@ -10,6 +10,15 @@ from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional,
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.integrations.guardrail_run_counting import (
+    REPLY_TEXT,
+    CountingGuardrail,
+    drain,
+    guarded_router,
+    mock_provider,
+    post_call_guardrail,
+    pre_call_guardrail,
+)
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import anthropic
@@ -19,6 +28,7 @@ import pytest
 import respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 import litellm
 from litellm._uuid import uuid
@@ -40,6 +50,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -87,6 +98,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -13089,3 +13102,283 @@ async def test_a_chained_proxy_redacts_secrets_and_internal_details_from_relayed
     assert {key: answered[key] for key in _DOWNSTREAM_GUARDRAIL_FIELDS} == dict(_DOWNSTREAM_GUARDRAIL_FIELDS)
     assert answered["scanner"]["attempts"] == 2
     assert [value for value in _DOWNSTREAM_LEAKABLE_VALUES if value in json.dumps(answered)] == []
+
+
+_REWRITTEN_TEXT: Final = "rewritten by the proxy"
+
+GuardrailRouteType = Literal["acompletion", "aresponses", "anthropic_messages"]
+_GUARDRAIL_ROUTE_PATHS: Final[Mapping[GuardrailRouteType, str]] = MappingProxyType(
+    {
+        "acompletion": "/v1/chat/completions",
+        "aresponses": "/v1/responses",
+        "anthropic_messages": "/v1/messages",
+    }
+)
+_GUARDRAIL_ROUTE_BODIES: Final[Mapping[GuardrailRouteType, Mapping[str, object]]] = MappingProxyType(
+    {
+        "acompletion": {"messages": [{"role": "user", "content": "hello"}]},
+        "aresponses": {"input": "hello"},
+        "anthropic_messages": {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 32},
+    }
+)
+
+
+class _RewritingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [_REWRITTEN_TEXT for _ in inputs.get("texts") or ()]}
+
+
+class _InheritedApplyGuardrail(CountingGuardrail):
+    pass
+
+
+class _OwnPostCallHookGuardrail(CustomGuardrail):
+    checked: tuple[str, ...] = ()
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: ProxyUserAPIKeyAuth, response: object
+    ) -> None:
+        self.checked = (*self.checked, type(response).__name__)
+
+
+async def _guarded_proxy_request(
+    monkeypatch: pytest.MonkeyPatch,
+    guardrails: tuple[CustomGuardrail, ...],
+    llm_router: Router,
+    route_type: GuardrailRouteType,
+    stream: bool = False,
+    request_guardrails: tuple[str, ...] = (),
+) -> str:
+    from litellm.proxy.proxy_server import ProxyConfig as RuntimeProxyConfig
+    from litellm.proxy.proxy_server import select_data_generator
+
+    monkeypatch.setattr(litellm, "callbacks", list(guardrails))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router, raising=False)
+    ProxyLogging._callback_capabilities_cache.clear()  # pyright: ignore[reportPrivateUsage]  # keyed on id(), which a collected guardrail from an earlier test can reuse
+    path: Final = _GUARDRAIL_ROUTE_PATHS[route_type]
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "client": ("127.0.0.1", 12345),
+            "query_string": b"",
+            "headers": ((b"content-type", b"application/json"),),
+        }
+    )
+    body: Final = {
+        "model": "gpt",
+        **_GUARDRAIL_ROUTE_BODIES[route_type],
+        **({"stream": True} if stream else {}),
+        **({"guardrails": list(request_guardrails)} if request_guardrails else {}),
+    }
+    with respx.mock(assert_all_called=False) as provider:
+        mock_provider(provider)
+        response: Final = await ProxyBaseLLMRequestProcessing(data=body).base_process_llm_request(
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", request_route=path),
+            route_type=route_type,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            general_settings={},
+            proxy_config=RuntimeProxyConfig(),
+            select_data_generator=select_data_generator,
+            llm_router=llm_router,
+            is_streaming_request=stream,
+        )
+        text: Final = (
+            await drain(response.body_iterator)
+            if isinstance(response, StreamingResponse)
+            else json.dumps(response.model_dump() if isinstance(response, BaseModel) else response)
+        )
+        await asyncio.sleep(0)
+    return text
+
+
+_A_IS_LIT_10481: Final = pytest.mark.xfail(
+    strict=True, reason="A, LIT-10481: deployment and proxy post_call both check the same response"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("route_type", "stream"),
+    [
+        pytest.param("acompletion", False, id="A-chat", marks=_A_IS_LIT_10481),
+        pytest.param("aresponses", False, id="A-responses", marks=_A_IS_LIT_10481),
+        pytest.param("anthropic_messages", False, id="A-messages", marks=_A_IS_LIT_10481),
+        pytest.param("acompletion", True, id="B-chat-stream"),
+        pytest.param("aresponses", True, id="B-responses-stream"),
+        pytest.param("anthropic_messages", True, id="B-messages-stream"),
+    ],
+)
+async def test_a_model_config_post_call_guardrail_checks_a_proxy_response_once(
+    monkeypatch: pytest.MonkeyPatch, route_type: GuardrailRouteType, stream: bool
+) -> None:
+    guardrail: Final = post_call_guardrail()
+    reply: Final = await _guarded_proxy_request(monkeypatch, (guardrail,), guarded_router(("G",)), route_type, stream)
+
+    assert REPLY_TEXT in reply
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("stream", [False, True], ids=["I-non-stream", "I-stream"])
+@pytest.mark.parametrize("route_type", ["acompletion", "aresponses"])
+async def test_a_request_post_call_guardrail_checks_a_proxy_response_once(
+    monkeypatch: pytest.MonkeyPatch, route_type: GuardrailRouteType, stream: bool
+) -> None:
+    guardrail: Final = post_call_guardrail()
+    await _guarded_proxy_request(
+        monkeypatch, (guardrail,), guarded_router(()), route_type, stream, request_guardrails=("G",)
+    )
+
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    "primary_guardrails",
+    [
+        pytest.param((), id="E-only-on-fallback"),
+        pytest.param(
+            ("G",),
+            id="H-on-both",
+            marks=pytest.mark.xfail(strict=True, reason="H: the fallback deployment and the proxy both check R_B"),
+        ),
+    ],
+)
+async def test_a_fallback_deployments_post_call_guardrail_checks_its_response_once(
+    monkeypatch: pytest.MonkeyPatch, primary_guardrails: tuple[str, ...]
+) -> None:
+    guardrail: Final = post_call_guardrail()
+    reply: Final = await _guarded_proxy_request(
+        monkeypatch, (guardrail,), guarded_router(primary_guardrails, fallback_guardrails=("G",)), "acompletion"
+    )
+
+    assert REPLY_TEXT in reply
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+async def test_a_response_rewritten_after_the_deployment_check_is_checked_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rewriter: Final = _RewritingGuardrail(
+        guardrail_name="rewriter", event_hook=GuardrailEventHooks.post_call, default_on=False
+    )
+    guardrail: Final = post_call_guardrail()
+    reply: Final = await _guarded_proxy_request(
+        monkeypatch, (rewriter, guardrail), guarded_router(("G",)), "acompletion", request_guardrails=("rewriter",)
+    )
+
+    assert _REWRITTEN_TEXT in reply
+    assert sorted(guardrail.checked) == sorted((REPLY_TEXT, _REWRITTEN_TEXT))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.xfail(strict=True, reason="J: the deployment and the proxy both call the guardrail's own hook")
+async def test_a_guardrail_with_its_own_post_call_hook_checks_a_proxy_response_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _OwnPostCallHookGuardrail(guardrail_name="G", event_hook=GuardrailEventHooks.post_call)
+    await _guarded_proxy_request(monkeypatch, (guardrail,), guarded_router(("G",)), "acompletion")
+
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.xfail(strict=True, reason="K: the proxy only sees apply_guardrail defined on the class itself")
+async def test_an_inherited_apply_guardrail_checks_a_proxy_response_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    guardrail: Final = _InheritedApplyGuardrail(guardrail_name="G", event_hook=GuardrailEventHooks.post_call)
+    await _guarded_proxy_request(
+        monkeypatch, (guardrail,), guarded_router(()), "acompletion", request_guardrails=("G",)
+    )
+
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.xfail(strict=True, reason="L: any guardrails list on the deployment lets a default_on guardrail run there")
+async def test_a_default_on_post_call_guardrail_checks_once_when_the_model_lists_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = post_call_guardrail(default_on=True)
+    await _guarded_proxy_request(monkeypatch, (guardrail,), guarded_router(("some-other-guardrail",)), "acompletion")
+
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    "route_type",
+    [pytest.param("acompletion", id="P1-chat"), pytest.param("aresponses", id="P2-responses")],
+)
+async def test_a_model_config_pre_call_guardrail_checks_a_proxy_request_once(
+    monkeypatch: pytest.MonkeyPatch, route_type: GuardrailRouteType
+) -> None:
+    guardrail: Final = pre_call_guardrail("pii-mask")
+    await _guarded_proxy_request(monkeypatch, (guardrail,), guarded_router(("pii-mask",)), route_type)
+
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    "route_type",
+    [
+        pytest.param("acompletion", id="P3-chat"),
+        pytest.param(
+            "aresponses",
+            id="P4-responses",
+            marks=pytest.mark.xfail(
+                strict=True, reason="P4: the deployment pre_call hook only runs for completion and acompletion"
+            ),
+        ),
+    ],
+)
+async def test_each_deployments_pre_call_guardrail_checks_a_proxy_fallback_request_once(
+    monkeypatch: pytest.MonkeyPatch, route_type: GuardrailRouteType
+) -> None:
+    pii_mask: Final = pre_call_guardrail("pii-mask")
+    prompt_shield: Final = pre_call_guardrail("prompt-shield")
+    await _guarded_proxy_request(
+        monkeypatch,
+        (pii_mask, prompt_shield),
+        guarded_router(("pii-mask",), fallback_guardrails=("prompt-shield",)),
+        route_type,
+    )
+
+    assert {"pii-mask": len(pii_mask.checked), "prompt-shield": len(prompt_shield.checked)} == {
+        "pii-mask": 1,
+        "prompt-shield": 1,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("route_type", ["acompletion", "aresponses"], ids=["P5-chat", "P5-responses"])
+async def test_a_request_pre_call_guardrail_checks_a_proxy_request_once(
+    monkeypatch: pytest.MonkeyPatch, route_type: GuardrailRouteType
+) -> None:
+    guardrail: Final = pre_call_guardrail("G")
+    await _guarded_proxy_request(monkeypatch, (guardrail,), guarded_router(()), route_type, request_guardrails=("G",))
+
+    assert len(guardrail.checked) == 1

@@ -4,11 +4,15 @@ import datetime as dt
 import json
 import pickle
 import threading
+from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
 import pytest
+import respx
+from typing_extensions import TypeIs
 
+import litellm
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
@@ -19,6 +23,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.router import Router
 from litellm.types.guardrails import GuardrailEventHooks, LoggingOnlyScope, Mode
 from litellm.types.utils import (
     Choices,
@@ -26,6 +31,14 @@ from litellm.types.utils import (
     GuardrailTracingDetail,
     Message,
     ModelResponse,
+)
+from tests.unit.integrations.guardrail_run_counting import (
+    REPLY_TEXT,
+    drain,
+    guarded_router,
+    mock_provider,
+    post_call_guardrail,
+    pre_call_guardrail,
 )
 
 if TYPE_CHECKING:
@@ -3813,3 +3826,147 @@ def test_merged_guardrail_entries_names_each_guardrail_once_preferring_its_first
         {"pii": {"extra_body": {"threshold": 1}}},
         "model-guard",
     ]
+
+
+SdkCaller = Literal["sdk_call", "sdk_router"]
+SdkRoute = Literal["acompletion", "aresponses"]
+
+
+def _is_stream(response: object) -> TypeIs[AsyncIterable[object]]:
+    return isinstance(response, AsyncIterable)
+
+
+async def _sdk_response(
+    llm_router: Router, guardrail_names: list[str], caller: SdkCaller, route_type: SdkRoute, stream: bool
+) -> object:
+    match (caller, route_type):
+        case ("sdk_router", "acompletion"):
+            return await llm_router.acompletion(
+                model="gpt", messages=[{"role": "user", "content": "hello"}], stream=stream
+            )
+        case ("sdk_router", "aresponses"):
+            return await llm_router.aresponses(model="gpt", input="hello", stream=stream)
+        case ("sdk_call", "acompletion"):
+            return await litellm.acompletion(
+                model="openai/gpt-4o",
+                api_key="sk-test",
+                guardrails=guardrail_names,
+                messages=[{"role": "user", "content": "hello"}],
+                stream=stream,
+            )
+        case ("sdk_call", "aresponses"):
+            return await litellm.aresponses(
+                model="openai/gpt-4o", api_key="sk-test", guardrails=guardrail_names, input="hello", stream=stream
+            )
+
+
+async def _guarded_sdk_request(
+    monkeypatch: pytest.MonkeyPatch,
+    guardrails: tuple[CustomGuardrail, ...],
+    caller: SdkCaller,
+    route_type: SdkRoute,
+    stream: bool = False,
+    llm_router: Router | None = None,
+) -> str:
+    monkeypatch.setattr(litellm, "callbacks", list(guardrails))
+    names: Final = [g.guardrail_name or "" for g in guardrails]
+    target: Final = llm_router or guarded_router(tuple(names))
+    with respx.mock(assert_all_called=False) as provider:
+        mock_provider(provider)
+        response: Final = await _sdk_response(target, names, caller, route_type, stream)
+        text: Final = await drain(response) if _is_stream(response) else str(response)
+        await asyncio.sleep(0)
+    return text
+
+
+_D_SDK_STREAM: Final = pytest.mark.xfail(strict=True, reason="D: nothing checks a stream outside the proxy")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("caller", "route_type", "stream"),
+    [
+        pytest.param("sdk_call", "acompletion", False, id="C-call-chat"),
+        pytest.param("sdk_call", "aresponses", False, id="C-call-responses"),
+        pytest.param("sdk_router", "acompletion", False, id="C-router-chat"),
+        pytest.param("sdk_router", "aresponses", False, id="C-router-responses"),
+        pytest.param("sdk_call", "acompletion", True, id="D-call-chat-stream", marks=_D_SDK_STREAM),
+        pytest.param("sdk_call", "aresponses", True, id="D-call-responses-stream", marks=_D_SDK_STREAM),
+        pytest.param("sdk_router", "acompletion", True, id="D-router-chat-stream", marks=_D_SDK_STREAM),
+        pytest.param("sdk_router", "aresponses", True, id="D-router-responses-stream", marks=_D_SDK_STREAM),
+    ],
+)
+async def test_a_post_call_guardrail_checks_an_sdk_response_once(
+    monkeypatch: pytest.MonkeyPatch, caller: SdkCaller, route_type: SdkRoute, stream: bool
+) -> None:
+    guardrail: Final = post_call_guardrail()
+    reply: Final = await _guarded_sdk_request(monkeypatch, (guardrail,), caller, route_type, stream)
+
+    assert REPLY_TEXT in reply
+    assert len(guardrail.checked) == 1
+
+
+_NON_CHAT_DEPLOYMENT_PRE_CALL: Final = "the deployment pre_call hook only runs for completion and acompletion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("caller", "route_type"),
+    [
+        pytest.param("sdk_call", "acompletion", id="P7-call-chat"),
+        pytest.param(
+            "sdk_call",
+            "aresponses",
+            id="P8-call-responses",
+            marks=pytest.mark.xfail(strict=True, reason=f"P8: {_NON_CHAT_DEPLOYMENT_PRE_CALL}"),
+        ),
+        pytest.param("sdk_router", "acompletion", id="P9-router-chat"),
+        pytest.param(
+            "sdk_router",
+            "aresponses",
+            id="P10-router-responses",
+            marks=pytest.mark.xfail(strict=True, reason=f"P10: {_NON_CHAT_DEPLOYMENT_PRE_CALL}"),
+        ),
+    ],
+)
+async def test_a_pre_call_guardrail_checks_an_sdk_request_once(
+    monkeypatch: pytest.MonkeyPatch, caller: SdkCaller, route_type: SdkRoute
+) -> None:
+    guardrail: Final = pre_call_guardrail("pii-mask")
+    await _guarded_sdk_request(monkeypatch, (guardrail,), caller, route_type)
+
+    assert len(guardrail.checked) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    "route_type",
+    [
+        pytest.param("acompletion", id="P11-chat"),
+        pytest.param(
+            "aresponses",
+            id="P12-responses",
+            marks=pytest.mark.xfail(strict=True, reason=f"P12: {_NON_CHAT_DEPLOYMENT_PRE_CALL}"),
+        ),
+    ],
+)
+async def test_each_deployments_pre_call_guardrail_checks_an_sdk_router_fallback_request_once(
+    monkeypatch: pytest.MonkeyPatch, route_type: SdkRoute
+) -> None:
+    pii_mask: Final = pre_call_guardrail("pii-mask")
+    prompt_shield: Final = pre_call_guardrail("prompt-shield")
+    await _guarded_sdk_request(
+        monkeypatch,
+        (pii_mask, prompt_shield),
+        "sdk_router",
+        route_type,
+        llm_router=guarded_router(("pii-mask",), fallback_guardrails=("prompt-shield",)),
+    )
+
+    assert {"pii-mask": len(pii_mask.checked), "prompt-shield": len(prompt_shield.checked)} == {
+        "pii-mask": 1,
+        "prompt-shield": 1,
+    }
