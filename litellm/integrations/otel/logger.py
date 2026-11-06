@@ -995,8 +995,18 @@ class OpenTelemetryV2(CustomLogger):
             publish_logging_payload=False,
         )
         if payload is not None:
+            from litellm.litellm_core_utils.redact_messages import (
+                redacted_model_call_details_for_custom_logger,
+            )
+
+            redacted_details: Final = redacted_model_call_details_for_custom_logger(
+                model_call_details=self.redact_standard_logging_payload_from_model_call_details(
+                    model_call_details={**details, "standard_logging_object": payload},
+                ),
+                custom_logger=self,
+            )
             self._close_llm_call_with_suppression(
-                {**details, "standard_logging_object": payload},
+                redacted_details,
                 start_time,
                 end_time,
             )
