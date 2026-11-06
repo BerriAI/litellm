@@ -1622,6 +1622,18 @@ async def test_responses_thread_stays_on_the_deployment_holding_its_prefix(model
 
 
 @pytest.mark.asyncio
+async def test_responses_request_pins_after_prompt_caching_is_turned_off_and_on_again():
+    router = _responses_router(RESPONSES_NATIVE_MODEL)
+    await _serve_response(router, _marked_responses_input())
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    router.update_settings(optional_pre_call_checks=[])
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router.prompt_caching_pin_cache.in_memory_cache.flush_cache()
+
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input())) == 1
+
+
+@pytest.mark.asyncio
 async def test_responses_mark_on_the_input_item_pins_to_one_deployment():
     request_input = [
         {"role": "system", "content": LONG_PROMPT, "cache_control": {"type": "ephemeral"}},
@@ -1725,6 +1737,37 @@ async def test_responses_pin_sent_in_the_request_metadata_is_never_written(forge
     )
 
     assert not cache.in_memory_cache.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_interleaved_responses_requests_each_pin_their_own_prompt():
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    terse = {"input": _marked_responses_input(), "instructions": "Be terse."}
+    verbose = {"input": _marked_responses_input(), "instructions": "Be verbose."}
+    terse_metadata: dict[str, object] = {}
+    verbose_metadata: dict[str, object] = {}
+    await _read_responses_pin(check, {**terse, "litellm_metadata": terse_metadata})
+    await _read_responses_pin(check, {**verbose, "litellm_metadata": verbose_metadata})
+
+    await _log_responses_success(check, _marked_responses_input(), terse_metadata, model_id="dep-1")
+    await _log_responses_success(check, _marked_responses_input(), verbose_metadata, model_id="dep-2")
+
+    assert await _read_responses_pin(check, {**terse, "litellm_metadata": {}}) == ("dep-1",)
+    assert await _read_responses_pin(check, {**verbose, "litellm_metadata": {}}) == ("dep-2",)
+
+
+@pytest.mark.asyncio
+async def test_retried_responses_request_leaves_no_pin_in_flight_once_it_succeeds():
+    pins_in_flight = InMemoryCache()
+    check = PromptCachingDeploymentCheck(cache=DualCache(), responses_pins_in_flight=pins_in_flight)
+    metadata: dict[str, object] = {}
+    request = {"input": _marked_responses_input(), "litellm_metadata": metadata}
+    await _read_responses_pin(check, request)
+    await _read_responses_pin(check, request)
+
+    await _log_responses_success(check, _marked_responses_input(), metadata)
+
+    assert not pins_in_flight.cache_dict
 
 
 @pytest.mark.asyncio
@@ -2054,7 +2097,7 @@ class _MetadataSerializingLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_logger_serializing_the_request_metadata_reads_a_pinned_responses_request(monkeypatch):
+async def test_logger_serializing_the_request_metadata_never_sees_the_prompt_cache_key(monkeypatch):
     serializing_logger = _MetadataSerializingLogger()
     monkeypatch.setattr(litellm, "callbacks", [serializing_logger])
     router = _responses_router(RESPONSES_NATIVE_MODEL)
@@ -2062,6 +2105,10 @@ async def test_logger_serializing_the_request_metadata_reads_a_pinned_responses_
     assert len(await _deployments_serving_repeats(router, _marked_responses_input())) == 1
 
     assert await _eventually(lambda: len(serializing_logger.serialized_metadata) == 9)
+    logged_metadata = "".join(serializing_logger.serialized_metadata)
+    pin_keys = tuple(router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
+    assert pin_keys
+    assert not [pin_key for pin_key in pin_keys if pin_key.split(":")[1] in logged_metadata]
 
 
 @pytest.mark.asyncio

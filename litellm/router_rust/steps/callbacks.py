@@ -44,7 +44,10 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
 )
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
-from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
+from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
+    PromptCachingDeploymentCheck,
+    new_responses_pins_in_flight,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -130,6 +133,7 @@ class OptionalChecks:
             redis_cache=cache.redis_cache,
             in_memory_cache=InMemoryCache(max_size_in_memory=PROMPT_CACHE_PIN_CACHE_MAX_SIZE),
         )
+        self.prompt_caching_pins_in_flight: Final = new_responses_pins_in_flight()
         self._request_scoped_selectors: tuple[CustomLogger, ...] = ()
         self._request_scoped_policies: tuple[CustomLogger, ...] = ()
         # ``_slack_alerting_loggers``: the Slack alerting logger ``alerting_config`` builds, if any.
@@ -291,7 +295,9 @@ class OptionalChecks:
             callback: CustomLogger | None = None
             if name == "prompt_caching":
                 callback = PromptCachingDeploymentCheck(
-                    cache=self.prompt_caching_pin_cache, is_priority_group=self._is_priority_group
+                    cache=self.prompt_caching_pin_cache,
+                    is_priority_group=self._is_priority_group,
+                    responses_pins_in_flight=self.prompt_caching_pins_in_flight,
                 )
             elif name == "router_budget_limiting":
                 if self.budget_limiter() is not None:

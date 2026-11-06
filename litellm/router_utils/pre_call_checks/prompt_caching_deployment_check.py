@@ -4,14 +4,16 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
+import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, NamedTuple, TypedDict, cast
+from typing import Final, NamedTuple, Protocol, TypedDict, cast
 
 from typing_extensions import ReadOnly
 
 from litellm import verbose_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.integrations.anthropic_cache_control_hook import (
     AllToolParamValues,
@@ -51,6 +53,14 @@ class _ResponsesPin(NamedTuple):
     cacheable_deployment_ids: tuple[str, ...]
 
 
+class ResponsesPinsInFlight(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: object) -> None: ...
+
+    def delete_cache(self, key: str) -> None: ...
+
+
 class _ResponsesPrompt(NamedTuple):
     messages: list[AllMessageValues]  # mutable-ok: the prefix helpers take chat messages as a list
     tools: list[AllToolParamValues] | None  # mutable-ok: the prefix helpers take chat tools as a list
@@ -58,8 +68,16 @@ class _ResponsesPrompt(NamedTuple):
 
 
 _RESPONSES_PIN_METADATA_KEY: Final = "responses_prompt_cache_pin"
+_RESPONSES_PINS_IN_FLIGHT_LIMIT: Final = 10_000
+_RESPONSES_PIN_LIFETIME_SECONDS: Final = 3600
 _RESPONSES_CALL_TYPES: Final = frozenset((CallTypes.responses.value, CallTypes.aresponses.value))
 _RESPONSES_TOOL_TYPES_KEPT_AS_SENT: Final = RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM | RESPONSES_WEB_SEARCH_TOOL_TYPES
+
+
+def new_responses_pins_in_flight() -> ResponsesPinsInFlight:
+    return InMemoryCache(
+        max_size_in_memory=_RESPONSES_PINS_IN_FLIGHT_LIMIT, default_ttl=_RESPONSES_PIN_LIFETIME_SECONDS
+    )
 
 
 def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | None:
@@ -91,7 +109,7 @@ def _responses_prompt(request_data: Mapping[str, object]) -> _ResponsesPrompt | 
             convertible_tools
         )
     except Exception as error:  # noqa: BLE001  # the provider judges the input, a routing preference never does
-        verbose_logger.debug("Prompt Caching: skipping an input with no chat form: %s", error)
+        verbose_logger.debug("Prompt Caching: skipping an input with no chat form: %s", type(error).__name__)
         return None
     key_tools: Final = [*tools, *tools_kept_as_sent]
     return _ResponsesPrompt(
@@ -173,10 +191,18 @@ def _honors_one_hour_cache_ttl(
 
 
 class PromptCachingDeploymentCheck(CustomLogger):
-    def __init__(self, cache: DualCache, is_priority_group: Callable[[str], bool] | None = None):
+    def __init__(
+        self,
+        cache: DualCache,
+        is_priority_group: Callable[[str], bool] | None = None,
+        responses_pins_in_flight: ResponsesPinsInFlight | None = None,
+    ):
         super().__init__()
         self.cache = cache
         self.is_priority_group = is_priority_group
+        self.responses_pins_in_flight: Final = (
+            responses_pins_in_flight if responses_pins_in_flight is not None else new_responses_pins_in_flight()
+        )
 
     async def async_filter_deployments(
         self,
@@ -203,6 +229,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         pin_metadata: Final = (
             request_data.get("litellm_metadata") if messages is None and request_data is not None else None
         )
+        previous_attempt_token: Final = (as_str_mapping(pin_metadata) or {}).get(_RESPONSES_PIN_METADATA_KEY)
         previous_response_model_id: Final = (
             _previous_response_model_id(request_data)
             if request_data is not None and isinstance(pin_metadata, dict)
@@ -284,19 +311,26 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             positions: Final = await PromptCachingCache.async_prefix_positions(affinity_messages, prefix_tools)
             if responses_prompt is not None and isinstance(pin_metadata, dict) and positions:
-                pin_metadata[_RESPONSES_PIN_METADATA_KEY] = _ResponsesPin(
-                    cache_key=positions[-1].cache_key,
-                    marked_ttl_seconds=await offload_token_count(PromptCachingCache.pin_ttl_seconds)(
-                        affinity_messages, prefix_tools
-                    ),
-                    cacheable_deployment_ids=await _cacheable_deployment_ids(
-                        cast(  # cast-ok: router deployments are plain dicts keyed by section name
-                            Sequence[Mapping[str, Mapping[str, object]]], healthy_deployments
+                if isinstance(previous_attempt_token, str):
+                    self.responses_pins_in_flight.delete_cache(previous_attempt_token)
+                pin_token: Final = secrets.token_hex(16)
+                self.responses_pins_in_flight.set_cache(
+                    pin_token,
+                    _ResponsesPin(
+                        cache_key=positions[-1].cache_key,
+                        marked_ttl_seconds=await offload_token_count(PromptCachingCache.pin_ttl_seconds)(
+                            affinity_messages, prefix_tools
                         ),
-                        group_minimum,
-                        reaches,
+                        cacheable_deployment_ids=await _cacheable_deployment_ids(
+                            cast(  # cast-ok: router deployments are plain dicts keyed by section name
+                                Sequence[Mapping[str, Mapping[str, object]]], healthy_deployments
+                            ),
+                            group_minimum,
+                            reaches,
+                        ),
                     ),
                 )
+                pin_metadata[_RESPONSES_PIN_METADATA_KEY] = pin_token
 
             model_id_dict: Final = await prompt_cache.async_get_model_id_at(positions)
             if model_id_dict is not None and model_id_dict["model_id"] not in deployment_ids_failed_in_request(
@@ -399,7 +433,11 @@ class PromptCachingDeploymentCheck(CustomLogger):
     ) -> None:
         litellm_params: Final = kwargs.get("litellm_params") or {}
         metadata: Final = as_str_mapping(litellm_params.get("litellm_metadata")) or {}
-        recorded_pin: Final = metadata.get(_RESPONSES_PIN_METADATA_KEY)
+        pin_token: Final = metadata.get(_RESPONSES_PIN_METADATA_KEY)
+        if not isinstance(pin_token, str):
+            return
+        recorded_pin: Final = self.responses_pins_in_flight.get_cache(pin_token)
+        self.responses_pins_in_flight.delete_cache(pin_token)
         model_id: Final = standard_logging_object["model_id"]
         if not isinstance(recorded_pin, _ResponsesPin) or model_id not in recorded_pin.cacheable_deployment_ids:
             return
