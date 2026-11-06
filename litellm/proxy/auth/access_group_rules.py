@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from functools import lru_cache
+from functools import lru_cache, reduce
 from importlib import import_module
 from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import AUTH_OBJECTS_TARGET
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -74,15 +76,14 @@ def _subject(operator: Literal["contains", "equals"], claim: str, value: object)
     return json.dumps((operator, claim, value), ensure_ascii=True, separators=(",", ":"))
 
 
-def _claim_value(attributes: Mapping[str, object], path: Sequence[str]) -> object:
-    if not path:
-        return attributes
-    value: Final = attributes.get(path[0], _MISSING)
-    if len(path) == 1:
-        return value
+def _attribute_segment(value: object, segment: str) -> object:
     if not isinstance(value, Mapping):
         return _MISSING
-    return _claim_value(_ATTRIBUTES.validate_python(value), path[1:])
+    return _ATTRIBUTES.validate_python(value).get(segment, _MISSING)
+
+
+def _claim_value(attributes: Mapping[str, object], path: Sequence[str]) -> object:
+    return reduce(_attribute_segment, path, attributes)
 
 
 def _subjects(rule: AccessGroupRule, identity: UserAPIKeyAuth) -> tuple[str, ...]:
@@ -133,6 +134,7 @@ def _validate_rules(value: object) -> tuple[AccessGroupRule, ...]:
     return rules
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _resolve_name(name: str, prisma_client: DatabaseClient | None, cache: UserApiKeyCache) -> str | None:
     from litellm.constants import DEFAULT_ACCESS_GROUP_CACHE_TTL
     from litellm.proxy._types import LiteLLM_AccessGroupTable
