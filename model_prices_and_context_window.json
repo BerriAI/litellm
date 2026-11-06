@@ -31653,7 +31653,7 @@
         "input_cost_per_audio_token_batches": 2.5e-07
     },
     "gemini/gemini-embedding-2-preview": {
-        "deprecation_date": "2026-08-10",
+        "deprecation_date": "2026-11-06",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "input_cost_per_audio_token": 6.5e-06,
         "input_cost_per_audio_token_batches": 3.25e-06,
