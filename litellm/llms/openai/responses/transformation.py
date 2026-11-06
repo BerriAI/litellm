@@ -78,7 +78,7 @@ _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = frozenset(
-    {LlmProviders.AZURE, LlmProviders.BEDROCK, LlmProviders.OPENAI}
+    {LlmProviders.AZURE, LlmProviders.BEDROCK, LlmProviders.BEDROCK_MANTLE, LlmProviders.OPENAI}
 )
 _ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
 _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
