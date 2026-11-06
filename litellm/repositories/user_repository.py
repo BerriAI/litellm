@@ -168,7 +168,9 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """
         return await _count_billable_users(self.table)
 
-    async def upsert_user(self, data: Mapping[str, object]) -> "prisma_models.LiteLLM_UserTable | None":
+    async def upsert_user(
+        self, data: Mapping[str, object], *, allow_existing: bool = True
+    ) -> "prisma_models.LiteLLM_UserTable | None":
         """Return the user row, or None when a new free SSO user would exceed capacity."""
         scope: Final = _FREE_SSO_CREATION.get()
         if (
@@ -176,6 +178,8 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
             or (scope[0] is not None and scope[0] != data["user_id"])
             or scope[1] is not asyncio.current_task()
         ):
+            if not allow_existing:
+                return await self.table.create(data=dict(data))
             return await self.table.upsert(
                 where={"user_id": data["user_id"]}, data={"create": dict(data), "update": {}}
             )

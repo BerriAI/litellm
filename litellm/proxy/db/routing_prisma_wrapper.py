@@ -4,6 +4,7 @@ to a writer client. Used when DATABASE_URL_READ_REPLICA is configured;
 otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
+import asyncio
 import os
 from collections.abc import Callable
 from datetime import timedelta
@@ -233,8 +234,13 @@ class RoutingPrismaWrapper:
         await self._reader.start_token_refresh_task()
 
     async def stop_token_refresh_task(self) -> None:
-        await self._writer.stop_token_refresh_task()
-        await self._reader.stop_token_refresh_task()
+        results: Final = await asyncio.gather(
+            self._writer.stop_token_refresh_task(),
+            self._reader.stop_token_refresh_task(),
+            return_exceptions=True,
+        )
+        if (error := next((result for result in results if isinstance(result, BaseException)), None)) is not None:
+            raise error
 
     async def recreate_prisma_client(
         self,

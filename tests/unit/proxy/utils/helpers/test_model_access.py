@@ -1,10 +1,17 @@
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, Router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import (
     create_model_info_response,
@@ -650,3 +657,61 @@ async def test_listing_is_unchanged_without_an_agent_or_without_attached_groups(
         resolve_agent_ceiling=_agent_ceiling(None),
     )
     assert (plain_key, agent_without_groups) == (["model-a", "model-b"], ["model-a", "model-b"])
+
+
+OPENROUTER_BASE: Final = "https://openrouter.ai/api/v1"
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogHeldUntilTheLoopRuns:
+    requested: threading.Event = field(default_factory=threading.Event)
+    released: threading.Event = field(default_factory=threading.Event)
+
+    def answer(self, _request: httpx.Request) -> httpx.Response:
+        self.requested.set()
+        if not self.released.wait(timeout=30):
+            return httpx.Response(504)
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+
+    async def release_from_the_loop(self) -> None:
+        assert await asyncio.to_thread(self.requested.wait, 30)
+        self.released.set()
+
+
+def test_get_available_models_for_user_fetches_a_live_catalog_without_holding_the_event_loop_or_its_default_pool(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    catalog: Final = _CatalogHeldUntilTheLoopRuns()
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {
+                    "model": "openrouter/*",
+                    "api_key": "sk-or-available-models-off-loop",
+                    "api_base": OPENROUTER_BASE,
+                },
+            }
+        ]
+    )
+
+    async def list_models_on_a_one_thread_default_pool() -> list[str]:
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=1))
+        listing: Final = asyncio.ensure_future(
+            get_available_models_for_user(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-key", user_id="user-1"),
+                llm_router=router,
+                general_settings={},
+                user_model=None,
+            )
+        )
+        await catalog.release_from_the_loop()
+        return await listing
+
+    with respx.mock() as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+        models: Final = asyncio.run(list_models_on_a_one_thread_default_pool())
+
+    assert catalog_route.calls.last.response.status_code == 200
+    assert models == ["openrouter/openai/gpt-5.4-mini"]
