@@ -39,6 +39,7 @@ _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=Config
 _HIDDEN_PARAMS: Final = TypeAdapter(dict[str, object])
 _CHANNELS: Final = TypeAdapter(int)
 _DIARIZATION_KEYS: Final = frozenset(("diarize", "use_multi_channel", "multichannel_output_style"))
+_MAX_MULTICHANNEL_CHANNELS: Final = 5
 _ELEVENLABS_PARAM_NAMES: Final = MappingProxyType({"language": "language_code"})
 
 
@@ -207,26 +208,43 @@ def _channel_count(audio_content: bytes) -> int:
         return 1
 
 
+def _has_timestamps(provider_params: Mapping[str, object]) -> bool:
+    return str(provider_params.get("timestamps_granularity", "word")).strip().lower() != "none"
+
+
+def _can_auto_switch_to_multichannel(provider_params: Mapping[str, object], audio_content: bytes) -> bool:
+    return (
+        provider_params.get("num_speakers") is None
+        and _has_timestamps(provider_params)
+        and 1 < _channel_count(audio_content) <= _MAX_MULTICHANNEL_CHANNELS
+    )
+
+
 def _resolve_diarization_params(provider_params: Mapping[str, object], audio_content: bytes) -> Mapping[str, object]:
     """
     ElevenLabs rejects diarize and use_multi_channel together. Diarization
-    requested on multi-channel audio uses the channel as the speaker; on mono it
-    falls back to acoustic diarization. An explicit use_multi_channel from the
-    caller wins over auto-detection, and an unreadable header falls back to mono.
+    requested on multi-channel audio uses the channel as the speaker, unless
+    multichannel mode would reject the request (num_speakers set, timestamps off,
+    or too many channels), in which case it stays acoustic diarization, as it does
+    on mono. An explicit use_multi_channel from the caller wins over
+    auto-detection, and an unreadable header falls back to mono.
     """
     diarize_requested: Final = _truthy(provider_params.get("diarize"))
     multichannel: Final = (
         _truthy(provider_params["use_multi_channel"])
         if "use_multi_channel" in provider_params
-        else diarize_requested and _channel_count(audio_content) > 1
+        else diarize_requested and _can_auto_switch_to_multichannel(provider_params, audio_content)
     )
     others: Final = {key: value for key, value in provider_params.items() if key not in _DIARIZATION_KEYS}
 
     if multichannel:
+        output_style: Final = provider_params.get(
+            "multichannel_output_style", "combined" if _has_timestamps(provider_params) else None
+        )
         return {
             **others,
             "use_multi_channel": True,
-            "multichannel_output_style": provider_params.get("multichannel_output_style", "combined"),
+            **({} if output_style is None else {"multichannel_output_style": output_style}),
         }
     if diarize_requested:
         return {**others, "diarize": True}

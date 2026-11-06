@@ -214,6 +214,31 @@ def test_language_maps_to_language_code():
             id="explicit-no-multichannel-keeps-diarize-on-stereo",
         ),
         pytest.param(2, {}, {}, id="no-diarization-requested"),
+        pytest.param(
+            2,
+            {"diarize": True, "num_speakers": 2},
+            {"diarize": "True", "num_speakers": "2"},
+            id="num-speakers-keeps-acoustic-diarize-on-stereo",
+        ),
+        pytest.param(
+            2,
+            {"diarize": True, "timestamps_granularity": "none"},
+            {"diarize": "True", "timestamps_granularity": "none"},
+            id="no-timestamps-keeps-acoustic-diarize-on-stereo",
+        ),
+        pytest.param(
+            5,
+            {"diarize": True},
+            {"use_multi_channel": "True", "multichannel_output_style": "combined"},
+            id="five-channels-switch-to-multichannel",
+        ),
+        pytest.param(6, {"diarize": True}, {"diarize": "True"}, id="six-channels-keep-acoustic-diarize"),
+        pytest.param(
+            1,
+            {"use_multi_channel": True, "timestamps_granularity": "none"},
+            {"use_multi_channel": "True", "timestamps_granularity": "none"},
+            id="explicit-multichannel-without-timestamps-gets-no-combined-default",
+        ),
     ],
 )
 def test_diarization_mechanism_follows_audio_channel_count(
