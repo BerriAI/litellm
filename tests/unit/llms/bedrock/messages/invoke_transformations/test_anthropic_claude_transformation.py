@@ -4158,6 +4158,57 @@ async def test_bedrock_invoke_messages_forward_per_turn_control_beta_only_where_
     assert ("per-turn-control-2026-07-01" in sent_betas) is forwarded
 
 
+@pytest.mark.parametrize(
+    ("model", "flag", "expected"),
+    [
+        ("us.anthropic.claude-opus-5-5", False, (False, True)),
+        ("anthropic.claude-3-haiku-20240307-v1:0", True, (True, False)),
+    ],
+    ids=["opt_out", "opt_in"],
+)
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+async def test_bedrock_invoke_messages_per_turn_control_flag_stays_on_its_own_deployment(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    flag: bool,
+    expected: tuple[bool, bool],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE), (200, _ANTHROPIC_MESSAGE)))
+    respx_mock.post(url__regex=r"https://bedrock-runtime\..*").mock(side_effect=bedrock)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"bedrock/invoke/{model}",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": model_info,
+            }
+            for model_name, model_info in (("flagged", {"supports_per_turn_control": flag}), ("default", {}))
+        ],
+        num_retries=0,
+    )
+
+    for model_name in ("flagged", "default"):
+        await router.aanthropic_messages(
+            model=model_name,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            extra_headers={"anthropic-beta": "per-turn-control-2026-07-01"},
+        )
+
+    forwarded: Final = tuple(
+        "per-turn-control-2026-07-01" in TypeAdapter(tuple[str, ...]).validate_python(sent.get("anthropic_beta", ()))
+        for sent in bedrock.bodies
+    )
+    assert forwarded == expected
+
+
 _OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(
     ("model", "model_info"),
     [

@@ -1708,9 +1708,12 @@ def bedrock_supports_tool_search(model: str) -> bool:
     return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
-def bedrock_supports_per_turn_control(model: str) -> bool:
+def bedrock_supports_per_turn_control(model: str, model_info: Mapping[str, object] | None) -> bool:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
+    deployment_flag: Final = (model_info or {}).get("supports_per_turn_control")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
     return AnthropicModelInfo.supports_model_capability(model, "supports_per_turn_control", "bedrock")
 
 

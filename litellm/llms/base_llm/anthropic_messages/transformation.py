@@ -139,7 +139,7 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return True
 
-    def model_specific_anthropic_betas(self, model: str) -> frozenset[str]:
+    def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         return frozenset()
 
     def supports_safeguards(self) -> bool:

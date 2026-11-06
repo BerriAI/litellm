@@ -4303,6 +4303,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
         "supports_regex_lookaround",
         "supports_assistant_prefill",
         "supports_bedrock_native_structured_output",
+        "supports_per_turn_control",
         "supports_pdf_input",
         "supports_continuation",
         "reasoning_modes",
