@@ -45,6 +45,7 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_calls,
     with_server_tool_call_arguments,
     write_anthropic_server_tool_calls,
+    write_request_server_tool_calls,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -571,6 +572,15 @@ class LassoGuardrail(CustomGuardrail):
             elif role == "assistant" and not content and orig_msg.get("tool_calls"):
                 msg["tool_calls"] = self._update_tool_calls_from_masked(orig_msg["tool_calls"], masked_tool_use)
 
+            if role == "assistant":
+                write_request_server_tool_calls(
+                    msg,
+                    tuple(
+                        self._masked_server_tool_call(server_tool_call, masked_tool_use)
+                        for server_tool_call in anthropic_server_tool_call_params(orig_msg)
+                    ),
+                )
+
             result.append(msg)
 
         return result
@@ -711,7 +721,7 @@ class LassoGuardrail(CustomGuardrail):
                 expanded.append({"role": role, "content": content})
 
             if role == "assistant":
-                for call in iter_items(msg.get("tool_calls") or []):
+                for call in (*anthropic_server_tool_call_params(msg), *iter_items(msg.get("tool_calls") or [])):
                     call_id, name, input_data = self._extract_tool_call_fields(call)
                     if not call_id or not name:
                         verbose_proxy_logger.warning(

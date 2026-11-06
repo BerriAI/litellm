@@ -1691,3 +1691,113 @@ async def test_post_call_masking_rewrites_server_tool_call_arguments(
             }
         ]
     }
+
+
+def _replayed_web_fetch_request(url: str) -> dict[str, object]:
+    return {
+        "messages": [
+            {"role": "user", "content": "open the order page"},
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {
+                    "server_tool_calls": [
+                        {
+                            "id": "srvtoolu_01",
+                            "type": "function",
+                            "function": {"name": "web_fetch", "arguments": json.dumps({"url": url})},
+                        }
+                    ]
+                },
+            },
+            {"role": "user", "content": "summarize it"},
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scan_sends_replayed_server_tool_calls_as_tool_use_entries(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    lasso_guardrail: Final = LassoGuardrail(
+        lasso_api_key="test-key",
+        user_id="test-user",
+        conversation_id="test-conversation",
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    route: Final = respx_mock.post("https://server.lasso.security/gateway/v3/classify").mock(
+        return_value=httpx.Response(200, json={"violations_detected": False, "deputies": {}, "findings": {}})
+    )
+
+    await lasso_guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data=_replayed_web_fetch_request("https://example.com/?email=jane@example.com"),
+        call_type="completion",
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": "open the order page"},
+        {
+            "role": "model",
+            "content": {
+                "type": "tool_use",
+                "id": "srvtoolu_01",
+                "name": "web_fetch",
+                "input": {"url": "https://example.com/?email=jane@example.com"},
+            },
+        },
+        {"role": "user", "content": "summarize it"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_masking_rewrites_replayed_server_tool_call_arguments(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    lasso_guardrail: Final = LassoGuardrail(
+        lasso_api_key="test-key",
+        user_id="test-user",
+        conversation_id="test-conversation",
+        mask=True,
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    respx_mock.post("https://server.lasso.security/gateway/v3/classifix").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "violations_detected": True,
+                "deputies": {"pattern-detection": True},
+                "findings": {"pattern-detection": [{"action": "AUTO_MASKING", "severity": "HIGH"}]},
+                "messages": [
+                    {"role": "user", "content": "open the order page"},
+                    {
+                        "role": "model",
+                        "content": {
+                            "type": "tool_use",
+                            "id": "srvtoolu_01",
+                            "name": "web_fetch",
+                            "input": {"url": "https://example.com/?email=<EMAIL_ADDRESS>"},
+                        },
+                    },
+                    {"role": "user", "content": "summarize it"},
+                ],
+            },
+        )
+    )
+
+    result: Final = await lasso_guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data=_replayed_web_fetch_request("https://example.com/?email=jane@example.com"),
+        call_type="completion",
+    )
+
+    assert isinstance(result, dict)
+    assert result["messages"] == _replayed_web_fetch_request("https://example.com/?email=<EMAIL_ADDRESS>")["messages"]
