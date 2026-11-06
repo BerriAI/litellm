@@ -76,7 +76,7 @@ class MockTable:
         return {"count": 1}
 
 
-def _raw_reset_write(query, args):
+def _raw_reset_write(query: str, args: Sequence[object]) -> dict[str, object] | None:
     if "CASE WHEN ABS(spend -" not in query:
         return None
     table, column = {
@@ -85,6 +85,8 @@ def _raw_reset_write(query, args):
         "LiteLLM_TeamTable": ("team", "team_id"),
     }[query.split('"')[1]]
     identity, reset_at, decrement, expected_reset_at, _ = args
+    assert isinstance(identity, str) and isinstance(reset_at, str) and isinstance(decrement, str)
+    assert expected_reset_at is None or isinstance(expected_reset_at, str)
     return {
         "table": table,
         "op": "update_many",
@@ -3865,9 +3867,12 @@ def _wire_batcher_for_test(prisma_client, fail_commit=False):
         batcher.litellm_organizationtable = _Table("org")
         batcher.litellm_tagtable = _Table("tag")
         batcher.litellm_endusertable = _Table("enduser")
-        batcher.execute_raw = lambda query, *args: (
-            queued.append(_raw_reset_write(query, args)) if _raw_reset_write(query, args) is not None else None
-        )
+        def execute_raw(query: str, *args: object) -> None:
+            write: Final = _raw_reset_write(query, args)
+            if write is not None:
+                queued.append(write)
+
+        batcher.execute_raw = execute_raw
         batcher.commit = commit
         return batcher
 

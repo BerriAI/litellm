@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -25,6 +27,21 @@ PEER_POD_LEASE: Final = json.dumps("integration-peer-pod-holding-the-reset-lease
 FAST_RESET_TICK: Final = MappingProxyType(
     {"PROXY_BUDGET_RESCHEDULER_MIN_TIME": "2", "PROXY_BUDGET_RESCHEDULER_MAX_TIME": "2"}
 )
+
+
+@contextmanager
+def _peer_reset_lease() -> Generator["Redis[bytes]", None, None]:
+    cache: Final["Redis[bytes]"] = Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
+    with cache:
+        eventually(
+            lambda: cache.set(RESET_LEASE_KEY, PEER_POD_LEASE, ex=300, nx=True),
+            lambda claimed: claimed is True,
+            seconds=60,
+        )
+        try:
+            yield cache
+        finally:
+            cache.delete(RESET_LEASE_KEY)
 
 
 def _team_spend(team: str) -> float:
@@ -146,7 +163,7 @@ def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
         f"  budget_rollover: {str(rollover).lower()}\n"
         f"  timezone: {reset_timezone}\n"
     )
-    with gateway.scenario() as scenario:
+    with gateway.scenario() as scenario, _peer_reset_lease() as peer:
         identity: Final = (
             sha256(scenario.key(max_budget=max_budget, budget_duration="1d").encode()).hexdigest()
             if entity == "key"
@@ -211,6 +228,7 @@ def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
                     assert response.status_code == 200, response.text
                     assert response.json()[info]["spend"] == pytest.approx(expected_spend, rel=1e-14, abs=0.0)
                     assert result == [(expected_spend, True)], result
+                    assert peer.get(RESET_LEASE_KEY) == PEER_POD_LEASE.encode()
                 finally:
                     gate.rollback()
 
