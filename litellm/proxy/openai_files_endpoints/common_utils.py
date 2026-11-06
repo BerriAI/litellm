@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -103,6 +104,13 @@ class ManagedResourceAccessChecker(Protocol):
     ) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class TeamProviderDeployment:
+    deployment_id: str
+    public_model_name: str
+    credentials: Mapping[str, object]
+
+
 @runtime_checkable
 class ManagedFileIdResolver(Protocol):
     async def get_unified_file_ids_for_provider_file_ids(
@@ -135,6 +143,28 @@ class ManagedBatchOutputFileWriter(Protocol):
     ) -> None:
         """Register file metadata, optionally fetching provider details."""
         ...
+
+
+@runtime_checkable
+class ManagedProviderFileRegistrar(Protocol):
+    async def register_provider_file(
+        self,
+        *,
+        provider_file_id: str,
+        content_type: str,
+        deployment: TeamProviderDeployment,
+        owner: "UserAPIKeyAuth",
+        llm_router: "Router | None",
+    ) -> str | None: ...
+
+
+def provider_file_id_from_managed_id(managed_file_id: str) -> str:
+    decoded_id: Final = is_base64_encoded_unified_id(managed_file_id)
+    if not decoded_id:
+        return managed_file_id
+
+    match: Final = re.search(r"(?:^|;)llm_output_file_id,([^;]+)", decoded_id)
+    return match.group(1).strip() if match else managed_file_id
 
 
 def is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
@@ -521,8 +551,20 @@ def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) 
     return (created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)), deployment_id
 
 
-def _by_team_deployment_rank(order: tuple[tuple[datetime, str], str]) -> tuple[datetime, str]:
-    return order[0]
+@dataclass(frozen=True, slots=True)
+class _TeamDeploymentOrder:
+    rank: tuple[datetime, str]
+    deployment_id: str
+    public_model_name: str
+
+
+def _by_team_deployment_rank(order: _TeamDeploymentOrder) -> tuple[datetime, str]:
+    return order.rank
+
+
+@dataclass(frozen=True, slots=True)
+class _AccessibleProviderCredentials:
+    credentials: Mapping[str, object]
 
 
 def get_team_provider_credentials(
@@ -557,6 +599,33 @@ def get_team_provider_credentials(
     Returns None when the router is unavailable or no authorized deployment
     matches, so the caller can fall back to default credential resolution.
     """
+    resolved: Final = _resolve_provider_credentials(
+        llm_router,
+        user_api_key_dict,
+        custom_llm_provider,
+        include_accessible_deployments=include_accessible_deployments,
+    )
+    return None if resolved is None else dict(resolved.credentials)
+
+
+def get_team_provider_deployment(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> TeamProviderDeployment | None:
+    resolved: Final = _resolve_provider_credentials(
+        llm_router, user_api_key_dict, custom_llm_provider, include_accessible_deployments=False
+    )
+    return resolved if isinstance(resolved, TeamProviderDeployment) else None
+
+
+def _resolve_provider_credentials(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+    *,
+    include_accessible_deployments: bool,
+) -> TeamProviderDeployment | _AccessibleProviderCredentials | None:
     if llm_router is None:
         return None
 
@@ -602,16 +671,17 @@ def get_team_provider_credentials(
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
-    def _usable_team_deployment_order(deployment: _RouterDeployment) -> tuple[tuple[datetime, str], str] | None:
+    def _usable_team_deployment_order(deployment: _RouterDeployment) -> _TeamDeploymentOrder | None:
         model_info: Final[Mapping[str, object]] = deployment["model_info"]
         if model_info.get("team_id") != team_id:
             return None
-        if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
+        public_model_name: Final = model_info.get("team_public_model_name") or deployment.get("model_name")
+        if not isinstance(public_model_name, str) or not _key_may_use(public_model_name):
             return None
         deployment_id: Final = model_info.get("id")
         if not isinstance(deployment_id, str):
             return None
-        return _team_deployment_rank(model_info, deployment_id), deployment_id
+        return _TeamDeploymentOrder(_team_deployment_rank(model_info, deployment_id), deployment_id, public_model_name)
 
     # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. Config file
     #    deployments win, kept in file order by the stable sort, then DB ones oldest first, then
@@ -626,13 +696,16 @@ def get_team_provider_credentials(
             ),
             key=_by_team_deployment_rank,
         )
-        team_deployment_ids: Final = tuple(deployment_id for _, deployment_id in team_deployment_orders)
-        team_credentials: Final = next(
-            (credentials for credentials in map(_provider_credentials, team_deployment_ids) if credentials is not None),
+        team_deployment: Final = next(
+            (
+                TeamProviderDeployment(order.deployment_id, order.public_model_name, MappingProxyType(credentials))
+                for order in team_deployment_orders
+                if (credentials := _provider_credentials(order.deployment_id)) is not None
+            ),
             None,
         )
-        if team_credentials is not None:
-            return team_credentials
+        if team_deployment is not None:
+            return team_deployment
 
     if not include_accessible_deployments:
         return None
@@ -668,7 +741,7 @@ def get_team_provider_credentials(
             is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
         )
     )
-    return next(
+    accessible_credentials: Final = next(
         (
             credentials
             for credentials in map(
@@ -678,6 +751,7 @@ def get_team_provider_credentials(
         ),
         None,
     )
+    return None if accessible_credentials is None else _AccessibleProviderCredentials(accessible_credentials)
 
 
 HTTP_HEADER_VALUE: Final = re.compile(r"[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*")
@@ -704,6 +778,10 @@ def _request_api_key(data: Mapping[str, object]) -> str | None:
             "whitespace and non-ASCII characters, or set drop_params to send the request without it."
         },
     )
+
+
+def carries_explicit_credentials(data: Mapping[str, object]) -> bool:
+    return any(_non_blank_string(data.get(key)) is not None for key in EXPLICIT_CREDENTIAL_KEYS)
 
 
 def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
@@ -1242,6 +1320,17 @@ async def validate_managed_id_requirement(
                 f"{resource_kind} was created."
             ),
         )
+
+    await authorize_managed_resource_id(resource_id, resource_kind, user_api_key_dict, managed_files_obj)
+
+
+async def authorize_managed_resource_id(
+    resource_id: str,
+    resource_kind: Literal["file", "batch", "fine-tuning job"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    managed_files_obj: object | None,
+) -> None:
+    from fastapi import HTTPException
 
     if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
         raise HTTPException(

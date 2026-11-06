@@ -27,6 +27,7 @@ from fastapi import HTTPException
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
@@ -2427,12 +2428,12 @@ def _registered_bedrock_kb_search(team_id: str) -> dict[str, object]:
     }
 
 
-def _team_a_router(*team_models: tuple[str, dict[str, object]]) -> litellm.Router:
+def _team_a_router(*team_models: tuple[str, Mapping[str, object]]) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
                 "model_name": f"internal-team-a-{public_name}",
-                "litellm_params": litellm_params,
+                "litellm_params": dict(litellm_params),
                 "model_info": {
                     "id": f"team-a-{public_name}",
                     "team_id": "team-a",
@@ -2500,6 +2501,213 @@ async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_
         posted_url
     )
     assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth
+
+
+_TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
+_TEAM_OPENAI_PARAMS: Final[Mapping[str, object]] = {
+    "model": "openai/*",
+    "api_key": "team-openai-key",
+    "api_base": _TEAM_OPENAI_BASE,
+}
+_VECTOR_STORE_FILE: Final[Mapping[str, object]] = {
+    "id": "file-ingested",
+    "object": "vector_store.file",
+    "vector_store_id": "vs_team",
+    "status": "completed",
+    "created_at": 1,
+    "usage_bytes": 1,
+    "last_error": None,
+}
+_VECTOR_STORE_FILE_CALLS: Final[Mapping[str, tuple[str, str, Mapping[str, object]]]] = {
+    "avector_store_file_list": (
+        "GET",
+        "/vector_stores/vs_team/files",
+        {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False},
+    ),
+    "avector_store_file_retrieve": ("GET", "/vector_stores/vs_team/files/file-ingested", _VECTOR_STORE_FILE),
+    "avector_store_file_content": (
+        "GET",
+        "/vector_stores/vs_team/files/file-ingested/content",
+        {"object": "vector_store.file_content.page", "data": [], "has_more": False, "next_page": None},
+    ),
+    "avector_store_file_delete": (
+        "DELETE",
+        "/vector_stores/vs_team/files/file-ingested",
+        {"id": "file-ingested", "object": "vector_store.file.deleted", "deleted": True},
+    ),
+    "avector_store_file_create": ("POST", "/vector_stores/vs_team/files", _VECTOR_STORE_FILE),
+    "avector_store_file_update": ("POST", "/vector_stores/vs_team/files/file-ingested", _VECTOR_STORE_FILE),
+}
+_TEAM_A_MEMBER: Final = UserAPIKeyAuth(api_key="team-a-member-key", team_id="team-a")
+
+
+def _model_less_vector_store_file_request(
+    route_type: str, litellm_credential_name: str | None = None
+) -> Mapping[str, object]:
+    return {
+        "model": None,
+        "vector_store_id": "vs_team",
+        **({} if route_type == "avector_store_file_list" else {"file_id": "file-ingested"}),
+        **({"attributes": {"source": "rag-ingest"}} if route_type == "avector_store_file_update" else {}),
+        "custom_llm_provider": "openai",
+        "metadata": {"user_api_key_team_id": "team-a"},
+        "litellm_credential_name": litellm_credential_name,
+    }
+
+
+def _team_a_openai_db_deployment(deployment_id: str, api_base: str, created_at: datetime) -> Mapping[str, object]:
+    return {
+        "model_name": f"internal-team-a-{deployment_id}",
+        "litellm_params": {"model": "openai/*", "api_key": f"{deployment_id}-key", "api_base": api_base},
+        "model_info": {
+            "id": deployment_id,
+            "team_id": "team-a",
+            "team_public_model_name": f"openai-{deployment_id}",
+            "db_model": True,
+            "created_at": created_at,
+        },
+    }
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.parametrize(
+    "team_models",
+    [
+        pytest.param((("openai/*", _TEAM_OPENAI_PARAMS),), id="openai-only"),
+        pytest.param(
+            (("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS), ("openai/*", _TEAM_OPENAI_PARAMS)),
+            id="langgraph-first",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_key_model_less_vector_store_file_call_reaches_openai_with_the_team_deployment_key(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+    team_models: tuple[tuple[str, Mapping[str, object]], ...],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request(route_type)),
+                _team_a_router(*team_models),
+                None,
+                route_type,
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.asyncio
+async def test_a_team_key_restricted_away_from_the_openai_deployment_keeps_proxy_credentials_on_a_file_call(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "proxy-openai-key")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+    restricted_member: Final = UserAPIKeyAuth(
+        api_key="restricted-member-key", team_id="team-a", models=["a-langgraph-agent"]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.route(method=method, url=f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request(route_type)),
+                _team_a_router(("openai/*", _TEAM_OPENAI_PARAMS)),
+                None,
+                route_type,
+                user_api_key_dict=restricted_member,
+            )
+        )
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer proxy-openai-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+@pytest.mark.asyncio
+async def test_a_model_less_file_call_uses_the_team_openai_deployment_ingest_uploads_through(
+    monkeypatch: pytest.MonkeyPatch,
+    newer_first: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    older: Final = _team_a_openai_db_deployment("deployment-z", "https://older-openai.example/v1", datetime(2026, 1, 1))
+    newer: Final = _team_a_openai_db_deployment("deployment-a", "https://newer-openai.example/v1", datetime(2026, 6, 1))
+    router: Final = litellm.Router(model_list=[dict(newer), dict(older)] if newer_first else [dict(older), dict(newer)])
+    ingest_deployment: Final = get_team_provider_deployment(router, _TEAM_A_MEMBER, "openai")
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.get(url__regex=r"/v1/vector_stores/vs_team/files/file-ingested$").mock(
+            return_value=httpx.Response(200, json=_VECTOR_STORE_FILE)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request("avector_store_file_retrieve")),
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert ingest_deployment is not None
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {ingest_deployment.deployment_id}-key"
+
+
+@pytest.mark.asyncio
+async def test_registered_store_credential_wins_over_the_team_deployment_on_a_model_less_file_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="store-credential",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={"api_key": "store-credential-key", "api_base": "https://store-openai.example/v1"},
+            )
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get("https://store-openai.example/v1/vector_stores/vs_team/files/file-ingested").mock(
+            return_value=httpx.Response(200, json=_VECTOR_STORE_FILE)
+        )
+        await (
+            await route_request(
+                dict(
+                    _model_less_vector_store_file_request(
+                        "avector_store_file_retrieve", litellm_credential_name="store-credential"
+                    )
+                ),
+                _team_a_router(("openai/*", _TEAM_OPENAI_PARAMS)),
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer store-credential-key"
 
 
 @pytest.fixture(autouse=True)

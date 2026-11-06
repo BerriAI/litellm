@@ -18,6 +18,10 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    carries_explicit_credentials,
+    get_team_provider_deployment,
+)
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
 from litellm.router_config import build_router_config
@@ -714,6 +718,42 @@ RouteType = Literal[
 ]
 
 
+_MODEL_LESS_VECTOR_STORE_FILE_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "avector_store_file_create",
+        "avector_store_file_list",
+        "avector_store_file_retrieve",
+        "avector_store_file_content",
+        "avector_store_file_update",
+        "avector_store_file_delete",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelLessTeamFileCall:
+    caller: UserAPIKeyAuth
+    custom_llm_provider: str
+
+
+def _model_less_team_vector_store_file_call(
+    route_type: str,
+    request: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> _ModelLessTeamFileCall | None:
+    custom_llm_provider: Final = request.get("custom_llm_provider")
+    if (
+        route_type not in _MODEL_LESS_VECTOR_STORE_FILE_ROUTES
+        or user_api_key_dict is None
+        or user_api_key_dict.team_id is None
+        or request.get("model")
+        or carries_explicit_credentials(request)
+        or not isinstance(custom_llm_provider, str)
+    ):
+        return None
+    return _ModelLessTeamFileCall(user_api_key_dict, custom_llm_provider)
+
+
 def _merge_router_settings_override(
     data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
 ) -> frozenset[str]:
@@ -918,6 +958,16 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "alist_agent_versions",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
+        model_less_team_file_call: Final = _model_less_team_vector_store_file_call(
+            route_type, JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict
+        )
+        if model_less_team_file_call is not None:
+            team_file_deployment: Final = get_team_provider_deployment(
+                llm_router, model_less_team_file_call.caller, model_less_team_file_call.custom_llm_provider
+            )
+            if team_file_deployment is None:
+                return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
+            return getattr(llm_router, f"{route_type}")(**{**data, "model": team_file_deployment.deployment_id})
         if route_type in [
             "avideo_list",
             "avideo_status",

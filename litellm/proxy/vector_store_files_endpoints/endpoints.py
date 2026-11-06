@@ -22,6 +22,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+    provider_file_id_from_managed_id,
 )
 from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -41,24 +42,12 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
-def _provider_file_id_from_managed_id(managed_file_id: str | None) -> str | None:
-    if managed_file_id is None:
-        return None
-
-    decoded_id: Final = is_base64_encoded_unified_id(managed_file_id)
-    if not decoded_id:
-        return managed_file_id
-
-    match: Final = re.search(r"(?:^|;)llm_output_file_id,([^;]+)", decoded_id)
-    return match.group(1).strip() if match else managed_file_id
-
-
 def _with_provider_file_id_cursors(
     query_params: Mapping[str, str],
 ) -> Mapping[str, str | None]:
     return MappingProxyType(
         {
-            key: (_provider_file_id_from_managed_id(value) if key in {"after", "before"} else value)
+            key: (provider_file_id_from_managed_id(value) if key in {"after", "before"} else value)
             for key, value in query_params.items()
         }
     )
@@ -122,7 +111,7 @@ async def _with_managed_file_list_ids(
         {
             provider_file_id: managed_file_id
             for provider_file_id, managed_file_id in id_map.items()
-            if _provider_file_id_from_managed_id(managed_file_id) == provider_file_id
+            if provider_file_id_from_managed_id(managed_file_id) == provider_file_id
         }
     )
     return _with_managed_file_ids(response, round_trippable_id_map)
