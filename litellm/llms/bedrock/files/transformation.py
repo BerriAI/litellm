@@ -11,7 +11,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict
+from typing import Any, Final, Literal, Protocol, TypeAlias, TypedDict
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
@@ -19,6 +19,7 @@ from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
 from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     text_completion_prompt_to_messages,
 )
@@ -151,6 +153,10 @@ def _retrieved_s3_file_size(raw_response: Response) -> int:
     )
 
 
+class _SupportsRstrip(Protocol):
+    def rstrip(self, chars: str, /) -> str: ...
+
+
 class _S3DeleteContext(LiteLLMBaseModel):
     file_id: str = Field(min_length=1)
 
@@ -166,6 +172,10 @@ def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]
 
 _LITELLM_PARAMS_THE_MAPPER_TAKES: Final = frozenset({"allowed_openai_params"})
 _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS: Final = frozenset({"json_mode"})
+
+
+class _ParamsTheMapperOwns(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 _UPLOAD_PARAMS: Final = TypeAdapter(dict[str, object])
@@ -710,9 +720,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         encoded_object_name: Final = encode_s3_object_key_for_url(object_name)
 
         # S3 endpoint URL format
-        s3_endpoint_url: Final = (
+        s3_endpoint_url: Final = require_attributes(
             request_params.get("s3_endpoint_url")
-            or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+            or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}",
+            _SupportsRstrip,
+            "rstrip",
         ).rstrip("/")
 
         return f"{s3_endpoint_url}/{bucket_name}/{encoded_object_name}"
@@ -1062,7 +1074,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         from litellm.types.utils import LlmProviders
 
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
-        optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+        request_params: Final[Mapping[str, object]] = openai_request_body
+        optional_params: Final = {k: v for k, v in request_params.items() if k not in ["model", "messages"]}
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
@@ -1085,8 +1098,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 custom_llm_provider="bedrock",
                 messages=messages,
                 model_info=deployment_model_info(litellm_params),
-                **MappingProxyType(
-                    {
+                **_ParamsTheMapperOwns(
+                    **{
                         k: v
                         for k, v in optional_params.items()
                         if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES

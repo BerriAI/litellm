@@ -6,7 +6,7 @@ import json
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 from pydantic import TypeAdapter
 
@@ -1143,7 +1143,7 @@ def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
     return _message_without_fields(message, frozenset({"prefix"}))
 
 
-def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Mapping[object, object]:
     """
     Filters a value from a dictionary
 

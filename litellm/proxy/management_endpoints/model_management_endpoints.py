@@ -30,6 +30,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -210,6 +211,7 @@ class KubernetesPodsResponse(BaseModel):
 
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
+_STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
 
 async def update_team(*args, **kwargs):
@@ -246,12 +248,12 @@ def _model_write_response(
 ) -> _ProxyModelRow | Mapping[str, object]:
     if member_write is None:
         return row
-    payload: Final = TypeAdapter(dict[str, object]).validate_json(row.model_dump_json())
+    payload: Final = _STR_OBJECT_DICT.validate_json(row.model_dump_json())
     stored_params: Final = payload.get("litellm_params")
     params: Final = (
-        TypeAdapter(dict[str, object]).validate_json(stored_params)
+        _STR_OBJECT_DICT.validate_json(stored_params)
         if isinstance(stored_params, str)
-        else TypeAdapter(dict[str, object]).validate_python(stored_params)
+        else _STR_OBJECT_DICT.validate_python(stored_params)
     )
     redacted: Final = redact_credentials_in_payload(params)
     return {
@@ -1371,7 +1373,9 @@ def legacy_update_model_info_changes(
     value that differs from the stored override resets that override (``None``).
     """
     stored: Final = db_model.model_info.model_dump(exclude_none=True)
-    requested: Final = incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
+    requested: Final = _STR_OBJECT_DICT.validate_python(
+        incoming_model_info.model_dump(exclude_unset=True, exclude_none=True)
+    )
     sent: Final = {k: v for k, v in requested.items() if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS and v != ""}
     echoed: Final = frozenset(
         echoed_cost_map_fields(
@@ -1381,7 +1385,7 @@ def legacy_update_model_info_changes(
             discovered_model_info,
         )
     )
-    kept: Final = without_server_derived_pricing(sent)
+    kept: Final[Mapping[str, object]] = without_server_derived_pricing(sent)
     return MappingProxyType(
         {
             **{k: getattr(incoming_model_info, k) for k in kept if k not in echoed},
@@ -1421,20 +1425,16 @@ async def _locked_legacy_update_model_info_json(
         return None
     stored_model_info: Final[object] = payload.get("model_info")
     stored: Final = (
-        TypeAdapter(dict[str, object]).validate_json(stored_model_info)
+        _STR_OBJECT_DICT.validate_json(stored_model_info)
         if isinstance(stored_model_info, str)
-        else TypeAdapter(dict[str, object]).validate_python(stored_model_info or {})
+        else _STR_OBJECT_DICT.validate_python(stored_model_info or {})
     )
-    return (
-        TypeAdapter(dict[str, object])
-        .dump_json(
-            {
-                **{k: v for k, v in stored.items() if k not in writes},
-                **{k: v for k, v in writes.items() if v is not None},
-            }
-        )
-        .decode()
-    )
+    return _STR_OBJECT_DICT.dump_json(
+        {
+            **{k: v for k, v in stored.items() if k not in writes},
+            **{k: v for k, v in writes.items() if v is not None},
+        }
+    ).decode()
 
 
 def _param_keys_to_remove(patch: updateDeployment) -> tuple[str, ...]:
@@ -1543,7 +1543,7 @@ def update_db_model(
     prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel(
         model_name=merged_model_name,
         litellm_params=json.dumps(merged_litellm_params),
-        model_info=TypeAdapter(dict[str, object]).dump_json(merged_model_info).decode(),
+        model_info=_STR_OBJECT_DICT.dump_json(merged_model_info).decode(),
     )
 
     if updated_patch.blocked is not None:
@@ -2080,7 +2080,7 @@ async def add_model_to_db(
     slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
     # encrypt litellm params #
-    _litellm_params_dict: Final = TypeAdapter(dict[str, object]).validate_python(
+    _litellm_params_dict: Final = _STR_OBJECT_DICT.validate_python(
         model_params.litellm_params.model_dump(exclude_none=True)
     )
     if "complexity_router_config" in _litellm_params_dict:
@@ -4000,19 +4000,20 @@ async def clear_cache() -> ReconcileOutcome:
 
             db_router_names: Final = set()
 
-            for model in current_models:
-                model_info = model.get("model_info", {})
+            for model in as_object_list(current_models) or ():
+                deployment = decoded_json_object(model)
+                model_info = decoded_json_object(deployment.get("model_info", {}))
                 if model_info.get("db_model", False):
                     db_model_ids.append(model_info.get("id"))
                     # Auto-router deployments (and only those) are wiped here, in the
                     # same pass, so the reload rebuilds them -- see the comment below.
-                    model_name = model.get("model_name")
-                    if model_name is not None and str(model.get("litellm_params", {}).get("model", "")).startswith(
-                        "auto_router/"
-                    ):
-                        db_router_names.add(model_name)
+                    deployment_name = deployment.get("model_name")
+                    if isinstance(deployment_name, str) and str(
+                        decoded_json_object(deployment.get("litellm_params", {})).get("model", "")
+                    ).startswith("auto_router/"):
+                        db_router_names.add(deployment_name)
                         router_model_id = model_info.get("id")
-                        if router_model_id is not None:
+                        if isinstance(router_model_id, str):
                             llm_router.apply(ChangeSet(delete=[router_model_id]))
                 else:
                     # This is a config model, preserved by the reconcile below

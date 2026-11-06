@@ -12,7 +12,6 @@ from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     Protocol,
@@ -22,12 +21,6 @@ from typing import (
     runtime_checkable,
 )
 
-from openai.types.chat.chat_completion_named_tool_choice_param import (
-    ChatCompletionNamedToolChoiceParam,
-)
-from openai.types.chat.chat_completion_named_tool_choice_param import (
-    Function as NamedToolChoiceFunction,
-)
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseOutputRefusal
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
@@ -56,7 +49,12 @@ from litellm.integrations.anthropic_cache_control_hook import (
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    normalize_drop_params,
+    require_attributes,
+)
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -66,6 +64,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     invalid_type_message,
@@ -199,6 +198,8 @@ ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool | AnthropicToolSearchToolRegex
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
+RESPONSES_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM: Final = frozenset({"computer_use", "image_generation", "local_shell", "shell"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
     MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
 )
@@ -382,6 +383,10 @@ class _HasToolCalls(Protocol):
 @runtime_checkable
 class _HasId(Protocol):
     id: object
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class _ResponsesToolCallItem(Protocol):
@@ -982,8 +987,8 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_tool_choice(
-        tool_choice: Any,
-    ) -> str | dict[str, object] | None:
+        tool_choice: object,
+    ) -> object:
         """
         Transform tool_choice from various formats to OpenAI Chat Completion format.
 
@@ -1007,11 +1012,13 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(tool_choice, str):
             return tool_choice
 
-        if isinstance(tool_choice, dict):
+        if is_str_keyed_dict(tool_choice):
             tool_choice_type: Final = tool_choice.get("type")
 
             # If it has a function with name, it's standard OpenAI format - pass through
-            if tool_choice.get("function") and tool_choice.get("function", {}).get("name"):
+            if tool_choice.get("function") and require_attributes(
+                tool_choice.get("function", {}), _SupportsGet, "get"
+            ).get("name"):
                 return tool_choice
 
             # Handle Cursor IDE dict formats without function name
@@ -1026,17 +1033,13 @@ class LiteLLMCompletionResponsesConfig:
             elif tool_choice_type == "function":
                 function_name: Final = tool_choice.get("name")
                 if function_name:
-                    return ChatCompletionNamedToolChoiceParam(
-                        type="function", function=NamedToolChoiceFunction(name=function_name)
-                    )
+                    return {"type": "function", "function": {"name": function_name}}
                 return "required"
             elif tool_choice_type == "custom":
                 custom: Final = tool_choice.get("custom")
-                custom_name = tool_choice.get("name") or (custom.get("name") if isinstance(custom, dict) else None)
+                custom_name = tool_choice.get("name") or (custom.get("name") if is_str_keyed_dict(custom) else None)
                 if custom_name:
-                    return ChatCompletionNamedToolChoiceParam(
-                        type="function", function=NamedToolChoiceFunction(name=custom_name)
-                    )
+                    return {"type": "function", "function": {"name": custom_name}}
                 return "required"
 
         # Return as-is for unknown formats
@@ -1060,7 +1063,7 @@ class LiteLLMCompletionResponsesConfig:
                 return ToolChoiceCustomParam(type="custom", name=custom_name)
             case _, {"type": "function", "function": {"name": str(function_name)}}:
                 return ToolChoiceFunctionParam(type="function", name=function_name)
-            case _, "none" | "auto" | "required" as normalized:
+            case _, normalized if normalized in ("none", "auto", "required"):
                 return normalized
             case _, _:
                 return "auto"
@@ -2948,7 +2951,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_type: Final = tool.get("type")
         if tool_type == "mcp":
             return ResponsesToolChatForm(chat_tools=(cast(OpenAIMcpServerTool, tool),), web_search_options=None)
-        if tool_type == "web_search_preview" or tool_type == "web_search":
+        if tool_type in RESPONSES_WEB_SEARCH_TOOL_TYPES:
             _search_context_size: Final[Literal["low", "medium", "high"]] = cast(
                 Literal["low", "medium", "high"], tool.get("search_context_size")
             )
@@ -3001,7 +3004,7 @@ class LiteLLMCompletionResponsesConfig:
             return ResponsesToolChatForm(chat_tools=(client_tool_search_chat_tool(tool),), web_search_options=None)
         if tool_type == "tool_search":
             return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "local_shell", "shell"):
+        if tool_type in RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM:
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",

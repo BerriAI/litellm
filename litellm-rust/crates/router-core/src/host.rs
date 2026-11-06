@@ -405,6 +405,12 @@ pub enum SelectStage {
     OverrideCheck(RoutingStrategy),
 }
 
+#[derive(Debug)]
+pub struct CallbackFiltered {
+    pub kept: Vec<Arc<Deployment>>,
+    pub preferred: Option<String>,
+}
+
 /// Routing events, delivered through [`Host::observe`]. They serialize as JSON objects tagged by
 /// `event` (the variant name), durations in seconds.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -714,14 +720,19 @@ pub trait Host: Send + Sync {
     }
 
     /// `async_callback_filter_deployments`: the host's routing callbacks narrow `candidates` in
-    /// turn. A filter that raises fails the try with [`Error::Attempt`], which the call retries and
-    /// falls back from like any attempt failure. A host without filters keeps every candidate.
+    /// turn, and may name one deployment they prefer, which the pick takes only when the filters
+    /// after the callbacks keep it. A filter that raises fails the try with [`Error::Attempt`],
+    /// which the call retries and falls back from like any attempt failure. A host without
+    /// filters keeps every candidate and prefers none.
     async fn callback_filters(
         &self,
         _ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
-        Ok(candidates)
+    ) -> Result<CallbackFiltered, Error> {
+        Ok(CallbackFiltered {
+            kept: candidates,
+            preferred: None,
+        })
     }
     /// The values of `refs`, one per ref, in order: what the deployment build substitutes for
     /// each `os.environ/` reference it found in entry `index` ([`crate::build`]). Asked once per
