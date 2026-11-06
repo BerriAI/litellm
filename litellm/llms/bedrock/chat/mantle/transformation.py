@@ -15,7 +15,12 @@ from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.bedrock.common_utils import bedrock_chat_opts_into_native_structured_output, build_mantle_messages_url
+from litellm.llms.bedrock.common_utils import (
+    BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES,
+    bedrock_takes_native_output,
+    build_mantle_messages_url,
+    schema_property_count,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -57,9 +62,12 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     def chat_uses_native_structured_output(
         self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
     ) -> bool:
-        return bedrock_chat_opts_into_native_structured_output(
-            model, self.will_think(model, "bedrock", request_params), model_info=model_info
-        )
+        return bedrock_takes_native_output(model, "bedrock_mantle", model_info)
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        if schema_property_count(json_schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES:
+            return None
+        return super().native_output_format_schema(json_schema)
 
     def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
         return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))

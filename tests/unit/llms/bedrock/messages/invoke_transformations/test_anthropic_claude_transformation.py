@@ -1080,8 +1080,6 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
 def test_bedrock_messages_converts_output_config_format_to_inline_schema():
     """Without native structured-output support, ``output_config.format`` falls back
     to the inline schema so Bedrock does not see an unknown nested key."""
-    from unittest.mock import patch
-
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -1098,17 +1096,13 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
         },
     }
 
-    with patch(
-        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key, *_: key == "supports_output_config",
-    ):
-        result = cfg.transform_anthropic_messages_request(
-            model="anthropic.claude-opus-4-7",
-            messages=messages,
-            anthropic_messages_optional_request_params=optional_params,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
+    result = cfg.transform_anthropic_messages_request(
+        model="us-gov.anthropic.claude-fable-5-1",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
 
     assert result.get("output_config") == {"effort": "xhigh"}
     assert "output_format" not in result
@@ -1153,8 +1147,6 @@ def test_bedrock_messages_normalizes_output_config_effort_for_opus(model, expect
 def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema():
     """Inline-schema embedding must not mutate the caller's ``messages`` list,
     message dicts, or content list."""
-    from unittest.mock import patch
-
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -1170,17 +1162,13 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
         },
     }
 
-    with patch(
-        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key, *_: key == "supports_output_config",
-    ):
-        result = cfg.transform_anthropic_messages_request(
-            model="anthropic.claude-opus-4-7",
-            messages=caller_messages,
-            anthropic_messages_optional_request_params=optional_params,
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
+    result = cfg.transform_anthropic_messages_request(
+        model="us-gov.anthropic.claude-fable-5-1",
+        messages=caller_messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
 
     assert caller_messages == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
     assert caller_message == {
@@ -3360,11 +3348,8 @@ MESSAGES_OPEN_OBJECT_SCHEMA: Final = {
 @pytest.mark.parametrize(
     "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
 )
-def test_bedrock_messages_schema_native_output_cannot_hold_is_inlined_on_a_bedrock_native_profile(
-    set_native_structured_output, schema
-):
-    model: Final = "us.anthropic.claude-sonnet-5"
-    set_native_structured_output(model, "bedrock")
+def test_bedrock_messages_schema_is_inlined_when_native_output_is_disabled(schema):
+    model: Final = "us-gov.anthropic.claude-fable-5-1"
 
     result: Final = _bedrock_messages_request_with_schema(model, schema)
 
@@ -4328,7 +4313,9 @@ def test_bedrock_messages_offers_a_native_output_retry_only_when_it_sends_native
     )
     retry_params: Final = config.native_output_fallback_litellm_params(model, optional_params, litellm_params)
 
-    assert (retry_params is not None) is ("format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {})))
+    assert (retry_params is not None) is (
+        "format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {}))
+    )
 
 
 # Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
@@ -4644,7 +4631,10 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
                     "aws_region_name": "us-east-1",
                 },
             },
-            {"model_name": "anthropic-claude", "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"}},
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"},
+            },
         ],
         fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
         num_retries=0,

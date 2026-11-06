@@ -279,7 +279,7 @@ def test_a_rejection_logs_the_retry_and_advises_opting_out_only_when_native_outp
         _call(bedrock, _FALLBACK)
 
     assert _MODEL in caplog.text
-    assert ("supports_bedrock_native_structured_output: false" in caplog.text) is advises_opting_out
+    assert ("supports_native_structured_output: false" in caplog.text) is advises_opting_out
 
 
 _STRICT_FALLBACK: Final = NativeOutputFallback(optional_params={"tools": "without_strict"}, litellm_params={})

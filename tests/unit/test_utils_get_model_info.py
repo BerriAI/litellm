@@ -13,7 +13,10 @@ from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
-from litellm.utils import _invalidate_model_cost_lowercase_map, supports_native_structured_output
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    native_structured_output_support,
+)
 import os
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +35,37 @@ def test_get_model_info_simple_model_name():
     """
     model = "claude-opus-5-5"
     litellm.get_model_info(model)
+
+
+def test_get_model_info_keeps_bedrock_structured_output_map_fields() -> None:
+    model_info: Final = get_model_info(model="us.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
+
+    assert model_info["supports_bedrock_native_structured_output"] is True
+    assert model_info["supports_bedrock_native_structured_output_by_default"] is True
+
+
+def test_native_structured_output_support_prefers_the_bedrock_default_flag() -> None:
+    assert (
+        native_structured_output_support(
+            {
+                "supports_native_structured_output": True,
+                "supports_bedrock_native_structured_output_by_default": False,
+                "supports_bedrock_native_structured_output": True,
+            }
+        )
+        is False
+    )
+    assert (
+        native_structured_output_support(
+            {
+                "supports_native_structured_output": False,
+                "supports_bedrock_native_structured_output_by_default": True,
+            }
+        )
+        is True
+    )
+    assert native_structured_output_support({"supports_native_structured_output": True}) is True
+    assert native_structured_output_support({"supports_bedrock_native_structured_output": True}) is None
 
 
 def test_get_model_info_custom_llm_with_model_name():
@@ -195,9 +229,7 @@ def test_model_info_bedrock_converse(monkeypatch):
     except FileNotFoundError:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
-    _enforce_bedrock_converse_models(
-        model_cost=litellm.model_cost, whitelist_models=whitelist_models
-    )
+    _enforce_bedrock_converse_models(model_cost=litellm.model_cost, whitelist_models=whitelist_models)
 
 
 @pytest.mark.flaky(retries=6, delay=2)
@@ -221,9 +253,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 
         # Check for unwhitelisted models
         with pytest.raises(AssertionError, match=r"fake\.bedrock-chat-model"):
-            _enforce_bedrock_converse_models(
-                model_cost=litellm.model_cost, whitelist_models=whitelist_models
-            )
+            _enforce_bedrock_converse_models(model_cost=litellm.model_cost, whitelist_models=whitelist_models)
     except FileNotFoundError as e:
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
@@ -249,7 +279,12 @@ def test_regional_bedrock_alias_requires_canonical_converse_metadata(
     _enforce_bedrock_converse_models(model_cost, ())
 
 
-GOVCLOUD_LAGGING_CAPABILITIES: Final = frozenset({"supports_bedrock_native_structured_output"})
+GOVCLOUD_LAGGING_CAPABILITIES: Final = frozenset(
+    {
+        "supports_bedrock_native_structured_output",
+        "supports_bedrock_native_structured_output_by_default",
+    }
+)
 
 
 def _govcloud_may_lag(model_key: str, capability: str) -> bool:
@@ -282,11 +317,7 @@ def test_get_model_info_bedrock_models():
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
             # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
-            base_model_key = (
-                base_model
-                if base_model in litellm.model_cost
-                else f"bedrock/{base_model}"
-            )
+            base_model_key = base_model if base_model in litellm.model_cost else f"bedrock/{base_model}"
             if base_model_key not in litellm.model_cost:
                 continue
             base_model_info = litellm.model_cost[base_model_key]
@@ -294,15 +325,13 @@ def test_get_model_info_bedrock_models():
                 if "invoke/" in k:
                     continue
                 if base_model_key.startswith("supports_"):
-                    assert (
-                        base_model_key in v
-                    ), f"{base_model_key} is not in model cost map for {k}"
+                    assert base_model_key in v, f"{base_model_key} is not in model cost map for {k}"
                     if _govcloud_may_lag(k, base_model_key):
                         assert base_model_value or not v[base_model_key], f"{base_model_key} is on {k} but not its base"
                         continue
-                    assert (
-                        v[base_model_key] == base_model_value
-                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+                    assert v[base_model_key] == base_model_value, (
+                        f"{base_model_key} is not equal to {base_model_value} for model {k}"
+                    )
 
 
 def _cross_region_base_model_key(
@@ -325,10 +354,7 @@ def _cross_region_profiles(
         (model_key, model_info, base_model_key)
         for model_key, model_info in model_cost.items()
         if str(model_info.get("litellm_provider", "")).startswith("bedrock")
-        and (
-            base_model_key := _cross_region_base_model_key(model_key, prefixes, model_cost)
-        )
-        is not None
+        and (base_model_key := _cross_region_base_model_key(model_key, prefixes, model_cost)) is not None
     )
 
 
@@ -381,34 +407,20 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             ):
                 assert base_value is False, f"{cap} is already enabled on bare model {base_model_key}"
                 continue
-            assert (
-                v[cap] == base_value
-            ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
+            assert v[cap] == base_value, f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
-def test_bedrock_native_output_default_reaches_only_versions_that_read_its_key(local_model_cost_map):
+def test_bedrock_native_output_default_reaches_get_model_info(local_model_cost_map):
     flagged: Final = tuple(
-        key for key, row in litellm.model_cost.items() if row.get("supports_bedrock_native_structured_output_by_default")
+        key
+        for key, row in litellm.model_cost.items()
+        if row.get("supports_bedrock_native_structured_output_by_default")
     )
 
     assert flagged
-    assert [key for key in flagged if litellm.model_cost[key].get("supports_native_structured_output")] == []
     assert [key for key in flagged if not get_model_info(key)["supports_native_structured_output"]] == []
-
-
-@pytest.mark.parametrize(
-    ("registered", "native"),
-    [({"supports_bedrock_native_structured_output": False}, False), ({"max_output_tokens": 1024}, True)],
-    ids=["bedrock-opt-out", "unrelated-override"],
-)
-def test_a_registered_bedrock_opt_out_beats_the_native_output_default(local_model_cost_map, registered, native):
-    model: Final = "us.anthropic.claude-sonnet-5"
-    litellm.register_model({model: registered}, persist_across_reloads=False)
-
-    assert get_model_info(f"bedrock/{model}")["supports_native_structured_output"] is native
-    assert supports_native_structured_output(f"bedrock/{model}") is native
 
 
 def _is_positive_cost(value: object) -> bool:
@@ -435,9 +447,7 @@ def test_get_model_info_bedrock_priced_cross_region_profile_has_priced_base():
         base = litellm.model_cost[base_model_key]
         for cost_key in ("input_cost_per_token", "output_cost_per_token"):
             if (v.get(cost_key) or 0) > 0:
-                assert (
-                    base.get(cost_key) or 0
-                ) > 0, f"{k} charges {cost_key} but its base {base_model_key} is free"
+                assert (base.get(cost_key) or 0) > 0, f"{k} charges {cost_key} but its base {base_model_key} is free"
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
@@ -469,23 +479,17 @@ def test_get_model_info_case_insensitive_lookup(monkeypatch):
     )
 
     # Test 1: Exact case should work
-    info = litellm.get_model_info(
-        model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai"
-    )
+    info = litellm.get_model_info(model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai")
     assert info is not None
     assert info["supports_function_calling"] is True
 
     # Test 2: Lowercase should also work (case-insensitive lookup)
-    info_lower = litellm.get_model_info(
-        model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai"
-    )
+    info_lower = litellm.get_model_info(model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai")
     assert info_lower is not None
     assert info_lower["supports_function_calling"] is True
 
     # Test 3: Mixed case should also work
-    info_mixed = litellm.get_model_info(
-        model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai"
-    )
+    info_mixed = litellm.get_model_info(model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai")
     assert info_mixed is not None
     assert info_mixed["supports_function_calling"] is True
 
@@ -513,16 +517,10 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
     from litellm.utils import supports_function_calling
 
     # Exact case
-    assert (
-        supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider")
-        is True
-    )
+    assert supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider") is True
 
     # Lowercase (should now work with case-insensitive lookup)
-    assert (
-        supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
-        is True
-    )
+    assert supports_function_calling("testmodel-abc", custom_llm_provider="test_provider") is True
 
 
 def test_get_model_info_custom_model_router():
@@ -585,9 +583,7 @@ def test_get_model_info_custom_provider():
     # Get registered model info
     from litellm import get_model_info
 
-    get_model_info(
-        model="my-custom-llm/my-fake-model"
-    )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+    get_model_info(model="my-custom-llm/my-fake-model")  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
 
 
 def test_get_model_info_huggingface_models(monkeypatch):

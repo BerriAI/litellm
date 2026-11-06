@@ -41,7 +41,6 @@ from litellm.llms.bedrock.common_utils import (
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    requests_opt_in_native_output,
     strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
@@ -150,17 +149,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def chat_uses_native_structured_output(
         self, model: str, request_params: Mapping[str, object], model_info: Mapping[str, object] | None
     ) -> bool:
-        return bedrock_chat_uses_native_structured_output(
-            model,
-            will_think=self.will_think(model, "bedrock", request_params),
-            thinking_requested=self.is_thinking_requested(request_params),
-            model_info=model_info,
-        )
-
-    def uses_opt_in_native_output(
-        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
-    ) -> bool:
-        return requests_opt_in_native_output(model, optional_params, deployment_model_info(litellm_params))
+        return bedrock_chat_uses_native_structured_output(model, "bedrock", model_info)
 
     def uses_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
@@ -371,9 +360,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model=model,
             request_body=anthropic_request,
             model_info=model_info,
-            chat_uses_native_output=lambda: self.chat_uses_native_structured_output(
-                model, _NON_DEFAULT_PARAMS.validate_python(filtered_params), model_info
-            ),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,
