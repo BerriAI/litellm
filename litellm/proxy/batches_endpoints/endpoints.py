@@ -48,7 +48,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_deployment_model_info,
-    add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_cost_poller_is_active,
@@ -621,7 +620,7 @@ async def retrieve_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,
@@ -748,13 +747,6 @@ async def retrieve_batch(
                 raise HTTPException(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
-                )
-
-            if unified_batch_id:
-                add_internal_model_credentials(
-                    data=data,
-                    llm_router=llm_router,
-                    model_id=unified_model_id,
                 )
 
             response = await llm_router.aretrieve_batch(**data)
@@ -1130,7 +1122,7 @@ async def cancel_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,

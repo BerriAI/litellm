@@ -6,148 +6,58 @@ UTF-8 encoded content in streaming responses, specifically fixing
 the ASCII encoding error described in issue #12660.
 """
 
-import asyncio
-from unittest.mock import AsyncMock, Mock
+import json
+from typing import Final
+from unittest.mock import Mock
 
+import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.chat.handler import make_call, make_sync_call
 
-
-class MockResponse:
-    """Mock httpx response for testing UTF-8 handling."""
-
-    def __init__(self, test_content: str):
-        self.test_content = test_content
-        self.status_code = 200
-
-    def iter_text(self, encoding="utf-8"):
-        """Mock iter_text that yields content with the specified encoding."""
-        yield self.test_content
-
-    async def aiter_text(self, encoding="utf-8"):
-        """Mock aiter_text that yields content with the specified encoding."""
-        yield self.test_content
-
-    def iter_lines(self):
-        """Mock iter_lines method for synchronous streaming."""
-        yield self.test_content
-
-    async def aiter_lines(self):
-        """Mock aiter_lines method for asynchronous streaming."""
-        yield self.test_content
-
-    def json(self):
-        return {"choices": [{"delta": {"content": "test"}}]}
+_UNICODE_TEXTS: Final = (
+    "The symbol µ represents micro",
+    "Testing © character",
+    "Testing ™ character",
+    "Testing € character",
+    "Testing 北京 character",
+    "Testing 🚀 character",
+    "Testing Ñoño character",
+)
 
 
-class MockSyncClient:
-    """Mock synchronous HTTP client for testing."""
-
-    def __init__(self, response_content: str):
-        self.response_content = response_content
-
-    def post(self, *args, **kwargs):
-        return MockResponse(self.response_content)
+def _utf8_stream_transport(text: str) -> httpx.MockTransport:
+    chunk: Final = {"choices": [{"index": 0, "delta": {"content": text}}]}
+    body: Final = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+    return httpx.MockTransport(lambda request: httpx.Response(200, stream=httpx.ByteStream(body)))
 
 
-class MockAsyncClient:
-    """Mock asynchronous HTTP client for testing."""
+def _call_args() -> dict[str, object]:
+    return {
+        "api_base": "https://test.com/v1/chat/completions",
+        "headers": {"Authorization": "Bearer test"},
+        "data": '{"model": "test", "messages": []}',
+        "model": "test-model",
+        "messages": [],
+        "logging_obj": Mock(),
+    }
 
-    def __init__(self, response_content: str):
-        self.response_content = response_content
 
-    async def post(self, *args, **kwargs):
-        return MockResponse(self.response_content)
-
-
-def test_utf8_streaming_sync():
-    """Test that synchronous streaming handles UTF-8 characters correctly."""
-    # Content with the µ character that was causing issues
-    test_content = (
-        'data: {"choices":[{"delta":{"content":"The symbol µ represents micro"}}]}\n\n'
+@pytest.mark.parametrize("text", _UNICODE_TEXTS)
+def test_utf8_streaming_sync(text: str) -> None:
+    completion_stream: Final = make_sync_call(
+        client=HTTPHandler(client=httpx.Client(transport=_utf8_stream_transport(text))), **_call_args()
     )
 
-    mock_client = MockSyncClient(test_content)
-    mock_logging = Mock()
-
-    # This should not raise an ASCII encoding error
-    completion_stream = make_sync_call(
-        client=mock_client,
-        api_base="https://test.com/v1/chat/completions",
-        headers={"Authorization": "Bearer test"},
-        data='{"model": "test", "messages": []}',
-        model="test-model",
-        messages=[],
-        logging_obj=mock_logging,
-    )
-
-    # Verify we can iterate through the stream without encoding errors
-    assert completion_stream is not None
+    assert "".join(chunk["text"] for chunk in completion_stream) == text
 
 
 @pytest.mark.asyncio
-async def test_utf8_streaming_async():
-    """Test that asynchronous streaming handles UTF-8 characters correctly."""
-    # Content with the µ character that was causing issues
-    test_content = (
-        'data: {"choices":[{"delta":{"content":"The symbol µ represents micro"}}]}\n\n'
+@pytest.mark.parametrize("text", _UNICODE_TEXTS)
+async def test_utf8_streaming_async(text: str) -> None:
+    completion_stream: Final = await make_call(
+        client=AsyncHTTPHandler(transport=_utf8_stream_transport(text)), **_call_args()
     )
 
-    mock_client = MockAsyncClient(test_content)
-    mock_logging = Mock()
-
-    # This should not raise an ASCII encoding error
-    completion_stream = await make_call(
-        client=mock_client,
-        api_base="https://test.com/v1/chat/completions",
-        headers={"Authorization": "Bearer test"},
-        data='{"model": "test", "messages": []}',
-        model="test-model",
-        messages=[],
-        logging_obj=mock_logging,
-    )
-
-    # Verify we can iterate through the stream without encoding errors
-    assert completion_stream is not None
-
-
-def test_various_unicode_characters():
-    """Test streaming with various Unicode characters that could cause issues."""
-    unicode_test_cases = [
-        "µ",  # Micro symbol (the original issue)
-        "©",  # Copyright symbol
-        "™",  # Trademark symbol
-        "€",  # Euro symbol
-        "北京",  # Chinese characters
-        "🚀",  # Emoji
-        "Ñoño",  # Spanish characters with tildes
-    ]
-
-    for unicode_char in unicode_test_cases:
-        test_content = f'data: {{"choices":[{{"delta":{{"content":"Testing {unicode_char} character"}}}}]}}\n\n'
-
-        mock_client = MockSyncClient(test_content)
-        mock_logging = Mock()
-
-        # This should not raise an ASCII encoding error for any Unicode character
-        completion_stream = make_sync_call(
-            client=mock_client,
-            api_base="https://test.com/v1/chat/completions",
-            headers={"Authorization": "Bearer test"},
-            data='{"model": "test", "messages": []}',
-            model="test-model",
-            messages=[],
-            logging_obj=mock_logging,
-        )
-
-        assert (
-            completion_stream is not None
-        ), f"Failed to handle Unicode character: {unicode_char}"
-
-
-if __name__ == "__main__":
-    test_utf8_streaming_sync()
-    asyncio.run(test_utf8_streaming_async())
-    test_various_unicode_characters()
-    print("All UTF-8 streaming tests passed!")
+    assert "".join([chunk["text"] async for chunk in completion_stream]) == text

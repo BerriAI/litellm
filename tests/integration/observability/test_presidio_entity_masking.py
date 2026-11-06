@@ -325,7 +325,7 @@ def test_long_apply_guardrail_alias_accepts_an_llm_api_scoped_key(gateway: Gatew
             "error": {
                 "message": "Authentication Error, No api key passed in.",
                 "type": "auth_error",
-                "param": "None",
+                "param": None,
                 "code": "401",
             }
         }, unauthenticated.text

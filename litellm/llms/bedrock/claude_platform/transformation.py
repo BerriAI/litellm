@@ -30,6 +30,9 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def runs_hosted_mcp(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,
@@ -72,6 +75,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
             ),
             code_execution_tool_used=self.is_code_execution_tool_used(tools=optional_params.get("tools")),
             container_with_skills_used=self.is_container_with_skills_used(optional_params=optional_params),
+            thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
         )
         anthropic_headers["anthropic-workspace-id"] = workspace_id
         return {**headers, **anthropic_headers}

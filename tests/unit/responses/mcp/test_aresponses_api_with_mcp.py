@@ -540,13 +540,9 @@ async def test_mcp_allowed_tools_filtering():
     ]
 
     # First filter by allowed tools
-    filtered_tools_with_duplicates = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_with_duplicates,
-            mcp_tools_with_litellm_proxy=cast(
-                List[ToolParam], mcp_tool_config_with_duplicates
-            ),
-        )
+    filtered_tools_with_duplicates = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_with_duplicates,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], mcp_tool_config_with_duplicates),
     )
 
     # Then deduplicate the filtered tools
@@ -605,11 +601,9 @@ async def test_mcp_allowed_tools_filtering():
         },
     ]
 
-    filtered_tools_multiple = (
-        LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
-            mcp_tools=mock_mcp_tools_from_server,
-            mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
-        )
+    filtered_tools_multiple = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_mcp_tools_from_server,
+        mcp_tools_with_litellm_proxy=cast(List[ToolParam], multiple_mcp_configs),
     )
 
     # Should return union of all allowed tools (3 unique tools)
@@ -2668,8 +2662,67 @@ async def test_stream_auto_execute_bills_the_paid_first_round_on_its_success_row
     assert _request_failure_row(logging_obj, recorder.logged[0]).get("response_cost", 0.0) == 0.0
 
 
+class _CutAfterStreamedText(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        opened: Final = {**json.loads(json.dumps(_ROUND_TWO_BODY, default=dict)), "status": "in_progress"}
+        yield _sse(
+            (
+                {"type": "response.created", "response": opened, "sequence_number": 0},
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_round_two",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "PING " * 40,
+                    "sequence_number": 1,
+                },
+            )
+        )
+        raise httpx.ReadError("connection reset mid-stream")
+
+
 @pytest.mark.asyncio
-async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_keeps_both_rounds_on_the_success_row(
+async def test_stream_auto_execute_bills_a_follow_up_cut_after_streamed_text_with_no_second_fixed_margin(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": _FIXED_MARGIN}})
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_streamed(_ROUND_ONE_BODY), httpx.Response(200, stream=_CutAfterStreamedText(), headers=SSE_HEADERS)),
+    )
+    recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-stream-follow-up-cut-after-text")
+
+    with pytest.raises(httpx.ReadError):
+        await _stream_auto_execute(logging_obj)
+    ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
+
+    _assert_one_row_bills(recorder.logged, _ROUND_ONE_BODY)
+    assert len(recorder.failed) == 1
+    failed: Final = recorder.failed[0]
+    assert failed["completion_tokens"] > 0
+    priced_with_its_own_margin: Final = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model="gpt-5.6",
+            usage=Usage(
+                prompt_tokens=failed["prompt_tokens"],
+                completion_tokens=failed["completion_tokens"],
+                total_tokens=failed["prompt_tokens"] + failed["completion_tokens"],
+            ),
+        ),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+    )
+    assert failed["response_cost"] == pytest.approx(priced_with_its_own_margin - _FIXED_MARGIN)
+    _assert_breakdown_agrees_with_the_billed_cost(failed)
+
+
+@pytest.mark.asyncio
+async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_keeps_both_rounds_on_one_failure_row(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -2690,10 +2743,22 @@ async def test_stream_auto_execute_blocked_by_a_post_call_guardrail_keeps_both_r
     if not ProxyLogging._discard_deferred_stream_logging_for_failure({"litellm_logging_obj": logging_obj}, blocked):
         ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
     await logging_obj.async_failure_handler(blocked, "blocked by output-policy")
-    await _settle(lambda: len(recorder.logged) > 0 and len(recorder.failed) > 0)
+    await _settle(lambda: len(recorder.failed) > 0)
 
-    _assert_one_stream_row_bills_both_rounds_once(recorder.logged, _final_response(events))
-    assert [row["response_cost"] for row in recorder.failed] == [0.0]
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    row: Final = recorder.failed[0]
+    charged_once: Final = _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY) - _FIXED_MARGIN
+    assert row["status"] == "failure"
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert row["response_cost"] == pytest.approx(charged_once)
+    assert row["cost_breakdown"]["total_cost"] == pytest.approx(charged_once)
+    client: Final = _final_response(events)
+    assert "message" in _output_types(client.output)
+    assert "function_call" not in _output_types(client.output)
+    assert client.usage is not None
+    assert (client.usage.input_tokens, client.usage.output_tokens) == (71 + 149, 19 + 5)
+    assert client.usage.cost == pytest.approx(charged_once)
 
 
 @pytest.mark.asyncio

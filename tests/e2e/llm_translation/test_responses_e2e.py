@@ -57,7 +57,7 @@ OPENAI_VISION_BACKEND: Final = "openai/gpt-4o"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
-GEMINI_BACKEND: Final = "gemini/gemini-2.5-flash"
+GEMINI_BACKEND: Final = "gemini/gemini-3.8-flash"
 OPENAI_RESPONSES_BACKEND: Final = "openai/gpt-5.5"
 INSTRUCTIONS = "You are a helpful assistant"
 CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
@@ -182,6 +182,48 @@ class TestResponses:
             model=model, input="reply with one word", instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
         )
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
+
+    @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_RESPONSES_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_forwards_moderation(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(proxy, resources, _openai_responses_params())
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="hi",
+            extra_body={**NO_PROXY_CACHE, "moderation": {"model": "omni-moderation-latest"}},
+        )
+        response_body: Final = TypeAdapter(dict[str, object]).validate_python(cast(object, response.model_dump()))
+        moderation_value: Final = response_body.get("moderation")
+        assert moderation_value is not None, f"response had no moderation results: {response_body!r}"
+        moderation: Final = TypeAdapter(dict[str, object]).validate_python(moderation_value)
+        moderation_input: Final = TypeAdapter(dict[str, object]).validate_python(moderation["input"])
+        moderation_output: Final = TypeAdapter(dict[str, object]).validate_python(moderation["output"])
+        assert moderation_input.get("type") == "moderation_result", (
+            f"unexpected input moderation: {moderation_input!r}"
+        )
+        assert (
+            moderation_output.get("type") == "moderation_result"
+        ), f"unexpected output moderation: {moderation_output!r}"
+
+        with pytest.raises(openai.BadRequestError) as exc_info:
+            client.responses.create(
+                model=model,
+                input="hi",
+                extra_body={**NO_PROXY_CACHE, "moderation": {"model": "does-not-exist"}},
+            )
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.covers("llm.responses.openai.basic.stream.works")
     @meta(

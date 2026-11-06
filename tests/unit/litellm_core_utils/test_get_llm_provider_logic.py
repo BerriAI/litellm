@@ -714,6 +714,48 @@ class TestClaudeModelPatternMatching:
             litellm.get_llm_provider(model="claude-opus-4-9")
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+class TestTypesafeJevPatternMatching:
+    def test_every_priced_jev_id_routes_to_typesafe(
+        self, shipped_generalizations: None
+    ) -> None:
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        priced_ids: Final = tuple(
+            key.removeprefix("typesafe/")
+            for key in GetModelCostMap.load_local_model_cost_map()
+            if key.startswith("typesafe/")
+        )
+        assert "jev-latest" in priced_ids
+        assert {
+            model: litellm.get_llm_provider(model=model)[1] for model in priced_ids
+        } == dict.fromkeys(priced_ids, "typesafe")
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "foo/jev-latest",
+            "openjev-latest",
+            "jev-",
+            "jev-latest model",
+            "jev-internal-router",
+            "jev-2.0-internal",
+            "jev-1.0-acme.router",
+            "jev-1.0",
+            "jev-2.0",
+            "jev-1.13",
+        ],
+    )
+    def test_namespaced_or_partial_jev_name_does_not_match_rule(
+        self, model: str, shipped_generalizations: None
+    ) -> None:
+        from litellm.litellm_core_utils.fallback_generalizations import (
+            match_routing_generalization,
+        )
+
+        assert match_routing_generalization(model) is None
+
+
 @pytest.mark.parametrize("prefix", ["openai", "anthropic", "custom_openai", "openai_like"])
 def test_opencode_affinity_resolution_preserves_existing_transport(prefix: str) -> None:
     api_base: Final = "https://opencode.ai/zen/go/v1"
@@ -754,7 +796,6 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
     from litellm.proxy.spend_tracking.savings import _resolve_model
     from litellm.router import Router
-    from litellm.types.router import LiteLLM_Params
     from litellm.utils import supports_native_streaming
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -763,4 +804,7 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     assert get_api_base("chatgpt/gpt-5.4", {"model": "chatgpt/gpt-5.4"}) == "https://chatgpt.com/backend-api/codex"
     identity = _resolve_model("chatgpt/gpt-5.4", None)
     assert identity is not None and identity.provider == "chatgpt"
-    assert Router._model_group_llm_provider(LiteLLM_Params(model="chatgpt/gpt-5.4")) == ("gpt-5.4", "chatgpt")
+    group = Router(model_list=[{"model_name": "codex", "litellm_params": {"model": "chatgpt/gpt-5.4"}}]).registry().group(
+        "codex"
+    )
+    assert group is not None and group.providers == ["chatgpt"]

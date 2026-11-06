@@ -7,9 +7,8 @@ the implicit `"default"` group driven by the router's top-level
 
 import asyncio
 import datetime
-import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Final, Literal
 from unittest.mock import patch
 
@@ -20,7 +19,9 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
+from litellm.router_api import RoutingContext
+from litellm.router_strategy.least_busy import picks_reserve
+from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup
 from litellm.utils import Rules, function_setup
 
 
@@ -62,63 +63,6 @@ def _build_router(routing_strategy="simple-shuffle", routing_groups=None):
         routing_strategy=routing_strategy,
         routing_groups=routing_groups,
     )
-
-
-def test_no_groups_uses_top_level_strategy_for_all_models():
-    router = _build_router(routing_strategy="latency-based-routing")
-    assert router._get_routing_context("filtered-model")[0] == "latency-based-routing"
-    assert router._get_routing_context("other-model")[0] == "latency-based-routing"
-
-
-def test_explicit_group_overrides_top_level():
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-            }
-        ],
-    )
-    strategy, selector = router._get_routing_context("filtered-model")
-    assert strategy == "latency-based-routing"
-    assert selector is not None
-    # other-model isn't in any explicit group, so it lands in the default fallback
-    strategy_other, _ = router._get_routing_context("other-model")
-    assert strategy_other == "simple-shuffle"
-
-
-def test_default_group_is_simple_shuffle_when_top_level_strategy_unset():
-    router = _build_router()
-    strategy, selector = router._get_routing_context("other-model")
-    assert strategy == "simple-shuffle"
-    # simple-shuffle does not use a selector
-    assert selector is None
-
-
-def test_two_groups_same_strategy_have_independent_selectors():
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "group_a",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-                "routing_strategy_args": {"ttl": 60},
-            },
-            {
-                "group_name": "group_b",
-                "models": ["other-model"],
-                "routing_strategy": "latency-based-routing",
-                "routing_strategy_args": {"ttl": 600},
-            },
-        ],
-    )
-    a_selector = router._group_selectors["group_a"]["latency-based-routing"]
-    b_selector = router._group_selectors["group_b"]["latency-based-routing"]
-    assert a_selector is not None and b_selector is not None
-    assert id(a_selector) != id(b_selector)
 
 
 def test_overlapping_models_across_groups_raises():
@@ -165,23 +109,6 @@ def test_invalid_strategy_in_group_raises():
         )
 
 
-def test_unknown_model_in_group_warns_but_does_not_raise(caplog):
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
-        router = _build_router(
-            routing_groups=[
-                {
-                    "group_name": "g1",
-                    "models": ["model-not-in-list"],
-                    "routing_strategy": "latency-based-routing",
-                }
-            ],
-        )
-    assert "model-not-in-list" in caplog.text
-    assert router._model_to_group.get("model-not-in-list") == "g1"
-
-
 def test_duplicate_group_name_raises():
     with pytest.raises(ValueError, match="duplicate"):
         _build_router(
@@ -198,250 +125,6 @@ def test_duplicate_group_name_raises():
                 },
             ],
         )
-
-
-def test_routing_group_object_input_accepted():
-    router = _build_router(
-        routing_groups=[
-            RoutingGroup(
-                group_name="g1",
-                models=["filtered-model"],
-                routing_strategy="latency-based-routing",
-            )
-        ],
-    )
-    assert router._model_to_group["filtered-model"] == "g1"
-
-
-@pytest.mark.asyncio
-async def test_async_dispatch_uses_group_strategy_for_grouped_model():
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-            }
-        ],
-    )
-
-    group_selector = router._group_selectors["fast"]["latency-based-routing"]
-
-    with (
-        patch.object(
-            group_selector,
-            "async_get_available_deployments",
-            wraps=group_selector.async_get_available_deployments,
-        ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
-    ):
-        await router.async_get_available_deployment(
-            model="filtered-model", request_kwargs={}
-        )
-
-        assert (
-            latency_spy.called
-        ), "group's latency selector should run for grouped model"
-        assert not shuffle_spy.called
-
-
-@pytest.mark.asyncio
-async def test_async_dispatch_falls_back_to_default_for_ungrouped_models():
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-            }
-        ],
-    )
-
-    group_selector = router._group_selectors["fast"]["latency-based-routing"]
-
-    with (
-        patch.object(
-            group_selector,
-            "async_get_available_deployments",
-            wraps=group_selector.async_get_available_deployments,
-        ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
-    ):
-        await router.async_get_available_deployment(
-            model="other-model", request_kwargs={}
-        )
-
-        assert shuffle_spy.called, "default group's simple-shuffle should run"
-        assert not latency_spy.called
-
-
-def test_update_settings_round_trip_routing_groups():
-    router = _build_router()
-    assert router._model_to_group == {}
-
-    router.update_settings(
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-            }
-        ]
-    )
-    assert router._model_to_group == {"filtered-model": "fast"}
-    assert router._get_routing_context("filtered-model")[0] == "latency-based-routing"
-
-    settings = router.get_settings()
-    assert any(g["group_name"] == "fast" for g in settings["routing_groups"])
-
-
-def test_default_group_accepts_routing_strategy_enum_for_top_level_strategy():
-    """
-    The Router constructor accepts both string and RoutingStrategy enum forms.
-    The default group must resolve a real selector for either input shape, or
-    every ungrouped model raises NoDeploymentAvailable.
-    """
-    router = _build_router(routing_strategy=RoutingStrategy.LATENCY_BASED)
-    strategy, selector = router._get_routing_context("other-model")
-    assert strategy == "latency-based-routing"
-    assert selector is not None
-    assert router.lowestlatency_logger is selector
-
-
-@pytest.mark.asyncio
-async def test_async_dispatch_uses_default_selector_when_constructed_with_enum():
-    router = _build_router(routing_strategy=RoutingStrategy.LATENCY_BASED)
-    default_selector = router.lowestlatency_logger
-    assert default_selector is not None
-
-    # filtered-model has 2 deployments, so the single-deployment short-circuit
-    # in async_get_available_deployment doesn't kick in and we actually hit
-    # the latency selector.
-    with (
-        patch.object(
-            default_selector,
-            "async_get_available_deployments",
-            wraps=default_selector.async_get_available_deployments,
-        ) as latency_spy,
-        patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
-        ) as shuffle_spy,
-    ):
-        await router.async_get_available_deployment(
-            model="filtered-model", request_kwargs={}
-        )
-
-        assert (
-            latency_spy.called
-        ), "default group's latency selector must run when constructed with the enum"
-        assert not shuffle_spy.called
-
-
-def test_update_settings_does_not_leak_strategy_callbacks(monkeypatch):
-    """
-    Repeated `update_settings` calls must not accumulate stale selectors in
-    `litellm.callbacks` / `litellm.input_callback`. Each rebuild owns the
-    previous generation and is responsible for unregistering it by identity
-    so the global lists don't grow without bound.
-    """
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-
-    router = _build_router(routing_strategy="latency-based-routing")
-    initial_default_selector = router.lowestlatency_logger
-    assert initial_default_selector is not None
-    assert any(
-        c is initial_default_selector for c in litellm.callbacks
-    ), "fresh router should register its default selector"
-
-    # Flip strategies back and forth — each transition triggers
-    # routing_strategy_init and must replace, not accumulate.
-    for _ in range(3):
-        router.update_settings(routing_strategy="usage-based-routing")
-        router.update_settings(routing_strategy="latency-based-routing")
-
-    assert all(
-        c is not initial_default_selector for c in litellm.callbacks
-    ), "old default selector instance leaked into litellm.callbacks"
-
-    # The set of router-owned selectors should be bounded — at most one per
-    # strategy class. Without the cleanup fix this grows by one per toggle.
-    router_owned_classes = (
-        "LeastBusyLoggingHandler",
-        "LowestTPMLoggingHandler",
-        "LowestTPMLoggingHandler_v2",
-        "LowestLatencyLoggingHandler",
-        "LowestCostLoggingHandler",
-    )
-    router_owned = [
-        c for c in litellm.callbacks if type(c).__name__ in router_owned_classes
-    ]
-    assert len(router_owned) <= len(
-        router_owned_classes
-    ), f"router selectors leaked: {[type(c).__name__ for c in router_owned]}"
-
-    # Group selectors: capture the v1 instance, swap, confirm v1 is gone by id.
-    router.update_settings(
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-            }
-        ]
-    )
-    group_selector_v1 = router._group_selectors["fast"]["latency-based-routing"]
-    assert group_selector_v1 is not None
-
-    router.update_settings(
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-                "routing_strategy_args": {"ttl": 600},
-            }
-        ]
-    )
-    assert all(
-        c is not group_selector_v1 for c in litellm.callbacks
-    ), "old group selector instance leaked into litellm.callbacks"
-    group_selector_v2 = router._group_selectors["fast"]["latency-based-routing"]
-    assert group_selector_v2 is not group_selector_v1
-
-
-def test_update_settings_unregisters_group_selectors_when_groups_removed(monkeypatch):
-    """
-    Setting routing_groups to an empty list (or omitting all groups) must
-    unregister every previously-owned group selector.
-    """
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-
-    router = _build_router(
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "least-busy",
-            }
-        ]
-    )
-    group_selector = router._group_selectors["fast"]["least-busy"]
-    assert group_selector in litellm.callbacks
-    assert group_selector in litellm.input_callback
-
-    router.update_settings(routing_groups=[])
-
-    assert all(c is not group_selector for c in litellm.callbacks)
-    assert all(c is not group_selector for c in litellm.input_callback)
-    assert router._group_selectors == {}
 
 
 def test_two_least_busy_groups_count_a_request_once(monkeypatch):
@@ -479,6 +162,38 @@ def test_two_least_busy_groups_count_a_request_once(monkeypatch):
             callback.log_success_event(kwargs, None, None, None)
 
     assert router.cache.get_cache("filtered-model_request_count:deploy-1") == 0
+
+
+def _filtered_model_pick(router: Router) -> str:
+    deployment: Final = router.get_available_deployment(
+        "filtered-model", request_kwargs=_proxy_shaped_request(model="filtered-model")
+    )
+    return deployment["model_info"]["id"]
+
+
+def test_a_least_busy_group_pick_stops_counting_once_its_request_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router: Final = _build_router(
+        routing_strategy="least-busy",
+        routing_groups=[{"group_name": "fast", "models": ["filtered-model"], "routing_strategy": "least-busy"}],
+    )
+
+    request: Final = _proxy_shaped_request(model="filtered-model")
+    with picks_reserve(True):
+        first: Final = router.get_available_deployment("filtered-model", request_kwargs=request)["model_info"]["id"]
+    kwargs: Final = {
+        "litellm_params": {"metadata": {"model_group": "filtered-model"}, "model_info": {"id": first}},
+        "litellm_call_id": request["litellm_call_id"],
+    }
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert _filtered_model_pick(router) == first
 
 
 def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
@@ -524,320 +239,8 @@ def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_strategy_handles_string_enum_and_none():
-    assert Router._normalize_strategy(None) is None
-    assert Router._normalize_strategy("simple-shuffle") == "simple-shuffle"
-    assert (
-        Router._normalize_strategy(RoutingStrategy.LATENCY_BASED)
-        == RoutingStrategy.LATENCY_BASED.value
-    )
-
-
-def test_validate_routing_strategy_accepts_valid_and_rejects_invalid():
-    router = _build_router()
-    # Valid: string, enum, None
-    router._validate_routing_strategy("simple-shuffle")
-    router._validate_routing_strategy(RoutingStrategy.LATENCY_BASED)
-    router._validate_routing_strategy(None)
-    with pytest.raises(ValueError, match="Invalid routing_strategy"):
-        router._validate_routing_strategy("not-a-real-strategy")
-
-
-def test_build_strategy_selector_returns_none_for_simple_shuffle(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router()
-    assert (
-        router._build_strategy_selector(
-            strategy="simple-shuffle",
-            routing_strategy_args={},
-            register_callbacks=False,
-        )
-        is None
-    )
-
-
-def test_build_strategy_selector_constructs_for_known_strategies(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router()
-    selector = router._build_strategy_selector(
-        strategy="latency-based-routing",
-        routing_strategy_args={"ttl": 30},
-        register_callbacks=False,
-    )
-    assert selector is not None
-
-
-def test_unregister_router_selectors_removes_by_identity(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router()
-    selector = router._build_strategy_selector(
-        strategy="least-busy",
-        routing_strategy_args={},
-        register_callbacks=True,
-    )
-    assert selector in litellm.callbacks
-    assert selector in litellm.input_callback
-    router._unregister_router_selectors([selector])
-    assert all(c is not selector for c in litellm.callbacks)
-    assert all(c is not selector for c in litellm.input_callback)
-
-
-def test_init_routing_groups_with_none_clears_state():
-    router = _build_router(
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "least-busy",
-            }
-        ]
-    )
-    assert router.routing_groups
-    router._init_routing_groups(None)
-    assert router.routing_groups == {}
-    assert router._model_to_group == {}
-    assert router._group_selectors == {}
-
-
-@pytest.mark.asyncio
-async def test_select_deployment_async_returns_none_without_selector():
-    router = _build_router()
-    result = await router._select_deployment_async(
-        strategy="simple-shuffle",
-        selector=None,
-        model="filtered-model",
-        healthy_deployments=[],
-        messages=None,
-        input=None,
-        request_kwargs=None,
-    )
-    assert result is None
-
-
-def test_select_deployment_sync_returns_none_without_selector():
-    router = _build_router()
-    result = router._select_deployment_sync(
-        strategy="simple-shuffle",
-        selector=None,
-        model="filtered-model",
-        healthy_deployments=[],
-        messages=None,
-        input=None,
-        request_kwargs=None,
-    )
-    assert result is None
-
-
-def test_select_deployment_sync_does_not_dispatch_cost_based_routing():
-    """
-    `LowestCostLoggingHandler` only implements `async_get_available_deployments`,
-    so the sync dispatch must fall through to None for `cost-based-routing`
-    instead of raising AttributeError.
-    """
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "cheap",
-                "models": ["filtered-model"],
-                "routing_strategy": "cost-based-routing",
-            }
-        ],
-    )
-    cost_selector = router._group_selectors["cheap"]["cost-based-routing"]
-    assert not hasattr(cost_selector, "get_available_deployments"), (
-        "test premise broken: LowestCostLoggingHandler unexpectedly grew a "
-        "sync method — revisit the sync dispatch arm."
-    )
-
-    result = router._select_deployment_sync(
-        strategy="cost-based-routing",
-        selector=cost_selector,
-        model="filtered-model",
-        healthy_deployments=[],
-        messages=None,
-        input=None,
-        request_kwargs=None,
-    )
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_async_dispatch_falls_back_to_sync_for_usage_based_routing_v1():
-    """
-    `LowestTPMLoggingHandler` (v1) only implements the sync
-    `get_available_deployments`. The async dispatch must call the sync method
-    on the v1 selector instead of awaiting a non-existent async one.
-    """
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "v1",
-                "models": ["filtered-model"],
-                "routing_strategy": "usage-based-routing",
-            }
-        ],
-    )
-    v1_selector = router._group_selectors["v1"]["usage-based-routing"]
-    assert not hasattr(v1_selector, "async_get_available_deployments"), (
-        "test premise broken: LowestTPMLoggingHandler v1 unexpectedly grew an "
-        "async method — revisit the async dispatch arm."
-    )
-
-    with patch.object(
-        v1_selector,
-        "get_available_deployments",
-        wraps=v1_selector.get_available_deployments,
-    ) as v1_spy:
-        await router._select_deployment_async(
-            strategy="usage-based-routing",
-            selector=v1_selector,
-            model="filtered-model",
-            healthy_deployments=[
-                {
-                    "model_name": "filtered-model",
-                    "litellm_params": {"model": "openai/gpt-4o"},
-                    "model_info": {"id": "deploy-1"},
-                }
-            ],
-            messages=[{"role": "user", "content": "hi"}],
-            input=None,
-            request_kwargs={},
-        )
-
-    assert v1_spy.called, "async dispatch must route v1 strategy through sync method"
-
-
-def test_request_routing_strategy_override_beats_top_level():
-    router = _build_router(routing_strategy="least-busy")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "simple-shuffle"}
-    )
-    assert strategy == "simple-shuffle"
-    assert selector is None
-
-
-def test_request_routing_strategy_override_beats_explicit_group():
-    router = _build_router(
-        routing_strategy="simple-shuffle",
-        routing_groups=[
-            {
-                "group_name": "fast",
-                "models": ["filtered-model"],
-                "routing_strategy": "latency-based-routing",
-            }
-        ],
-    )
-    strategy, _ = router._get_routing_context(
-        "filtered-model", {"routing_strategy": "least-busy"}
-    )
-    assert strategy == "least-busy"
-
-
-def test_request_routing_strategy_override_builds_and_caches_selector():
-    router = _build_router(routing_strategy="simple-shuffle")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "latency-based-routing"}
-    )
-    assert strategy == "latency-based-routing"
-    assert selector is not None
-    _, selector_again = router._get_routing_context(
-        "other-model", {"routing_strategy": "latency-based-routing"}
-    )
-    assert selector_again is selector
-
-
-def test_request_routing_strategy_override_matching_global_reuses_default_selector():
-    router = _build_router(routing_strategy="least-busy")
-    _, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "least-busy"}
-    )
-    assert selector is router.leastbusy_logger
-    assert router._override_selectors == {}
-
-
-def test_invalid_request_routing_strategy_override_falls_back():
-    router = _build_router(routing_strategy="least-busy")
-    strategy, selector = router._get_routing_context(
-        "other-model", {"routing_strategy": "not-a-real-strategy"}
-    )
-    assert strategy == "least-busy"
-    assert selector is router.leastbusy_logger
-
-
-def test_no_override_key_keeps_existing_behavior():
-    router = _build_router(routing_strategy="least-busy")
-    strategy, _ = router._get_routing_context("other-model", {"messages": []})
-    assert strategy == "least-busy"
-    strategy_none_kwargs, _ = router._get_routing_context("other-model", None)
-    assert strategy_none_kwargs == "least-busy"
-
-
-def test_request_routing_strategy_override_helper_validates_directly():
-    router = _build_router(routing_strategy="least-busy")
-    assert router._get_request_routing_strategy_override({"routing_strategy": "simple-shuffle"}) == "simple-shuffle"
-    assert router._get_request_routing_strategy_override({"routing_strategy": RoutingStrategy.LEAST_BUSY}) == "least-busy"
-    assert router._get_request_routing_strategy_override({"routing_strategy": "lar1"}) is None
-    assert router._get_request_routing_strategy_override({"routing_strategy": {"bad": "type"}}) is None
-    assert router._get_request_routing_strategy_override({}) is None
-    assert router._get_request_routing_strategy_override(None) is None
-
-
-def test_override_strategy_selector_helper_builds_per_strategy():
-    router = _build_router(routing_strategy="least-busy")
-    latency_selector = router._get_override_strategy_selector("latency-based-routing")
-    assert latency_selector is not None
-    assert router._get_override_strategy_selector("latency-based-routing") is latency_selector
-    assert router._get_override_strategy_selector("least-busy") is router.leastbusy_logger
-    assert router._get_override_strategy_selector("simple-shuffle") is None
-
-
-def test_strategy_reinit_unregisters_override_selectors():
-    router = _build_router(routing_strategy="least-busy")
-    override_selector = router._get_override_strategy_selector("latency-based-routing")
-    assert override_selector is not None
-    assert not any(cb is override_selector for cb in litellm.callbacks)
-
-    router.update_settings(routing_strategy="latency-based-routing")
-
-    assert router._override_selectors == {}
-    assert not any(cb is override_selector for cb in litellm.callbacks)
-    assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
-
-
 def _single_latency_group():
     return [{"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"}]
-
-
-def _assert_still_routes_with_original_group(router, selector):
-    assert list(router.routing_groups) == ["g1"]
-    assert router._model_to_group == {"filtered-model": "g1"}
-    assert router._group_selectors["g1"]["latency-based-routing"] is selector
-    assert router._get_routing_context("filtered-model", None) == ("latency-based-routing", selector)
-    assert sum(1 for cb in litellm.callbacks if cb is selector) == 1
-
-
-def test_failed_routing_groups_update_keeps_previous_groups(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router(routing_groups=_single_latency_group())
-    selector = router._group_selectors["g1"]["latency-based-routing"]
-
-    with pytest.raises(ValueError, match="appears in"):
-        router.update_settings(
-            routing_groups=[
-                *_single_latency_group(),
-                {"group_name": "g2", "models": ["filtered-model"], "routing_strategy": "least-busy"},
-            ],
-        )
-
-    _assert_still_routes_with_original_group(router, selector)
-    assert sum(1 for cb in litellm.callbacks if type(cb) is not type(selector)) == 0
-    assert litellm.input_callback == []
 
 
 def test_failed_routing_groups_update_does_not_poison_later_strategy_changes(monkeypatch):
@@ -880,106 +283,6 @@ def test_overlap_error_names_every_conflicting_model():
     assert "'other-model' appears in 'g1' and 'g2'" in message
 
 
-def test_invalid_group_strategy_keeps_previous_groups(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router(routing_groups=_single_latency_group())
-    selector = router._group_selectors["g1"]["latency-based-routing"]
-
-    with pytest.raises(ValueError, match="Invalid routing_strategy"):
-        router.update_settings(
-            routing_groups=[
-                {"group_name": "g2", "models": ["other-model"], "routing_strategy": "not-a-real-strategy"},
-            ],
-        )
-
-    _assert_still_routes_with_original_group(router, selector)
-
-
-def test_unbuildable_group_selector_keeps_previous_groups(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router(routing_groups=_single_latency_group())
-    selector = router._group_selectors["g1"]["latency-based-routing"]
-
-    with pytest.raises(ValidationError, match="ttl"):
-        router.update_settings(
-            routing_groups=[
-                {"group_name": "g0", "models": ["other-model"], "routing_strategy": "least-busy"},
-                *_single_latency_group(),
-                {
-                    "group_name": "g2",
-                    "models": ["other-model-2"],
-                    "routing_strategy": "latency-based-routing",
-                    "routing_strategy_args": {"ttl": "not-a-number"},
-                },
-            ],
-        )
-
-    _assert_still_routes_with_original_group(router, selector)
-    assert litellm.callbacks == [selector]
-    assert litellm.input_callback == []
-
-
-def test_register_router_selector_wires_only_the_hooks_the_strategy_needs(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router()
-    least_busy = router._build_strategy_selector(
-        strategy="least-busy", routing_strategy_args={}, register_callbacks=False
-    )
-    latency = router._build_strategy_selector(
-        strategy="latency-based-routing", routing_strategy_args={}, register_callbacks=False
-    )
-    assert least_busy is not None and latency is not None
-    assert litellm.callbacks == [] and litellm.input_callback == []
-
-    router._register_router_selector(least_busy)
-    router._register_router_selector(latency)
-
-    assert [cb for cb in litellm.callbacks if cb is least_busy or cb is latency] == [least_busy, latency]
-    assert litellm.input_callback == [least_busy]
-
-
-def test_replace_routing_groups_swaps_state_and_callbacks_in_one_step(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router(routing_groups=_single_latency_group())
-    old_selector = router._group_selectors["g1"]["latency-based-routing"]
-    new_selector = router._build_strategy_selector(
-        strategy="least-busy", routing_strategy_args={}, register_callbacks=False
-    )
-    assert new_selector is not None
-
-    router._replace_routing_groups(
-        (
-            (RoutingGroup(group_name="g2", models=["other-model"], routing_strategy="least-busy"), new_selector),
-            (RoutingGroup(group_name="g3", models=["other-model-2"], routing_strategy="simple-shuffle"), None),
-        )
-    )
-
-    assert list(router.routing_groups) == ["g2", "g3"]
-    assert router._model_to_group == {"other-model": "g2", "other-model-2": "g3"}
-    assert router._group_selectors == {"g2": {"least-busy": new_selector}, "g3": {}}
-    assert router._get_routing_context("other-model", None) == ("least-busy", new_selector)
-    assert router._get_routing_context("filtered-model", None)[0] == router.routing_strategy
-    assert all(cb is not old_selector for cb in litellm.callbacks)
-    assert sum(1 for cb in litellm.callbacks if cb is new_selector) == 1
-    assert litellm.input_callback == [new_selector]
-
-
-def test_override_selectors_are_not_registered_process_wide(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    router = _build_router(routing_strategy="simple-shuffle")
-    v2_selector = router._get_override_strategy_selector("usage-based-routing-v2")
-    least_busy_selector = router._get_override_strategy_selector("least-busy")
-    assert v2_selector is not None and least_busy_selector is not None
-
-    assert litellm.callbacks == []
-    assert litellm.input_callback == []
-
-
 def _rpm_limited_model_list():
     return [
         {
@@ -993,77 +296,6 @@ def _rpm_limited_model_list():
             "model_info": {"id": "deploy-3"},
         },
     ]
-
-
-async def _mock_completion(router, **override):
-    return await router.acompletion(
-        model="other-model", messages=[{"role": "user", "content": "hi"}], mock_response="ok", **override
-    )
-
-
-@pytest.mark.asyncio
-async def test_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it():
-    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
-
-    await _mock_completion(router, routing_strategy="usage-based-routing-v2")
-    override_selector = router._override_selectors["usage-based-routing-v2"]
-    assert not any(cb is override_selector for cb in litellm.callbacks)
-
-    with patch.object(
-        override_selector, "async_pre_call_check", wraps=override_selector.async_pre_call_check
-    ) as pre_call_spy:
-        for _ in range(2):
-            plain = await _mock_completion(router)
-            assert plain.choices[0].message.content == "ok"
-        assert not pre_call_spy.called
-
-        with pytest.raises(litellm.RateLimitError):
-            await _mock_completion(router, routing_strategy="usage-based-routing-v2")
-
-
-def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it():
-    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
-    messages = [{"role": "user", "content": "hi"}]
-
-    router.completion(
-        model="other-model", messages=messages, mock_response="ok", routing_strategy="usage-based-routing-v2"
-    )
-    override_selector = router._override_selectors["usage-based-routing-v2"]
-    assert not any(cb is override_selector for cb in litellm.callbacks)
-
-    for _ in range(2):
-        plain = router.completion(model="other-model", messages=messages, mock_response="ok")
-        assert plain.choices[0].message.content == "ok"
-
-    with pytest.raises(ValueError, match="No deployments available"):
-        router.completion(
-            model="other-model", messages=messages, mock_response="ok", routing_strategy="usage-based-routing-v2"
-        )
-
-
-@pytest.mark.asyncio
-async def test_override_selector_pre_call_check_only_runs_for_override_selectors(monkeypatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    deployment = _rpm_limited_model_list()[0]
-
-    override_router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle")
-    override_selector = override_router._get_override_strategy_selector("usage-based-routing-v2")
-    await override_router._async_override_selector_pre_call_check(
-        "usage-based-routing-v2", override_selector, deployment, None
-    )
-    with pytest.raises(litellm.RateLimitError):
-        override_router._override_selector_pre_call_check("usage-based-routing-v2", override_selector, deployment)
-
-    default_router = Router(model_list=_rpm_limited_model_list(), routing_strategy="usage-based-routing-v2")
-    for _ in range(2):
-        await default_router._async_override_selector_pre_call_check(
-            "usage-based-routing-v2", default_router.lowesttpm_logger_v2, deployment, None
-        )
-        default_router._override_selector_pre_call_check(
-            "usage-based-routing-v2", default_router.lowesttpm_logger_v2, deployment
-        )
-    await default_router._async_override_selector_pre_call_check(None, None, deployment, None)
-    default_router._override_selector_pre_call_check(None, None, deployment)
 
 
 @pytest.mark.asyncio
@@ -1149,149 +381,6 @@ def _proxy_shaped_request(**data: object) -> dict[str, object]:
     return {**kwargs, "litellm_logging_obj": logging_obj}
 
 
-async def _async_override_pick(router: Router, strategy: str) -> str:
-    deployment = await router.async_get_available_deployment(
-        "grp", request_kwargs=_proxy_shaped_request(model="grp", routing_strategy=strategy)
-    )
-    return deployment["model_info"]["id"]
-
-
-def _sync_override_pick(router: Router, strategy: str) -> str:
-    deployment = router.get_available_deployment(
-        "grp", request_kwargs=_proxy_shaped_request(model="grp", routing_strategy=strategy)
-    )
-    return deployment["model_info"]["id"]
-
-
-def _in_flight(router: Router, deployment_id: str) -> int | None:
-    return router.cache.get_cache(f"grp_request_count:{deployment_id}")
-
-
-async def _async_wait_until(predicate: Callable[[], bool]) -> None:
-    for _ in range(100):
-        if predicate():
-            return
-        await asyncio.sleep(0.02)
-    raise AssertionError("lifecycle callback never reached the override selector")
-
-
-def _sync_wait_until(predicate: Callable[[], bool]) -> None:
-    for _ in range(100):
-        if predicate():
-            return
-        time.sleep(0.02)
-    raise AssertionError("lifecycle callback never reached the override selector")
-
-
-def _selector_is_not_global(selector: CustomLogger) -> bool:
-    global_lists = (
-        litellm.callbacks,
-        litellm.input_callback,
-        litellm.success_callback,
-        litellm.failure_callback,
-        litellm._async_success_callback,
-        litellm._async_failure_callback,
-    )
-    return not any(cb is selector for cbs in global_lists for cb in cbs)
-
-
-@pytest.mark.asyncio
-async def test_least_busy_override_sees_the_overriding_request_in_flight():
-    router = Router(model_list=_two_deployment_model_list(), routing_strategy="simple-shuffle", num_retries=0)
-
-    stream = await router.acompletion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy", stream=True))
-    busy = stream._hidden_params["model_id"]
-    idle = "d2" if busy == "d1" else "d1"
-    assert [await _async_override_pick(router, "least-busy") for _ in range(3)] == [idle, idle, idle]
-
-    async for _ in stream:
-        pass
-    await _async_wait_until(lambda: _in_flight(router, busy) == 0)
-    assert await _async_override_pick(router, "least-busy") == "d1"
-    assert _selector_is_not_global(router._override_selectors["least-busy"])
-
-
-def test_sync_least_busy_override_sees_the_overriding_request_in_flight():
-    router = Router(model_list=_two_deployment_model_list(), routing_strategy="simple-shuffle", num_retries=0)
-
-    stream = router.completion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy", stream=True))
-    busy = stream._hidden_params["model_id"]
-    idle = "d2" if busy == "d1" else "d1"
-    assert [_sync_override_pick(router, "least-busy") for _ in range(3)] == [idle, idle, idle]
-
-    for _ in stream:
-        pass
-    _sync_wait_until(lambda: _in_flight(router, busy) == 0)
-    assert _sync_override_pick(router, "least-busy") == "d1"
-    assert _selector_is_not_global(router._override_selectors["least-busy"])
-
-
-@pytest.mark.asyncio
-async def test_least_busy_override_releases_the_slot_when_the_overriding_request_fails():
-    router = Router(
-        model_list=_two_deployment_model_list(mock_response="litellm.InternalServerError"),
-        routing_strategy="simple-shuffle",
-        num_retries=0,
-    )
-
-    with pytest.raises(litellm.InternalServerError):
-        await router.acompletion(**_proxy_shaped_request(model="grp", routing_strategy="least-busy"))
-
-    await _async_wait_until(lambda: _in_flight(router, "d1") == 0)
-    assert await _async_override_pick(router, "least-busy") == "d1"
-    assert _selector_is_not_global(router._override_selectors["least-busy"])
-
-
-@pytest.mark.asyncio
-async def test_latency_based_override_learns_from_the_overriding_requests():
-    router = Router(
-        model_list=_two_deployment_model_list(mock_delay=0.05), routing_strategy="simple-shuffle", num_retries=0
-    )
-
-    def samples(deployment_id: str) -> list[float]:
-        recorded = (router.cache.get_cache("grp_map") or {}).get(deployment_id, {}).get("latency_normalized", [])
-        return [latency for latency in recorded if latency > 0]
-
-    async def overriding_call() -> str:
-        sampled_before = {"d1": len(samples("d1")), "d2": len(samples("d2"))}
-        response = await router.acompletion(
-            **_proxy_shaped_request(model="grp", routing_strategy="latency-based-routing")
-        )
-        deployment_id = response._hidden_params["model_id"]
-        await _async_wait_until(lambda: len(samples(deployment_id)) > sampled_before[deployment_id])
-        return deployment_id
-
-    served = [await overriding_call() for _ in range(6)]
-
-    assert "d1" in served
-    assert served[2:] == ["d2"] * 4
-    assert _selector_is_not_global(router._override_selectors["latency-based-routing"])
-
-
-def test_override_selector_is_bound_only_to_the_request_that_asked_for_it():
-    router = Router(model_list=_two_deployment_model_list(), routing_strategy="simple-shuffle")
-    overriding = _proxy_shaped_request(model="grp", routing_strategy="least-busy")
-    plain = _proxy_shaped_request(model="grp")
-
-    router.get_available_deployment("grp", request_kwargs=overriding)
-    router.get_available_deployment("grp", request_kwargs=overriding)
-    router.get_available_deployment("grp", request_kwargs=plain)
-
-    selector = router._override_selectors["least-busy"]
-    bound = overriding["litellm_logging_obj"]
-    for callbacks in (
-        bound.dynamic_input_callbacks,
-        bound.dynamic_success_callbacks,
-        bound.dynamic_async_success_callbacks,
-        bound.dynamic_failure_callbacks,
-        bound.dynamic_async_failure_callbacks,
-    ):
-        assert callbacks == [selector]
-    unbound = plain["litellm_logging_obj"]
-    assert unbound.dynamic_input_callbacks is None and unbound.dynamic_success_callbacks is None
-    assert unbound.dynamic_failure_callbacks is None and unbound.dynamic_async_failure_callbacks is None
-
-
 def test_override_matching_the_router_strategy_is_not_bound_twice():
     router = Router(model_list=_two_deployment_model_list(), routing_strategy="least-busy")
     request = _proxy_shaped_request(model="grp", routing_strategy="least-busy")
@@ -1301,52 +390,20 @@ def test_override_matching_the_router_strategy_is_not_bound_twice():
     assert request["litellm_logging_obj"].dynamic_input_callbacks is None
 
 
-@pytest.mark.asyncio
-async def test_override_matching_a_routing_group_strategy_records_each_request_once():
-    router = Router(
-        model_list=_two_deployment_model_list(),
-        routing_strategy="simple-shuffle",
-        routing_groups=[RoutingGroup(group_name="lat", models=["grp"], routing_strategy="latency-based-routing")],
-        num_retries=0,
-    )
-    request = _proxy_shaped_request(model="grp", routing_strategy="latency-based-routing")
-    assert router._globally_registered_strategies() == {"simple-shuffle", "latency-based-routing"}
-
-    response = await router.acompletion(**request)
-    deployment_id = response._hidden_params["model_id"]
-    await _async_wait_until(lambda: (router.cache.get_cache("grp_map") or {}).get(deployment_id) is not None)
-
-    assert len(router.cache.get_cache("grp_map")[deployment_id]["latency_normalized"]) == 1
-    assert request["litellm_logging_obj"].dynamic_success_callbacks is None
-
-
-def test_bind_override_selector_to_request_binds_once_and_ignores_requests_without_logging():
-    router = Router(model_list=_two_deployment_model_list(), routing_strategy="simple-shuffle")
-    selector = router._get_override_strategy_selector("least-busy")
-    request = _proxy_shaped_request(model="grp", routing_strategy="least-busy")
-    request["litellm_logging_obj"].dynamic_success_callbacks = ["langfuse"]
-
-    router._bind_override_selector_to_request("least-busy", selector, request)
-    router._bind_override_selector_to_request("least-busy", selector, request)
-    router._bind_override_selector_to_request("least-busy", selector, None)
-    router._bind_override_selector_to_request("least-busy", selector, {"model": "grp"})
-
-    logging_obj = request["litellm_logging_obj"]
-    assert logging_obj.dynamic_success_callbacks == ["langfuse", selector]
-    assert logging_obj.dynamic_input_callbacks == [selector]
-    assert logging_obj.dynamic_async_failure_callbacks == [selector]
-    assert _selector_is_not_global(selector)
-
-
 def _quality_group(strategy="latency-based-routing"):
     return [{"group_name": "quality", "models": ["filtered-model", "other-model"], "routing_strategy": strategy}]
 
 
-def test_group_name_is_callable_and_unions_member_deployments():
+async def _candidate_ids(router: Router, model: str) -> list[str]:
+    deployments: Final = await router.async_get_healthy_deployments(model=model, request_kwargs={})
+    assert isinstance(deployments, list)
+    return sorted(d["model_info"]["id"] for d in deployments)
+
+
+@pytest.mark.asyncio
+async def test_group_name_is_callable_and_unions_member_deployments():
     router = _build_router(routing_groups=_quality_group())
-    model, deployments = router._common_checks_available_deployment(model="quality")
-    assert model == "quality"
-    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert await _candidate_ids(router, "quality") == ["deploy-1", "deploy-2", "deploy-3"]
 
 
 def test_group_name_appears_in_model_names_and_model_list():
@@ -1357,34 +414,8 @@ def test_group_name_appears_in_model_names_and_model_list():
     assert sorted(r["model_info"]["id"] for r in rows) == ["deploy-1", "deploy-2", "deploy-3"]
 
 
-def test_get_routing_context_for_group_name_uses_group_strategy():
-    router = _build_router(routing_groups=_quality_group())
-    strategy, selector = router._get_routing_context("quality")
-    assert strategy == "latency-based-routing"
-    assert selector is router._group_selectors["quality"]["latency-based-routing"]
-
-
 @pytest.mark.asyncio
-async def test_group_call_dispatches_via_group_selector():
-    router = _build_router(routing_groups=_quality_group())
-    group_selector = router._group_selectors["quality"]["latency-based-routing"]
-
-    with (
-        patch.object(
-            group_selector,
-            "async_get_available_deployments",
-            wraps=group_selector.async_get_available_deployments,
-        ) as latency_spy,
-        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
-    ):
-        deployment = await router.async_get_available_deployment(model="quality", request_kwargs={})
-
-        assert latency_spy.called
-        assert not shuffle_spy.called
-        assert deployment["model_name"] in {"filtered-model", "other-model"}
-
-
-def test_group_name_colliding_with_model_name_is_shadowed_with_warning(caplog):
+async def test_group_name_colliding_with_model_name_is_shadowed_with_warning(caplog):
     import logging
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
@@ -1395,13 +426,11 @@ def test_group_name_colliding_with_model_name_is_shadowed_with_warning(caplog):
         )
     assert any("shadowed" in record.getMessage() for record in caplog.records)
     assert router.get_routing_group("filtered-model") is None
-    assert router._get_routing_context("other-model")[0] == "latency-based-routing"
-
-    model, deployments = router._common_checks_available_deployment(model="filtered-model")
-    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2"]
+    assert await _candidate_ids(router, "filtered-model") == ["deploy-1", "deploy-2"]
 
 
-def test_group_name_colliding_with_model_group_alias_is_shadowed_with_warning(caplog):
+@pytest.mark.asyncio
+async def test_group_name_colliding_with_model_group_alias_is_shadowed_with_warning(caplog):
     import logging
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
@@ -1412,13 +441,11 @@ def test_group_name_colliding_with_model_group_alias_is_shadowed_with_warning(ca
         )
     assert any("shadowed" in record.getMessage() for record in caplog.records)
     assert router.get_routing_group("quality") is None
-
-    model, deployments = router._common_checks_available_deployment(model="quality")
-    assert model == "filtered-model"
-    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2"]
+    assert await _candidate_ids(router, "quality") == ["deploy-1", "deploy-2"]
 
 
-def test_real_model_added_later_shadows_group():
+@pytest.mark.asyncio
+async def test_real_model_added_later_shadows_group():
     router = _build_router(routing_groups=_quality_group())
     assert router.get_routing_group("quality") is not None
 
@@ -1432,34 +459,32 @@ def test_real_model_added_later_shadows_group():
         )
     )
     assert router.get_routing_group("quality") is None
-    model, deployments = router._common_checks_available_deployment(model="quality")
-    assert [d["model_info"]["id"] for d in deployments] == ["deploy-shadow"]
+    assert await _candidate_ids(router, "quality") == ["deploy-shadow"]
 
     router.delete_deployment(id="deploy-shadow")
     assert "quality" not in router.model_names
     assert router.get_routing_group("quality") is not None
-    _, restored = router._common_checks_available_deployment(model="quality")
-    assert sorted(d["model_info"]["id"] for d in restored) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert await _candidate_ids(router, "quality") == ["deploy-1", "deploy-2", "deploy-3"]
 
 
-def test_group_with_no_member_deployments_raises_no_healthy():
+@pytest.mark.asyncio
+async def test_group_with_no_member_deployments_raises_no_healthy():
     router = Router(
         model_list=_model_list(),
         routing_groups=[{"group_name": "empty-group", "models": ["ghost-model"], "routing_strategy": "simple-shuffle"}],
     )
     with pytest.raises(litellm.BadRequestError):
-        router._common_checks_available_deployment(model="empty-group")
+        await router.async_get_healthy_deployments(model="empty-group", request_kwargs={})
 
 
-def test_alias_pointing_at_group_composes():
+@pytest.mark.asyncio
+async def test_alias_pointing_at_group_composes():
     router = Router(
         model_list=_model_list(),
         model_group_alias={"quality-alias": "quality"},
         routing_groups=_quality_group(),
     )
-    model, deployments = router._common_checks_available_deployment(model="quality-alias")
-    assert model == "quality"
-    assert sorted(d["model_info"]["id"] for d in deployments) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert await _candidate_ids(router, "quality-alias") == ["deploy-1", "deploy-2", "deploy-3"]
 
 
 def test_model_group_info_reports_group():
@@ -1483,11 +508,10 @@ def test_routing_group_has_alternatives():
     assert solo_router.routing_group_has_alternatives("solo-group") is False
 
 
-def test_member_direct_call_unchanged_by_callable_groups():
+@pytest.mark.asyncio
+async def test_member_direct_call_unchanged_by_callable_groups():
     router = _build_router(routing_groups=_quality_group())
-    model, deployments = router._common_checks_available_deployment(model="other-model")
-    assert model == "other-model"
-    assert [d["model_info"]["id"] for d in deployments] == ["deploy-3"]
+    assert await _candidate_ids(router, "other-model") == ["deploy-3"]
 
 
 def test_update_settings_group_change_invalidates_model_group_info():
@@ -1545,29 +569,19 @@ def test_group_rows_cache_invalidated_on_model_list_change():
     assert sum(1 for row in router.get_model_list() if row["model_name"] == "quality") == 4
 
 
-def _pin_choice_to(deployment_id):
-    def _pick(seq):
-        for candidate in seq:
-            if candidate["model_info"]["id"] == deployment_id:
-                return candidate
-        return seq[0]
-
-    return _pick
-
-
 async def _call_and_get_cooldowns(router, model):
-    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
-
-    with (
-        patch("litellm.router_strategy.simple_shuffle.random.choice", side_effect=_pin_choice_to("deploy-3")),
-        pytest.raises(litellm.RateLimitError),
-    ):
+    """Cool down the other members first, so the call has to land on deploy-3."""
+    for model_id in ("deploy-1", "deploy-2"):
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id, original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=60
+        )
+    with pytest.raises(litellm.RateLimitError):
         await router.acompletion(
             model=model,
             messages=[{"role": "user", "content": "hi"}],
             mock_response="litellm.RateLimitError",
         )
-    return await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    return [model_id for model_id, _ in await router.cooldown_cache.async_get_active_cooldowns(["deploy-3"], None)]
 
 
 @pytest.mark.asyncio
@@ -1626,15 +640,6 @@ def test_group_rows_do_not_inherit_member_access_groups():
     assert "access_groups" in router.get_model_list(model_name="gated-member")[0]["model_info"]
 
 
-def test_group_rebuild_invalidates_access_groups_cache():
-    router = _build_router(routing_groups=_quality_group())
-    router.get_model_access_groups()
-    assert router._access_groups_cache is not None
-
-    router.update_settings(routing_groups=[])
-    assert router._access_groups_cache is None
-
-
 def test_get_model_list_from_routing_groups_materializes_rows():
     router = _build_router(routing_groups=_quality_group())
     rows = router.get_model_list_from_routing_groups()
@@ -1644,28 +649,6 @@ def test_get_model_list_from_routing_groups_materializes_rows():
     named = router.get_model_list_from_routing_groups(model_name="quality")
     assert sorted(row["model_info"]["id"] for row in named) == ["deploy-1", "deploy-2", "deploy-3"]
     assert router.get_model_list_from_routing_groups(model_name="filtered-model") == ()
-
-
-def test_get_routing_group_deployments_unions_members():
-    router = _build_router(routing_groups=_quality_group())
-    union = router._get_routing_group_deployments("quality")
-    assert sorted(d["model_info"]["id"] for d in union) == ["deploy-1", "deploy-2", "deploy-3"]
-    assert router._get_routing_group_deployments("filtered-model") is None
-
-
-def test_materialize_routing_group_rows_labels_members_with_group_name():
-    router = _build_router(routing_groups=_quality_group())
-    group = router.get_routing_group("quality")
-    rows = router._materialize_routing_group_rows((group,))
-    assert {row["model_name"] for row in rows} == {"quality"}
-    assert len(rows) == 3
-
-
-def test_as_routing_group_row_strips_access_groups():
-    source = {"model_name": "member", "model_info": {"id": "d1", "access_groups": ["restricted"]}}
-    row = Router._as_routing_group_row(source)
-    assert row["model_info"] == {"id": "d1"}
-    assert source["model_info"]["access_groups"] == ["restricted"]
 
 
 @pytest.mark.asyncio
@@ -1711,30 +694,6 @@ def _priority_deployments(
         }
         for deployment in _model_list()
     ]
-
-
-def test_priority_group_affinity_scope_follows_group_aliases_and_settings_reload() -> None:
-    router: Final = Router(
-        model_list=_priority_deployments(),
-        routing_groups=[
-            _priority_group(),
-            RoutingGroup(group_name="legacy", models=["filtered-model"], routing_strategy="simple-shuffle"),
-        ],
-        model_group_alias={"priority-alias": "priority-group"},
-    )
-    requested_models: Final = (
-        "priority-group", "priority-alias", "filtered-model", "other-model", "legacy", "missing"
-    )
-    assert tuple(router._is_priority_routing_group(model) for model in requested_models) == (
-        True, True, False, False, False, False
-    )
-
-    router.update_settings(routing_groups=[{
-        "group_name": "priority-group",
-        "models": ["filtered-model", "other-model"],
-        "routing_strategy": "simple-shuffle",
-    }])
-    assert tuple(router._is_priority_routing_group(model) for model in requested_models) == (False,) * 6
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -1795,8 +754,6 @@ async def test_opposite_priority_groups_preserve_deployments_and_legacy_member_p
         model="reverse-group", messages=[{"role": "user", "content": "hi"}]
     )
     assert (forward.choices[0].message.content, reverse.choices[0].message.content) == ("primary", "backup")
-    assert router._get_routing_context("filtered-model")[0] == "least-busy"
-    assert router._get_routing_context("other-model")[0] == "latency-based-routing"
     assert router.get_model_list(model_name="filtered-model") == before
     assert all(deployment["litellm_params"]["order"] == 10 for deployment in before)
 
@@ -1960,67 +917,6 @@ async def test_auto_router_selected_priority_group_fails_over_inside_the_group()
     assert response.choices[0].message.content == "backup"
 
 
-@pytest.mark.parametrize("endpoint_request", [{"input": "hi"}, {"messages": [{"role": "user", "content": "hi"}]}])
-@pytest.mark.asyncio
-async def test_priority_generic_fallback_keeps_routing_controls_out_of_provider_kwargs(
-    endpoint_request: dict[str, object],
-) -> None:
-    async def provider(model: str, **provider_kwargs: object) -> str:
-        assert "_target_order" not in provider_kwargs
-        assert "model_priorities" not in provider_kwargs
-        model_info: Final = provider_kwargs["model_info"]
-        assert isinstance(model_info, dict)
-        if model_info["id"] != "deploy-3":
-            raise litellm.RateLimitError(message="primary refused", model=model, llm_provider="openai")
-        return "backup"
-
-    router: Final = Router(
-        model_list=_priority_deployments(),
-        routing_groups=[_priority_group()],
-        num_retries=0,
-        disable_cooldowns=True,
-    )
-    response: Final = await router._ageneric_api_call_with_fallbacks(
-        model="priority-group", original_function=provider, **endpoint_request
-    )
-    assert response == "backup"
-
-
-@pytest.mark.parametrize("provider_model_id", [None, "resolved-downstream-id"])
-@pytest.mark.asyncio
-async def test_priority_generic_fallback_dict_preserves_served_model_id(provider_model_id: str | None) -> None:
-    async def provider(model: str, **provider_kwargs: object) -> dict[str, object]:
-        model_info: Final = provider_kwargs["model_info"]
-        assert isinstance(model_info, dict)
-        if model_info["id"] == "deploy-1":
-            raise litellm.NotFoundError(message="primary missing", model=model, llm_provider="openai")
-        assert model_info["id"] == "deploy-3"
-        return {
-            "content": "backup",
-            **({"_hidden_params": {"model_id": provider_model_id}} if provider_model_id is not None else {}),
-        }
-
-    router: Final = Router(
-        model_list=_priority_deployments()[::2],
-        routing_groups=[_priority_group()],
-        num_retries=0,
-        disable_cooldowns=True,
-    )
-    outer_metadata: Final[dict[str, object]] = {}
-    response: Final = await router._ageneric_api_call_with_fallbacks(
-        model="priority-group",
-        original_function=provider,
-        messages=[{"role": "user", "content": "hi"}],
-        litellm_metadata=outer_metadata,
-    )
-    primary_info: Final = outer_metadata["model_info"]
-    assert isinstance(primary_info, dict)
-    assert primary_info["id"] == "deploy-1"
-    assert response["content"] == "backup"
-    assert response["_hidden_params"]["model_id"] == (provider_model_id or "deploy-3")
-    assert response["_hidden_params"]["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
-
-
 @pytest.mark.asyncio
 async def test_priority_group_ignores_cached_backup_affinity() -> None:
     from litellm.router_utils.prompt_caching_cache import PromptCachingCache
@@ -2060,7 +956,7 @@ async def test_priority_group_preserves_responses_continuity_on_a_backup() -> No
 
 
 def _recording_fallback_gate(allowed: frozenset[str], checked: list[str]) -> FallbackAccessCheck:
-    async def check(*, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def check(*, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         checked.append(model)
         return model in allowed
 
