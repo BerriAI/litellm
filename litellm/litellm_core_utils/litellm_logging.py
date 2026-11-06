@@ -780,6 +780,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2909,6 +2910,7 @@ class Logging(LiteLLMLoggingBaseClass):
         discarded as a duplicate of the in-progress create.
         """
         self.model_call_details.pop("has_logged_async_success", None)
+        self._sync_success_scheduled = False
         litellm_params = self.model_call_details.get("litellm_params")
         if not isinstance(litellm_params, dict):
             return
@@ -4275,6 +4277,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
+        if not self.stream and self._sync_success_scheduled:
+            return
+        if not self.stream:
+            self._sync_success_scheduled = True
         executor.submit(
             self.success_handler,
             result,
