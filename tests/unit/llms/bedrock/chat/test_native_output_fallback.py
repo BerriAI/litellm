@@ -149,6 +149,56 @@ def test_a_rejection_reaches_the_caller_when_the_retry_would_send_native_output_
     assert bedrock.sent == (None,)
 
 
+# Bedrock's 403 for a role without the streaming action, seen live on us.anthropic.claude-sonnet-5 on 2026-11-06
+_STREAM_PERMISSION_DENIAL: Final = BedrockError(
+    status_code=403,
+    message='{"Message":"User: arn:aws:sts::123456789012:assumed-role/invoke-only/qa is not authorized to perform: '
+    "bedrock:InvokeModelWithResponseStream on resource: arn:aws:bedrock:us-west-2:123456789012:inference-profile/"
+    "us.anthropic.claude-sonnet-5 because no identity-based policy allows the "
+    'bedrock:InvokeModelWithResponseStream action"}',
+)
+_INVOKE_PERMISSION_DENIAL: Final = BedrockError(
+    status_code=403,
+    message='{"Message":"User: arn:aws:sts::123456789012:assumed-role/no-bedrock/qa is not authorized to perform: '
+    'bedrock:InvokeModel because no identity-based policy allows the bedrock:InvokeModel action"}',
+)
+_BUFFERED_STREAM_FALLBACK: Final = NativeOutputFallback(
+    optional_params={"tools": "json_tool_call", "fake_stream": True}, litellm_params=_FALLBACK.litellm_params
+)
+
+
+@_MODES
+def test_a_denied_native_stream_is_sent_again_once_as_a_buffered_stream(
+    asynchronous: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(_STREAM_PERMISSION_DENIAL, None), asynchronous=asynchronous)
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        response: Final = _call(bedrock, _BUFFERED_STREAM_FALLBACK)
+
+    assert isinstance(response, ModelResponse) and response.id == "answer-2"
+    assert bedrock.sent == (None, _BUFFERED_STREAM_FALLBACK)
+    assert "bedrock:InvokeModelWithResponseStream" in caplog.text and _MODEL in caplog.text
+
+
+@_MODES
+@pytest.mark.parametrize(
+    ("error", "fallback"),
+    [(_STREAM_PERMISSION_DENIAL, _FALLBACK), (_INVOKE_PERMISSION_DENIAL, _BUFFERED_STREAM_FALLBACK)],
+    ids=["retry_would_stream_again", "invoke_denied"],
+)
+def test_a_permission_denial_reaches_the_caller_unless_the_retry_buffers_the_stream(
+    asynchronous: bool, error: BedrockError, fallback: NativeOutputFallback
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(error,), asynchronous=asynchronous)
+
+    with pytest.raises(BedrockError) as raised:
+        _call(bedrock, fallback)
+
+    assert raised.value is error
+    assert bedrock.sent == (None,)
+
+
 @pytest.mark.parametrize(
     ("error", "advises_opting_out"),
     [(_REJECTION, True), (_SCHEMA_REFUSAL, False)],

@@ -9,7 +9,9 @@ from litellm.llms.bedrock.common_utils import (
     NativeOutputFallback,
     bedrock_strict_tools_fallback,
     is_bedrock_native_output_rejection,
+    is_bedrock_stream_permission_denial,
     warn_bedrock_native_output_rejected,
+    warn_bedrock_native_output_stream_denied,
     warn_bedrock_strict_tools_dropped,
 )
 from litellm.types.utils import ModelResponse
@@ -30,15 +32,33 @@ class _SelectedFallback:
 _RetryFor: TypeAlias = Callable[[BaseLLMException], _SelectedFallback | None]
 
 
-def _native_output_retry(
-    error: BaseLLMException, fallback: NativeOutputFallbackFactory | None, model: str
+def _native_output_rejection_retry(
+    error: BaseLLMException, fallback: NativeOutputFallbackFactory, model: str
 ) -> NativeOutputFallback | None:
-    if fallback is None or not is_bedrock_native_output_rejection(error.status_code, error.message):
-        return None
     retry: Final = fallback()
     if retry is not None:
         warn_bedrock_native_output_rejected(model, error.message)
     return retry
+
+
+def _buffered_stream_retry(fallback: NativeOutputFallbackFactory, model: str) -> NativeOutputFallback | None:
+    retry: Final = fallback()
+    if retry is None or retry.optional_params.get("fake_stream") is not True:
+        return None
+    warn_bedrock_native_output_stream_denied(model)
+    return retry
+
+
+def _native_output_retry(
+    error: BaseLLMException, fallback: NativeOutputFallbackFactory | None, model: str
+) -> NativeOutputFallback | None:
+    if fallback is None:
+        return None
+    if is_bedrock_native_output_rejection(error.status_code, error.message):
+        return _native_output_rejection_retry(error, fallback, model)
+    if is_bedrock_stream_permission_denial(error.status_code, error.message):
+        return _buffered_stream_retry(fallback, model)
+    return None
 
 
 def _strict_tools_retry(

@@ -18,9 +18,10 @@ from pydantic import JsonValue, TypeAdapter
 _HAIKU: Final = "us.anthropic.claude-haiku-5-5"
 _FABLE: Final = "us.anthropic.claude-fable-5"
 _SONNET: Final = "us.anthropic.claude-sonnet-4-6"
-_OPUS: Final = "us.anthropic.claude-opus-5-5"
-_OPT_IN: Final = _OPUS
-_UNFORCEABLE_TOOL: Final = _OPUS
+_NEITHER_KEY: Final = "us.anthropic.claude-opus-4-7"
+_OPT_IN: Final = _NEITHER_KEY
+_BEDROCK_KEY_ONLY: Final = "us.anthropic.claude-sonnet-5-5"
+_UNFORCEABLE_TOOL: Final = "anthropic.claude-opus-5-5"
 _OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _DEEPSEEK: Final = "deepseek.v3.2"
 _AWS: Final[dict[str, JsonValue]] = {
@@ -683,7 +684,7 @@ def test_a_model_that_cannot_force_the_json_tool_retries_a_rejected_native_outpu
 @pytest.mark.parametrize(
     ("backend", "model_info", "native"),
     [
-        (_OPUS, None, False),
+        (_NEITHER_KEY, None, False),
         (_OPT_IN, {"supports_bedrock_native_structured_output": True}, True),
         (_OPUS_4_8, {"supports_bedrock_native_structured_output": False}, False),
     ],
@@ -897,7 +898,7 @@ def test_messages_on_bedrock_invoke_follows_the_bedrock_native_key_without_think
 ) -> None:
     marker, marker_hex = _marker()
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, wire, "invoke", _HAIKU)
+        model: Final = _deployment(scenario, wire, "invoke", _BEDROCK_KEY_ONLY)
         response: Final = gateway.request(
             "POST",
             "/v1/messages",
@@ -945,9 +946,9 @@ def test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy
     ("route", "backend", "thinking", "schema", "native"),
     [
         ("converse", _SONNET, False, _NUMERIC_FORMATS_SCHEMA, True),
-        ("invoke", _HAIKU, True, _NUMERIC_FORMATS_SCHEMA, True),
+        ("invoke", _BEDROCK_KEY_ONLY, True, _NUMERIC_FORMATS_SCHEMA, True),
         ("converse", _SONNET, False, _WIDE_SCHEMA, True),
-        ("converse", _HAIKU, True, _WIDE_SCHEMA, False),
+        ("converse", _BEDROCK_KEY_ONLY, True, _WIDE_SCHEMA, False),
     ],
     ids=["numeric_formats_old_key", "numeric_formats_new_key_invoke", "wide_old_key", "wide_new_key"],
 )
