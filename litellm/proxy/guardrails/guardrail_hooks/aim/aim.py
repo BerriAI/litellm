@@ -17,12 +17,15 @@ from websockets.asyncio.client import ClientConnection, connect
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import APPLY_GUARDRAIL_ONLY_CALL_TYPES, CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # callback_utils types request_data as a bare dict
+)
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
@@ -152,7 +155,9 @@ class AimGuardrail(CustomGuardrail):
         if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
             return data
-        return await self.call_aim_guardrail(data, hook="pre_call", key_alias=user_api_key_dict.key_alias)
+        return await self.call_aim_guardrail(
+            data, hook="pre_call", key_alias=user_api_key_dict.key_alias, call_type=call_type
+        )
 
     async def async_moderation_hook(
         self,
@@ -165,10 +170,19 @@ class AimGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
             return data
 
-        await self.call_aim_guardrail(data, hook="moderation", key_alias=user_api_key_dict.key_alias)
+        await self.call_aim_guardrail(
+            data, hook="moderation", key_alias=user_api_key_dict.key_alias, call_type=call_type
+        )
         return data
 
-    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict:
+    async def call_aim_guardrail(
+        self, data: dict, hook: str, key_alias: str | None, call_type: CallTypesLiteral | None = None
+    ) -> dict:
+        messages: Final = self._build_aim_inspection_messages(data)  # pyright: ignore[reportUnknownMemberType]  # hook request data is an untyped dict
+        if not messages and call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            return data  # pyright: ignore[reportUnknownVariableType]  # hook request data is an untyped dict
+        if call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES:
+            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
         user_email: Final = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_aim_headers(
@@ -180,7 +194,7 @@ class AimGuardrail(CustomGuardrail):
         response: Final = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": self._build_aim_inspection_messages(data)},
+            json={"messages": messages},
             timeout=self.timeout,
         )
         response.raise_for_status()

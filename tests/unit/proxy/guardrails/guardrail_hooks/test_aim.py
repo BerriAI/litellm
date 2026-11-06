@@ -7,6 +7,9 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from collections.abc import Mapping, Sequence
+from typing import Final
+from litellm.types.utils import CallTypesLiteral
 import pytest
 import respx
 from httpx import Request, Response
@@ -316,7 +319,7 @@ async def test_aim_anonymize_action_blocks_malformed_redacted_messages(
             )
 
     assert exc_info.value.code == "400"
-    assert data == request_body
+    assert {key: value for key, value in data.items() if key != "metadata"} == request_body
 
 
 _OUTPUT_REQUEST = {
@@ -815,3 +818,46 @@ async def test_aim_streaming_block_stops_after_verified_chunks(monkeypatch: pyte
         {"choices": [{"delta": {"content": "A"}}]},
         {"done": True},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    ("call_type", "request_fields", "aim_calls", "applied"),
+    [
+        pytest.param(
+            "adecisions", {"input": [{"role": "user", "content": "Is this a refund?"}]}, 1, ["aim"], id="decisions"
+        ),
+        pytest.param("aextraction", {"state": {"invoice": "INV-1"}}, 0, None, id="extraction"),
+        pytest.param("acompletion", {"messages": [{"role": "user", "content": "Refund?"}]}, 1, None, id="chat"),
+        pytest.param(
+            "acompletion",
+            {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://a.test/i.png"}}]}]},
+            1,
+            None,
+            id="chat-image-only",
+        ),
+    ],
+)
+async def test_aim_skips_requests_without_text_and_lists_itself_only_on_apply_guardrail_routes(
+    respx_mock: respx.MockRouter,
+    call_type: CallTypesLiteral,
+    request_fields: Mapping[str, object],
+    aim_calls: int,
+    applied: Sequence[str] | None,
+) -> None:
+    analyze: Final = respx_mock.post("http://aim.test/fw/v1/analyze").respond(
+        json={"analysis_result": {"analysis_time_ms": 1, "policy_drill_down": {}}, "required_action": None}
+    )
+    guardrail: Final = AimGuardrail(api_key="hs-aim-key", api_base="http://aim.test", guardrail_name="aim")
+    metadata: Final[dict[str, object]] = {}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data={**request_fields, "metadata": metadata},
+        call_type=call_type,
+    )
+
+    assert analyze.call_count == aim_calls
+    assert metadata.get("applied_guardrails") == applied

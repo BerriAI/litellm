@@ -16,6 +16,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -75,6 +76,30 @@ _PRE_CALL_RAISED_TOKEN: Final = secrets.token_hex(16)
 _DEPLOYMENT_HOOK_RAN_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
+
+APPLY_GUARDRAIL_ONLY_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    call_type.value
+    for call_type in (
+        CallTypes.extraction,
+        CallTypes.aextraction,
+        CallTypes.decisions,
+        CallTypes.adecisions,
+        CallTypes.systemone,
+        CallTypes.asystemone,
+    )
+)
+
+
+def is_apply_guardrail_only_route(route: str | None) -> bool:
+    call_types: Final = get_call_types_for_route(route) if route else None
+    return bool(call_types) and call_types[0] in APPLY_GUARDRAIL_ONLY_CALL_TYPES
+
+
+def runs_through_apply_guardrail(guardrail: "CustomGuardrail", call_type: str | None) -> bool:
+    return "apply_guardrail" in type(guardrail).__dict__ and (
+        not guardrail.use_native_lifecycle_hooks or call_type in APPLY_GUARDRAIL_ONLY_CALL_TYPES
+    )
+
 
 DEFAULT_ADVISORY_MESSAGE: Final = (
     "The user's latest message was flagged for {reason} by a content safety "
@@ -298,6 +323,7 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    adds_itself_to_applied_guardrails: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
 

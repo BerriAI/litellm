@@ -205,6 +205,28 @@ def test_get_logging_caching_headers_merges_metadata_and_litellm_metadata():
     assert headers["x-litellm-policy-sources"] == "global-baseline=team_default"
 
 
+@pytest.mark.parametrize(
+    ("metadata_guardrails", "litellm_metadata_guardrails", "expected"),
+    (
+        (["lakera-v1"], ["hide-secrets"], "lakera-v1,hide-secrets"),
+        (["hide-secrets"], ["hide-secrets", "lakera-v1"], "hide-secrets,lakera-v1"),
+    ),
+)
+def test_applied_guardrails_header_lists_guardrails_from_both_metadata_buckets(
+    metadata_guardrails: list[str], litellm_metadata_guardrails: list[str], expected: str
+) -> None:
+    request_data: Final = {
+        "metadata": {"applied_guardrails": metadata_guardrails},
+        "litellm_metadata": {"applied_guardrails": litellm_metadata_guardrails, "guardrail_scan_ids": ("scan-1",)},
+    }
+
+    headers: Final = get_logging_caching_headers(request_data)
+
+    assert headers is not None
+    assert headers["x-litellm-applied-guardrails"] == expected
+    assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
+
+
 def _record(
     request_data: dict[str, object],
     scan_id: str | None,
