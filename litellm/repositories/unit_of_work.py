@@ -30,20 +30,20 @@ def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float) 
     return {"spend": spend, "budget_reset_at": budget_reset_at}
 
 
-_ZERO_SPEND_RESET_SET: Final = (
+_SPEND_RESET_SET: Final = (
     " SET spend = CASE WHEN ABS(spend - $3::text::double precision) <= $5::text::double precision"
-    " THEN 0 ELSE spend - $3::text::double precision END, budget_reset_at = $2::timestamp,"
+    " THEN 0 ELSE GREATEST(spend - $3::text::double precision, 0) END, budget_reset_at = $2::timestamp,"
     " updated_at = (NOW() AT TIME ZONE 'UTC')"
 )
-_ZERO_SPEND_RESET_WHERE: Final = " AND budget_reset_at IS NOT DISTINCT FROM $4::timestamp"
-_KEY_ZERO_SPEND_RESET_SQL: Final = (
-    'UPDATE "LiteLLM_VerificationToken"' + _ZERO_SPEND_RESET_SET + " WHERE token = $1" + _ZERO_SPEND_RESET_WHERE
+_SPEND_RESET_WHERE: Final = " AND budget_reset_at IS NOT DISTINCT FROM $4::timestamp"
+_KEY_SPEND_RESET_SQL: Final = (
+    'UPDATE "LiteLLM_VerificationToken"' + _SPEND_RESET_SET + " WHERE token = $1" + _SPEND_RESET_WHERE
 )
-_USER_ZERO_SPEND_RESET_SQL: Final = (
-    'UPDATE "LiteLLM_UserTable"' + _ZERO_SPEND_RESET_SET + " WHERE user_id = $1" + _ZERO_SPEND_RESET_WHERE
+_USER_SPEND_RESET_SQL: Final = (
+    'UPDATE "LiteLLM_UserTable"' + _SPEND_RESET_SET + " WHERE user_id = $1" + _SPEND_RESET_WHERE
 )
-_TEAM_ZERO_SPEND_RESET_SQL: Final = (
-    'UPDATE "LiteLLM_TeamTable"' + _ZERO_SPEND_RESET_SET + " WHERE team_id = $1" + _ZERO_SPEND_RESET_WHERE
+_TEAM_SPEND_RESET_SQL: Final = (
+    'UPDATE "LiteLLM_TeamTable"' + _SPEND_RESET_SET + " WHERE team_id = $1" + _SPEND_RESET_WHERE
 )
 
 
@@ -54,18 +54,19 @@ def _reset_timestamp(value: datetime | None) -> str | None:
     return reset_at.replace(tzinfo=None).isoformat(timespec="microseconds")
 
 
-def _queue_zero_spend_reset(
+def _queue_guarded_spend_reset(
     batch: PrismaBatch,
     query: str,
     identity: str,
     budget_reset_at: datetime | None,
     spend_decrement: float,
     expected_reset_at: datetime | None,
+    spend_after_reset: float,
 ) -> bool:
     if budget_reset_at is None or spend_decrement == 0 or not isfinite(spend_decrement):
         return False
     # Prisma rounds Float reads, so exact subtraction can still leave a few ULPs.
-    tolerance: Final = 4 * ulp(spend_decrement)
+    tolerance: Final = 4 * ulp(spend_decrement) if spend_after_reset == 0.0 else 0.0
     batch.execute_raw(
         query,
         identity,
@@ -90,8 +91,14 @@ class KeySpendResetWrites:
         expected_reset_at: datetime | None,
         spend_after_reset: float = 0.0,
     ) -> None:
-        if spend_after_reset == 0.0 and _queue_zero_spend_reset(
-            self.batch, _KEY_ZERO_SPEND_RESET_SQL, token, budget_reset_at, spend_decrement, expected_reset_at
+        if _queue_guarded_spend_reset(
+            self.batch,
+            _KEY_SPEND_RESET_SQL,
+            token,
+            budget_reset_at,
+            spend_decrement,
+            expected_reset_at,
+            spend_after_reset,
         ):
             return
         self.table.update_many(
@@ -113,8 +120,14 @@ class UserSpendResetWrites:
         expected_reset_at: datetime | None,
         spend_after_reset: float = 0.0,
     ) -> None:
-        if spend_after_reset == 0.0 and _queue_zero_spend_reset(
-            self.batch, _USER_ZERO_SPEND_RESET_SQL, user_id, budget_reset_at, spend_decrement, expected_reset_at
+        if _queue_guarded_spend_reset(
+            self.batch,
+            _USER_SPEND_RESET_SQL,
+            user_id,
+            budget_reset_at,
+            spend_decrement,
+            expected_reset_at,
+            spend_after_reset,
         ):
             return
         self.table.update_many(
@@ -136,8 +149,14 @@ class TeamSpendResetWrites:
         expected_reset_at: datetime | None,
         spend_after_reset: float = 0.0,
     ) -> None:
-        if spend_after_reset == 0.0 and _queue_zero_spend_reset(
-            self.batch, _TEAM_ZERO_SPEND_RESET_SQL, team_id, budget_reset_at, spend_decrement, expected_reset_at
+        if _queue_guarded_spend_reset(
+            self.batch,
+            _TEAM_SPEND_RESET_SQL,
+            team_id,
+            budget_reset_at,
+            spend_decrement,
+            expected_reset_at,
+            spend_after_reset,
         ):
             return
         self.table.update_many(

@@ -318,3 +318,44 @@ def test_reset_starts_the_window_of_a_row_that_never_had_a_reset_time(gateway: G
         assert response.status_code == 200, response.text
         assert response.json()[info]["spend"] == 0.0
         assert response.json()[info]["budget_reset_at"] is not None
+
+
+@pytest.mark.parametrize("entity", ("key", "user", "team"))
+@pytest.mark.parametrize(("spend_decrement", "spend_after_reset"), ((40.0, 0.0), (30.0, 10.0)))
+def test_reset_after_a_manual_spend_reset_never_goes_negative(
+    gateway: Gateway, entity: str, spend_decrement: float, spend_after_reset: float
+) -> None:
+    previous_reset: Final = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    next_reset: Final = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=1)
+    with gateway.scenario() as scenario:
+        identity: Final = (
+            sha256(scenario.key(max_budget=100.0, budget_duration="1d").encode()).hexdigest()
+            if entity == "key"
+            else scenario.user(max_budget=100.0, budget_duration="1d")
+            if entity == "user"
+            else scenario.team(max_budget=100.0, budget_duration="1d")
+        )
+        table, column, parameter, info = {
+            "key": ("LiteLLM_VerificationToken", "token", "key", "info"),
+            "user": ("LiteLLM_UserTable", "user_id", "user_id", "user_info"),
+            "team": ("LiteLLM_TeamTable", "team_id", "team_id", "team_info"),
+        }[entity]
+        with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
+            connection.execute(
+                sql.SQL("UPDATE {} SET spend = 0, budget_reset_at = %s WHERE {} = %s").format(
+                    sql.Identifier(table), sql.Identifier(column)
+                ),
+                (previous_reset, identity),
+            )
+
+        async def reset_with_the_spend_read_before_the_manual_reset() -> None:
+            async with Prisma() as client:
+                async with spend_reset_unit_of_work(client.batch_) as writes:
+                    {"key": writes.keys, "user": writes.users, "team": writes.teams}[entity].queue_spend_reset(
+                        identity, next_reset, spend_decrement, previous_reset, spend_after_reset
+                    )
+
+        asyncio.run(reset_with_the_spend_read_before_the_manual_reset())
+        response: Final = gateway.request("GET", f"/{entity}/info?{parameter}={identity}")
+        assert response.status_code == 200, response.text
+        assert response.json()[info]["spend"] == 0.0
