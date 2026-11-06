@@ -16,6 +16,19 @@ describe("hydrateOssClassifier", () => {
     expect(hydrated).toEqual({ classifier_type: "jev", jev_classifier_config: stored });
   });
 
+  it("keeps a stored Nace classifier instead of falling back to Jev", () => {
+    const stored = {
+      provider: "nace",
+      model: "drex-max",
+      timeout_ms: 3000,
+    };
+
+    const hydrated = hydrateOssClassifier({ classifier_type: "oss_classifier", opensource_classifier_config: stored });
+
+    expect(hydrated).toEqual({ classifier_type: "jev", jev_classifier_config: stored });
+    expect(defaultJevClassifierConfig("nace")).toEqual(stored);
+  });
+
   it("falls back to Jev only when the stored classifier cannot be parsed", () => {
     const hydrated = hydrateOssClassifier({
       classifier_type: "oss_classifier",

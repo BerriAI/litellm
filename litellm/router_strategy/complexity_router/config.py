@@ -714,6 +714,7 @@ _ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
     {
         "jev": "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai",
         "databricks": "DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE",
+        "nace": "NACE_API_KEY is only sent to NACE_API_BASE, NACE_BASE_URL or https://console.nace.ai",
     }
 )
 
@@ -722,7 +723,7 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     deployment_name: str | None = Field(default=None, min_length=1)
-    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "databricks", "nace"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -785,6 +786,10 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
                     f"{DATABRICKS_AI_DECIDE_MODEL!r} or a serving endpoint name, e.g. databricks-openjev-qwen35-4b"
                 )
             _ = validate_databricks_decisions_model(self.model)
+        if self.provider == "nace" and "model" not in self.model_fields_set:
+            raise ValueError(
+                "opensource_classifier_config.model is required for provider 'nace', e.g. drex-max or drex-latest"
+            )
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
                 "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
