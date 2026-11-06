@@ -555,8 +555,14 @@ def process_state_started() -> bool: ...
 def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "AtomicApplied",
+    "AtomicOverLimit",
     "ForkedAfterNativeRuntimeStarted",
+    "GaugeOverLimit",
+    "GaugesAcquired",
+    "GuardedReply",
     "HuggingFaceEncoding",
+    "LocalSizes",
     "NativeAuthCache",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
@@ -578,8 +584,10 @@ __all__ = [
     "RouterCoreHandle",
     "RustBridgeDeclined",
     "RustUpstreamError",
+    "SpendRead",
     "TokenCounter",
     "Tokenizer",
+    "WindowCount",
     "acompletion",
     "aembedding",
     "amessages",
