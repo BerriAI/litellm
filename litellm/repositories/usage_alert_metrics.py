@@ -399,7 +399,7 @@ class UsageAlertMetricsRepository:
         cursor: str | None = None  # rebind-ok: keyset pagination retains only the current page
         while True:
             async with db_span("daily_activity_query", sql_relation(query)):
-                rows = _ROWS.validate_python(  # rebind-ok: only the current bounded page is retained
+                rows: tuple[DailyAlertMetrics, ...] = _ROWS.validate_python(
                     await self._database.query_raw(query, start, target.isoformat(), cursor, _BATCH_SIZE)
                 )
             if not rows:
