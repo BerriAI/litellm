@@ -247,6 +247,30 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
 
 
+def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_it() -> None:
+    body: Final = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "system": "brief",
+        "stream": True,
+        "context_management": {"edits": []},
+        "output_config": {"effort": "low"},
+    }
+
+    logged: Final = legacy.messages_input(
+        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}}
+    )
+
+    assert logged == [
+        {
+            "role": "user",
+            "content": '{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "model": "claude-sonnet-4-5", '
+            '"stream": true, "system": "brief", "output_config": {"effort": "low"}, "context_management": {"edits": []}}',
+        }
+    ]
+
+
 def _messages_logger() -> Logging:
     return Logging(
         model="claude-sonnet-4-5",
