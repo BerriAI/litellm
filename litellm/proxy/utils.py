@@ -75,6 +75,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
+from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
@@ -3225,6 +3226,12 @@ class ProxyLogging:
 
         if data is None:
             return None
+
+        if not guardrails_only:
+            seed_request_identity(
+                user_api_key_dict,
+                request_data=cast("Mapping[str, object]", data),  # cast-ok: untyped request body, read with .get
+            )
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
         prompt_id: Final[str | None] = data.get("prompt_id", None)
