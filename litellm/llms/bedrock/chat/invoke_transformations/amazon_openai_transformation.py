@@ -82,7 +82,12 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         Uses the standard Bedrock invoke endpoint format.
         """
-        model_id = self._get_openai_model_id(model)
+        model_id = optional_params.pop("model_id", None) or litellm_params.get("model_id")
+        if model_id is not None:
+            model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(str(model_id))
+        else:
+            model_id = self._get_openai_model_id(model)
+            model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(model_id)
 
         # Get AWS region
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -95,8 +100,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
             aws_region_name=aws_region_name,
         )
 
-        # Encode model ID for ARNs (e.g., :imported-model/ -> :imported-model%2F)
-        model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(model_id)
+        # Model ID is already encoded above
 
         invoke_route: Final = "invoke-with-response-stream" if stream else "invoke"
         return join_api_base(endpoint_url, f"model/{model_id}/{invoke_route}")
@@ -141,8 +145,9 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         Removes AWS-specific params and stream param (handled separately in URL),
         then delegates to parent class for standard OpenAI request transformation.
         """
-        # Remove stream from optional_params as it's handled separately in URL
+        # Remove stream and model_id from optional_params as they're handled separately in URL
         optional_params.pop("stream", None)
+        optional_params.pop("model_id", None)
 
         # Remove AWS-specific params that shouldn't be in the request body
         inference_params: Final = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}

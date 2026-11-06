@@ -51,3 +51,29 @@ def test_openai_imported_model_preserves_message_types_and_request_parameters() 
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
         "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy/invoke"
     )
+
+
+def test_openai_imported_model_with_model_id_application_inference_profile() -> None:
+    model: Final = "bedrock/openai/global.openai.gpt-6-luna"
+    profile_arn: Final = "arn:aws:bedrock:ap-northeast-2:123456789012:application-inference-profile/abc123def456"
+    config: Final = AmazonBedrockOpenAIConfig()
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"model_id": profile_arn, "max_tokens": 100},
+        litellm_params={"model_id": profile_arn},
+        headers={},
+    )
+    url: Final = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model=model,
+        optional_params={"aws_region_name": "ap-northeast-2", "model_id": profile_arn},
+        litellm_params={"model_id": profile_arn},
+        stream=False,
+    )
+    assert "model_id" not in request
+    assert url == (
+        "https://bedrock-runtime.ap-northeast-2.amazonaws.com/model/"
+        "arn:aws:bedrock:ap-northeast-2:123456789012:application-inference-profile%2Fabc123def456/invoke"
+    )
