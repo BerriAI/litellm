@@ -54,10 +54,10 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 from litellm.litellm_core_utils.routing_common_utils import team_may_use_deployment
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
 from litellm.router_python_host import python_host
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import build_io_token_rate_limit_headers
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
-from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
@@ -189,8 +189,62 @@ class _GroupBuild:
     info: ModelGroupInfo | None = None
 
 
+def _usage_total(values: Sequence[object]) -> int | None:
+    counts: Final = tuple(value for value in values if isinstance(value, int))
+    return sum(counts) if counts else None
+
+
+def _usage_totals(values: Sequence[object], tpm_count: int) -> tuple[int | None, int | None]:
+    """The group's (tpm, rpm): each counter Redis or memory holds, summed; none held is ``None``."""
+    return _usage_total(values[:tpm_count]), _usage_total(values[tpm_count:])
+
+
+def _limits_io(info: ModelGroupInfo | None) -> bool:
+    return info is not None and (info.itpm is not None or info.otpm is not None)
+
+
+def _limits_usage(info: ModelGroupInfo | None) -> bool:
+    return info is not None and (info.tpm is not None or info.rpm is not None)
+
+
+def _remaining_usage(
+    info: ModelGroupInfo | None,
+    io_usage: tuple[int | None, int | None] | None,
+    usage: tuple[int | None, int | None] | None,
+) -> dict[str, int]:  # mutable-ok: the headers the caller adds to
+    """The remaining-limit headers of a group. ITPM/OTPM groups emit input/output token headers, but they may
+    also set tpm/rpm, so both sets are built: clients and prometheus gauges that read the standard headers
+    still get data."""
+    io_headers: Final = (
+        {}
+        if info is None or io_usage is None
+        else build_io_token_rate_limit_headers(
+            itpm_limit=info.itpm, otpm_limit=info.otpm, current_itpm=io_usage[0], current_otpm=io_usage[1]
+        )
+    )
+    current_tpm, current_rpm = usage or (None, None)
+    tpm_limit: Final = None if info is None else info.tpm
+    rpm_limit: Final = None if info is None else info.rpm
+    tpm_headers: Final = (
+        {}
+        if tpm_limit is None
+        else {"x-ratelimit-remaining-tokens": tpm_limit - (current_tpm or 0), "x-ratelimit-limit-tokens": tpm_limit}
+    )
+    rpm_headers: Final = (
+        {}
+        if rpm_limit is None
+        else {
+            "x-ratelimit-remaining-requests": rpm_limit - (current_rpm or 0),
+            "x-ratelimit-limit-requests": rpm_limit,
+        }
+    )
+    return {**io_headers, **tpm_headers, **rpm_headers}
+
+
 class HostModelInfo:
     """Mixed into ``HostRegistry``, which holds the model list, the indexes and the host."""
+
+    _core_usage_store: RouterUsage
 
     def _live_handle(self) -> "RouterCoreHandle | None": ...  # the registry's: the handle ``RustCore`` set
 
@@ -704,62 +758,37 @@ class HostModelInfo:
             _operator_max_input_tokens(deployment) for deployment in self._routable_deployments(model_name, team_id)
         )
 
-    async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
-        """
-        Returns current tpm/rpm usage for model group
-
-        Parameters:
-        - model_group: str - the received model name from the user (can be a wildcard route).
-
-        Returns:
-        - usage: Tuple[tpm, rpm]
-        """
-        dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_keys: Final[list[str]] = []  # mutable-ok: ported from the Python core unchanged
-        rpm_keys: Final[list[str]] = []  # mutable-ok: ported from the Python core unchanged
-
+    def _group_usage_counters(self, model_group: str) -> tuple[tuple[UsageCounter, ...], ...] | None:
+        """This minute's tpm and rpm counters of every deployment in ``model_group`` (can be a wildcard route),
+        under the model sent to ``litellm.completion()``, as the usage writes name them."""
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
         model_list: Final = self._core_get_model_list(model_name=model_group)
         if model_list is None:  # no matching deployments
+            return None
+        named: Final = tuple(
+            (model.get("model_info", {}).get("id"), model["litellm_params"].get("model")) for model in model_list
+        )
+        deployments: Final = tuple(pair for pair in named if pair[0] is not None and pair[1] is not None)
+        return tuple(
+            tuple(UsageCounter(id, litellm_model, current_minute, kind) for id, litellm_model in deployments)
+            for kind in ("tpm", "rpm")
+        )
+
+    async def _core_get_model_group_usage(self, model_group: str) -> tuple[int | None, int | None]:
+        """Current (tpm, rpm) usage of ``model_group``."""
+        counters: Final = self._group_usage_counters(model_group)
+        if counters is None:
             return None, None
+        tpm, rpm = counters
+        return _usage_totals(await self._core_usage_store.get_many((*tpm, *rpm)), len(tpm))
 
-        for model in model_list:
-            id: str | None = model.get("model_info", {}).get("id")
-            litellm_model: str | None = model["litellm_params"].get(
-                "model"
-            )  # USE THE MODEL SENT TO litellm.completion() - consistent with how global_router cache is written.
-            if id is None or litellm_model is None:
-                continue
-            tpm_keys.append(self._core_handle().usage_key(id, litellm_model, "tpm", current_minute))
-            rpm_keys.append(self._core_handle().usage_key(id, litellm_model, "rpm", current_minute))
-        combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
-
-        with service_target(ROUTER_USAGE_TARGET):
-            combined_tpm_rpm_values: Final = await self._core_cache.async_batch_get_cache(keys=combined_tpm_rpm_keys)
-        if combined_tpm_rpm_values is None:
+    def _core_get_model_group_usage_sync(self, model_group: str) -> tuple[int | None, int | None]:
+        """``_core_get_model_group_usage`` for a sync call, which has no event loop to await the store on."""
+        counters: Final = self._group_usage_counters(model_group)
+        if counters is None:
             return None, None
-
-        rpm_start: Final = len(tpm_keys)
-        tpm_usage_list: Final[list | None] = combined_tpm_rpm_values[:rpm_start]  # mutable-ok: ported from the Python core unchanged  # fmt: skip
-        rpm_usage_list: Final[list | None] = combined_tpm_rpm_values[rpm_start:]  # mutable-ok: ported from the Python core unchanged  # fmt: skip
-
-        ## TPM
-        tpm_usage: int | None = None  # rebind-ok: ported from the Python core unchanged
-        if tpm_usage_list is not None:
-            for t in tpm_usage_list:
-                if isinstance(t, int):
-                    if tpm_usage is None:
-                        tpm_usage = 0
-                    tpm_usage += t
-        ## RPM
-        rpm_usage: int | None = None  # rebind-ok: ported from the Python core unchanged
-        if rpm_usage_list is not None:
-            for t in rpm_usage_list:
-                if isinstance(t, int):
-                    if rpm_usage is None:
-                        rpm_usage = 0
-                    rpm_usage += t
-        return tpm_usage, rpm_usage
+        tpm, rpm = counters
+        return _usage_totals(self._core_usage_store.get_many_sync((*tpm, *rpm)), len(tpm))
 
     async def get_model_group_io_token_usage(self, model_group: str) -> tuple[int | None, int | None]:
         """
@@ -805,40 +834,19 @@ class HostModelInfo:
     async def _core_get_remaining_model_group_usage(
         self, model_group: str
     ) -> dict[str, int]:  # mutable-ok: ported from the Python core unchanged
-        model_group_info: Final = self._cached_get_model_group_info(model_group)
+        info: Final = self._cached_get_model_group_info(model_group)
+        io_usage: Final = await self.get_model_group_io_token_usage(model_group) if _limits_io(info) else None
+        usage: Final = await self._core_get_model_group_usage(model_group) if _limits_usage(info) else None
+        return _remaining_usage(info, io_usage, usage)
 
-        returned_dict: Final[dict[str, int]] = {}  # mutable-ok: ported from the Python core unchanged
-
-        # ITPM/OTPM groups emit input/output token headers, but they may also set
-        # tpm/rpm, so build both sets rather than returning early - clients and
-        # prometheus gauges that read the standard headers still get data.
-        if model_group_info is not None and (model_group_info.itpm is not None or model_group_info.otpm is not None):
-            current_itpm, current_otpm = await self.get_model_group_io_token_usage(model_group)
-            returned_dict.update(
-                build_io_token_rate_limit_headers(
-                    itpm_limit=model_group_info.itpm,
-                    otpm_limit=model_group_info.otpm,
-                    current_itpm=current_itpm,
-                    current_otpm=current_otpm,
-                )
-            )
-
-        tpm_limit: Final = model_group_info.tpm if model_group_info is not None else None
-        rpm_limit: Final = model_group_info.rpm if model_group_info is not None else None
-
-        if tpm_limit is None and rpm_limit is None:
-            return returned_dict
-
-        current_tpm, current_rpm = await self._core_get_model_group_usage(model_group)
-
-        if tpm_limit is not None:
-            returned_dict["x-ratelimit-remaining-tokens"] = tpm_limit - (current_tpm or 0)
-            returned_dict["x-ratelimit-limit-tokens"] = tpm_limit
-        if rpm_limit is not None:
-            returned_dict["x-ratelimit-remaining-requests"] = rpm_limit - (current_rpm or 0)
-            returned_dict["x-ratelimit-limit-requests"] = rpm_limit
-
-        return returned_dict
+    def _core_get_remaining_model_group_usage_sync(
+        self, model_group: str, read_io_usage: Callable[[str], tuple[int | None, int | None]]
+    ) -> dict[str, int]:  # mutable-ok: what the async read returns
+        """``_core_get_remaining_model_group_usage`` for a sync call; ``read_io_usage`` reads the routing cache."""
+        info: Final = self._cached_get_model_group_info(model_group)
+        io_usage: Final = read_io_usage(model_group) if _limits_io(info) else None
+        usage: Final = self._core_get_model_group_usage_sync(model_group) if _limits_usage(info) else None
+        return _remaining_usage(info, io_usage, usage)
 
     async def set_response_headers(
         self,

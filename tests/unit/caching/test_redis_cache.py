@@ -1198,11 +1198,11 @@ def test_timeouts_during_a_blip_log_once_per_interval_not_once_per_call(sync_bat
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm.caching import redis_cache as redis_cache_module
-    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+    from litellm.caching.redis_cache import RedisTimeoutLogThrottle
 
     clock = MagicMock(return_value=1_000.0)
     monkeypatch.setattr(
-        redis_cache_module, "_redis_timeout_log_throttle", _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+        redis_cache_module, "redis_timeout_log_throttle", RedisTimeoutLogThrottle(interval=5.0, clock=clock)
     )
     sync_batch_redis_cache.redis_client.get.side_effect = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
     sync_batch_redis_cache.redis_client.mget.side_effect = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
@@ -1272,12 +1272,12 @@ async def test_write_path_timeouts_inside_the_interval_stay_at_debug(call_method
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm.caching import redis_cache as redis_cache_module
-    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+    from litellm.caching.redis_cache import RedisTimeoutLogThrottle
 
     clock = MagicMock(return_value=1_000.0)
-    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+    throttle = RedisTimeoutLogThrottle(interval=5.0, clock=clock)
     assert throttle.admit() == 0
-    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+    monkeypatch.setattr(redis_cache_module, "redis_timeout_log_throttle", throttle)
 
     timeout = RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
     client = MagicMock()

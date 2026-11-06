@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-from codex.run import Command, codex_run
+from codex.run import Command, McpCall, codex_run
 
 E2E_PYTEST_INI: Final = Path(__file__).resolve().parents[2] / "e2e" / "pytest.ini"
 
@@ -59,6 +59,30 @@ class TestCodexRun:
         )
 
         assert run.patched_files == (Path("/w/app.py"),)
+
+    def test_only_an_mcp_tool_call_that_completed_counts_and_keeps_the_text_the_tool_returned(self) -> None:
+        def call(status: str, result: Mapping[str, object] | None) -> str:
+            item: Final = {
+                "id": status,
+                "type": "mcp_tool_call",
+                "server": "vault",
+                "tool": "read_secret",
+                "arguments": {},
+                "result": result,
+                "error": None if result else {"message": "tool call failed"},
+                "status": status,
+            }
+            return _line({"type": "item.completed", "item": item})
+
+        returned: Final = {
+            "content": [{"type": "text", "text": "marker-7f3a91"}],
+            "structured_content": {"result": "marker-7f3a91"},
+        }
+        run: Final = codex_run(
+            exit_code=0, stdout="\n".join((call("completed", returned), call("failed", None))), stderr=""
+        )
+
+        assert run.mcp_calls == (McpCall(server="vault", tool="read_secret", output="marker-7f3a91"),)
 
     def test_a_turn_that_gave_up_on_a_5xx_is_rerun_by_the_suites_network_rule(self) -> None:
         failed: Final = _line(

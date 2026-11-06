@@ -1392,29 +1392,23 @@ async def test_team_update_redis():
     """
     Tests if team update, updates the redis cache if set
     """
-    from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import cache_team_object
+    from tests.unit.redis.stores.auth_cache_double import shared_cache
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
+    cache, redis = shared_cache()
 
-    redis_cache = RedisCache(host="localhost")
+    await cache_team_object(
+        team_id="1234",
+        team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
+        user_api_key_cache=cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
-    with patch.object(
-        redis_cache,
-        "async_set_cache",
-        new=AsyncMock(),
-    ) as mock_client:
-        await cache_team_object(
-            team_id="1234",
-            team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
-            user_api_key_cache=DualCache(redis_cache=redis_cache),
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-        mock_client.assert_called()
+    assert redis.redis["team_id:1234"]["team_id"] == "1234"
 
 
 @pytest.mark.asyncio
