@@ -1,6 +1,7 @@
 import base64
 import functools
 import json
+import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -10,16 +11,15 @@ import pytest
 import respx
 
 import litellm
-
-
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
-    encrypted_reasoning_signature,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -123,6 +123,57 @@ def test_translate_chat_length_takes_precedence_over_refusal():
 
     assert result["stop_reason"] == "max_tokens"
     assert result.get("stop_details") is None
+
+
+@pytest.mark.parametrize(
+    ("provider_specific_fields", "expected_stop_reason"),
+    [({"stop_reason": "pause_turn"}, "pause_turn"), (None, "max_tokens")],
+    ids=["paused_claude_turn", "truncated_turn"],
+)
+def test_translate_chat_length_keeps_a_paused_claude_turn_unfinished(
+    provider_specific_fields: dict[str, object] | None, expected_stop_reason: str
+):
+    """A paused Claude turn reaches chat as ``length``, which a /v1/messages client would read as a cut-off reply."""
+    message: Final = Message(content="Searching", role="assistant", provider_specific_fields=provider_specific_fields)
+    response: Final = ModelResponse(choices=[Choices(index=0, finish_reason="length", message=message)], usage=Usage())
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == expected_stop_reason
+    assert result["content"] == [{"type": "text", "text": "Searching"}]
+
+
+@pytest.mark.parametrize(
+    ("stop_details", "expected_stop_details"),
+    [
+        (
+            {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."},
+            {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."},
+        ),
+        (
+            {"type": "refusal", "category": 7, "explanation": "I can't help with that."},
+            {"type": "refusal", "category": None, "explanation": "I can't help with that."},
+        ),
+    ],
+    ids=["claude_stop_details", "unreadable_stop_details"],
+)
+def test_translate_claude_refusal_keeps_the_explanation_out_of_the_reply_text(stop_details, expected_stop_details):
+    """Claude's refusal explanation is API metadata, so replaying it as a text block puts words in Claude's mouth."""
+    message: Final = Message(
+        content="Partial answer",
+        role="assistant",
+        refusal=stop_details["explanation"],
+        provider_specific_fields={"stop_reason": "refusal", "stop_details": stop_details},
+    )
+    response: Final = ModelResponse(
+        choices=[Choices(index=0, finish_reason="content_filter", message=message)], usage=Usage()
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == [{"type": "text", "text": "Partial answer"}]
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") == expected_stop_details
 
 
 def test_translate_chat_content_filter_to_anthropic_response():
@@ -2871,14 +2922,21 @@ def test_translate_completion_input_params_rejects_a_non_numeric_budget_without_
 
 @pytest.mark.parametrize("budget", ["2048", True])
 def test_translate_completion_input_params_drops_a_non_numeric_budget_under_drop_params(
-    budget: object, monkeypatch: pytest.MonkeyPatch
+    budget: object, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
-    translated: Final = AnthropicAdapter().translate_completion_input_params(
-        _gemini_request_with_budget(budget, drop_params=True)
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        translated: Final = AnthropicAdapter().translate_completion_input_params(
+            _gemini_request_with_budget(budget, drop_params=True)
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     assert translated is not None
     assert not {"reasoning_effort", "thinking"} & translated.keys()
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in (f"thinking.budget_tokens={budget!r}", "gemini-2.5-flash", "(drop_params=True)")
+    )
 
 
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
@@ -3243,7 +3301,6 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
     """
     Regression test: input_tokens should equal prompt_tokens when there are no cached tokens.
     """
-    from litellm.types.utils import PromptTokensDetailsWrapper
 
     # Create OpenAI format response without cached tokens
     usage = Usage(

@@ -796,7 +796,6 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
     from litellm.proxy.spend_tracking.savings import _resolve_model
     from litellm.router import Router
-    from litellm.types.router import LiteLLM_Params
     from litellm.utils import supports_native_streaming
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -805,4 +804,7 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     assert get_api_base("chatgpt/gpt-5.4", {"model": "chatgpt/gpt-5.4"}) == "https://chatgpt.com/backend-api/codex"
     identity = _resolve_model("chatgpt/gpt-5.4", None)
     assert identity is not None and identity.provider == "chatgpt"
-    assert Router._model_group_llm_provider(LiteLLM_Params(model="chatgpt/gpt-5.4")) == ("gpt-5.4", "chatgpt")
+    group = Router(model_list=[{"model_name": "codex", "litellm_params": {"model": "chatgpt/gpt-5.4"}}]).registry().group(
+        "codex"
+    )
+    assert group is not None and group.providers == ["chatgpt"]

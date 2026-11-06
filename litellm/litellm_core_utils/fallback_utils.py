@@ -3,12 +3,12 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+)
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
-)
-from litellm.router_utils.add_retry_fallback_headers import (
-    add_fallback_headers_to_response,
 )
 
 from .asyncify import run_async_function

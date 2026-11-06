@@ -2026,6 +2026,28 @@ class TestStreamingHttpErrorFrames:
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
 
     @pytest.mark.asyncio
+    async def test_v1_a2a_stream_route_scans_response_chunks(self):
+        guardrail: Final = RecordingGuardrail()
+        guardrail.streaming_sampling_rate = 1
+        chunk: Final = {
+            "jsonrpc": "2.0",
+            "id": "stream-1",
+            "result": {
+                "kind": "task",
+                "artifacts": [{"parts": [{"kind": "text", "text": "streamed text"}]}],
+            },
+        }
+
+        await _drive_stream(
+            UnifiedLLMGuardrails(),
+            guardrail,
+            [chunk],
+            request_route="/v1/a2a/my-agent/message/stream",
+        )
+
+        assert guardrail.apply_calls[0]["inputs"]["texts"] == ["streamed text"]
+
+    @pytest.mark.asyncio
     async def test_chat_eos_block_emits_data_error_frame(self):
         import json as _json
 
@@ -3269,3 +3291,21 @@ async def test_pass_through_guardrail_text_is_the_client_body_without_the_inject
     texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
     assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
     assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_lets_responses_compact_through_without_a_translation() -> None:
+    handler: Final = UnifiedLLMGuardrails()
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-5.4-mini",
+        "input": [{"role": "user", "content": "Remember the number 42."}],
+    }
+
+    result: Final = await handler.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), call_type="acompact_responses"
+    )
+
+    assert result is data
+    assert guardrail.apply_calls == []

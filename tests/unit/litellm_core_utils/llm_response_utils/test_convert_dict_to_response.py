@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -1110,6 +1111,44 @@ def test_convert_to_model_response_object_with_logprobs():
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "upstream_logprobs",
+    [
+        pytest.param({"content": [{"token": "Hi", "logprob": None}]}, id="null-content-logprob"),
+        pytest.param(
+            {
+                "content": [{"token": "Hi", "logprob": -0.1, "top_logprobs": []}],
+                "refusal": [{"token": "I", "logprob": None}],
+            },
+            id="null-refusal-logprob",
+        ),
+    ],
+)
+def test_convert_to_model_response_object_passes_nonconforming_logprobs_through(
+    upstream_logprobs: Mapping[str, object],
+) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1702685778,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "logprobs": upstream_logprobs,
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert json.loads(result.model_dump_json())["choices"][0]["logprobs"] == upstream_logprobs
+
 
 def test_convert_to_model_response_object_error():
     """Test error handling for None response object."""
@@ -2775,6 +2814,24 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert result.usage.output_tokens == 5
         assert result.usage.input_token_details.audio_tokens == 4
 
+    def test_parse_error_keeps_the_transcript_out_of_the_exception(self):
+        import traceback
+
+        from litellm.types.utils import TranscriptionResponse
+
+        transcript: Final = "CANARYTRANSCRIPT customer account ending 2750"
+
+        with pytest.raises(Exception, match="Invalid response object") as exc_info:
+            convert_to_model_response_object(
+                response_object={"text": transcript, "usage": {"type": "duration", "seconds": "not-a-number"}},
+                model_response_object=TranscriptionResponse(),
+                response_type="audio_transcription",
+            )
+
+        rendered: Final = "".join(traceback.format_exception(exc_info.value))
+        assert "received_args=" in rendered
+        assert "CANARYTRANSCRIPT" not in rendered
+
 class TestConvertToModelResponseObjectRerank:
     def test_basic_rerank(self):
         from litellm.types.utils import RerankResponse
@@ -3048,6 +3105,117 @@ def test_convert_to_model_response_object_function_output():
     assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
+
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": 151645}, {"stop_reason": None, "token_ids": None}],
+    ids=["stop-string-with-token-ids", "stop-token", "natural-stop"],
+)
+def test_vllm_choice_fields_stay_on_the_choice_through_a_cache_round_trip(
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    upstream: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                **vllm_choice_fields,
+            }
+        ],
+    }
+    response: Final = convert_to_model_response_object(response_object=upstream, model_response_object=ModelResponse())
+    assert isinstance(response, ModelResponse)
+    cache_hit: Final = convert_to_model_response_object(
+        response_object=json.loads(response.model_dump_json()), model_response_object=ModelResponse()
+    )
+    assert isinstance(cache_hit, ModelResponse)
+
+    dumped_choices: Final = [json.loads(rebuilt.model_dump_json())["choices"][0] for rebuilt in (response, cache_hit)]
+    assert [{field: choice.get(field, "missing") for field in vllm_choice_fields} for choice in dumped_choices] == [
+        vllm_choice_fields,
+        vllm_choice_fields,
+    ]
+
+
+@pytest.mark.parametrize(
+    "vllm_choice_fields",
+    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": None, "token_ids": None}],
+    ids=["stop-string-with-token-ids", "natural-stop"],
+)
+def test_vllm_choice_fields_cached_only_under_provider_specific_fields_come_back_on_the_choice(
+    vllm_choice_fields: dict[str, object],
+) -> None:
+    cached_before_upgrade: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                "provider_specific_fields": vllm_choice_fields,
+            }
+        ],
+    }
+    cache_hit: Final = convert_to_model_response_object(
+        response_object=cached_before_upgrade, model_response_object=ModelResponse()
+    )
+    assert isinstance(cache_hit, ModelResponse)
+
+    dumped_choice: Final = json.loads(cache_hit.model_dump_json())["choices"][0]
+    assert {field: dumped_choice.get(field, "missing") for field in vllm_choice_fields} == vllm_choice_fields
+
+
+@pytest.mark.parametrize(
+    "reported_cost",
+    [
+        float("nan"),
+        float("inf"),
+        {"input_tokens_cost": 0.0001, "request_cost": 0.005, "total_cost": float("nan")},
+        {"input_tokens_cost": float("inf"), "request_cost": 0.005, "total_cost": 0.0051},
+    ],
+    ids=["nan", "inf", "breakdown-with-nan-total", "breakdown-with-inf-part"],
+)
+def test_a_non_finite_provider_usage_cost_is_dropped_so_the_response_is_strict_json(reported_cost: object):
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-non-finite-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": reported_cost},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    usage: Final = json.loads(json.dumps(response.model_dump(), allow_nan=False))["usage"]
+    assert "cost" not in usage
+    assert usage["total_tokens"] == 4
+
+
+def test_a_finite_provider_cost_breakdown_with_non_string_keys_is_kept():
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-int-key-cost",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": {1: 0.5}},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.usage.cost == {1: 0.5}
 
 
 _URL_CITATION: Final = {

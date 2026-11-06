@@ -1,8 +1,10 @@
 import base64
 import json
+import traceback
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.gemini.audio_transcription.transformation import (
@@ -241,12 +243,87 @@ class TestTransformResponse:
         with pytest.raises(GeminiError, match="non-JSON"):
             config.transform_audio_transcription_response(raw)
 
+    def test_non_completed_status_error_omits_response_body(self, config):
+        payload = json.loads(json.dumps(COMPLETED_RESPONSE))
+        payload["status"] = "incomplete"
+        payload["steps"][0]["content"][0]["text"] = "sensitive transcript text"
+        with pytest.raises(GeminiError) as excinfo:
+            config.transform_audio_transcription_response(make_response(payload))
+        assert "status=incomplete" in str(excinfo.value)
+        assert "sensitive transcript text" not in str(excinfo.value)
+
+    def test_non_json_error_omits_response_body(self, config):
+        raw = httpx.Response(200, text="sensitive body", request=httpx.Request("POST", "https://example.test"))
+        with pytest.raises(GeminiError) as excinfo:
+            config.transform_audio_transcription_response(raw)
+        assert "sensitive body" not in str(excinfo.value)
+
     def test_word_without_offsets_survives(self, config):
         payload = json.loads(json.dumps(COMPLETED_RESPONSE))
         payload["steps"][0]["content"][0]["annotations"] = [{"type": "word_info", "text": "Hello"}]
         response = config.transform_audio_transcription_response(make_response(payload))
         assert response["words"] == [{"word": "Hello"}]
         assert response.get("duration") is None
+
+
+
+class TestNonCompletedInteractionThroughRouter:
+    @pytest.fixture
+    def router(self, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "transcribe",
+                    "litellm_params": {"model": "gemini/gemini-3.5-transcribe", "api_key": "test-gemini-key"},
+                }
+            ],
+            num_retries=2,
+        )
+
+    def _interaction(self, status):
+        payload = json.loads(json.dumps(COMPLETED_RESPONSE))
+        payload["status"] = status
+        payload["steps"][0]["content"][0]["text"] = "sensitive transcript text"
+        return payload
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_retry_recovers_an_incomplete_interaction(self, router):
+        route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            side_effect=[
+                httpx.Response(200, json=self._interaction("incomplete")),
+                httpx.Response(200, json=COMPLETED_RESPONSE),
+            ]
+        )
+        response = await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
+        assert route.call_count == 2
+        assert response.text == COMPLETED_RESPONSE["steps"][0]["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize("status", ["incomplete", "failed", "cancelled", "in_progress", None])
+    async def test_non_completed_interaction_retries_then_fails_without_transcript(self, router, status):
+        route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json=self._interaction(status))
+        )
+        with pytest.raises(litellm.APIConnectionError) as excinfo:
+            await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
+        assert route.call_count == 3
+        assert f"status={status}" in str(excinfo.value)
+        assert "sensitive transcript text" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_response_field_of_unexpected_type_keeps_transcript_out_of_the_error(self, router):
+        payload = self._interaction("incomplete")
+        payload["steps"][0]["content"] = "sensitive transcript text"
+        respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        with pytest.raises(litellm.APIConnectionError) as excinfo:
+            await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
+        assert "sensitive transcript text" not in "".join(traceback.format_exception(excinfo.value))
 
 
 class TestSubtitleSynthesisThroughHandler:

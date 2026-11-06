@@ -1,4 +1,5 @@
 import base64
+import itertools
 import logging
 import mimetypes
 import re
@@ -20,8 +21,8 @@ from typing import (
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -541,7 +542,8 @@ def get_team_provider_credentials(
        listings on the team's own provider account/key instead of a shared
        global one.
     2. Fallback: any deployment the caller is granted access to for this
-       provider, expanding wildcard routes and the all-proxy-models sentinel.
+       provider, matching wildcard grants against deployed model names without
+       listing any provider's catalog, and expanding the all-proxy-models sentinel.
        Skipped when ``include_accessible_deployments`` is False.
 
     Credential lookup is scoped to both the team's allowlist and the key's own
@@ -559,6 +561,7 @@ def get_team_provider_credentials(
         return None
 
     from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
     from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
 
     team_id: Final = user_api_key_dict.team_id
@@ -645,28 +648,36 @@ def get_team_provider_credentials(
     grants_all_models: Final = SpecialModelNames.all_proxy_models.value in team_models
     effective_team_models: Final = [] if grants_all_models else team_models
 
-    models_to_try: Final = list(
-        dict.fromkeys(
-            get_complete_model_list(
-                key_models=list(key_model_allowlist),
-                team_models=effective_team_models,
-                proxy_model_list=proxy_model_list,
-                user_model=None,
-                infer_model_from_keys=False,
-                return_wildcard_routes=True,
-                llm_router=llm_router,
-                model_access_groups=model_access_groups,
-                include_model_access_groups=True,
-                team_id=team_id,
-            )
+    granted_models: Final = get_complete_model_list(
+        key_models=list(key_model_allowlist),
+        team_models=effective_team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=True,
+        team_id=team_id,
+        expand_wildcard_routes=False,
+    )
+    deployments_granted_by_wildcard: Final = (
+        model_name
+        for model_name in proxy_model_list
+        if any(
+            is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
         )
     )
-    for model_name in models_to_try:
-        credentials = _provider_credentials(model_name)
-        if credentials is not None:
-            return credentials
-
-    return None
+    return next(
+        (
+            credentials
+            for credentials in map(
+                _provider_credentials, dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
+            )
+            if credentials is not None
+        ),
+        None,
+    )
 
 
 HTTP_HEADER_VALUE: Final = re.compile(r"[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*")
@@ -730,31 +741,6 @@ def apply_team_provider_credentials(
     prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
 
 
-def add_internal_model_credentials(
-    data: dict,
-    llm_router: "Router",
-    model_id: str | None,
-) -> None:
-    """
-    Attach the deployment's immutable server-side credential snapshot to a router-routed
-    batch call (in-place).
-
-    Cost accounting for a completed batch reads the batch's output file, and the Bedrock
-    file config resolves its bucket only from this snapshot, never from a request param,
-    because the bucket is what managed file ids are validated against. Without it that
-    read fails and the batch's cost is never recorded.
-    """
-    if model_id is None:
-        return
-    try:
-        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
-    except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
-        return
-    if credentials is None:
-        return
-    data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
-
-
 def add_deployment_model_info(
     data: dict,
     llm_router: Optional["Router"],
@@ -780,7 +766,6 @@ def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
     file_id: str | None = None,
-    include_internal_credentials: bool = False,
 ) -> None:
     """
     Update data dictionary with model credentials (in-place).
@@ -789,12 +774,8 @@ def prepare_data_with_credentials(
         data: Data dictionary to update
         credentials: Credentials from router
         file_id: Optional original file_id to set (for decoded file IDs)
-        include_internal_credentials: Preserve an immutable server-side snapshot
-            for code paths that must distinguish proxy config from request params.
     """
     data.update(credentials)
-    if include_internal_credentials:
-        data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:

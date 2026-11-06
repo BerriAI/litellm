@@ -540,7 +540,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
     oidc_api_key_credential, deployment_params: dict, override: str
 ):
     from litellm.exceptions import BadRequestError
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
         get_dynamic_litellm_params(
@@ -550,7 +550,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
 
 @pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
 def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params=dict(deployment_params),
@@ -3009,7 +3009,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
     """
 
     def test_clears_admin_organization_and_extra_body_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3035,7 +3035,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "api_version" not in out
 
     def test_clears_aws_and_vertex_secrets_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3058,7 +3058,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "vertex_project" not in out
 
     def test_clears_nvcf_function_id_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3076,7 +3076,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "nvcf_function_id" not in out
 
     def test_clears_use_ssl_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3094,7 +3094,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "use_ssl" not in out
 
     def test_clears_oauth_token_exchange_fields_for_other_provider_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3116,7 +3116,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert all(field not in out for field in oauth_values)
 
     def test_clears_oauth_token_exchange_fields_for_microsoft_365_copilot_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3146,7 +3146,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # the field name with any value (or empty string) to keep the
         # admin's value forwarded, which is the exfiltration vector this
         # test guards against.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3172,7 +3172,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # deployment, which would flip the call to shared mode and send the
         # admin's Copilot token to the attacker's host. Keeping them is safe
         # because per-user mode ignores the caller api_base anyway.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3201,7 +3201,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://attacker.example"
 
     def test_shared_oauth_credential_name_is_cleared_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3231,7 +3231,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # Regression: a caller that echoes an admin-config field name with
         # an *empty* value (or any value) must not be able to keep the
         # admin's value in ``litellm_params``.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3253,7 +3253,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "org-admin-secret" not in str(out)
 
     def test_no_clearing_when_only_api_key_overridden(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3272,7 +3272,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://admin.upstream/v1"
 
     def test_client_api_key_used_when_supplied_with_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3971,7 +3971,7 @@ def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
 
 
 def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},
@@ -5309,6 +5309,124 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
     )
     for request_body, expected_end_user_id in cases:
         assert get_end_user_id_from_request_body(request_body) == expected_end_user_id
+
+
+_BUCKET_ALLOWLIST: Final = {"allowed_client_side_s3_buckets": ["team-batch-bucket"]}
+_ENDPOINT_ALLOWLIST: Final = {"allowed_client_side_s3_endpoint_urls": ["https://s3.us-west-2.amazonaws.com"]}
+
+
+def _batches_body_is_safe(body: dict[str, object], general_settings: dict[str, object]) -> bool:
+    return is_request_body_safe(
+        request_body=body,
+        general_settings=general_settings,
+        llm_router=None,
+        model="",
+        route="/v1/batches",
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("s3_bucket_name", "team-batch-bucket"),
+        ("s3_output_bucket_name", "team-batch-bucket"),
+        ("allow_legacy_cloud_file_ids", True),
+        ("s3_endpoint_url", "https://s3.us-west-2.amazonaws.com"),
+    ],
+)
+def test_storage_setting_in_request_body_is_rejected_without_an_allowlist(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="Rejected Request") as error:
+        _batches_body_is_safe({field: value}, {})
+
+    assert field in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_bucket_on_the_proxy_allowlist_is_accepted(field: str) -> None:
+    assert _batches_body_is_safe({field: "team-batch-bucket"}, _BUCKET_ALLOWLIST) is True
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_bucket_off_the_proxy_allowlist_is_rejected_and_names_the_setting(field: str) -> None:
+    with pytest.raises(ValueError, match=field) as error:
+        _batches_body_is_safe({field: "someone-elses-bucket"}, _BUCKET_ALLOWLIST)
+
+    assert "general_settings.allowed_client_side_s3_buckets" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "general_settings,accepted_body,rejected_field",
+    [
+        (
+            {**_BUCKET_ALLOWLIST, "allowed_client_side_s3_endpoint_urls": None},
+            {"s3_bucket_name": "team-batch-bucket"},
+            "s3_endpoint_url",
+        ),
+        (
+            {**_ENDPOINT_ALLOWLIST, "allowed_client_side_s3_buckets": None},
+            {"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"},
+            "s3_bucket_name",
+        ),
+    ],
+)
+def test_allowlist_left_null_in_config_is_treated_as_empty(
+    general_settings: dict[str, object], accepted_body: dict[str, object], rejected_field: str
+) -> None:
+    assert _batches_body_is_safe(accepted_body, general_settings) is True
+    with pytest.raises(ValueError, match=f"{rejected_field} is not allowed"):
+        _batches_body_is_safe({rejected_field: "team-batch-bucket"}, general_settings)
+
+
+def test_endpoint_on_the_proxy_allowlist_is_accepted() -> None:
+    assert _batches_body_is_safe({"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST) is True
+
+
+def test_endpoint_off_the_proxy_allowlist_is_rejected_and_names_the_setting() -> None:
+    with pytest.raises(ValueError, match="s3_endpoint_url") as error:
+        _batches_body_is_safe({"s3_endpoint_url": "https://attacker.example"}, _ENDPOINT_ALLOWLIST)
+
+    assert "general_settings.allowed_client_side_s3_endpoint_urls" in str(error.value)
+
+
+def test_bucket_allowlist_admits_neither_an_endpoint_nor_the_legacy_file_flag() -> None:
+    with pytest.raises(ValueError, match="s3_endpoint_url"):
+        _batches_body_is_safe(
+            {"s3_bucket_name": "team-batch-bucket", "s3_endpoint_url": "team-batch-bucket"},
+            _BUCKET_ALLOWLIST,
+        )
+    with pytest.raises(ValueError, match="allow_legacy_cloud_file_ids"):
+        _batches_body_is_safe(
+            {"s3_bucket_name": "team-batch-bucket", "allow_legacy_cloud_file_ids": True},
+            _BUCKET_ALLOWLIST,
+        )
+
+
+def test_endpoint_allowlist_does_not_admit_a_bucket() -> None:
+    with pytest.raises(ValueError, match="s3_bucket_name"):
+        _batches_body_is_safe({"s3_bucket_name": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST)
+
+
+def test_bucket_nested_in_extra_body_is_checked_against_the_allowlist() -> None:
+    assert _batches_body_is_safe({"extra_body": {"s3_bucket_name": "team-batch-bucket"}}, _BUCKET_ALLOWLIST) is True
+    with pytest.raises(ValueError, match="s3_bucket_name"):
+        _batches_body_is_safe({"extra_body": {"s3_bucket_name": "someone-elses-bucket"}}, _BUCKET_ALLOWLIST)
+
+
+def test_proxy_wide_client_side_credentials_still_admit_any_bucket() -> None:
+    assert (
+        _batches_body_is_safe(
+            {"s3_bucket_name": "any-bucket", "allow_legacy_cloud_file_ids": True},
+            {"allow_client_side_credentials": True},
+        )
+        is True
+    )
+
+
+def test_other_blocked_fields_do_not_point_at_the_storage_allowlist() -> None:
+    with pytest.raises(ValueError, match="api_base") as error:
+        _batches_body_is_safe({"api_base": "https://attacker.example"}, _BUCKET_ALLOWLIST)
+
+    assert "allowed_client_side" not in str(error.value)
 
 
 def _request_with_content_length(content_length: int) -> Request:

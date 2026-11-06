@@ -20,6 +20,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
@@ -44,6 +46,7 @@ def _make_request(**overrides) -> AnthropicMessagesRequest:
 
 
 _ADAPTER = LiteLLMAnthropicToResponsesAPIAdapter()
+_MODEL: Final = "openai/gpt-6.1-sol"
 
 
 # ---------------------------------------------------------------------------
@@ -957,13 +960,13 @@ class TestTranslateThinkingToReasoning:
     """Anthropic thinking param -> Responses API reasoning param."""
 
     def test_budget_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000}, model=_MODEL)
         # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
         assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000}, model=_MODEL)
         assert result is not None
         assert result["effort"] == "high"
         assert "summary" not in result
@@ -973,7 +976,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result == {"effort": "medium"}
         assert result is not None and "summary" not in result
@@ -983,13 +987,14 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result == {"effort": "low"}
         assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500}, model=_MODEL)
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -998,7 +1003,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_high is not None
         assert result_high["effort"] == "high"
@@ -1006,7 +1012,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_medium is not None
         assert result_medium["effort"] == "medium"
@@ -1015,23 +1022,24 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_low is not None
         assert result_low["effort"] == "low"
         assert "summary" not in result_low
 
     def test_disabled_type_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"}, model=_MODEL)
         assert result is None
 
     def test_non_dict_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning("enabled")  # type: ignore
+        result = _ADAPTER.translate_thinking_to_reasoning("enabled", model=_MODEL)  # type: ignore
         assert result is None
 
     def test_missing_budget_defaults_to_minimal(self):
         """Missing budget_tokens defaults to 0, below the low threshold -> minimal."""
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"}, model=_MODEL)
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -1042,7 +1050,7 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000}, model=_MODEL)
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
@@ -1059,7 +1067,8 @@ class TestTranslateThinkingToReasoning:
                 {
                     "type": "enabled",
                     "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                }
+                },
+                model=_MODEL,
             )
             assert result == {"effort": "medium", "summary": "detailed"}
         finally:

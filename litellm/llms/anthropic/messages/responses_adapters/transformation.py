@@ -14,9 +14,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     anthropic_inline_document,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
     responses_reasoning_items_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
@@ -534,6 +538,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_config: dict[str, object] | None = None,
         auto_summary_level: str = "detailed",
         *,
+        model: str,
         drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
@@ -555,7 +560,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
             if budget_effort is None:
                 return None
             effort = budget_effort
@@ -667,6 +672,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 thinking,
                 output_config=cast(dict[str, object] | None, output_config),
                 auto_summary_level=auto_summary_level,
+                model=model,
                 drop_params=drop_params,
             )
             if reasoning:

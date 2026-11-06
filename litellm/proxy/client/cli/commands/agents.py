@@ -770,9 +770,10 @@ def codex_model_catalog(
     A model Codex does not know gets the fallback
     entry, with the same base instructions Codex itself uses so the agent never
     runs without a system prompt, and offers the reasoning efforts `groups` gives its model group
-    that the installed Codex, at `client_version`, can parse. Apart from aliases, the catalog is
-    the one `/v1/models?client_version=...` serves, built from the installed Codex's own entries
-    instead of the proxy's vendored ones.
+    that the installed Codex, at `client_version`, can parse. Apart from aliases, and the window the
+    deployments' `model_info.max_input_tokens` gives a model Codex knows, the catalog is the one
+    `/v1/models?client_version=...` serves, built from the installed Codex's own entries instead of
+    the proxy's vendored ones.
     """
     rows: Final = tuple(_codex_row(m, upstreams.get(m.id), groups) for m in models)
     body: Final = codex_models_response_json(
