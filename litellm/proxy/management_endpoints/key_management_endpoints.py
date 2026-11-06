@@ -430,6 +430,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
 
 
 def _decode_json_string_column(column: str, value: object) -> object:
@@ -5336,7 +5337,7 @@ async def generate_key_helper_fn(
     rotation_interval: str | None = None,
     router_settings: dict[str, object] | None = None,
     access_group_ids: list[str] | None = None,
-    disallowed_models: Sequence[str] | None = None,
+    disallowed_models: object = None,
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
@@ -5473,7 +5474,9 @@ async def generate_key_helper_fn(
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
-            "disallowed_models": list(disallowed_models or ()),
+            "disallowed_models": []
+            if disallowed_models is None
+            else list(_MODEL_NAMES.validate_python(disallowed_models)),
         }
 
         # Add rotation fields if auto_rotate is enabled

@@ -526,6 +526,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       const projectModels = project?.models ?? [];
       setModelsToPick(projectModels);
       form.setValue("models", []);
+      form.setValue("disallowed_models", []);
       return;
     }
     if (userID && userRole && accessToken) {
@@ -540,6 +541,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     if (!pendingPrefillModels) {
       form.setValue("models", []);
     }
+    form.setValue("disallowed_models", []);
     // Clear MCP server selection when team changes (available servers may differ)
     form.setValue("allowed_mcp_servers_and_groups", { servers: [], accessGroups: [] });
     form.setValue("mcp_tool_permissions", {});
@@ -684,12 +686,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     })),
   ];
 
+  const disallowedModelOptions: MultiSelectOption[] = modelsToPick.map((model) => ({
+    value: model,
+    label: getModelDisplayName(model),
+  }));
+
   const changeKeyType = (write: FieldWrite) => (value: string) => {
     write(value);
     setKeyType(value);
     // Clear models field and disable if management or read_only
     if (value === "management" || value === "read_only") {
       form.setValue("models", []);
+      form.setValue("disallowed_models", []);
     }
   };
 
@@ -985,6 +993,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             form.setValue("models", ["all-proxy-models"]);
                           }
                         }}
+                      />
+                    )}
+                  </MountedFormField>
+
+                  <MountedFormField
+                    label={
+                      <span>
+                        {t("createKey.disallowedModels.label")}{" "}
+                        <SimpleTooltip content={t("createKey.disallowedModels.tooltip")}>
+                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                        </SimpleTooltip>
+                      </span>
+                    }
+                    name="disallowed_models"
+                    className="mt-4"
+                  >
+                    {(control) => (
+                      <MultiSelect
+                        id={control.id}
+                        options={disallowedModelOptions}
+                        value={(control.value as string[] | undefined) ?? []}
+                        placeholder={t("createKey.disallowedModels.placeholder")}
+                        disabled={keyType === "management" || keyType === "read_only"}
+                        onValueChange={control.onChange}
                       />
                     )}
                   </MountedFormField>
@@ -1874,6 +1906,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               "team_id",
                               "organization_id",
                               "models",
+                              "disallowed_models",
                               "duration",
                               "metadata",
                               "tags",

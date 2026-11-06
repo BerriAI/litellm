@@ -18,8 +18,8 @@ def key_disallowed_models(valid_token: UserAPIKeyAuth) -> frozenset[str]:
 def _names_model_resolves_through(
     model: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
 ) -> frozenset[str]:
-    team_aliases: Final = alias_map(valid_token.team_model_aliases) if valid_token.team_model_aliases else {}
-    key_aliases: Final = alias_map(valid_token.aliases) if valid_token.aliases else {}
+    team_aliases: Final = alias_map(valid_token.team_model_aliases)
+    key_aliases: Final = alias_map(valid_token.aliases)
     after_team_alias: Final = team_aliases.get(model, model)
     after_key_alias: Final = key_aliases.get(after_team_alias, after_team_alias)
     after_global_alias: Final = litellm.model_alias_map.get(after_key_alias, after_key_alias)
@@ -66,11 +66,13 @@ def ensure_key_may_call_model(
 
 def without_key_disallowed_models(
     models: Iterable[str], valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
-) -> list[str]:
+) -> tuple[str, ...]:
     disallowed: Final = key_disallowed_models(valid_token)
-    if not disallowed:
-        return list(models)
-    return [m for m in models if not _names_model_resolves_through(m, valid_token, llm_router) & disallowed]
+    return tuple(
+        m
+        for m in models
+        if not disallowed or not _names_model_resolves_through(m, valid_token, llm_router) & disallowed
+    )
 
 
 def disallowed_models_removed_by(data: BaseModel | None, stored: Collection[str] | None) -> frozenset[str]:

@@ -2165,6 +2165,7 @@
         "throttleOnBudgetExceeded": "Throttle on budget exceeded: Yes",
         "models": "Models",
         "noModels": "No models specified",
+        "disallowedModels": "Disallowed Models",
         "guardrails": "Guardrails",
         "noGuardrails": "No guardrails configured",
         "globalGuardrailsDisabled": "Global Guardrails Disabled",
@@ -2211,6 +2212,7 @@
         "globalGuardrailsActive": "Disabled - Global guardrails active",
         "models": "Models",
         "noModels": "No models specified",
+        "disallowedModels": "Disallowed Models",
         "rateLimits": "Rate Limits",
         "tpm": "TPM: ",
         "rpm": "RPM: ",
@@ -2267,6 +2269,9 @@
         "models": "Models",
         "modelsDisabled": "Models field is disabled for this key type",
         "modelsPlaceholder": "Select models",
+        "disallowedModels": "Disallowed Models",
+        "disallowedModelsHint": "Models this key can never call, even if its own models, its team, or an access group allow them.",
+        "disallowedModelsPlaceholder": "Select models to block",
         "keyType": "Key Type",
         "allowedRoutes": "Allowed Routes",
         "allowedRoutesHint": "List of allowed routes for the key (comma-separated). Can be specific routes (e.g., '/chat/completions') or route patterns (e.g., 'llm_api_routes', 'management_routes', '/keys/*'). Leave empty to allow all routes.",
@@ -2603,6 +2608,11 @@
       "placeholder": "Select models",
       "allTeamModels": "All Team Models",
       "allProxyModels": "All Proxy Models"
+    },
+    "disallowedModels": {
+      "label": "Disallowed Models",
+      "tooltip": "Models this key can never call, even if its own models, its team, or an access group allow them.",
+      "placeholder": "Select models to block"
     },
     "keyType": {
       "label": "Key Type",

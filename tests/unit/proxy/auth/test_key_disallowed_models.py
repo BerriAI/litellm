@@ -7,6 +7,7 @@ from litellm.proxy.auth.auth_checks import can_key_call_model
 from litellm.proxy.auth.key_disallowed_models import (
     disallowed_models_removed_by,
     ensure_key_may_call_model,
+    first_disallowed_model,
     without_key_disallowed_models,
 )
 from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
@@ -14,7 +15,7 @@ from litellm.types.proxy.management_endpoints.key_requests import UpdateKeyReque
 
 
 def _token(**fields: object) -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(token="hashed-token", **fields)
+    return UserAPIKeyAuth.model_validate({"token": "hashed-token", **fields})
 
 
 def _denied_model(error: pytest.ExceptionInfo[ProxyException]) -> str:
@@ -41,12 +42,13 @@ def test_a_disallowed_model_is_refused_however_it_is_named(fields: dict[str, obj
 
 @pytest.mark.parametrize("disallowed", [None, (), ("gpt-other",)])
 def test_a_model_outside_disallowed_models_is_not_refused(disallowed: tuple[str, ...] | None) -> None:
+    assert first_disallowed_model(["gpt-allowed"], _token(disallowed_models=disallowed), None) is None
     ensure_key_may_call_model("gpt-allowed", _token(disallowed_models=disallowed), None)
 
 
 def test_listing_drops_every_disallowed_model_and_every_alias_pointing_at_one() -> None:
     token: Final = _token(disallowed_models=("b", "d"), aliases={"alias-b": "b"})
-    assert without_key_disallowed_models(["a", "b", "alias-b", "c", "d"], token, None) == ["a", "c"]
+    assert without_key_disallowed_models(["a", "b", "alias-b", "c", "d"], token, None) == ("a", "c")
 
 
 @pytest.mark.asyncio
@@ -91,28 +93,33 @@ async def test_keys_that_skip_the_allow_list_still_honor_disallowed_models(
 
 @pytest.mark.asyncio
 async def test_keys_that_skip_the_allow_list_are_served_models_outside_disallowed_models() -> None:
-    await enforce_key_and_fallback_model_access(
-        valid_token=_token(models=["all-team-models"], team_id="team-1", disallowed_models=("gpt-denied",)),
-        request_data={"model": "gpt-allowed"},
-        route="/chat/completions",
-        request=None,
-        llm_model_list=None,
-        llm_router=None,
+    request_data: Final[dict[str, object]] = {"model": "gpt-allowed"}
+    assert (
+        await enforce_key_and_fallback_model_access(
+            valid_token=_token(models=["all-team-models"], team_id="team-1", disallowed_models=("gpt-denied",)),
+            request_data=request_data,
+            route="/chat/completions",
+            request=None,
+            llm_model_list=None,
+            llm_router=None,
+        )
+        is None
     )
+    assert request_data == {"model": "gpt-allowed"}
 
 
 @pytest.mark.parametrize(
     "update,stored,removed",
     [
-        pytest.param({}, ["a", "b"], frozenset(), id="field-not-sent"),
+        pytest.param({}, ["a", "b"], frozenset[str](), id="field-not-sent"),
         pytest.param({"disallowed_models": []}, ["a", "b"], frozenset({"a", "b"}), id="cleared"),
         pytest.param({"disallowed_models": None}, ["a"], frozenset({"a"}), id="null"),
         pytest.param({"disallowed_models": ["b"]}, ["a", "b"], frozenset({"a"}), id="narrowed"),
-        pytest.param({"disallowed_models": ["a", "b", "c"]}, ["a", "b"], frozenset(), id="added"),
-        pytest.param({"disallowed_models": []}, None, frozenset(), id="nothing-stored"),
+        pytest.param({"disallowed_models": ["a", "b", "c"]}, ["a", "b"], frozenset[str](), id="added"),
+        pytest.param({"disallowed_models": []}, None, frozenset[str](), id="nothing-stored"),
     ],
 )
 def test_removed_disallowed_models_are_the_stored_entries_the_update_drops(
     update: dict[str, object], stored: list[str] | None, removed: frozenset[str]
 ) -> None:
-    assert disallowed_models_removed_by(UpdateKeyRequest(key="sk-1", **update), stored) == removed
+    assert disallowed_models_removed_by(UpdateKeyRequest.model_validate({"key": "sk-1", **update}), stored) == removed

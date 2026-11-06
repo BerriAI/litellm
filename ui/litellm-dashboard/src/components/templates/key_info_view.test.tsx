@@ -464,6 +464,23 @@ describe("KeyInfoView", () => {
     });
   });
 
+  it("should list the key's disallowed models on the overview", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, disallowed_models: ["blocked-model-x"] }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findAllByText("blocked-model-x")).not.toHaveLength(0);
+    expect(screen.getAllByText("Disallowed Models")).not.toHaveLength(0);
+  });
+
   it("should not render tags in metadata textarea", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 

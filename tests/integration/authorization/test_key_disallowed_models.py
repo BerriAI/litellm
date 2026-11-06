@@ -142,31 +142,32 @@ def test_adding_and_clearing_disallowed_models_takes_effect_on_the_next_request(
 
 def test_a_key_owner_cannot_remove_disallowed_models_but_can_add_them(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        grant: Final = _team_grant(scenario)
-        owner: Final = scenario.member(grant.team_id)
-        key: Final = scenario.key(team_id=grant.team_id, user_id=owner, disallowed_models=[grant.disallowed])
+        allowed: Final = scenario.model()
+        disallowed: Final = scenario.model()
+        owner: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=owner, disallowed_models=[disallowed])
         cleared: Final = gateway.request("POST", "/key/update", {"key": key, "disallowed_models": []}, key=key)
         assert cleared.status_code == 403, f"{cleared.status_code} {cleared.text}"
-        assert _stored_disallowed_models(key) == [{"disallowed_models": [grant.disallowed]}]
-        _assert_denied(gateway, key, {"model": grant.disallowed}, grant.disallowed)
+        assert "disallowed_models" in cleared.text, cleared.text
+        assert _stored_disallowed_models(key) == [{"disallowed_models": [disallowed]}]
+        _assert_denied(gateway, key, {"model": disallowed}, disallowed)
         widened: Final = gateway.request(
-            "POST",
-            "/key/update",
-            {"key": key, "disallowed_models": [grant.disallowed, grant.allowed]},
-            key=key,
+            "POST", "/key/update", {"key": key, "disallowed_models": [disallowed, allowed]}, key=key
         )
         assert widened.status_code == 200, f"{widened.status_code} {widened.text}"
-        _assert_denied(gateway, key, {"model": grant.allowed}, grant.allowed)
+        _assert_denied(gateway, key, {"model": allowed}, allowed)
 
 
 def test_an_admin_of_the_keys_team_can_remove_disallowed_models(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        grant: Final = _team_grant(scenario)
-        admin: Final = scenario.member(grant.team_id, role="admin")
-        admin_key: Final = scenario.key(team_id=grant.team_id, user_id=admin)
-        key: Final = scenario.key(team_id=grant.team_id, disallowed_models=[grant.disallowed])
-        _assert_denied(gateway, key, {"model": grant.disallowed}, grant.disallowed)
+        group: Final = f"integration-group-{uuid.uuid4().hex[:10]}"
+        disallowed: Final = scenario.model(model_info={"access_groups": [group]})
+        admin: Final = scenario.user(user_role="internal_user")
+        team: Final = scenario.team(models=[group], members_with_roles=[{"role": "admin", "user_id": admin}])
+        admin_key: Final = scenario.key(team_id=team, user_id=admin)
+        key: Final = scenario.key(team_id=team, disallowed_models=[disallowed])
+        _assert_denied(gateway, key, {"model": disallowed}, disallowed)
         cleared: Final = gateway.request("POST", "/key/update", {"key": key, "disallowed_models": []}, key=admin_key)
         assert cleared.status_code == 200, f"{cleared.status_code} {cleared.text}"
         assert _stored_disallowed_models(key) == [{"disallowed_models": []}]
-        _assert_served(gateway, key, grant.disallowed)
+        _assert_served(gateway, key, disallowed)

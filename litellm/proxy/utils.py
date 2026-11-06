@@ -10206,7 +10206,7 @@ async def get_available_models_for_user(
         resolve_agent_ceiling=resolve_agent_ceiling,
     )
     visible_models: Final = all_models if agent_visible is None else [m for m in all_models if m in agent_visible]
-    return without_key_disallowed_models(visible_models, user_api_key_dict, llm_router)
+    return list(without_key_disallowed_models(visible_models, user_api_key_dict, llm_router))
 
 
 def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:
