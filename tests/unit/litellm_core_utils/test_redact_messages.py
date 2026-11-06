@@ -51,6 +51,26 @@ SECRET: Final = "private-redaction-canary"
 SIGNATURE: Final = "opaque-thought-signature"
 
 
+@pytest.mark.parametrize("as_list", [False, True])
+def test_redaction_keeps_guardrail_verdict_without_echoing_screened_content(as_list: bool) -> None:
+    entry: Final = {
+        "guardrail_status": "guardrail_intervened",
+        "guardrail_response": {"texts": [SECRET]},
+        "guardrail_request": {"messages": [SECRET]},
+    }
+    entries: Final = [entry] if as_list else entry
+    details: Final = {
+        "litellm_params": {"metadata": {"standard_logging_guardrail_information": entries}},
+        "standard_logging_object": {"guardrail_information": entries},
+    }
+
+    perform_redaction(details, None)
+
+    assert SECRET not in json.dumps(details)
+    assert "guardrail_intervened" in json.dumps(details)
+    assert entry["guardrail_response"] == {"texts": [SECRET]}
+
+
 def _provider_fields() -> dict[str, object]:
     return {
         "reasoning_content": SECRET,
