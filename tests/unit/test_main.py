@@ -2533,9 +2533,7 @@ def non_openai_responses_bridge(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(
-        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
-    )
+    (tmp_path / "access-token").write_text("gho_test")
     litellm.register_model(
         {
             **{
@@ -2579,7 +2577,11 @@ def non_openai_responses_bridge(
             {"api_base": _FOUNDRY_API_BASE, "api_key": "fake-key"},
         ),
         "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
-        "github_copilot": ("github_copilot/gpt-6.1-bridge-test", "https://api.githubcopilot.com/responses", {}),
+        "github_copilot": (
+            "github_copilot/gpt-6.1-bridge-test",
+            "https://api.githubcopilot.com/responses",
+            {"api_base": "https://api.githubcopilot.com"},
+        ),
         "databricks": (
             "databricks/responses/databricks-gpt-bridge-test",
             "https://dbx.example/serving-endpoints/responses",
@@ -4214,6 +4216,41 @@ def test_anthropic_text_disable_url_suffix_env_var(
     assert disabled_response.choices[0].text == "test response"
     assert disabled_route.called
     assert str(disabled_route.calls.last.request.url) == "https://api.example.com/custom/complete"
+
+
+def test_huggingface_text_completion_sends_each_token_prompt_with_the_callers_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.rust_bridge.tokenizer import get_encoding
+
+    encoding: Final = get_encoding("p50k_base")
+    respx_mock.get(url__startswith="https://huggingface.co/").respond(404)
+    endpoint: Final = respx_mock.post("https://hf.example.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-hf",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "tgi",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+        }
+    )
+
+    response: Final = litellm.text_completion(
+        model="huggingface/tgi",
+        prompt=[list(encoding.encode("Hello")), list(encoding.encode("world"))],
+        api_key="hf-test-key",
+        api_base="https://hf.example.com",
+        max_tokens=7,
+    )
+
+    assert [choice.text for choice in response.choices] == ["OK", "OK"]
+    sent: Final = sorted(
+        (json.loads(call.request.content) for call in endpoint.calls), key=lambda body: body["messages"][0]["content"]
+    )
+    assert [(body["messages"], body["max_tokens"]) for body in sent] == [
+        ([{"role": "user", "content": "Hello"}], 7),
+        ([{"role": "user", "content": "world"}], 7),
+    ]
 
 
 def test_image_edit_merges_headers_and_extra_headers():
@@ -7703,6 +7740,7 @@ async def test_bedrock_converse_parses_scripted_response(
     assert json.loads(route.calls[0].request.content) == {
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
         "inferenceConfig": {},
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
     assert response.choices[0].message.content == "Hello from Bedrock."
     assert response.usage.prompt_tokens == 8
@@ -11547,3 +11585,28 @@ async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_to
 
     assert error is not None and "Too many strict tools" in str(error)
     assert len(sent) == 1
+
+
+def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller-supplied OpenAI client sends the request to its own base_url, so billing must use that
+    host and not an env-configured FedRAMP or regional base."""
+    import openai
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gov.api.openai.com/v1")
+    captured = {}
+    real_init = litellm.Logging.__init__
+
+    def init_spy(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        captured["logging_obj"] = self
+
+    with patch.object(litellm.Logging, "__init__", init_spy):
+        litellm.completion(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "hi"}],
+            client=openai.OpenAI(api_key="test-key", base_url="https://api.openai.com/v1"),
+            mock_response="ok",
+        )
+
+    assert captured["logging_obj"].litellm_params.get("data_residency") is None

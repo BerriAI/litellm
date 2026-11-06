@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { getSSOSettings, updateSSOSettings } from "./networking";
-import { CLEARED_SSO_SETTINGS, diffSSOSettingsPayload } from "./Settings/AdminSettings/SSOSettings/utils";
+import { CLEARED_SSO_SETTINGS } from "./Settings/AdminSettings/SSOSettings/utils";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   ProxyBaseUrlField,
   RoleMappingTeamFields,
   SSOProviderSelectField,
+  buildSSOSettingsPatch,
   emptySSOSettingsFormValues,
   renderProviderFields,
   submitMountedSSOValues,
@@ -191,9 +192,11 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     }
 
     try {
-      const payload = diffSSOSettingsPayload(
-        buildLegacySSOPayload({ ...emptySSOSettingsFormValues, ...form.formState.defaultValues }),
-        buildLegacySSOPayload(formValues),
+      const payload = buildSSOSettingsPatch(
+        { ...emptySSOSettingsFormValues, ...form.formState.defaultValues },
+        formValues,
+        "admin-panel",
+        buildLegacySSOPayload,
       );
 
       // Save SSO settings using the new API

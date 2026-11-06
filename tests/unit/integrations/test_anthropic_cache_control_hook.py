@@ -1401,6 +1401,109 @@ def _marks_the_route_sends(model: str, custom_llm_provider: str | None, messages
 _SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
 
 
+_CLIENT_MARKED_CONVERSATION: Final = (
+    {"role": "system", "content": [{"type": "text", "text": "Handbook", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
+    {"role": "user", "content": [{"type": "text", "text": "First", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
+    {"role": "assistant", "content": "First answer"},
+    {"role": "user", "content": "Second"},
+)
+
+
+def _hook_result(
+    model: str, points: tuple[Mapping[str, object], ...] = ({"location": "message", "index": -1},), **params: object
+) -> tuple[list[AllMessageValues], Mapping[str, object]]:
+    _, processed, returned_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=model,
+        messages=cast(list[AllMessageValues], copy.deepcopy(list(_CLIENT_MARKED_CONVERSATION))),
+        non_default_params={"cache_control_injection_points": list(points), **params},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    return processed, returned_params
+
+
+def _hook_output(
+    model: str, points: tuple[Mapping[str, object], ...] = ({"location": "message", "index": -1},), **params: object
+) -> list[AllMessageValues]:
+    return _hook_result(model, points, **params)[0]
+
+
+def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_on_claude():
+    request: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=_hook_output("anthropic/claude-sonnet-5-5"),
+        optional_params={"max_tokens": 64},
+        litellm_params={},
+        headers={},
+    )
+
+    assert _marks_in(request["system"]) == 0
+    assert [_marks_in(message) for message in request["messages"]] == [0, 0, 1]
+    assert "prompt_cache_breakpoint" not in json.dumps(request)
+
+
+@pytest.mark.parametrize(
+    "sibling_model_infos",
+    [
+        pytest.param((), id="one-deployment"),
+        pytest.param(
+            ({"supports_prompt_cache_breakpoint": True, "base_model": "anthropic.claude-unmapped-v1:0"},),
+            id="beside-a-deployment-of-the-same-profile-with-a-base-model",
+        ),
+    ],
+)
+@pytest.mark.parametrize("route", ["bedrock", "bedrock/converse"])
+def test_cache_control_injection_points_replace_client_prompt_cache_breakpoints_on_a_flagged_bedrock_profile(
+    local_model_cost_map, sibling_model_infos: tuple[Mapping[str, object], ...], route: str
+):
+    from litellm import Router
+
+    model: Final = f"{route}/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
+    Router(
+        model_list=[
+            {
+                "model_name": f"claude-profile-{position}",
+                "litellm_params": {"model": model, "aws_region_name": "us-east-1"},
+                "model_info": model_info,
+            }
+            for position, model_info in enumerate(({"supports_prompt_cache_breakpoint": True}, *sibling_model_infos))
+        ]
+    )
+    processed, params = _hook_result(model)
+
+    assert "prompt_cache_breakpoint" not in json.dumps(processed)
+    assert "prompt_cache_options" not in params
+    assert [_marks_in(message) for message in processed] == [0, 0, 0, 1]
+
+
+def test_tool_config_injection_point_leaves_client_prompt_cache_breakpoints_on_claude():
+    processed: Final = _hook_output("anthropic/claude-sonnet-5-5", points=({"location": "tool_config"},))
+
+    assert [message["content"] for message in processed[:2]] == [
+        message["content"] for message in _CLIENT_MARKED_CONVERSATION[:2]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "params"),
+    [
+        pytest.param("openai/gpt-5.6", {"api_base": "https://gateway.example.com/v1"}, id="reads-them"),
+        pytest.param("openai/gpt-4o", {}, id="openai-model-that-predates-them"),
+        pytest.param("hosted_vllm/qwen3", {"api_base": "http://vllm.example.com/v1"}, id="self-hosted"),
+        pytest.param("azure_ai/qa-unflagged-gpt", {"api_base": "https://qa.services.ai.azure.com/models"}, id="foundry"),
+    ],
+)
+def test_cache_control_injection_points_keep_client_prompt_cache_breakpoints_on_a_route_that_does_not_translate_them(
+    model: str, params: Mapping[str, object]
+):
+    processed: Final = _hook_output(model, **params)
+
+    assert [message["content"] for message in processed[:2]] == [
+        message["content"] for message in _CLIENT_MARKED_CONVERSATION[:2]
+    ]
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider"),
     [
@@ -4963,6 +5066,33 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
         assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_capping_thousands_of_marks_on_one_tool_result_counts_the_request_a_logarithmic_number_of_times():
+    def marked_parts(prefix: str, count: int) -> list[dict]:
+        return [
+            {"type": "text", "text": f"{prefix} {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+            for index in range(count)
+        ]
+
+    messages: Final = [
+        {"role": "user", "content": marked_parts("part", 4)},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": marked_parts("result", 2000)},
+    ]
+    sent_breakpoints: Final = MagicMock(side_effect=AnthropicCacheControlHook.count_converse_cache_points)
+
+    capped: Final = AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
+        cast(List[AllMessageValues], messages), True, sent_breakpoints, lambda: 0
+    )
+
+    assert [part.get("cache_control") for part in capped[0]["content"]] == [{"type": "ephemeral"}] * 3 + [None]
+    assert ["cache_control" in part for part in capped[2]["content"]] == [False] * 1997 + [True] * 3
+    assert sent_breakpoints.call_count < 3 * 20
 
 
 def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_request_builder(

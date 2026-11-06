@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { Info, UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { useForm } from "react-hook-form";
 import { userFilterUICall } from "@/components/networking";
@@ -47,23 +49,23 @@ interface UserSearchModalProps {
   teamId?: string;
 }
 
+const defaultRoles = (t: TFunction): Role[] => [
+  { label: "admin", value: "admin", description: t("userSearchModal.defaultRoles.adminDescription") },
+  { label: "user", value: "user", description: t("userSearchModal.defaultRoles.userDescription") },
+];
+
 const UserSearchModal: React.FC<UserSearchModalProps> = ({
   isVisible,
   onCancel,
   onSubmit,
   accessToken,
-  title = "Add Team Member",
-  roles = [
-    {
-      label: "admin",
-      value: "admin",
-      description: "Admin role. Can create team keys, add members, and manage settings.",
-    },
-    { label: "user", value: "user", description: "User role. Can view team info, but not manage it." },
-  ],
+  title,
+  roles,
   defaultRole = "user",
   teamId,
 }) => {
+  const { t } = useTranslation();
+  const roleOptions = roles ?? defaultRoles(t);
   const emptyValues: FormValues = { user_email: undefined, user_id: undefined, role: defaultRole };
   const form = useForm<FormValues>({ defaultValues: emptyValues });
   const selectedUserId = form.watch("user_id");
@@ -172,8 +174,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           autoHighlight="always"
           isLoading={loading}
           placeholder={placeholder}
-          emptyText="No results"
-          loadingText="Loading..."
+          emptyText={t("userSearchModal.search.noResults")}
+          loadingText={t("userSearchModal.search.loading")}
           inputId={controlProps.id}
         />
       </div>
@@ -184,39 +186,43 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal={isSubmitting}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>{title ?? t("userSearchModal.defaultTitle")}</DialogTitle>
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
             <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
               <Info />
-              <AlertTitle>
-                Search selects from users that already exist. To add someone new, ask a proxy admin to create their
-                account first.
-              </AlertTitle>
+              <AlertTitle>{t("userSearchModal.existingUsersNotice")}</AlertTitle>
             </Alert>
 
             <FieldGroup>
-              <FormField control={form.control} name="user_email" label="Email">
+              <FormField control={form.control} name="user_email" label={t("userSearchModal.fields.email")}>
                 {({ id, value, onChange }) =>
-                  renderUserSearch("user_email", "Search by email", { id, value, onChange }, "member-email-search")
+                  renderUserSearch(
+                    "user_email",
+                    t("userSearchModal.fields.emailPlaceholder"),
+                    { id, value, onChange },
+                    "member-email-search",
+                  )
                 }
               </FormField>
 
-              <div className="text-center">OR</div>
+              <div className="text-center">{t("userSearchModal.fields.or")}</div>
 
-              <FormField control={form.control} name="user_id" label="User ID">
-                {({ id, value, onChange }) => renderUserSearch("user_id", "Search by user ID", { id, value, onChange })}
+              <FormField control={form.control} name="user_id" label={t("userSearchModal.fields.userId")}>
+                {({ id, value, onChange }) =>
+                  renderUserSearch("user_id", t("userSearchModal.fields.userIdPlaceholder"), { id, value, onChange })
+                }
               </FormField>
 
-              <FormField control={form.control} name="role" label="Member Role">
+              <FormField control={form.control} name="role" label={t("userSearchModal.fields.role")}>
                 {({ id, value, onChange }) => (
-                  <Select items={roles} value={value} onValueChange={(next) => onChange(next as string)}>
+                  <Select items={roleOptions} value={value} onValueChange={(next) => onChange(next as string)}>
                     <SelectTrigger id={id}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {roles.map((role) => (
+                      {roleOptions.map((role) => (
                         <SelectItem key={role.value} value={role.value}>
                           <Tooltip>
                             <TooltipTrigger
@@ -240,7 +246,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             <div className="mt-4 text-right">
               <Button type="submit" disabled={isSubmitting || (!selectedUserId && !selectedUserEmail)}>
                 {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserPlus />}
-                {isSubmitting ? "Adding..." : "Add Member"}
+                {isSubmitting ? t("userSearchModal.submit.adding") : t("userSearchModal.submit.add")}
               </Button>
             </div>
           </form>
