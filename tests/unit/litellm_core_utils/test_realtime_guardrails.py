@@ -143,19 +143,36 @@ async def test_masked_texts_come_back_as_a_rewrite_and_reach_later_guardrails_ma
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED]", "and [MASKED]", "hi"))
-    assert second.screened[0] == ("my [MASKED] and swordfish hi",)
+    assert second.screened[0] == ("my [MASKED]and swordfishhi", "my [MASKED] and swordfish hi")
 
 
 @pytest.mark.asyncio
-async def test_a_clean_multi_part_item_reaches_each_guardrail_once_as_the_space_joined_text() -> None:
+@pytest.mark.parametrize(
+    ("parts", "screened"),
+    [
+        pytest.param(
+            ("Compare this photo ", "with that one"),
+            ("Compare this photo with that one",),
+            id="a space at the boundary",
+        ),
+        pytest.param(
+            ("Compare this photo", "with that one"),
+            ("Compare this photowith that one", "Compare this photo with that one"),
+            id="no space at the boundary",
+        ),
+    ],
+)
+async def test_a_clean_multi_part_item_reaches_each_guardrail_in_one_call_with_only_the_joins_it_needs(
+    parts: tuple[str, ...], screened: tuple[str, ...]
+) -> None:
     guardrail: Final = MaskingGuardrail("hunter2")
 
     verdict: Final = await realtime_guardrail_verdict(
-        ("Compare this photo", "with that one"), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,)
+        parts, "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,)
     )
 
     assert verdict is None
-    assert guardrail.screened == [("Compare this photo with that one",)]
+    assert guardrail.screened == [screened]
 
 
 @pytest.mark.asyncio
@@ -168,20 +185,23 @@ async def test_texts_a_guardrail_leaves_unchanged_need_no_rewrite() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_phrase_split_across_typed_text_parts_is_still_blocked() -> None:
+@pytest.mark.parametrize(
+    ("parts", "phrase"),
+    [
+        pytest.param(("tell me the secret", "plan"), "secret plan", id="split at a word break"),
+        pytest.param(("tell me about secret-", "project"), "secret-project", id="split mid-word"),
+    ],
+)
+async def test_a_phrase_split_across_typed_text_parts_is_still_blocked(parts: tuple[str, str], phrase: str) -> None:
     client_event: Final = _item_create(
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "tell me the secret"}, {"type": "input_text", "text": "plan"}],
-        }
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": part} for part in parts]}
     )
     guarded_item: Final = realtime_guarded_item(client_event)
     assert isinstance(guarded_item, RealtimeMessageText)
 
     phrase_filter: Final = ContentFilterGuardrail(
         guardrail_name="phrase-filter",
-        blocked_words=[BlockedWord(keyword="secret plan", action=ContentFilterAction.BLOCK)],
+        blocked_words=[BlockedWord(keyword=phrase, action=ContentFilterAction.BLOCK)],
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
@@ -226,17 +246,21 @@ async def test_a_mask_inside_one_part_keeps_every_part_in_place() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_mask_across_parts_replaces_them_with_the_masked_text_the_model_would_have_read() -> None:
+@pytest.mark.parametrize(
+    ("parts", "word", "masked"),
+    [
+        pytest.param(("my secret", "plan is here"), "secret plan", "my [MASKED] is here", id="split at a word break"),
+        pytest.param(("my code is hun", "ter2 ok"), "hunter2", "my code is [MASKED] ok", id="split mid-word"),
+    ],
+)
+async def test_a_mask_across_parts_replaces_them_with_the_masked_text_the_model_would_have_read(
+    parts: tuple[str, ...], word: str, masked: str
+) -> None:
     verdict: Final = await realtime_guardrail_verdict(
-        ("my secret", "plan is here"),
-        "user",
-        (GuardrailEventHooks.pre_call,),
-        {},
-        None,
-        (MaskingGuardrail("secret plan"),),
+        parts, "user", (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail(word),)
     )
 
-    assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED] is here",))
+    assert verdict == RealtimeGuardrailRewrite(texts=(masked,))
 
 
 @pytest.mark.asyncio

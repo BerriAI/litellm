@@ -177,17 +177,25 @@ async def _screen(
     return await _screen(guardrails[1:], outcome, request_data)
 
 
+def _joins(texts: tuple[str, ...]) -> tuple[str, ...]:
+    unspaced: Final = "".join(texts)
+    boundaries: Final = zip(texts, texts[1:])
+    word_break_unknown: Final = any(not left[-1:].isspace() and not right[:1].isspace() for left, right in boundaries)
+    return (unspaced, " ".join(texts)) if word_break_unknown else (unspaced,)
+
+
 async def _rewritten_parts(
     guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
 ) -> RealtimeGuardrailBlock | tuple[str, ...]:
     parts: Final = await _screen(guardrails, texts, request_data)
     if isinstance(parts, RealtimeGuardrailBlock):
         return parts
-    rejoined: Final = (" ".join(parts),)
+    rejoined: Final = _joins(parts)
     screened_rejoined: Final = await _screen(guardrails, rejoined, request_data)
     if isinstance(screened_rejoined, RealtimeGuardrailBlock):
         return screened_rejoined
-    return parts if screened_rejoined == rejoined else screened_rejoined
+    masked_join: Final = next((text for text, join in zip(screened_rejoined, rejoined) if text != join), None)
+    return parts if masked_join is None else (masked_join,)
 
 
 def _in_role_scope(guardrail: "CustomGuardrail", role: str) -> bool:
@@ -238,7 +246,7 @@ async def realtime_guardrail_verdict(
     }
     in_scope: Final = tuple(guardrails.values())
     guardrail_request_data: Final = {**request_data, "user_api_key_dict": user_api_key_dict}
-    joined: Final = (" ".join(texts),)
+    joined: Final = _joins(texts)
     screened: Final = await _screen(in_scope, joined, guardrail_request_data)
     if isinstance(screened, RealtimeGuardrailBlock):
         return screened
