@@ -37,10 +37,12 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
@@ -974,6 +976,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         openai_request_body: Mapping[str, Any],
         model: str,
         provider: str | None = None,
+        deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
         Transform OpenAI request body to Bedrock-compatible modelInput
@@ -987,6 +990,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
@@ -1001,12 +1005,20 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 custom_llm_provider="bedrock",
                 messages=messages,
                 model_info=deployment_model_info(litellm_params),
+                drop_params=drop_params,
                 **MappingProxyType(
-                    {
-                        k: v
-                        for k, v in optional_params.items()
-                        if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
-                    }
+                    tool_params_without_hosted_mcp(
+                        {
+                            k: v
+                            for k, v in optional_params.items()
+                            if k != "drop_params"
+                            and (not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES)
+                        },
+                        model=model,
+                        route="bedrock",
+                        drop_params=drop_params,
+                        remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                    )
                 ),
             )
             return config.transform_request(
@@ -1029,10 +1041,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
-                non_default_params=optional_params,
+                non_default_params=tool_params_without_hosted_mcp(
+                    {k: v for k, v in optional_params.items() if k != "drop_params"},
+                    model=model,
+                    route="bedrock",
+                    drop_params=drop_params,
+                    remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                ),
                 optional_params={},
                 model=model,
-                drop_params=optional_params.get("drop_params") is True,
+                drop_params=drop_params,
             )
             return converse_config.transform_request(
                 model=model,
@@ -1063,7 +1081,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return target_model, target_provider
 
     def _transform_openai_jsonl_content_to_bedrock_jsonl_content(
-        self, openai_jsonl_content: Sequence[_OpenAIBatchRecord], target_model: str = ""
+        self,
+        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
+        target_model: str = "",
+        deployment_drop_params: object = None,
     ) -> list[_BedrockBatchRecord]:
         """
         Transforms OpenAI JSONL content to Bedrock batch format
@@ -1112,6 +1133,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
                     model=model_for_transform,
                     provider=provider,
+                    deployment_drop_params=deployment_drop_params,
                 )
 
             # Create Bedrock batch record
@@ -1125,15 +1147,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         openai_jsonl_content: Sequence[_OpenAIBatchRecord],
         target_model: str = "",
+        deployment_drop_params: object = None,
     ) -> list[_BedrockBatchRecord]:  # mutable-ok: mirrors override contract
-        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content, target_model)
+        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content, target_model, deployment_drop_params
+        )
 
     def transform_create_file_request(
         self,
         model: str,
         create_file_data: CreateFileRequest,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> bytes | str | dict:
         """
         Transform file request and return a pre-signed request for S3.
@@ -1159,7 +1184,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
             bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                openai_jsonl_content, target_model=target_model
+                openai_jsonl_content,
+                target_model=target_model,
+                deployment_drop_params=litellm_params.get("drop_params"),
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
