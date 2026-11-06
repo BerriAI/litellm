@@ -361,11 +361,11 @@ def _self_routing_violation(
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None,
 ) -> str | None:
-    if not model_name or incoming_params is None:
+    if not model_name:
         return None
     effective_params: Final = {
-        **(existing_params.model_dump(exclude_none=True) if existing_params is not None else {}),
-        **incoming_params.model_dump(exclude_none=True),
+        **(_decrypted_litellm_params(existing_params) if existing_params is not None else {}),
+        **(_dump_without_none(incoming_params) if incoming_params is not None else {}),
     }
     if any(dependency.model_name == model_name for dependency in strategy_router_dependencies(effective_params)):
         return f"A strategy router cannot route to itself: {model_name} is listed as one of its own models"

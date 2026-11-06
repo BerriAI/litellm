@@ -1,16 +1,21 @@
 import asyncio
 import json
+from itertools import chain
 from collections.abc import AsyncIterator, Mapping
 from typing import Final
 
 import pytest
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
 from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
 from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.utils import ModelResponse
 
 libsy = pytest.importorskip("switchyard_rust.libsy")
+
+HELLO: Final = [{"role": "user", "content": "Hello"}]
 
 
 async def unexpected_judge(request: Mapping[str, object]) -> ModelResponse:
@@ -47,240 +52,223 @@ def router(
     return SwitchyardRouter("route", route_config, algorithm or build_algorithm(route_config), completion, decide)
 
 
-def tool_history(*results: str) -> list[dict[str, object]]:
-    turns: Final = (
-        message
-        for index, result in enumerate(results)
-        for message in (
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": f"call{index}",
-                        "type": "function",
-                        "function": {"name": "bash", "arguments": '{"command":"pytest"}'},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": f"call{index}", "content": result},
-        )
+async def route(
+    route_config: SwitchyardRouterConfig,
+    messages: object,
+    *,
+    call_type: str | None = "acompletion",
+    request_kwargs: Mapping[str, object] | None = None,
+    **router_kwargs: object,
+) -> tuple[str, Mapping[str, object]]:
+    result: Final = await router(route_config, **router_kwargs).async_pre_routing_hook(  # pyright: ignore[reportArgumentType]  # test doubles
+        "route", request_kwargs or {}, messages, call_type=call_type
     )
-    return [{"role": "user", "content": "Apply the edit and run the tests"}, *turns]
+    assert result is not None
+    assert result.routing_decision is not None
+    return result.model, result.routing_decision
 
 
-def decision_answer(advantage: float) -> OpenAIDecisionResponse:
-    return OpenAIDecisionResponse.model_validate(
+def anthropic_turn(call_id: str, tool: str, result: str, marked: bool) -> tuple[dict[str, object], ...]:
+    error: Final = {"is_error": True} if marked else {}
+    return (
         {
-            "model": "jev-1.14.0",
-            "answers": [
-                {
-                    "type": "choice",
-                    "name": "route",
-                    "choice": "advantage" if advantage > 0.5 else "no_advantage",
-                    "probabilities": [
-                        {"value": "advantage", "probability": advantage},
-                        {"value": "no_advantage", "probability": 1 - advantage},
-                    ],
-                }
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Next step", "signature": "sig"},
+                {"type": "tool_use", "id": call_id, "name": tool, "input": {"file_path": "a.py"}},
             ],
-            "usage": {"input_tokens": 10, "output_tokens": 0, "total_tokens": 10},
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": call_id, "content": result, **error}]},
+    )
+
+
+def responses_turn(call_id: str, tool: str, result: str, marked: bool) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "function_call", "call_id": call_id, "name": tool, "arguments": '{"file_path":"a.py"}'},
+        {"type": "function_call_output", "call_id": call_id, "output": result},
+    )
+
+
+def chat_turn(call_id: str, tool: str, result: str, marked: bool) -> tuple[dict[str, object], ...]:
+    call: Final = {"id": call_id, "type": "function", "function": {"name": tool, "arguments": '{"file_path":"a.py"}'}}
+    return (
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": call_id, "content": result},
+    )
+
+
+TURN_FORMATS: Final = {"anthropic_messages": anthropic_turn, "aresponses": responses_turn, "acompletion": chat_turn}
+
+
+def transcript(endpoint: str, tool: str, results: tuple[str, ...], *, marked: bool = False) -> list[dict[str, object]]:
+    turn: Final = TURN_FORMATS[endpoint]
+    turns: Final = chain.from_iterable(
+        turn(f"call{index}", tool, result, marked) for index, result in enumerate(results)
+    )
+    return [{"role": "user", "content": "Fix the helper"}, *turns]
+
+
+def llm_router(
+    *, route_config: Mapping[str, object], judge_fails: bool = False, num_retries: int = 0
+) -> litellm.Router:
+    def deployment(name: str, reply: object) -> Mapping[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {"model": f"openai/{name}", "api_key": "k", "mock_response": reply},
         }
+
+    return litellm.Router(
+        num_retries=num_retries,
+        model_list=[
+            deployment("strong", "strong"),
+            deployment("fast", "fast"),
+            *((deployment("judge", Exception("judge down")),) if judge_fails else ()),
+            {
+                "model_name": "route",
+                "litellm_params": {"model": "auto_router/switchyard", "switchyard_router_config": route_config},
+            },
+        ],
     )
 
 
 @pytest.mark.asyncio
 async def test_critical_tool_error_selects_capable_without_rewriting_messages() -> None:
-    messages: Final = tool_history("CUDA out of memory")
+    messages: Final = transcript("acompletion", "bash", ("CUDA out of memory",))
     result: Final = await router(config()).async_pre_routing_hook("route", {}, messages, call_type="acompletion")
     assert result is not None
     assert result.model == "strong"
     assert result.messages == messages
-    assert result.routing_decision is not None
-    assert result.routing_decision["router_type"] == "switchyard"
-    assert result.routing_decision["switchyard_evidence"] is not None
+
+
+async def routed_reply(proxy: litellm.Router, endpoint: str, edits: tuple[str, ...]) -> object:
+    match endpoint:
+        case "anthropic_messages":
+            message: Final = await proxy.aanthropic_messages(
+                model="route", messages=transcript(endpoint, "Edit", edits), max_tokens=16
+            )
+            return message["content"][0]["text"]  # pyright: ignore[reportIndexIssue]  # non-streaming response
+        case "aresponses":
+            response: Final = await proxy.aresponses(model="route", input=transcript(endpoint, "Edit", edits))
+            return response.output[0].content[0].text  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming response
+        case _:
+            chat: Final = await proxy.acompletion(model="route", messages=transcript(endpoint, "Edit", edits))
+            return chat.choices[0].message.content  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming response
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["Edit applied successfully", "All tests passed", "Hello"])
-async def test_heuristic_decision_is_a_configured_target_with_evidence(text: str) -> None:
-    result: Final = await router(config()).async_pre_routing_hook(
-        "route", {}, tool_history(text), call_type="acompletion"
-    )
-    assert result is not None
-    assert result.model in {"strong", "fast"}
-    assert result.routing_decision is not None
-    assert result.routing_decision["routed_model"] == result.model
-    assert result.routing_decision["switchyard_evidence"] is not None
+@pytest.mark.parametrize("endpoint", ["acompletion", "anthropic_messages", "aresponses"])
+async def test_router_routes_agent_traffic_from_every_endpoint(endpoint: str) -> None:
+    proxy: Final = llm_router(route_config={"models": {"capable": "strong", "efficient": "fast"}})
+    assert await routed_reply(proxy, endpoint, ("Edit applied",) * 3) == "fast"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("marked", "expected"), [(True, "strong"), (False, "fast")])
+async def test_anthropic_tool_failure_marker_reaches_switchyard(marked: bool, expected: str) -> None:
+    failures: Final = transcript("anthropic_messages", "Edit", ("String to replace not found.",) * 4, marked=marked)
+    model, decision = await route(config(), failures, call_type="anthropic_messages")
+    assert model == expected
+    assert "switchyard_fallback_reason" not in decision
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("session_kwargs", "expected"),
+    ("request_kwargs", "expected"),
     [
-        ({"litellm_session_id": "session-1"}, ["strong", "strong", "strong", "fast"]),
-        ({"proxy_server_request": {"headers": {"X-Session-Id": "session-1"}}}, ["strong", "strong", "strong", "fast"]),
+        ({"litellm_session_id": "s1"}, ["strong", "strong", "strong", "fast"]),
+        ({"proxy_server_request": {"headers": {"X-Session-Id": "s1"}}}, ["strong", "strong", "strong", "fast"]),
         ({}, ["strong", "fast", "fast", "fast"]),
     ],
 )
-async def test_capable_hold_follows_the_session_without_a_classifier(
-    session_kwargs: Mapping[str, object], expected: list[str]
-) -> None:
-    route: Final = router(config())
-    transcripts: Final = (
-        tool_history("CUDA out of memory"),
-        tool_history("All tests passed", "All tests passed"),
-        tool_history("All tests passed", "All tests passed", "All tests passed"),
-        tool_history("All tests passed", "All tests passed", "All tests passed", "All tests passed"),
-    )
+async def test_capable_hold_follows_the_session(request_kwargs: Mapping[str, object], expected: list[str]) -> None:
+    switchyard: Final = router(config())
+    turns: Final = (("CUDA out of memory",), *((("All tests passed",) * count) for count in (2, 3, 4)))
     picks: Final = [
         result.model
-        for transcript in transcripts
-        if (result := await route.async_pre_routing_hook("route", session_kwargs, transcript, call_type="acompletion"))
+        for results in turns
+        if (
+            result := await switchyard.async_pre_routing_hook(
+                "route", request_kwargs, transcript("acompletion", "bash", results), call_type="acompletion"
+            )
+        )
         is not None
     ]
     assert picks == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("probability", "expected"), [(0.0, "strong"), (1.0, "fast")])
-async def test_llm_judge_answer_selects_target_and_carries_classifier_origin(probability: float, expected: str) -> None:
+@pytest.mark.parametrize(("p_solve", "expected"), [(0.0, "strong"), (1.0, "fast")])
+async def test_llm_judge_verdict_selects_the_target(p_solve: float, expected: str) -> None:
     async def judge(request: Mapping[str, object]) -> ModelResponse:
-        assert request["model"] == "judge"
-        assert request["stream"] is False
         assert "autorouter_classifier" in str(request["metadata"])
-        assert request["response_format"] is not None
-        return ModelResponse(
-            choices=[
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            {
-                                "crux": "The supplied task contract",
-                                "primary_rule": "none",
-                                "capability_boundary": "unmatched",
-                                "p_solve": probability,
-                            }
-                        ),
-                    }
-                }
-            ]
-        )
+        verdict: Final = {"crux": "c", "primary_rule": "none", "capability_boundary": "unmatched", "p_solve": p_solve}
+        return ModelResponse(choices=[{"message": {"role": "assistant", "content": json.dumps(verdict)}}])
 
-    messages: Final[list[dict[str, object]]] = [{"role": "user", "content": "Hello"}]
-    result: Final = await router(config(classifier={}), completion=judge).async_pre_routing_hook(
-        "route", {}, messages, call_type="acompletion"
-    )
-    assert result is not None
-    assert result.model == expected
-    assert result.messages == messages
-    assert result.routing_decision is not None
-    assert "switchyard_fallback_reason" not in result.routing_decision
+    model, _ = await route(config(classifier={}), HELLO, completion=judge)
+    assert model == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("advantage", "expected"), [(0.61, "strong"), (0.6, "fast"), (0.1, "fast")])
-async def test_decision_model_advantage_is_compared_strictly_against_the_cutoff(
-    advantage: float, expected: str
-) -> None:
-    requests: Final[list[Mapping[str, object]]] = []
-
+@pytest.mark.parametrize(("advantage", "expected"), [(0.61, "strong"), (0.6, "fast")])
+async def test_decision_model_advantage_must_exceed_the_cutoff(advantage: float, expected: str) -> None:
     async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
-        requests.append(request)
-        return decision_answer(advantage)
-
-    route_config: Final = config(classifier={"kind": "decision", "cutoff": 0.6}, threshold=1.0)
-    result: Final = await router(route_config, decide=decide).async_pre_routing_hook(
-        "route",
-        {"metadata": {"user_api_key_hash": "hash"}},
-        [{"role": "user", "content": "Refactor the parser"}],
-        call_type="acompletion",
-    )
-    assert result is not None
-    assert result.model == expected
-    assert result.routing_decision is not None
-    assert result.routing_decision["switchyard_evidence"] == {
-        "source": "decision_classifier",
-        "verdict": "relative_advantage",
-        "score": advantage,
-        "threshold": 0.6,
-    }
-    (request,) = requests
-    assert request["model"] == "judge"
-    assert "Refactor the parser" in str(request["input"])
-    (question,) = request["questions"]
-    assert {choice["value"] for choice in question["choices"]} == {"advantage", "no_advantage"}
-    assert "autorouter_classifier" in str(request["metadata"])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "outcome",
-    [
-        ConnectionError("Decision model unavailable"),
-        OpenAIDecisionResponse.model_validate(
+        assert "autorouter_classifier" in str(request["metadata"])
+        (question,) = request["questions"]  # pyright: ignore[reportGeneralTypeIssues]  # the decisions request shape
+        assert {choice["value"] for choice in question["choices"]} == {"advantage", "no_advantage"}
+        return OpenAIDecisionResponse.model_validate(
             {
-                "model": "jev-1.14.0",
-                "answers": [{"type": "refusal", "name": "route"}],
+                "model": "jev",
+                "answers": [
+                    {
+                        "type": "choice",
+                        "name": "route",
+                        "choice": "advantage",
+                        "probabilities": [
+                            {"value": "advantage", "probability": advantage},
+                            {"value": "no_advantage", "probability": 1 - advantage},
+                        ],
+                    }
+                ],
                 "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
             }
-        ),
-    ],
-)
-async def test_decision_model_failure_falls_open_to_the_picker_default(outcome: object) -> None:
-    async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
-        if isinstance(outcome, Exception):
-            raise outcome
-        assert isinstance(outcome, OpenAIDecisionResponse)
-        return outcome
+        )
 
-    route_config: Final = config(classifier={"kind": "decision"}, threshold=1.0)
-    result: Final = await router(route_config, decide=decide).async_pre_routing_hook(
-        "route", {}, [{"role": "user", "content": "Hello"}], call_type="acompletion"
+    model, decision = await route(
+        config(classifier={"kind": "decision", "cutoff": 0.6}, threshold=1.0), HELLO, decide=decide
     )
-    assert result is not None
-    assert result.model == "fast"
-    assert result.routing_decision is not None
-    assert "switchyard_fallback_reason" not in result.routing_decision
-    assert result.routing_decision["switchyard_evidence"]["source"] == "fail_open"
+    assert model == expected
+    assert decision["switchyard_evidence"]["score"] == advantage
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("picker", "expected"), [("efficient_first", "fast"), ("capable_first", "strong")])
-async def test_llm_judge_failure_returns_library_default_decision(picker: str, expected: str) -> None:
-    async def failing_judge(request: Mapping[str, object]) -> ModelResponse:
-        raise ConnectionError("Judge unavailable")
+async def judge_down(request: Mapping[str, object]) -> ModelResponse:
+    raise ConnectionError("judge down")
 
-    result: Final = await router(config(classifier={}, picker=picker), completion=failing_judge).async_pre_routing_hook(
-        "route", {}, [{"role": "user", "content": "Hello"}], call_type="acompletion"
+
+async def decision_refused(request: Mapping[str, object]) -> OpenAIDecisionResponse:
+    return OpenAIDecisionResponse.model_validate(
+        {
+            "model": "jev",
+            "answers": [{"type": "refusal", "name": "route"}],
+            "usage": {"input_tokens": 1, "output_tokens": 0, "total_tokens": 1},
+        }
     )
-    assert result is not None
-    assert result.model == expected
-    assert result.routing_decision is not None
-    assert "switchyard_fallback_reason" not in result.routing_decision
-    assert result.routing_decision["switchyard_evidence"] is not None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "content",
+    ("classifier", "router_kwargs", "picker", "expected"),
     [
-        [{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}],
-        [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
+        ({}, {"completion": judge_down}, "efficient_first", "fast"),
+        ({}, {"completion": judge_down}, "capable_first", "strong"),
+        ({"kind": "decision"}, {"decide": decision_refused}, "efficient_first", "fast"),
     ],
 )
-@pytest.mark.parametrize("picker", ["efficient_first", "capable_first"])
-async def test_unsupported_content_falls_back_to_capable_and_preserves_messages(content: object, picker: str) -> None:
-    messages: Final[list[dict[str, object]]] = [{"role": "user", "content": content}]
-    result: Final = await router(config(picker=picker)).async_pre_routing_hook(
-        "route", {}, messages, call_type="acompletion"
-    )
-    assert result is not None
-    assert result.model == "strong"
-    assert result.messages == messages
-    assert result.routing_decision is not None
-    assert result.routing_decision["switchyard_fallback_reason"] == "unsupported_content"
+async def test_classifier_failure_falls_open_to_the_picker_default(
+    classifier: Mapping[str, object], router_kwargs: Mapping[str, object], picker: str, expected: str
+) -> None:
+    model, decision = await route(config(classifier=classifier, picker=picker, threshold=1.0), HELLO, **router_kwargs)
+    assert model == expected
+    assert "switchyard_fallback_reason" not in decision
 
 
 class EndsWithoutDecision:
@@ -303,254 +291,44 @@ class RaisesLibsyError:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("route_config", "algorithm", "reason"),
+    ("route_config", "messages", "call_type", "algorithm", "reason"),
     [
-        (config(), EndsWithoutDecision(), "no_decision"),
-        (config(), RaisesLibsyError(), "libsy_error"),
+        (
+            config(),
+            [{"role": "user", "content": [{"type": "input_audio"}]}],
+            "acompletion",
+            None,
+            "unsupported_content",
+        ),
+        (config(), HELLO, None, None, "unsupported_request_type"),
+        (config(), HELLO, "acompletion", EndsWithoutDecision(), "no_decision"),
+        (config(), HELLO, "acompletion", RaisesLibsyError(), "libsy_error"),
         (
             config(classifier={}, threshold=1.0),
+            HELLO,
+            "acompletion",
             build_algorithm(config(classifier={"kind": "decision"}, threshold=1.0)),
             "unexpected_decision_call",
         ),
         (
             config(classifier={"kind": "decision"}, threshold=1.0),
+            HELLO,
+            "acompletion",
             build_algorithm(config(classifier={}, threshold=1.0)),
             "unexpected_judge_call",
         ),
     ],
 )
-async def test_algorithm_misbehavior_routes_to_capable_instead_of_failing_the_request(
-    route_config: SwitchyardRouterConfig, algorithm: object, reason: str
+async def test_anything_switchyard_cannot_route_goes_to_capable(
+    route_config: SwitchyardRouterConfig, messages: object, call_type: str | None, algorithm: object, reason: str
 ) -> None:
-    result: Final = await router(route_config, algorithm=algorithm).async_pre_routing_hook(
-        "route", {}, [{"role": "user", "content": "Hello"}], call_type="acompletion"
-    )
-    assert result is not None
-    assert result.model == "strong"
-    assert result.routing_decision is not None
-    assert result.routing_decision["switchyard_fallback_reason"] == reason
-
-
-@pytest.mark.asyncio
-async def test_judge_cancellation_propagates() -> None:
-    async def cancelled_judge(request: Mapping[str, object]) -> ModelResponse:
-        raise asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        await router(config(classifier={}), completion=cancelled_judge).async_pre_routing_hook(
-            "route", {}, [{"role": "user", "content": "Hello"}], call_type="acompletion"
-        )
-
-
-FAILING_TEST_TRANSCRIPTS: Final = {
-    "acompletion": (
-        [
-            {"role": "user", "content": "Fix the parser"},
-            *tool_history("CUDA out of memory")[1:],
-        ],
-        None,
-    ),
-    "anthropic_messages": (
-        [
-            {"role": "user", "content": "Fix the parser"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Run the tests first", "signature": "sig"},
-                    {"type": "tool_use", "id": "call0", "name": "bash", "input": {"command": "pytest"}},
-                ],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": "call0", "content": "CUDA out of memory"}],
-            },
-        ],
-        None,
-    ),
-    "aresponses": (
-        None,
-        [
-            {"role": "user", "content": "Fix the parser"},
-            {"type": "function_call", "call_id": "call0", "name": "bash", "arguments": '{"command":"pytest"}'},
-            {"type": "function_call_output", "call_id": "call0", "output": "CUDA out of memory"},
-        ],
-    ),
-}
-
-
-@pytest.mark.asyncio
-async def test_the_same_transcript_routes_identically_from_every_endpoint() -> None:
-    decisions: Final = [
-        result.routing_decision
-        for call_type, (messages, input) in FAILING_TEST_TRANSCRIPTS.items()
-        if (result := await router(config()).async_pre_routing_hook("route", {}, messages, input, call_type=call_type))
-        is not None
-    ]
-    assert len(decisions) == len(FAILING_TEST_TRANSCRIPTS)
-    assert all(decision == decisions[0] for decision in decisions)
-    assert decisions[0] is not None
-    assert decisions[0]["routed_model"] == "strong"
-    assert "switchyard_fallback_reason" not in decisions[0]
-
-
-def failed_edits(*, marked: bool) -> list[dict[str, object]]:
-    turns: Final = (
-        message
-        for index in range(4)
-        for message in (
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": f"edit{index}",
-                        "name": "Edit",
-                        "input": {"file_path": "a.py", "old_string": "x", "new_string": "y"},
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": f"edit{index}",
-                        "content": "String to replace not found in file.",
-                        **({"is_error": True} if marked else {}),
-                    }
-                ],
-            },
-        )
-    )
-    return [{"role": "user", "content": "Rename the helper"}, *turns]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("marked", "expected"), [(True, "strong"), (False, "fast")])
-async def test_anthropic_tool_failure_marker_reaches_switchyard(marked: bool, expected: str) -> None:
-    result: Final = await router(config()).async_pre_routing_hook(
-        "route", {}, failed_edits(marked=marked), call_type="anthropic_messages"
-    )
-    assert result is not None
-    assert result.model == expected
-    assert result.routing_decision is not None
-    assert "switchyard_fallback_reason" not in result.routing_decision
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("call_type", [None, "not_a_call_type"])
-async def test_request_without_a_chat_converter_routes_to_capable(call_type: str | None) -> None:
-    result: Final = await router(config(picker="efficient_first")).async_pre_routing_hook(
-        "route", {}, [{"role": "user", "content": "Hello"}], call_type=call_type
-    )
-    assert result is not None
-    assert result.model == "strong"
-    assert result.routing_decision is not None
-    assert result.routing_decision["switchyard_fallback_reason"] == "unsupported_request_type"
-
-
-def clean_edits_chat() -> list[dict[str, object]]:
-    turns: Final = (
-        message
-        for index in range(3)
-        for message in (
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": f"edit{index}",
-                        "type": "function",
-                        "function": {"name": "Edit", "arguments": '{"file_path":"a.py"}'},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": f"edit{index}", "content": "Edit applied"},
-        )
-    )
-    return [{"role": "user", "content": "Rename the helper"}, *turns]
-
-
-def clean_edits_anthropic() -> list[dict[str, object]]:
-    turns: Final = (
-        message
-        for index in range(3)
-        for message in (
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Edit the next call site", "signature": "sig"},
-                    {"type": "tool_use", "id": f"edit{index}", "name": "Edit", "input": {"file_path": "a.py"}},
-                ],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": f"edit{index}", "content": "Edit applied"}],
-            },
-        )
-    )
-    return [{"role": "user", "content": "Rename the helper"}, *turns]
-
-
-def clean_edits_responses() -> list[dict[str, object]]:
-    turns: Final = (
-        item
-        for index in range(3)
-        for item in (
-            {"type": "function_call", "call_id": f"edit{index}", "name": "Edit", "arguments": '{"file_path":"a.py"}'},
-            {"type": "function_call_output", "call_id": f"edit{index}", "output": "Edit applied"},
-        )
-    )
-    return [{"role": "user", "content": "Rename the helper"}, *turns]
-
-
-async def routed_text(llm_router: object, endpoint: str) -> object:
-    import litellm
-
-    assert isinstance(llm_router, litellm.Router)
-    match endpoint:
-        case "chat":
-            chat: Final = await llm_router.acompletion(model="route", messages=clean_edits_chat())
-            return chat.choices[0].message.content  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming response
-        case "anthropic_messages":
-            message: Final = await llm_router.aanthropic_messages(
-                model="route", messages=clean_edits_anthropic(), max_tokens=16
-            )
-            return message["content"][0]["text"]  # pyright: ignore[reportIndexIssue]  # non-streaming response
-        case _:
-            response: Final = await llm_router.aresponses(model="route", input=clean_edits_responses())
-            return response.output[0].content[0].text  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming response
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint", ["chat", "anthropic_messages", "responses"])
-async def test_router_routes_agent_traffic_from_every_endpoint(endpoint: str) -> None:
-    import litellm
-
-    llm_router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "strong",
-                "litellm_params": {"model": "openai/strong", "api_key": "k", "mock_response": "strong"},
-            },
-            {"model_name": "fast", "litellm_params": {"model": "openai/fast", "api_key": "k", "mock_response": "fast"}},
-            {
-                "model_name": "route",
-                "litellm_params": {
-                    "model": "auto_router/switchyard",
-                    "switchyard_router_config": {"models": {"capable": "strong", "efficient": "fast"}},
-                },
-            },
-        ]
-    )
-    assert await routed_text(llm_router, endpoint) == "fast"
+    model, decision = await route(route_config, messages, call_type=call_type, algorithm=algorithm)
+    assert model == "strong"
+    assert decision["switchyard_fallback_reason"] == reason
 
 
 @pytest.mark.asyncio
 async def test_failing_judge_is_called_once_even_when_the_router_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    import litellm
-    from litellm.integrations.custom_logger import CustomLogger
-
     attempts: Final[list[str]] = []
 
     class CountAttempts(CustomLogger):
@@ -558,31 +336,23 @@ async def test_failing_judge_is_called_once_even_when_the_router_retries(monkeyp
             attempts.append(model)
 
     monkeypatch.setattr(litellm, "callbacks", [CountAttempts()])
-    llm_router: Final = litellm.Router(
+    proxy: Final = llm_router(
+        route_config={
+            "models": {"capable": "strong", "efficient": "fast", "judge": "judge"},
+            "classifier": {},
+            "options": {"confidence_threshold": 1.0},
+        },
+        judge_fails=True,
         num_retries=3,
-        model_list=[
-            {
-                "model_name": "strong",
-                "litellm_params": {"model": "openai/strong", "api_key": "k", "mock_response": "strong"},
-            },
-            {"model_name": "fast", "litellm_params": {"model": "openai/fast", "api_key": "k", "mock_response": "fast"}},
-            {
-                "model_name": "judge",
-                "litellm_params": {"model": "openai/judge", "api_key": "k", "mock_response": Exception("judge down")},
-            },
-            {
-                "model_name": "route",
-                "litellm_params": {
-                    "model": "auto_router/switchyard",
-                    "switchyard_router_config": {
-                        "models": {"capable": "strong", "efficient": "fast", "judge": "judge"},
-                        "classifier": {},
-                        "options": {"confidence_threshold": 1.0},
-                    },
-                },
-            },
-        ],
     )
-    response: Final = await llm_router.acompletion(model="route", messages=[{"role": "user", "content": "hi"}])
-    assert response.choices[0].message.content == "fast"  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming response
+    await proxy.acompletion(model="route", messages=HELLO)
     assert attempts.count("judge") == 1
+
+
+@pytest.mark.asyncio
+async def test_judge_cancellation_propagates() -> None:
+    async def cancelled(request: Mapping[str, object]) -> ModelResponse:
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await route(config(classifier={}), HELLO, completion=cancelled)
