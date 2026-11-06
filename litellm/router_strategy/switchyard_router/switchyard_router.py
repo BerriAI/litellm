@@ -124,17 +124,12 @@ class SwitchyardRouter:
         )
 
     def _internal_call(self, request: Mapping[str, object], caller: Mapping[str, object]) -> Mapping[str, object]:
+        bucket: Final = get_metadata_variable_name_from_kwargs(caller)
         return {
             **request,
-            "metadata": {
+            bucket: {
                 **forwarded_internal_call_metadata(
-                    mapping(caller.get("metadata") or {}), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
-                ),
-                INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
-            },
-            "litellm_metadata": {
-                **forwarded_internal_call_metadata(
-                    mapping(caller.get("litellm_metadata") or {}), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+                    mapping(caller.get(bucket) or {}), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
                 ),
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
             },

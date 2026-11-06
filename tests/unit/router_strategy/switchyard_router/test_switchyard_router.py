@@ -7,6 +7,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_api import ChangeSet
 from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
@@ -252,6 +253,24 @@ async def test_llm_judge_verdict_selects_the_target(p_solve: float, expected: st
 
     model, _ = await route(config(classifier={}), HELLO, completion=judge)
     assert model == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_judge_call_routes_with_the_callers_tags(bucket: str) -> None:
+    seen: Final[list[Mapping[str, object]]] = []  # mutable-ok: collects the judge request
+
+    async def judge(request: Mapping[str, object]) -> ModelResponse:
+        seen.append(request)
+        verdict: Final = {"crux": "c", "primary_rule": "none", "capability_boundary": "unmatched", "p_solve": 1.0}
+        return ModelResponse(choices=[{"message": {"role": "assistant", "content": json.dumps(verdict)}}])
+
+    caller: Final = {bucket: {"tags": ["eu-only"], "inherited_tags": ["team-eu"]}}
+    await route(config(classifier={}), HELLO, completion=judge, request_kwargs=caller)
+    (request,) = seen
+    routed_metadata: Final = request[get_metadata_variable_name_from_kwargs(request)]
+    assert routed_metadata["tags"] == ["eu-only"]  # pyright: ignore[reportIndexIssue]  # the judge request's metadata dict
+    assert routed_metadata["inherited_tags"] == ["team-eu"]  # pyright: ignore[reportIndexIssue]  # same
 
 
 @pytest.mark.asyncio
