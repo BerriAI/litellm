@@ -1025,7 +1025,10 @@ class LiteLLMAnthropicMessagesAdapter:
         """Translate an in-sequence system entry without changing its role or position."""
         content: Final = message.get("content")
         if isinstance(content, str):
-            return ChatCompletionSystemMessage(role="system", content=content) if content else None
+            result = ChatCompletionSystemMessage(role="system", content=content) if content else None
+            if result and "output_config" in message:
+                result["output_config"] = message["output_config"]
+            return result
         if not isinstance(content, list):
             return None
         text_parts: Final[list[ChatCompletionTextObject]] = []  # mutable-ok: API message payload
@@ -1038,7 +1041,12 @@ class LiteLLMAnthropicMessagesAdapter:
             text_obj = ChatCompletionTextObject(type="text", text=text)
             self._add_cache_control_if_applicable(block, text_obj, model)
             text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
-        return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
+        if not text_parts:
+            return None
+        result = ChatCompletionSystemMessage(role="system", content=text_parts)
+        if "output_config" in message:
+            result["output_config"] = message["output_config"]
+        return result
 
     def _add_system_message_to_messages(
         self,

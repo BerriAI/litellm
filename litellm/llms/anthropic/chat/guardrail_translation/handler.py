@@ -857,7 +857,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
         chat_completion_compatible_request: Final = self._translate_to_openai(
-            translation_source, keep_cache_control=keep_cache_control
+            translation_source, keep_cache_control=keep_cache_control, keep_tool_errors=True
         )
 
         full_structured_messages: Final = cast(
@@ -1047,7 +1047,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
         content: Final = message.get("content")
         if isinstance(content, str):
-            return {"role": "system", "content": content} if content else None
+            result: dict[str, object] = {"role": "system", "content": content}
+            if "output_config" in message:
+                result["output_config"] = deepcopy(message["output_config"])
+            return result if content else None
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
@@ -1065,7 +1068,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             if cache_control:
                 anthropic_block["cache_control"] = deepcopy(cache_control)
             blocks.append(anthropic_block)
-        return {"role": "system", "content": blocks} if blocks else None
+        if not blocks:
+            return None
+        result: dict[str, object] = {"role": "system", "content": blocks}
+        if "output_config" in message:
+            result["output_config"] = deepcopy(message["output_config"])
+        return result
 
     @staticmethod
     def _fold_leading_systems_into_top_level(

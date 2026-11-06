@@ -1946,6 +1946,8 @@ def convert_to_anthropic_tool_result(
             tool_use_id=sanitized_tool_use_id,
             content=anthropic_content,
         )
+        if "is_error" in tool_message:
+            anthropic_tool_result["is_error"] = tool_message["is_error"]
 
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
