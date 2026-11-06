@@ -59,6 +59,10 @@ def _group(group: str, model: str, api_base: str) -> tuple[dict[str, JsonValue],
     )
 
 
+def _tools(tool: Mapping[str, object]) -> dict[str, object]:
+    return {"tools": [dict(tool)]}
+
+
 def _config(directory: Path) -> Path:
     shared: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration: Final = {
@@ -91,28 +95,28 @@ def web_search_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gatew
         pytest.param(
             "/v1/chat/completions",
             _ANTHROPIC_GROUP,
-            {"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}]},
+            _tools({"type": "web_search_20250305", "name": "web_search", "max_uses": 1}),
             message_json("msg_web_search", "claude-haiku-5-5", "OK"),
             id="anthropic-web_search_20250305-chat",
         ),
         pytest.param(
             "/v1/messages",
             _ANTHROPIC_GROUP,
-            {"max_tokens": 16, "tools": [{"type": "web_search_20260301", "name": "web_search"}]},
+            {"max_tokens": 16, **_tools({"type": "web_search_20260301", "name": "web_search"})},
             message_json("msg_web_search", "claude-haiku-5-5", "OK"),
             id="anthropic-web_search_newer-version-messages",
         ),
         pytest.param(
             "/v1/chat/completions",
             _GEMINI_GROUP,
-            {"tools": [{"googleSearch": {}}]},
+            _tools({"googleSearch": {}}),
             _gemini_json(),
             id="gemini-googleSearch-chat",
         ),
         pytest.param(
             "/v1/chat/completions",
             _GEMINI_GROUP,
-            {"tools": [{"google_search": {}}]},
+            _tools({"google_search": {}}),
             _gemini_json(),
             id="gemini-google_search-chat",
         ),
