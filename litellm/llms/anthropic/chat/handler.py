@@ -1172,7 +1172,7 @@ class ModelResponseIterator:
                                 type="function",
                                 function=ChatCompletionToolCallFunctionChunk(
                                     name=self._current_server_tool_name,
-                                    arguments=json.dumps(server_tool_input),
+                                    arguments=args or json.dumps(server_tool_input),
                                 ),
                                 index=len(self._server_tool_calls),
                             ),

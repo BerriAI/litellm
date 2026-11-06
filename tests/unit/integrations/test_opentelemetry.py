@@ -426,6 +426,58 @@ def test_v1_server_tool_calls_lead_the_completion_function_call_attributes() -> 
     }
 
 
+def test_v1_server_tool_calls_stay_in_the_gen_ai_input_and_output_messages() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    weather_call: Final = {
+        "id": "toolu_01",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+    }
+    search_call: Final = {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+    }
+    replayed_assistant: Final = {
+        "role": "assistant",
+        "content": "Searching.",
+        "tool_calls": [weather_call],
+        "provider_specific_fields": {"server_tool_calls": [search_call]},
+    }
+    response_obj: Final = litellm.ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=litellm.Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[weather_call],
+                    provider_specific_fields={"server_tool_calls": [search_call]},
+                ),
+            )
+        ],
+    )
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "Weather?"}, replayed_assistant],
+                "standard_logging_object": {"id": "server-tools-call", "call_type": "acompletion", "metadata": {}},
+            },
+            response_obj,
+        )
+    (finished,) = exporter.get_finished_spans()
+    input_messages: Final = json.loads(finished.attributes[SpanAttributes.GEN_AI_INPUT_MESSAGES.value])
+    output_messages: Final = json.loads(finished.attributes[SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value])
+    assert [call["id"] for call in input_messages[1]["tool_calls"]] == ["srvtoolu_01", "toolu_01"]
+    assert [call["id"] for call in output_messages[0]["tool_calls"]] == ["srvtoolu_01", "toolu_01"]
+
+
 def test_v1_pod_routing_none_matches_other_none_metadata_attributes() -> None:
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()

@@ -547,6 +547,128 @@ async def test_streamed_anthropic_code_execution_is_never_a_client_function_call
     assert [item.call_id for item in completed.response.output if item.type == "function_call"] == ["toolu_01Weather"]
 
 
+def _streamed_anthropic_tool_search(search_arguments: str) -> tuple[dict[str, object], ...]:
+    half: Final = len(search_arguments) // 2
+    return (
+        _STREAMED_WEB_FETCH_CALL[0],
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Searching."}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Search", "name": "tool_search_tool_regex"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": search_arguments[:half]},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": search_arguments[half:]},
+        },
+        {"type": "content_block_stop", "index": 1},
+        *_streamed_text_then_weather_call(2)[3:],
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("search_arguments", "expected_status", "expected_arguments"),
+    [
+        pytest.param('{"pattern": "weather"}', "completed", {"pattern": "weather"}, id="arguments_parse"),
+        pytest.param('{"pattern": ', "incomplete", {}, id="arguments_cut_off"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_streamed_anthropic_tool_search_keeps_its_place_before_the_function_call(
+    sync_mode: bool, search_arguments: str, expected_status: str, expected_arguments: dict[str, str]
+) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in _streamed_anthropic_tool_search(search_arguments)]
+        ),
+        request_input="What is the weather in Paris right now?",
+        responses_api_request={
+            "tools": [
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output: Final = completed.response.output
+    assert [item.type for item in output] == ["message", "tool_search_call", "function_call"]
+    assert (output[1].status, output[1].arguments) == (expected_status, expected_arguments)
+    search_item_events: Final = [
+        event for event in events if getattr(getattr(event, "item", None), "type", None) == "tool_search_call"
+    ]
+    assert [(event.type, event.output_index) for event in search_item_events] == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 1),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 1),
+    ]
+
+
+_STREAMED_PAUSED_WEB_SEARCH: Final[tuple[dict[str, object], ...]] = (
+    _STREAMED_WEB_FETCH_CALL[0],
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "input_json_delta", "partial_json": '{"query": "next city"}'},
+    },
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "pause_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 5},
+    },
+)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_paused_anthropic_web_search_lists_only_the_unrun_search(sync_mode: bool) -> None:
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    parser: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=sync_mode, json_mode=False)
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [parser.chunk_parser(event) for event in _STREAMED_PAUSED_WEB_SEARCH]
+        ),
+        request_input="Find the next city.",
+        responses_api_request={"tools": [{"type": "web_search_20250305", "name": "web_search"}]},
+        custom_llm_provider="anthropic",
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [(item.type, item.status, item.action.query) for item in completed.response.output] == [
+        ("web_search_call", "in_progress", "next city")
+    ]
+    assert not any(_is_message_item(event) for event in events)
+
+
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",

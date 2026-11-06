@@ -407,18 +407,22 @@ def walk_user_text(
             return new_parts
         return content
 
+    def _rewrite_call_arguments(calls: object) -> None:
+        for call in _object_list(calls) or ():
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and "arguments" in function:
+                function["arguments"] = _rewrite_arguments(function["arguments"])
+
     messages: Final = data.get("messages")
     for message in _object_list(messages) or ():
         if (skip_tool_message and _is_tool_message(message)) or not isinstance(message, dict):
             continue
         if "content" in message:
             message["content"] = _rewrite_content(message["content"])
-        calls = message.get("tool_calls")
-        if isinstance(calls, list):
-            for call in calls:
-                function = call.get("function") if isinstance(call, dict) else None
-                if isinstance(function, dict) and "arguments" in function:
-                    function["arguments"] = _rewrite_arguments(function["arguments"])
+        _rewrite_call_arguments(message.get("tool_calls"))
+        provider_fields = message.get("provider_specific_fields")
+        if isinstance(provider_fields, dict):
+            _rewrite_call_arguments(provider_fields.get("server_tool_calls"))
 
     if "system" in data:
         data["system"] = _rewrite_content(data["system"])  # rebind-ok: preserve the native hook's in-place contract

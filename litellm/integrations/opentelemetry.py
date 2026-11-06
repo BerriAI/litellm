@@ -42,7 +42,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_requested_service_tier,
     get_served_service_tier,
 )
-from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params, tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.integrations.otel_span_attributes import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload
@@ -2856,7 +2856,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             transformed_msg = {"role": role, "parts": parts}
             if "id" in msg:
                 transformed_msg["id"] = msg["id"]
-            if "tool_calls" in msg:
+            if server_tool_calls := anthropic_server_tool_call_params(cast(object, msg)):
+                transformed_msg["tool_calls"] = [*server_tool_calls, *(msg.get("tool_calls") or [])]
+            elif "tool_calls" in msg:
                 transformed_msg["tool_calls"] = msg["tool_calls"]
             if "tool_call_id" in msg:
                 transformed_msg["tool_call_id"] = msg["tool_call_id"]
