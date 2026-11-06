@@ -12,7 +12,10 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import call_targets_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import (
+    call_targets_openai_prompt_cache_breakpoint,
+    routed_model_info,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -45,6 +48,8 @@ from litellm.llms.anthropic.messages.utils import (
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
 )
+from litellm.llms.azure_ai.chat.transformation import deployment_reads_prompt_cache_breakpoints
+from litellm.responses.bridge_check import responses_bridge_model
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -397,21 +402,35 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
 
 
-_ROUTES_FORWARDING_CACHE_CONTROL_UNMAPPED: Final = frozenset(("azure",))
-_ROUTES_READING_ONLY_THE_SERVED_MODEL: Final = frozenset(("openai",))
+_CHAT_ROUTES_RENAMING_MARKS_FOR_THE_SERVED_MODEL: Final = frozenset(("openai", "bedrock_mantle"))
+
+
+def _deployment_base_model(call_kwargs: Mapping[str, object]) -> str | None:
+    model_info: Final = routed_model_info(call_kwargs.get("model_info"))
+    base_model: Final = call_kwargs.get("base_model") or (None if model_info is None else model_info.get("base_model"))
+    return base_model if isinstance(base_model, str) and base_model else None
 
 
 def _target_reads_prompt_cache_breakpoint(model: str, call_kwargs: Mapping[str, object]) -> bool:
     provider: Final = call_kwargs.get("custom_llm_provider")
-    if provider in _ROUTES_FORWARDING_CACHE_CONTROL_UNMAPPED:
+    if not isinstance(provider, str):
         return False
-    base_model: Final = call_kwargs.get("base_model")
-    named_models: Final = (
-        (model, base_model)
-        if isinstance(base_model, str) and base_model and provider not in _ROUTES_READING_ONLY_THE_SERVED_MODEL
-        else (model,)
+    served_model: Final = model.removeprefix(f"{provider}/")
+    base_model: Final = _deployment_base_model(call_kwargs)
+    served_model_reads: Final = call_targets_openai_prompt_cache_breakpoint(
+        served_model.removeprefix("responses/"), call_kwargs
     )
-    return any(call_targets_openai_prompt_cache_breakpoint(name, call_kwargs) for name in named_models)
+    if not served_model_reads and (
+        base_model is None or not call_targets_openai_prompt_cache_breakpoint(base_model, call_kwargs)
+    ):
+        return False
+    if responses_bridge_model(served_model, provider, call_kwargs.get("model_info")) is not None:
+        return True
+    if provider == "azure_ai":
+        return deployment_reads_prompt_cache_breakpoints(
+            served_model, {"model_info": call_kwargs.get("model_info"), "base_model": base_model}
+        )
+    return served_model_reads and provider in _CHAT_ROUTES_RENAMING_MARKS_FOR_THE_SERVED_MODEL
 
 
 def _record_bridged_model_response(logging_obj: LiteLLMLoggingObject | None, completion_response: object) -> None:

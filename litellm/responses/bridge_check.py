@@ -102,6 +102,15 @@ def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
     )
 
 
+def responses_bridge_model(model: str, custom_llm_provider: str, deployment_model_info: object) -> str | None:
+    model_info, bridged_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=str_keyed_mapping(deployment_model_info),
+    )
+    return bridged_model if model_info.get("mode") == "responses" else None
+
+
 def bridge_reasoning_effort(
     reasoning_effort: str | Mapping[str, object] | None, extra_body: object
 ) -> str | Mapping[str, object] | None:

@@ -227,6 +227,7 @@ def test_anthropic_messages_to_a_deployment_that_opts_out_of_breakpoints_carry_n
 
 
 _OPENAI_GPT_ROW: Final = {"litellm_provider": "openai", "mode": "chat", "supports_prompt_cache_breakpoint": True}
+_FOUNDRY_GPT_ROW: Final = {"litellm_provider": "azure_ai", "mode": "chat", "supports_prompt_cache_breakpoint": True}
 
 
 @pytest.mark.parametrize(
@@ -250,14 +251,65 @@ _OPENAI_GPT_ROW: Final = {"litellm_provider": "openai", "mode": "chat", "support
             id="openai-chat-reads-only-the-served-model",
         ),
         pytest.param(
+            "openai/responses/team-alias",
+            {
+                "custom_llm_provider": "openai",
+                "base_model": "gpt-5.6-sol",
+                "api_base": "https://llm.example.com/v1",
+                "prompt_cache_options": {"mode": "explicit"},
+            },
+            True,
+            id="openai-responses-alias-bridge-reads-base-model",
+        ),
+        pytest.param(
+            "azure/responses/gpt-5.6-sol",
+            {"custom_llm_provider": "azure", "model_info": {"supports_prompt_cache_breakpoint": True}},
+            True,
+            id="azure-responses-bridge-renames-marks",
+        ),
+        pytest.param(
+            "bedrock_mantle/team-alias",
+            {
+                "custom_llm_provider": "bedrock_mantle",
+                "model_info": {"mode": "responses", "base_model": "openai.gpt-5.6-sol"},
+                "prompt_cache_options": {"mode": "explicit"},
+            },
+            True,
+            id="pinned-bridge-reads-model-info-base-model",
+        ),
+        pytest.param(
             "bedrock_mantle/team-alias",
             {
                 "custom_llm_provider": "bedrock_mantle",
                 "base_model": "openai.gpt-5.6-sol",
                 "prompt_cache_options": {"mode": "explicit"},
             },
+            False,
+            id="mantle-chat-reads-only-the-served-model",
+        ),
+        pytest.param(
+            "litellm_proxy/gpt-5.6-sol",
+            {
+                "custom_llm_provider": "litellm_proxy",
+                "model_info": {"supports_prompt_cache_breakpoint": True, "litellm_provider": "litellm_proxy"},
+            },
+            False,
+            id="litellm-proxy-chat-forwards-cache-control-unmapped",
+        ),
+        pytest.param(
+            "sap/gpt-5.6-sol",
+            {
+                "custom_llm_provider": "sap",
+                "model_info": {"supports_prompt_cache_breakpoint": True, "litellm_provider": "sap"},
+            },
+            False,
+            id="sap-chat-forwards-cache-control-unmapped",
+        ),
+        pytest.param(
+            "azure_ai/team-alias",
+            {"custom_llm_provider": "azure_ai", "model_info": {"base_model": "gpt-5.6-sol"}},
             True,
-            id="bridge-reads-base-model",
+            id="foundry-chat-reads-model-info-base-model",
         ),
     ],
 )
@@ -265,6 +317,7 @@ def test_anthropic_messages_keep_marks_only_for_a_route_that_turns_them_into_bre
     monkeypatch: pytest.MonkeyPatch, model: str, extra_kwargs: dict[str, object], keeps_marks: bool
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, "gpt-5.6-sol", _OPENAI_GPT_ROW)
+    litellm.register_model({"azure_ai/gpt-5.6-sol": _FOUNDRY_GPT_ROW})
     monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
 
     completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(

@@ -130,7 +130,7 @@ def _with_breakpoints_for_foundry(message: AllMessageValues, drop_params: bool) 
     return cast(AllMessageValues, foundry_message)  # cast-ok: the same message, its breakpoints in Foundry's shape
 
 
-def _deployment_reads_breakpoints(model: str, litellm_params: Mapping[str, object]) -> bool:
+def deployment_reads_prompt_cache_breakpoints(model: str, litellm_params: Mapping[str, object]) -> bool:
     model_info: Final = routed_model_info(litellm_params.get("model_info"))
     declared: Final = declared_prompt_cache_breakpoint(model_info)
     if declared is not None:
@@ -439,7 +439,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             "messages": self._transform_messages(
                 messages,
                 model,
-                _deployment_reads_breakpoints(model, _FIELDS.validate_python(litellm_params)),
+                deployment_reads_prompt_cache_breakpoints(model, _FIELDS.validate_python(litellm_params)),
                 bool(litellm_params.get("drop_params") or litellm.drop_params),
             ),
             **optional_params,
