@@ -346,7 +346,7 @@ class ModelRateLimitingCheck(CustomLogger):
                     )
 
             if rpm_limit is not None:
-                current_rpm: Final = self.dual_cache.get_cache(key=rpm_key)
+                current_rpm: Final[int | None] = self.dual_cache.get_cache(key=rpm_key)
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",

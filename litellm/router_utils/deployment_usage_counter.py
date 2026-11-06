@@ -11,6 +11,8 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
@@ -21,13 +23,27 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 USAGE_TTL: Final = 60
+_STR_MAP: Final = TypeAdapter(Mapping[str, object])
+
+
+class _HiddenParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    litellm_model_name: str | None = None
+
+
+class _LoggedUsage(BaseModel):
+    """The slice of a ``standard_logging_object`` that says which deployment used how many tokens."""
+
+    model_config = ConfigDict(frozen=True, protected_namespaces=())
+    model_id: str | None = None
+    total_tokens: int = 0
+    hidden_params: _HiddenParams = _HiddenParams()
 
 
 def reads_deployment_usage(callbacks: Iterable[object]) -> bool:
@@ -38,10 +54,8 @@ def reads_deployment_usage(callbacks: Iterable[object]) -> bool:
 
 def usage_counter_keys(deployment: Mapping[str, object], minute: str) -> tuple[str, str]:
     """The ``(tpm_key, rpm_key)`` a deployment's usage is counted under this minute."""
-    model_info: Final = deployment.get("model_info")
-    params: Final = deployment.get("litellm_params")
-    model_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
-    model: Final = params.get("model") if isinstance(params, Mapping) else None
+    model_id: Final = _STR_MAP.validate_python(deployment.get("model_info") or {}).get("id")
+    model: Final = _STR_MAP.validate_python(deployment.get("litellm_params") or {}).get("model")
     return f"{model_id}:{model}:tpm:{minute}", f"{model_id}:{model}:rpm:{minute}"
 
 
@@ -57,7 +71,7 @@ class DeploymentUsageCounter(CustomLogger):
         charges: Callable[[], bool] = lambda: True,
         clock: Callable[[], datetime] = get_utc_datetime,
     ) -> None:
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger.__init__ is untyped
         self.dual_cache: Final = dual_cache
         self.charges: Final = charges
         self.clock: Final = clock
@@ -106,7 +120,9 @@ class DeploymentUsageCounter(CustomLogger):
 
     def _increment(self, key: str, value: int) -> int | None:
         try:
-            count: Final = int(self.dual_cache.increment_cache(key=key, value=value, ttl=USAGE_TTL))
+            count: Final = int(
+                self.dual_cache.increment_cache(key=key, value=value, ttl=USAGE_TTL)  # pyright: ignore[reportUnknownMemberType]  # DualCache.increment_cache is untyped
+            )
         except Exception as e:  # noqa: BLE001  # see _async_increment
             verbose_router_logger.debug("DeploymentUsageCounter: usage was not recorded. Got - %s", e)
             return None
@@ -118,15 +134,14 @@ class DeploymentUsageCounter(CustomLogger):
         """The ``(tpm_key prefix, total_tokens)`` of a logged success, or None when it counts nothing."""
         if is_batch_retrieve_call_type(kwargs.get("call_type")) or not self.charges():
             return None
-        logged: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")  # pyright: ignore[reportAssignmentType]  # the logging payload as CustomLogger receives it
-        if logged is None:
+        try:
+            logged: Final = _LoggedUsage.model_validate(kwargs.get("standard_logging_object"))
+        except ValidationError:
             return None
-        model_id: Final = logged.get("model_id")
-        model: Final = logged.get("hidden_params", {}).get("litellm_model_name")
-        tokens: Final = logged.get("total_tokens")
-        if model_id is None or not model or not tokens:
+        model: Final = logged.hidden_params.litellm_model_name
+        if logged.model_id is None or not model or not logged.total_tokens:
             return None
-        return f"{model_id}:{model}", int(tokens)
+        return f"{logged.model_id}:{model}", logged.total_tokens
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(
