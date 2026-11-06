@@ -2765,6 +2765,10 @@ def _anthropic_message_with_only_an_empty_text_block() -> dict[str, object]:
     }
 
 
+def _anthropic_message_with_only_a_whitespace_text_block() -> dict[str, object]:
+    return {**_anthropic_message_with_only_an_empty_text_block(), "content": [{"type": "text", "text": "\n\n"}]}
+
+
 def _empty_reply_with_provider_metadata(provider_specific_fields: dict[str, object]) -> ModelResponse:
     return litellm.ModelResponse(
         choices=[litellm.Choices(message=litellm.Message(content="", provider_specific_fields=provider_specific_fields))]
@@ -2847,6 +2851,18 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
             {"messages": _unique_messages(), "max_tokens": 16},
         ),
         (
+            _anthropic_message_with_only_a_whitespace_text_block(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+        (
+            litellm.ModelResponse(choices=[litellm.Choices(message=litellm.Message(content="\n\n"))]),
+            litellm.acompletion,
+            CallTypes.acompletion.value,
+            {"messages": _unique_messages()},
+        ),
+        (
             _empty_reply_with_provider_metadata({"thought_signatures": ["c2lnbmF0dXJl"]}),
             litellm.acompletion,
             CallTypes.acompletion.value,
@@ -2892,6 +2908,15 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
                     "index": 0,
                     "content_block": {"type": "text", "text": "", "citations": []},
                 },
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "\n\n"}},
             ),
             aanthropic_messages,
             CallTypes.aanthropic_messages.value,
@@ -2949,6 +2974,28 @@ async def test_async_get_cache_treats_stored_response_without_output_as_miss(
         kwargs=kwargs,
     )
     assert lookup.cached_result is None
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_keeps_reply_whose_text_is_padded_with_whitespace():
+    setup_cache()
+    handler: Final = LLMCachingHandler(original_function=litellm.acompletion, request_kwargs={}, start_time=_FIXED_START)
+    kwargs: Final = {"messages": _unique_messages()}
+    reply: Final = litellm.ModelResponse(choices=[litellm.Choices(message=litellm.Message(content="\n\nParis\n"))])
+
+    await handler.async_set_cache(result=reply, original_function=litellm.acompletion, kwargs=kwargs)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    lookup: Final = await handler.async_get_cache(
+        model="gpt-3.5-turbo",
+        original_function=litellm.acompletion,
+        logging_obj=_completion_logging_obj(CallTypes.acompletion.value),
+        start_time=_FIXED_START,
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+    )
+
+    assert isinstance(lookup.cached_result, ModelResponse)
+    assert lookup.cached_result.choices[0].message.content == "\n\nParis\n"
 
 
 @pytest.mark.asyncio

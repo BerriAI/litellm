@@ -154,9 +154,13 @@ def _content_block_payload(event: Mapping[str, object]) -> object:
             return None
 
 
+def _is_blank(value: object) -> bool:
+    return value in ("", [], {}, None) or (isinstance(value, str) and not value.strip())
+
+
 def _content_block_carries_output(block: object) -> bool:
     fields: Final = as_str_mapping(block)
-    return fields is not None and any(key != "type" and value not in ("", [], None) for key, value in fields.items())
+    return fields is not None and any(key != "type" and not _is_blank(value) for key, value in fields.items())
 
 
 def _sse_line_carries_output(line: str) -> bool:
@@ -178,12 +182,9 @@ def _message_field_carries_output(key: str, value: object) -> bool:
             return False
         case "provider_specific_fields":
             fields: Final = as_str_mapping(value) or {}
-            return any(
-                name not in _REPLAY_METADATA_FIELDS and field not in ("", [], {}, None)
-                for name, field in fields.items()
-            )
+            return any(name not in _REPLAY_METADATA_FIELDS and not _is_blank(field) for name, field in fields.items())
         case _:
-            return value not in ("", [], {}, None)
+            return not _is_blank(value)
 
 
 def _choice_output_fields(choice: object) -> Mapping[str, object]:
