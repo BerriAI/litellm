@@ -2,7 +2,7 @@
 
 import { ChevronRight, CircleHelp } from "lucide-react";
 import React from "react";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { FieldGroup } from "@/components/ui/field";
@@ -38,12 +38,21 @@ interface ModelInfo {
   };
 }
 
+const optionalLimit = z
+  .string()
+  .refine((value) => value === "" || (Number.isInteger(Number(value)) && Number(value) >= 0), {
+    error: () => i18n.t("tagManagement.createModal.validation.limitNonnegativeInteger"),
+  })
+  .optional();
+
 const createTagShape = {
   tag_name: z.string().min(1, { error: () => i18n.t("tagManagement.createModal.validation.nameRequired") }),
   description: z.string().optional(),
   allowed_llms: z.array(z.string()).optional(),
   max_budget: z.string().optional(),
   budget_duration: z.string().optional(),
+  tpm_limit: optionalLimit,
+  rpm_limit: optionalLimit,
 };
 
 const createTagSchema = z.object(createTagShape);
@@ -69,7 +78,11 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
   }));
 
   const handleFinish = (values: CreateTagFormValues) => {
-    onSubmit(budgetSectionOpen ? values : { ...values, max_budget: undefined, budget_duration: undefined });
+    onSubmit(
+      budgetSectionOpen
+        ? values
+        : { ...values, max_budget: undefined, budget_duration: undefined, tpm_limit: undefined, rpm_limit: undefined },
+    );
     form.reset();
     setBudgetSectionOpen(false);
   };
@@ -157,25 +170,29 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                       />
                     )}
                   </FormField>
-                </FieldGroup>
 
-                <div className="mt-4 rounded-md border border-border bg-muted p-3">
-                  <p className="text-sm text-muted-foreground">
-                    <Trans
-                      i18nKey="tagManagement.createModal.rateLimitsNotice"
-                      components={{
-                        issue: (
-                          <a
-                            href="https://github.com/BerriAI/litellm/issues/new"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-info underline hover:text-info/80"
-                          />
-                        ),
-                      }}
-                    />
-                  </p>
-                </div>
+                  <FormField
+                    control={form.control}
+                    name="tpm_limit"
+                    label={labelWithHint(
+                      t("tagManagement.createModal.fields.tpmLimit"),
+                      t("tagManagement.createModal.fields.tpmLimitHint"),
+                    )}
+                  >
+                    {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={1} min={0} />}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="rpm_limit"
+                    label={labelWithHint(
+                      t("tagManagement.createModal.fields.rpmLimit"),
+                      t("tagManagement.createModal.fields.rpmLimitHint"),
+                    )}
+                  >
+                    {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={1} min={0} />}
+                  </FormField>
+                </FieldGroup>
               </CollapsibleContent>
             </Collapsible>
 

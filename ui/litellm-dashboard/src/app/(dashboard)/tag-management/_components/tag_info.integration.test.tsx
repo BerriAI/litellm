@@ -90,8 +90,8 @@ describe("TagInfoView save payload", () => {
       description: "original description",
       models: ["model-1", "model-2"],
       max_budget: 150.75,
-      tpm_limit: undefined,
-      rpm_limit: undefined,
+      tpm_limit: 1000,
+      rpm_limit: 60,
       budget_duration: "7d",
     };
 
@@ -163,12 +163,56 @@ describe("TagInfoView save payload", () => {
       description: "original description",
       models: ["model-1", "model-2"],
       max_budget: 150.75,
-      tpm_limit: undefined,
-      rpm_limit: undefined,
+      tpm_limit: 1000,
+      rpm_limit: 60,
       budget_duration: "7d",
     };
 
     expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expected);
+  });
+
+  it("sends the edited TPM and RPM limits as integers", async () => {
+    const { user } = await renderEditor();
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    expect(await screen.findByLabelText("TPM Limit")).toHaveValue(1000);
+    expect(screen.getByLabelText("RPM Limit")).toHaveValue(60);
+
+    fireEvent.change(screen.getByLabelText("TPM Limit"), { target: { value: "50000" } });
+    fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value: "120" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(mockTagUpdateCall).toHaveBeenCalledWith(
+      "sk-test",
+      expect.objectContaining({ tpm_limit: 50000, rpm_limit: 120, max_budget: 10, budget_duration: "7d" }),
+    );
+  });
+
+  it("sends null for a cleared TPM limit so the proxy drops it", async () => {
+    const { user } = await renderEditor();
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(mockTagUpdateCall).toHaveBeenCalledWith(
+      "sk-test",
+      expect.objectContaining({ tpm_limit: null, rpm_limit: 60 }),
+    );
+  });
+
+  it("rejects a fractional or negative RPM limit", async () => {
+    const { user } = await renderEditor();
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    fireEvent.change(await screen.findByLabelText("RPM Limit"), { target: { value: "1.5" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(await screen.findByText("Enter a whole number of 0 or more")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value: "-1" } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(await screen.findByText("Enter a whole number of 0 or more")).toBeInTheDocument();
+    expect(mockTagUpdateCall).not.toHaveBeenCalled();
   });
 
   it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
