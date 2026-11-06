@@ -44089,6 +44089,7 @@
         "supports_vision": true
     },
     "mistral/mistral-large-2512": {
+        "deprecation_date": "2027-04-30",
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "mistral",
@@ -44164,6 +44165,7 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-3-5": {
+        "deprecation_date": "2027-04-30",
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -64726,6 +64728,7 @@
         "source": "https://docs.mistral.ai/models/model-cards/mistral-moderation-26-03"
     },
     "mistral/voxtral-mini-2602": {
+        "deprecation_date": "2027-04-30",
         "input_cost_per_second": 5e-05,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
@@ -64742,6 +64745,7 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-transcribe-realtime-2602": {
+        "deprecation_date": "2027-04-30",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
@@ -64758,6 +64762,7 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-2603": {
+        "deprecation_date": "2027-04-30",
         "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
