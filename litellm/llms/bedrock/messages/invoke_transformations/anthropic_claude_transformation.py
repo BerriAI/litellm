@@ -40,15 +40,18 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
-    bedrock_native_output_is_deployment_opt_in,
+    bedrock_native_output_format,
+    bedrock_native_output_retry_requested,
+    bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
+    for_bedrock_json_tool_retry,
     get_anthropic_beta_from_headers,
     is_bedrock_native_output_rejection,
+    json_object_or_none,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    requests_native_output,
     requests_output_config_format,
     strip_unsupported_bedrock_invoke_output_config_keys,
     supports_bedrock_prompt_cache_ttl,
@@ -111,6 +114,13 @@ class AmazonAnthropicClaudeMessagesConfig(
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
+    def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
+        if bedrock_supports_per_turn_control(
+            model, _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None))
+        ):
+            return frozenset({ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value})
+        return frozenset()
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def get_error_class(
@@ -133,13 +143,24 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> GenericLiteLLMParams | None:
         model_info: Final = _MODEL_INFO.validate_python(litellm_params.model_info)
         if not (
-            requests_native_output(anthropic_messages_optional_request_params)
-            and bedrock_native_output_is_deployment_opt_in(model, model_info=model_info)
+            bedrock_native_output_retry_requested(
+                model, anthropic_messages_optional_request_params, model_info=model_info
+            )
         ):
             return None
-        return litellm_params.model_copy(
-            update={"model_info": {**(model_info or {}), "supports_bedrock_native_structured_output": False}}
+        legacy_output_format: Final = json_object_or_none(
+            anthropic_messages_optional_request_params.get("output_format")
         )
+        output_config: Final = json_object_or_none(anthropic_messages_optional_request_params.get("output_config"))
+        output_config_format: Final = (
+            json_object_or_none(output_config.get("format")) if output_config is not None else None
+        )
+        output_format: Final = legacy_output_format if legacy_output_format is not None else output_config_format
+        if output_format is None or (bedrock_native_output_format(model, output_format, model_info=model_info) is None):
+            return None
+        retry_params: Final = for_bedrock_json_tool_retry({"model_info": model_info})
+        retry_model_info: Final = _MODEL_INFO.validate_python(retry_params.get("model_info"))
+        return litellm_params.model_copy(update={"model_info": retry_model_info})
 
     def should_retry_anthropic_messages_without_native_output(
         self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
@@ -561,6 +582,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         headers: dict,
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
+        litellm_params: GenericLiteLLMParams,
     ) -> list[str]:
         anthropic_model_info: Final = AnthropicModelInfo()
         tools: Final = anthropic_messages_optional_request_params.get("tools")
@@ -629,16 +651,22 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
+        model_supported_betas: Final = self.model_specific_anthropic_betas(model, litellm_params) & user_beta_set
         beta_provider: Final = self.beta_headers_provider
         filtered_betas: Final = sorted(
-            filter_and_transform_beta_headers(
-                beta_headers=list(beta_set),
-                provider=beta_provider,
-            )
+            {
+                *filter_and_transform_beta_headers(
+                    beta_headers=list(beta_set),
+                    provider=beta_provider,
+                ),
+                *model_supported_betas,
+            }
         )
 
         dropped_user_betas: Final = sorted(
-            b for b in user_beta_set if not filter_and_transform_beta_headers([b], provider=beta_provider)
+            b
+            for b in user_beta_set - model_supported_betas
+            if not filter_and_transform_beta_headers([b], provider=beta_provider)
         )
         if dropped_user_betas:
             verbose_logger.warning(
@@ -824,6 +852,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             headers=headers,
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
+            litellm_params=litellm_params,
         )
 
         if filtered_betas:

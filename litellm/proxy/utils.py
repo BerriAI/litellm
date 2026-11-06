@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -24,6 +25,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -85,7 +87,9 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -313,6 +317,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.errors import UniqueViolationError
     from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig, LiteLLM_VerificationTokenInclude
 
@@ -5559,6 +5564,25 @@ _LOCK_TEAMS_BY_ID_SQL: Final = (
 )
 
 
+def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
+    match metadata:
+        case {"target": ["user_id"]}:
+            return f"User with id {user_id} already exists"
+        case {"target": ["sso_user_id"]}:
+            return "User with this sso_user_id already exists"
+        case _:
+            return "User conflicts with an existing unique value"
+
+
+def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, *, allow_existing: bool) -> NoReturn:
+    if allow_existing:
+        raise error
+    raise HTTPException(
+        status_code=409,
+        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+    ) from error
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6446,12 +6470,15 @@ class PrismaClient:
         max_tries=3,  # maximum number of retries
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
+        giveup=lambda exc: isinstance(exc, HTTPException) and exc.status_code == 409,
     )
     @log_db_metrics
     async def insert_data(
         self,
         data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
+        *,
+        allow_existing_user: bool = True,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6487,14 +6514,20 @@ class PrismaClient:
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
+                from prisma.errors import UniqueViolationError
+
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    new_user_row: Final = await UserRepository(self).upsert_user(
+                        db_data, allow_existing=allow_existing_user
+                    )
                     if new_user_row is None:
                         raise HTTPException(
                             status_code=403,
                             detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
                         )
+                except UniqueViolationError as e:
+                    _raise_user_unique_conflict(e, db_data["user_id"], allow_existing=allow_existing_user)
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
@@ -8370,23 +8403,42 @@ def hash_token(token: str):
     return hashed_token
 
 
+def _is_pbkdf2_row(stored: str) -> bool:
+    return re.fullmatch(r"pbkdf2:[A-Za-z0-9+/]{64}", stored) is not None
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using scrypt with a random salt."""
+    """Hash a password using scrypt with a random salt, or PBKDF2 in FIPS mode."""
     import base64
     import hashlib
     import os
 
+    if fips_mode_active():
+        fips_salt: Final = ssl.RAND_bytes(16)
+        fips_dk: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), fips_salt, iterations=600_000, dklen=32)
+        return "pbkdf2:" + base64.b64encode(fips_salt + fips_dk).decode()
     salt: Final = os.urandom(16)
     dk: Final = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
     return "scrypt:" + base64.b64encode(salt + dk).decode()
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    """Verify a password against a stored hash. Supports scrypt and SHA256, or only PBKDF2 in FIPS mode."""
     import base64
     import hashlib
     import secrets
 
+    if fips_mode_active():
+        if not _is_pbkdf2_row(stored):
+            verbose_proxy_logger.error("FIPS mode refuses a non-PBKDF2 password row. Reset it with /user/update.")
+            return False
+        if len(password) < MIN_ALLOWED_LENGTH:
+            return False
+        fips_row: Final = base64.b64decode(stored[7:])
+        fips_dk: Final = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(errors="surrogatepass"), fips_row[:16], iterations=600_000, dklen=32
+        )
+        return secrets.compare_digest(fips_row[16:], fips_dk)
     if stored.startswith("scrypt:"):
         try:
             raw: Final = base64.b64decode(stored[7:])
@@ -8401,12 +8453,24 @@ def verify_password(password: str, stored: str) -> bool:
     return False
 
 
+_FIPS_KDF_POOL: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fips-password-kdf")
+
+
+async def run_off_loop_if_fips(kdf: Callable[..., _T], *args: str) -> _T:
+    """Run a password KDF inline, or on the single KDF thread in FIPS mode."""
+    if not fips_mode_active():
+        return kdf(*args)
+    return await asyncio.get_running_loop().run_in_executor(_FIPS_KDF_POOL, kdf, *args)
+
+
 async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     """
     Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
     are left alone (they migrate on next login via the SHA256 fallback).
     Skips quickly if no plaintext passwords exist.
     """
+    if fips_mode_active():
+        return "Skipped, FIPS mode has no password migration"
     all_with_pw: Final = await UserRepository(prisma_client).table.find_many(
         where={"password": {"not": None}},
     )
@@ -8417,7 +8481,10 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     plaintext_users: Final = [
         (u.user_id, u.password)
         for u in all_with_pw
-        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        if u.password
+        and not u.password.startswith("scrypt:")
+        and not _is_sha256_hex(u.password)
+        and not _is_pbkdf2_row(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"

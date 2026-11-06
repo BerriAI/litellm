@@ -19,6 +19,7 @@ import {
 } from "./helpers";
 import type { Plugin, SkillHubSkill } from "./types";
 import SkillVersionHistory from "./SkillVersionHistory";
+import SkillInstallDialog from "./SkillInstallDialog";
 
 type SkillDetailData = Pick<
   SkillHubSkill,
@@ -128,6 +129,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [installOpen, setInstallOpen] = useState(false);
   const marketplaceRequiresKey = useClaudeCodeMarketplaceRequiresKey();
   const visibleTab = activeTab === "downloads" && !isAdmin ? "overview" : activeTab;
   const portableArchivePath = skill.downloadAvailable
@@ -141,6 +143,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
         getProxyBaseUrl(),
         typeof window !== "undefined" ? window.location.origin : undefined,
       );
+  const installDialogPath = skill.portable && installOpen ? archivePath : null;
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -199,18 +202,36 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, o
 
       {/* Header */}
       <div className="mb-2">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{skill.name}</h1>
-          {onEditClick && (
-            <Button variant="outline" onClick={onEditClick}>
-              {t("skills.panel.editButton")}
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {onEditClick && (
+              <Button variant="outline" onClick={onEditClick}>
+                {t("skills.panel.editButton")}
+              </Button>
+            )}
+            {skill.portable && archivePath && (
+              <Button onClick={() => setInstallOpen(true)}>
+                <Download className="size-4" />
+                {t("skills.install.action")}
+              </Button>
+            )}
+          </div>
         </div>
         {skill.description && (
           <p className="mb-0 ml-0 mr-0 mt-2 text-sm leading-relaxed text-muted-foreground">{skill.description}</p>
         )}
       </div>
+
+      {installDialogPath && (
+        <SkillInstallDialog
+          key={`${skill.id}:${getProxyBaseUrl()}`}
+          name={skill.name}
+          archivePath={installDialogPath}
+          open={installOpen}
+          onOpenChange={setInstallOpen}
+        />
+      )}
 
       {/* Tab bar */}
       <div className="mb-7 mt-6 border-b border-border">
