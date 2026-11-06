@@ -1234,6 +1234,30 @@ async def test_bedrock_converse_drops_a_turn_that_held_only_signed_thinking(
     assert result == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_drops_the_cache_point_of_a_dropped_signed_thinking_block(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "private plan",
+                    "signature": "claude-signature",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.amazon.nova-2-lite-v1:0", None, use_async)
+
+    assert result == [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [

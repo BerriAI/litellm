@@ -5232,8 +5232,8 @@ class BedrockConverseMessagesProcessor:
                             deployment_model=deployment_model,
                             model_info=model_info,
                         )
-                        if _cache_point_block is not None and not (
-                            drop_params and _as_thinking_block(element) is not None
+                        if _cache_point_block is not None and BedrockConverseMessagesProcessor.keeps_cache_point(
+                            element, drop_params=drop_params, drop_signed=drop_signed_thinking
                         ):
                             assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
@@ -5304,6 +5304,16 @@ class BedrockConverseMessagesProcessor:
             if not (to_claude and is_encrypted_reasoning_block(thinking_block))
             and not (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
         ]
+
+    @staticmethod
+    def keeps_cache_point(element: object, *, drop_params: bool, drop_signed: bool) -> bool:
+        match _as_thinking_block(element):
+            case None:
+                return True
+            case thinking_block:
+                return not (
+                    drop_params or (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
+                )
 
     @staticmethod
     def _is_signed(thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock) -> bool:
@@ -5671,8 +5681,8 @@ def _bedrock_converse_messages_pt(
                             deployment_model=deployment_model,
                             model_info=model_info,
                         )
-                        if _cache_point_block is not None and not (
-                            drop_params and _as_thinking_block(element) is not None
+                        if _cache_point_block is not None and BedrockConverseMessagesProcessor.keeps_cache_point(
+                            element, drop_params=drop_params, drop_signed=drop_signed_thinking
                         ):
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
