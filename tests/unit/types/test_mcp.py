@@ -6,9 +6,12 @@ either stack because a second implementation is exactly how an injected header c
 resolved credential on one path and not the other.
 """
 
+from collections.abc import Mapping
+
 import pytest
 
 from litellm.types.mcp import (
+    credential_headers_problem,
     credential_redirect_hook,
     crosses_origin,
     has_header,
@@ -85,3 +88,56 @@ async def test_the_hook_drops_the_slot_only_once_the_origin_changes() -> None:
     foreign = httpx.Request("GET", "https://attacker.example.com/x", headers={"esb-oauth": "Bearer x"})
     await hook(foreign)
     assert "esb-oauth" not in foreign.headers
+
+
+@pytest.mark.parametrize(
+    "headers,static_headers,problem",
+    [
+        ({"DD-API-KEY": "key", "DD-APPLICATION-KEY": "app"}, {"X-Datadog-Site": "datadoghq.com"}, None),
+        ({}, None, "credentials.headers must name at least one header"),
+        (
+            {"Bad Name": "v"},
+            None,
+            "Invalid header name 'Bad Name': must be a valid HTTP header name (RFC 7230 token)",
+        ),
+        (
+            {" DD-API-KEY": "v"},
+            None,
+            "Invalid header name ' DD-API-KEY': must be a valid HTTP header name (RFC 7230 token)",
+        ),
+        (
+            {"DD-API-KEY": ""},
+            None,
+            "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space",
+        ),
+        ({"DD-API-KEY": "   "}, None, "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space"),
+        ({"DD-API-KEY": "caf\u00e9"}, None, "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space"),
+        ({"DD-API-KEY": "a\tb c"}, None, None),
+        ({"DD-API-KEY": " key"}, None, "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space"),
+        ({"DD-API-KEY": "key\t"}, None, "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space"),
+        ({"Accept": "text/plain"}, None, "Header 'Accept' is set by the gateway and cannot be configured"),
+        ({"content-type": "text/plain"}, None, "Header 'content-type' is set by the gateway and cannot be configured"),
+        ({"Mcp-Method": "x"}, None, "Header 'Mcp-Method' is set by the gateway and cannot be configured"),
+        ({"MCP-Param-Region": "x"}, None, "Header 'MCP-Param-Region' is set by the gateway and cannot be configured"),
+        ({"Last-Event-ID": "1"}, None, "Header 'Last-Event-ID' is set by the gateway and cannot be configured"),
+        ({"Cookie": "a=b"}, None, "Header 'Cookie' is set by the gateway and cannot be configured"),
+        ({"Upgrade": "h2c"}, None, "Header 'Upgrade' is set by the gateway and cannot be configured"),
+        ({"Proxy-Authorization": "x"}, None, "Header 'Proxy-Authorization' is set by the gateway and cannot be configured"),
+        ({"User-Agent": "acme"}, None, None),
+        (
+            {"DD-API-KEY": "key\r\nX-Injected: 1"},
+            None,
+            "Invalid value for header 'DD-API-KEY': must be printable ASCII with no leading or trailing space",
+        ),
+        ({"DD-API-KEY": "a", "dd-api-key": "b"}, None, "credentials.headers names must be unique, ignoring case"),
+        (
+            {"DD-API-KEY": "a"},
+            {"dd-api-key": "old"},
+            "Header 'DD-API-KEY' is in both static_headers and credentials.headers",
+        ),
+    ],
+)
+def test_credential_headers_problem_names_the_first_unusable_header(
+    headers: Mapping[str, str], static_headers: Mapping[str, str] | None, problem: str | None
+) -> None:
+    assert credential_headers_problem(headers, static_headers) == problem

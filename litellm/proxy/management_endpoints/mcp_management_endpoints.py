@@ -273,6 +273,7 @@ if MCP_AVAILABLE:
         MCPGatewaySessionsResponse,
         MCPGatewaySessionsTerminateResponse,
         MCPUpstreamProtocol,
+        credential_headers_problem,
         normalize_upstream_header_name,
         validate_mcp_protocol_transport,
     )
@@ -326,10 +327,60 @@ if MCP_AVAILABLE:
                 },
             )
 
+    def _credential_headers_error(payload: McpServerPayloadLike) -> str | None:
+        raw_credentials: Final[object] = getattr(payload, "credentials", None)
+        credentials: Final = cast(Mapping[str, object] | None, raw_credentials)  # cast-ok: request credentials mapping
+        has_headers_key: Final = credentials is not None and "headers" in credentials
+        raw_headers: Final[object] = credentials.get("headers") if credentials is not None else None
+        headers: Final = cast(Mapping[str, str] | None, raw_headers)  # cast-ok: typed by MCPCredentials
+        raw_auth_type: Final[object] = getattr(payload, "auth_type", None)
+        auth_type: Final = cast(MCPAuth | str | None, raw_auth_type)  # cast-ok: request auth type
+        is_create: Final = isinstance(payload, NewMCPServerRequest)
+        if has_headers_key and headers is None:
+            return "credentials.headers cannot be null"
+        if headers is None:
+            return (
+                "auth_type secret_headers requires credentials.headers"
+                if is_create and auth_type == MCPAuth.secret_headers
+                else None
+            )
+        if auth_type != MCPAuth.secret_headers and (is_create or auth_type is not None):
+            return "credentials.headers is only used with auth_type secret_headers"
+        if auth_type == MCPAuth.secret_headers and getattr(payload, "spec_path", None):
+            return "auth_type secret_headers is not supported for OpenAPI servers"
+        raw_static: Final[object] = getattr(payload, "static_headers", None)
+        static_headers: Final = cast(Mapping[str, str] | None, raw_static)  # cast-ok: request static headers
+        return credential_headers_problem(headers, static_headers)
+
+    def credential_headers_update_error(
+        payload: UpdateMCPServerRequest, stored_auth_type: MCPAuth | str | None, stored_spec_path: str | None
+    ) -> str | None:
+        """What a partial update gets wrong about secret headers once the stored server is known."""
+        headers: Final = (payload.credentials or {}).get("headers")
+        switching_in: Final = payload.auth_type == MCPAuth.secret_headers and stored_auth_type != MCPAuth.secret_headers
+        effective_auth_type: Final = payload.auth_type or stored_auth_type
+        if headers is not None and effective_auth_type != MCPAuth.secret_headers:
+            return "credentials.headers is only used with auth_type secret_headers"
+        if effective_auth_type != MCPAuth.secret_headers:
+            return None
+        if switching_in and headers is None:
+            return "auth_type secret_headers requires credentials.headers"
+        return (
+            "auth_type secret_headers is not supported for OpenAPI servers"
+            if payload.spec_path or stored_spec_path
+            else None
+        )
+
+    def _validate_credential_headers(payload: McpServerPayloadLike) -> None:
+        problem: Final = _credential_headers_error(payload)
+        if problem:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": problem})
+
     def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
         _validate_upstream_token_header(payload)
+        _validate_credential_headers(payload)
 
     def mcp_identifier_conflict_message(conflict: McpIdentifierConflict) -> str:
         return (
@@ -3259,6 +3310,14 @@ if MCP_AVAILABLE:
             old_server_record_read_failed = True
 
         _validate_mcp_protocol_update(payload, payload_fields_set, old_server_record, old_server_record_read_failed)
+
+        headers_problem: Final = (
+            None
+            if old_server_record is None
+            else credential_headers_update_error(payload, old_server_record.auth_type, old_server_record.spec_path)
+        )
+        if headers_problem:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": headers_problem})
 
         if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
             relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(
