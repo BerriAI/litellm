@@ -59,10 +59,12 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
-    ReservationAwareIncrementOperation,
+    ReservationWindowIdentity,
+    WindowGuardedIncrement,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitScope
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -835,9 +837,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return None
         try:
             window_start: Final = _WINDOW_START_ADAPTER.validate_python(
-                await self.parallel_request_limiter.internal_usage_cache.async_get_cache(
-                    key=f"{{{descriptor_key}:{status.get('descriptor_value') or ''}}}:window",
-                    litellm_parent_otel_span=parent_otel_span,
+                await self.parallel_request_limiter.rate_limits.get(
+                    RateLimitScope(descriptor_key, status.get("descriptor_value") or "").window
                 ),
                 strict=True,
             )
@@ -849,8 +850,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         self,
         descriptors: Sequence["RateLimitDescriptor"],
         tokens: int,
-        reservation_windows: frozenset[tuple[str, str, Literal["redis", "local"]]],
-    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        reservation_windows: frozenset[ReservationWindowIdentity],
+    ) -> tuple[WindowGuardedIncrement, ...]:
         """Refund operations for the daily token counters this batch charged.
 
         The v3 limiter's failure hook applies them when the submission fails
@@ -860,29 +861,22 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """
         if tokens <= 0 or not reservation_windows:
             return ()
-        tpd_descriptors_by_counter: Final[Mapping[str, RateLimitDescriptor]] = MappingProxyType(
-            {
-                self.parallel_request_limiter.create_rate_limit_keys(
-                    descriptor["key"], descriptor["value"], "tokens"
-                ): descriptor
-                for descriptor in descriptors
-                if descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
-            }
+        tpd_counters: Final = frozenset(
+            RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens")
+            for descriptor in descriptors
+            if descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
         )
         return tuple(
-            ReservationAwareIncrementOperation(
-                key=counter_key,
-                increment_value=-tokens,
-                ttl=BATCH_TPD_WINDOW_SECONDS,
-                window_key=f"{{{descriptor['key']}:{descriptor['value']}}}:window",
+            WindowGuardedIncrement(
+                increment=CounterIncrement(counter=counter, amount=-tokens, ttl=BATCH_TPD_WINDOW_SECONDS),
                 expected_window_start=window_start,
                 reservation_backend=backend,
             )
-            for counter_key, window_start, backend in sorted(reservation_windows)
-            if (descriptor := tpd_descriptors_by_counter.get(counter_key)) is not None
+            for counter, window_start, backend in sorted(reservation_windows)
+            if counter in tpd_counters
         )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def count_input_file_usage(
         self,
         file_id: str,
@@ -1241,7 +1235,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_content
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,

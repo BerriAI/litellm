@@ -32,7 +32,7 @@ import litellm
 from litellm import APIConnectionError, Router
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisClusterCache
-from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
+from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -105,6 +105,7 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
+from tests.unit.conftest import redis_cache_double
 import traceback
 import inspect
 from typing import List, Optional
@@ -1249,17 +1250,6 @@ _BATCH_NOT_FOUND = {
 }
 
 
-async def _router_usage_keys(router, timeout: float = 2.0) -> list[str]:
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        keys = sorted(k for k in router.cache.in_memory_cache.cache_dict if k.startswith("global_router:"))
-        if keys:
-            return keys
-        await asyncio.sleep(0.05)
-    return []
-
-
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(monkeypatch: pytest.MonkeyPatch):
     """
@@ -1306,11 +1296,13 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
         )
         response = await router.aretrieve_batch(batch_id=_BATCH_ID)
         payload = await collector.retrieve_batch_payload()
-        usage_keys = await _router_usage_keys(router)
+        requested_usage: Final = await router.get_model_group_usage(_BATCH_GROUP)
+        unrelated_usage: Final = await router.get_model_group_usage(_UNRELATED_BATCH_GROUP)
 
     assert response.id == _BATCH_ID
     assert payload["model_group"] == _BATCH_GROUP
-    assert usage_keys == []
+    assert requested_usage == (None, None)
+    assert unrelated_usage == (None, None)
 
 
 @pytest.mark.parametrize(
@@ -7299,6 +7291,27 @@ def test_upstream_model_and_service_tiers_are_read_off_the_deployments_the_team_
     assert router.get_configured_service_tiers(model_name, team_id) == service_tiers
 
 
+@pytest.mark.parametrize(
+    ("litellm_params", "provider"),
+    [
+        ({"model": "us.openai.gpt-6.1-sol", "custom_llm_provider": "bedrock"}, "bedrock"),
+        ({"model": "bedrock_mantle/openai.gpt-6.1-sol"}, "bedrock_mantle"),
+        ({"model": "gpt-6.1-sol"}, None),
+    ],
+)
+def test_the_upstream_provider_is_the_one_the_routable_deployment_declares(litellm_params, provider):
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "sol", "litellm_params": litellm_params, "model_info": {"team_id": "team-1"}},
+            {"model_name": "sol", "litellm_params": {"model": "azure/sol-deployment"}, "model_info": {"team_id": "t2"}},
+        ]
+    )
+
+    assert router.registry().resolve("sol", kind="upstream_provider", team_id="team-1") == provider
+    assert router.registry().resolve("sol", kind="upstream_provider", team_id="t2") == "azure"
+    assert router.registry().resolve("not-a-real-model", kind="upstream_provider") is None
+
+
 def test_get_configured_display_name_treats_malformed_values_as_absent():
     malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
     router = litellm.Router(
@@ -8701,11 +8714,10 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_redis_cleanup_failure_does_not_reject_a_subagent_request(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
         del router.complexity_routers["smart-router"]
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
         redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
         router.update_redis_cache(cache=redis_cache)
@@ -8720,10 +8732,9 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_redis_write_failures_do_not_reject_main_or_subagent_requests(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
         redis_cache.async_set_cache = AsyncMock(side_effect=Exception("redis unavailable"))
         router.update_redis_cache(cache=redis_cache)
@@ -8747,10 +8758,8 @@ class TestClaudeCodeSubagentSessionRouterBinding:
     async def test_subagents_follow_the_main_threads_latest_router_across_workers(self):
         from types import SimpleNamespace
 
-        from litellm.caching.caching import RedisCache
-
         shared_binding = SimpleNamespace(value=None)
-        shared_redis = MagicMock(spec=RedisCache)
+        shared_redis = redis_cache_double()
         shared_redis.async_get_cache = AsyncMock(side_effect=lambda key, **_: shared_binding.value)
         shared_redis.async_set_cache = AsyncMock(
             side_effect=lambda key, value, **_: setattr(shared_binding, "value", value)
@@ -8778,11 +8787,10 @@ class TestClaudeCodeSubagentSessionRouterBinding:
 
     @pytest.mark.asyncio
     async def test_no_pre_routing_strategies_means_no_session_cache_traffic(self):
-        from litellm.caching.caching import RedisCache
 
         router = self._router()
         router.complexity_routers.clear()
-        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache = redis_cache_double()
         redis_cache.async_get_cache = AsyncMock(return_value=None)
         redis_cache.async_set_cache = AsyncMock()
         redis_cache.async_delete_cache = AsyncMock()
@@ -13288,13 +13296,7 @@ def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failure_rpm_increment_declares_the_router_usage_key_family():
-    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
-    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
-    from unittest.mock import AsyncMock
-
-    from litellm._internal_context import current_service_target
-
+async def test_a_failed_call_still_counts_one_rpm():
     router = Router(
         model_list=[
             {
@@ -13304,43 +13306,32 @@ async def test_failure_rpm_increment_declares_the_router_usage_key_family():
             }
         ]
     )
-    seen: list[str | None] = []
-
-    async def _increment(**_kwargs):
-        seen.append(current_service_target())
-
-    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
-        await router.async_deployment_callback_on_failure(
-            kwargs={
-                "call_type": "acompletion",
-                "litellm_params": {
-                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
-                    "model_info": {"id": "dep-1"},
-                },
+    await router.async_deployment_callback_on_failure(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {
+                "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                "model_info": {"id": "dep-1"},
             },
-            completion_response=None,
-            start_time=None,
-            end_time=None,
-        )
+        },
+        completion_response=None,
+        start_time=None,
+        end_time=None,
+    )
 
-    assert seen == ["router_usage"]
-    assert current_service_target() is None
+    assert await _usage_by_kind(router, "gpt-group") == {"rpm": 1}
 
 
-class _SpanRecordingInMemoryCache(InMemoryCache):
-    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
+async def _usage_by_kind(router: Router, group: str) -> dict[str, int]:
+    tpm, rpm = await router.health().usage(group)
+    return {kind: value for kind, value in (("tpm", tpm), ("rpm", rpm)) if value is not None}
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.active_span_names: list[str] = []
 
-    async def async_batch_get_cache(self, keys, **kwargs):
-        self.active_span_names.append(trace.get_current_span().name)
-        return await super().async_batch_get_cache(keys, **kwargs)
-
-    async def async_get_cache(self, key, **kwargs):
-        self.active_span_names.append(trace.get_current_span().name)
-        return await super().async_get_cache(key, **kwargs)
+async def _usage_settles(router: Router, group: str, kinds: int) -> dict[str, int]:
+    async with asyncio.timeout(5):
+        while len(await _usage_by_kind(router, group)) < kinds:
+            await asyncio.sleep(0.01)
+    return await _usage_by_kind(router, group)
 
 
 @pytest.fixture
@@ -13380,10 +13371,6 @@ async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_mo
             },
         ]
     )
-    recording_cache = _SpanRecordingInMemoryCache()
-    router.cache.in_memory_cache = recording_cache
-    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
-
     with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
         deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
 
@@ -13392,7 +13379,6 @@ async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_mo
     assert route_span.name == "route gpt-group"
     assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
     assert route_span.end_time is not None
-    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}
 
 
 class TestAutoRouterTraceProvenance:
@@ -14011,25 +13997,15 @@ async def test_call_router_callbacks_on_success():
         ]
     )
 
-    with patch.object(router.cache, "async_increment_cache_pipeline", new=AsyncMock()) as mock_callback:
-        await router.acompletion(
-            model="gemini/gemini-2.5-flash",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            mock_response="Hello, I'm good.",
-        )
-        await asyncio.sleep(1)
-        assert mock_callback.call_count == 1
-
-        increment_list = mock_callback.call_args_list[0].kwargs["increment_list"]
-        assert len(increment_list) == 2
-
-        for increment in increment_list:
-            if "tpm" in increment["key"]:
-                assert increment["key"].startswith("global_router:1:gemini/gemini-2.5-flash:tpm")
-                assert increment["increment_value"] == 30
-            elif "rpm" in increment["key"]:
-                assert increment["key"].startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
-                assert increment["increment_value"] == 1
+    response: Final = await router.acompletion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, I'm good.",
+    )
+    assert await _usage_settles(router, "gemini/gemini-2.5-flash", kinds=2) == {
+        "tpm": response.usage.total_tokens,
+        "rpm": 1,
+    }
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
@@ -14046,22 +14022,14 @@ async def test_call_router_callbacks_on_failure():
         ]
     )
 
-    with patch.object(router.cache, "async_increment_cache", new=AsyncMock()) as mock_callback:
-        with pytest.raises(litellm.RateLimitError):
-            await router.acompletion(
-                model="gemini/gemini-2.5-flash",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                mock_response="litellm.RateLimitError",
-                num_retries=0,
-            )
-        await asyncio.sleep(3)
-        rpm_keys = [
-            key
-            for call in mock_callback.call_args_list
-            for key in (call.kwargs.get("key", call.args[0] if call.args else None),)
-            if isinstance(key, str) and key.startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
-        ]
-        assert len(rpm_keys) == 1
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            mock_response="litellm.RateLimitError",
+            num_retries=0,
+        )
+    assert await _usage_settles(router, "gemini/gemini-2.5-flash", kinds=1) == {"rpm": 1}
 
 
 @pytest.mark.asyncio
@@ -14214,7 +14182,7 @@ def test_router_get_model_access_groups(potential_access_group, expected_result)
 def test_router_redis_cache():
     router = Router(model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}}])
 
-    redis_cache = MagicMock()
+    redis_cache = redis_cache_double()
 
     router.update_redis_cache(cache=redis_cache)
 

@@ -956,7 +956,7 @@ _UNSUPPORTED: Final = (
         "supports_sampling_params",
         {"temperature": 0.2},
         {},
-        "Only temperature=1 is supported",
+        "does not support parameters: ['temperature']",
         id="temperature_on_a_fixed_sampling_model",
     ),
     pytest.param(

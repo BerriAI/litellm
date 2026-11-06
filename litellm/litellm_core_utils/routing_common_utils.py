@@ -409,7 +409,7 @@ def deployments_the_caller_may_use(
         return ()
 
 
-_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+_WEB_SEARCH_TOOL_KEYS: Final = frozenset({"googleSearch", "google_search"})
 
 
 def _deployment_supports_web_search(deployment: dict) -> bool:
@@ -433,11 +433,18 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
 
 
 def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
+    """OpenAI ``web_search`` / ``web_search_preview``, Anthropic ``web_search_<version>``, Gemini
+    ``googleSearch`` / ``google_search``."""
     tools: Final[object] = request_kwargs.get("tools")
     return isinstance(tools, (list, tuple)) and any(
         isinstance(tool, dict)
-        and isinstance(tool_type := tool.get("type"), str)
-        and tool_type in _WEB_SEARCH_TOOL_TYPES
+        and (
+            any(key in tool for key in _WEB_SEARCH_TOOL_KEYS)
+            or (
+                isinstance(tool_type := tool.get("type"), str)
+                and (tool_type == "web_search" or tool_type.startswith("web_search_"))
+            )
+        )
         for tool in tools
     )
 
