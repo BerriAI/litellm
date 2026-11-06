@@ -1,9 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { createWorkflowRunApi, WorkflowRunDebugger, type WorkflowRunGraphState } from "@/components/workflows/runs";
+import {
+  createWorkflowRunApi,
+  WorkflowRunDebugger,
+  WorkflowRunGraphPanel,
+  type WorkflowRunGraphState,
+} from "@/components/workflows/runs";
 import { useAuth } from "@/contexts/AuthContext";
 import { fixtureWorkflowId } from "./data";
+
+function renderGraph(state: WorkflowRunGraphState | null, onSelectStep: (stepId: string | null) => void) {
+  return <WorkflowRunGraphPanel state={state} onSelectStep={onSelectStep} />;
+}
 
 export default function WorkflowRunDemo() {
   const { accessToken } = useAuth();
@@ -31,6 +40,7 @@ export default function WorkflowRunDemo() {
         runId={runId}
         onSelectRun={setRunId}
         onGraphStateChange={setGraphState}
+        renderGraph={renderGraph}
         pageSize={3}
       />
       {graphState && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import type {
@@ -20,8 +20,12 @@ export interface WorkflowRunDebuggerProps {
   readonly runId: string | null;
   readonly onSelectRun: (runId: string) => void;
   readonly selectedStepId?: string | null;
-  readonly onSelectStep?: (selection: WorkflowStepSelection) => void;
+  readonly onSelectStep?: (selection: WorkflowStepSelection | null) => void;
   readonly onGraphStateChange?: (state: WorkflowRunGraphState | null) => void;
+  readonly renderGraph?: (
+    state: WorkflowRunGraphState | null,
+    selectStep: (stepId: string | null) => void,
+  ) => ReactNode;
   readonly pageSize?: number;
 }
 
@@ -47,8 +51,9 @@ function RunInspection({
   selectedStepId,
   onSelectStep,
   onGraphStateChange,
+  renderGraph,
 }: WorkflowRunDebuggerProps) {
-  const [localStepId, setLocalStepId] = useState<string | null>(null);
+  const [localStepId, setLocalStepId] = useState<string | null>();
   const traceOptions: UseQueryOptions<RunSteps> = {
     queryKey: ["workflowSteps", dataSource.cacheKey, workflowId, runId],
     queryFn: ({ signal }) => dataSource.getSteps({ runId: runId!, signal }),
@@ -70,12 +75,8 @@ function RunInspection({
   };
   const definitionQuery = useQuery(definitionOptions);
   const selectionId = selectedStepId === undefined ? localStepId : selectedStepId;
-  const defaultStep =
-    trace?.steps.find((step) => step.step_id === selectionId) ??
-    trace?.steps.find((step) => step.state === "failed") ??
-    trace?.steps[0];
-  const selected =
-    selectedStepId === undefined ? defaultStep : trace?.steps.find((step) => step.step_id === selectedStepId);
+  const defaultStep = trace?.steps.find((step) => step.state === "failed") ?? trace?.steps[0];
+  const selected = selectionId === undefined ? defaultStep : trace?.steps.find((step) => step.step_id === selectionId);
   const graphState = useMemo<WorkflowRunGraphState | null>(
     () =>
       trace
@@ -94,7 +95,12 @@ function RunInspection({
     onGraphStateChange?.(graphState);
     return () => onGraphStateChange?.(null);
   }, [graphState, onGraphStateChange]);
-  const selectStep = (stepId: string) => {
+  const selectStep = (stepId: string | null) => {
+    if (stepId === null) {
+      setLocalStepId(null);
+      onSelectStep?.(null);
+      return;
+    }
     const step = trace?.steps.find((candidate) => candidate.step_id === stepId);
     if (!trace || !step) return;
     setLocalStepId(stepId);
@@ -134,6 +140,7 @@ function RunInspection({
           </Button>
         </div>
       )}
+      {renderGraph?.(graphState, selectStep)}
       {trace && (
         <WorkflowRunInspector
           trace={trace}

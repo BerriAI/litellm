@@ -12,6 +12,7 @@ Import from `@/components/workflows/runs`
 | `WorkflowRunHistory`    | Workflow-scoped history, status filter and cursor pagination |
 | `WorkflowRunInspector`  | Controlled presentation of a trace and its pinned definition |
 | `WorkflowRunDebugger`   | History, selected-run queries, polling and graph callbacks   |
+| `WorkflowRunGraphPanel` | Collapsible adapter around the shared `WorkflowGraph`        |
 | `WorkflowRunDataSource` | Replaceable run-list, trace and pinned-definition boundary   |
 | `WorkflowRunGraphState` | Pinned definition, all step executions and selected step     |
 | `WorkflowStepSelection` | `runId`, `snapshotId`, `stepId` and `nodeId`                 |
@@ -32,6 +33,18 @@ const dataSource = useMemo(() => createWorkflowRunApi({ accessToken, teamId }), 
 ```
 
 The owning page controls the selected run and any URL state through nuqs. Clear its selected run when switching workflows. Local filters and pagination reset when the workflow, data source or page size changes. `selectedStepId` and `onSelectStep` support selection controlled by the graph. Without a controlled step, the inspector initially selects the failed step, then the first reported step
+
+The optional `renderGraph(state, selectStep)` slot integrates the shared graph without owning the workflow page
+
+```tsx
+function renderGraph(state: WorkflowRunGraphState | null, selectStep: (stepId: string | null) => void) {
+  return <WorkflowRunGraphPanel state={state} onSelectStep={selectStep} />;
+}
+```
+
+Pass that function to `WorkflowRunDebugger`. The panel renders the existing `WorkflowGraph` with the pinned bundle, never a second renderer. Its definition key includes the run and snapshot identities. Unreported nodes remain uncolored and selecting one clears the step inspector with an explicit “No step has been reported” message
+
+For multiple executions of one node, the graph shows the selected execution's state when that node is selected. Otherwise it shows the last reported execution for that node. All executions remain individually selectable in the inspector. `onSelectStep(null)` clears selection
 
 ## Confirmed trace contract
 
@@ -112,7 +125,9 @@ The preview serves run and definition responses over HTTP through `createWorkflo
 ```sh
 ../../scripts/with_dashboard_node.sh npx vitest run \
   src/components/workflows/runs/api.test.ts \
-  src/components/workflows/runs/WorkflowRunDebugger.integration.test.tsx
+  src/components/workflows/runs/graphExecution.test.ts \
+  src/components/workflows/runs/WorkflowRunDebugger.integration.test.tsx \
+  src/components/workflows/runs/WorkflowRunGraph.integration.test.tsx
 ```
 
 Stop both local processes after verification. This preview does not establish live gateway integration, real provider execution or authorization against the backend under development
