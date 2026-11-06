@@ -423,7 +423,10 @@ def build_key_page_sql(
     limit_param: Final = sentinel_param + 1
     offset_param: Final = limit_param + 1
     identity_filter: Final = (
-        "AND length(api_key)<=CASE WHEN api_key LIKE 'raw:%' THEN 1020 ELSE 1024 END" if bounded_identifiers else ""
+        "AND CASE WHEN octet_length(api_key)<=4096 THEN "
+        "length(api_key)<=CASE WHEN api_key LIKE 'raw:%' THEN 1020 ELSE 1024 END ELSE false END"
+        if bounded_identifiers
+        else ""
     )
     sql: Final = f"""
         WITH ranked AS (
@@ -467,7 +470,12 @@ def build_user_page_sql(
     limit_param: Final = len(where_params) + 1
     offset_param: Final = limit_param + 1
     group_expr: Final = f"NULLIF(\"{scope.entity_id_field}\", '')"
-    identity_filter: Final = f"AND ({group_expr} IS NULL OR length({group_expr})<=1024)" if bounded_identifiers else ""
+    identity_filter: Final = (
+        f"AND ({group_expr} IS NULL OR CASE WHEN octet_length({group_expr})<=4096 "
+        f"THEN length({group_expr})<=1024 ELSE false END)"
+        if bounded_identifiers
+        else ""
+    )
     sql: Final = f"""
         WITH ranked AS (
             SELECT {group_expr} AS user_id,{_user_spend_select()}, SUM(spend::numeric) AS rank_spend

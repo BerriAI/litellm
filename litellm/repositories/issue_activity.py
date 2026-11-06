@@ -151,11 +151,14 @@ class IssueActivityRepository:
             await self.database.query_raw(
                 """SELECT w.api_key,jsonb_build_object(
                     'key_alias',LEFT(COALESCE(k.key_alias,d.key_alias),256),
-                    'team_id',CASE WHEN length(COALESCE(k.team_id,d.team_id))<=1024
-                        THEN COALESCE(k.team_id,d.team_id) END,
-                    'user_id',CASE WHEN length(COALESCE(k.user_id,d.user_id))<=1024
-                        THEN COALESCE(k.user_id,d.user_id) END,
-                    'user_email',CASE WHEN length(u.user_email)<=320 THEN u.user_email END,
+                    'team_id',CASE WHEN octet_length(COALESCE(k.team_id,d.team_id))<=4096
+                        THEN CASE WHEN length(COALESCE(k.team_id,d.team_id))<=1024
+                            THEN COALESCE(k.team_id,d.team_id) END END,
+                    'user_id',CASE WHEN octet_length(COALESCE(k.user_id,d.user_id))<=4096
+                        THEN CASE WHEN length(COALESCE(k.user_id,d.user_id))<=1024
+                            THEN COALESCE(k.user_id,d.user_id) END END,
+                    'user_email',CASE WHEN octet_length(u.user_email)<=1280
+                        THEN CASE WHEN length(u.user_email)<=320 THEN u.user_email END END,
                     'key_exists',CASE WHEN k.token IS NOT NULL THEN true WHEN d.id IS NOT NULL THEN false END
                 ) AS metadata
                 FROM unnest($1::text[]) w(api_key)
@@ -179,7 +182,8 @@ class IssueActivityRepository:
         rows: Final = TypeAdapter(tuple[_UserLabel, ...]).validate_python(
             await self.database.query_raw(
                 """SELECT user_id,LEFT(user_alias,256) AS user_alias,
-                    CASE WHEN length(user_email)<=320 THEN user_email END AS user_email
+                    CASE WHEN octet_length(user_email)<=1280
+                        THEN CASE WHEN length(user_email)<=320 THEN user_email END END AS user_email
                 FROM "LiteLLM_UserTable" WHERE user_id=ANY($1::text[]) LIMIT 100""",
                 list(ids),
             )
