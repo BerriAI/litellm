@@ -17,7 +17,7 @@ export default function AlertsPage() {
         <IssueDetail id={params.issue} />
       </Page>
     );
-  if (params.model && params.type === "model-deprecations")
+  if (params.model)
     return (
       <Page className="gap-4">
         <ModelDeprecationsPanel />

@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import ModelAlertsPage from "@/app/(dashboard)/alerts/page";
+import { RETIREMENT_ISSUE } from "@/components/Issues/issueFixtures";
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => ({ data: [{ team_id: "support", team_alias: "Support" }] }),
@@ -50,6 +51,12 @@ describe("model migration impact", () => {
         body: request.method === "PUT" ? await request.clone().json() : null,
       };
       calls.push(call);
+      if (url.pathname === "/management/v1/users/me")
+        return apiResponse({ user_id: "user-1", user_role: "proxy_admin" });
+      if (url.pathname === "/issues") {
+        const page = { data: [RETIREMENT_ISSUE], total: 1, limit: 25, offset: 0 };
+        return apiResponse(page);
+      }
       if (url.pathname === "/alerting/model-deprecations/tags") return apiResponse([]);
       if (request.method === "PUT" && url.pathname === "/alerting/model-deprecations/state")
         return apiResponse({ status: "resolved" });
@@ -69,19 +76,21 @@ describe("model migration impact", () => {
     });
   });
   afterEach(() => vi.restoreAllMocks());
-  it("should render the inbox with last seen and the recommendation supplied by the API", () => {
+  it("should show model retirements in the unified Alerts inbox", async () => {
     renderWithProviders(<ModelAlertsPage />);
-    expect(screen.getByRole("tab", { name: "Model deprecations", exact: true })).toBeInTheDocument();
-    expect(screen.getByText("replacement-model")).toBeInTheDocument();
-    expect(screen.getByText("2026-11-04")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Review impact →" })).toHaveAttribute(
+    expect(screen.getByRole("heading", { name: "Alerts", exact: true })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: RETIREMENT_ISSUE.title })).toHaveAttribute(
       "href",
-      "/ui/alerts?type=model-deprecations&model=openai%2Fgpt-4-turbo",
+      "/ui/alerts?issue=issue-model-retirement",
     );
   });
-  it("should page through all affected keys instead of showing a top-ten sample", async () => {
+  it.each([undefined, "model-deprecations"])("should preserve migration deep links with type %s", async (type) => {
     const user = userEvent.setup();
-    renderWithProviders(<ModelAlertsPage />, { searchParams: { model: "openai/gpt-4-turbo" } });
+    renderWithProviders(<ModelAlertsPage />, {
+      searchParams: { model: "openai/gpt-4-turbo", ...(type ? { type } : {}) },
+    });
+    expect(screen.getByText("replacement-model")).toBeInTheDocument();
+    expect(screen.getByText(/Last seen 2026-11-04/)).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "support-key-0" })).toBeInTheDocument();
     expect(screen.getByText(/Showing 1-50 of 120/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
