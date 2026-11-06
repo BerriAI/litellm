@@ -729,6 +729,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     SCHEDULER_PRIORITY_HEADER,
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
+    sanitize_for_log,
 )
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
@@ -4474,7 +4475,7 @@ async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: fl
             verbose_proxy_logger.warning(
                 "Failed to update spend counter %s in Redis: %s. "
                 "Budget checks may use stale value until counter expires.",
-                counter_key,
+                sanitize_for_log(counter_key),
                 redis_err,
             )
 
