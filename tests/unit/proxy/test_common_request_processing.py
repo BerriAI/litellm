@@ -5202,7 +5202,9 @@ class TestHandleLLMApiExceptionProviderOverload:
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
