@@ -14690,3 +14690,83 @@ def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_bi
     model_map_value: Final = payload["model_map_information"]["model_map_value"]
     assert model_map_value is not None
     assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (3e-06, 7e-06)
+
+
+_INPUT_RATE: Final = 3e-06
+_OUTPUT_RATE: Final = 7e-06
+_BUDGET_MESSAGES: Final = ({"role": "user", "content": "Write one line about budgets"},)
+_BUDGET_REPLY: Final = "A budget is a promise you keep to yourself"
+
+
+def _locally_counted_cost() -> float:
+    from litellm.utils import token_counter
+
+    prompt_tokens: Final = token_counter(model="gpt-5.4-nano", messages=list(_BUDGET_MESSAGES))
+    completion_tokens: Final = token_counter(
+        model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True
+    )
+    assert prompt_tokens > 0 and completion_tokens > 0
+    return prompt_tokens * _INPUT_RATE + completion_tokens * _OUTPUT_RATE
+
+
+def _price_converted_reply(usage: Mapping[str, object] | None) -> tuple[float | None, ModelResponse]:
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+    from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
+
+    rates: Final = {"input_cost_per_token": _INPUT_RATE, "output_cost_per_token": _OUTPUT_RATE}
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.4-nano",
+        messages=list(_BUDGET_MESSAGES),
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime_unit_test(2026, 1, 1, 12, 0, 0),
+        litellm_call_id="reply-without-usage",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano", user="", optional_params={}, litellm_params=rates, custom_llm_provider="openai"
+    )
+    logging_obj.set_per_call_pricing(per_call_model_info("gpt-5.4-nano", "openai", rates, "chat"))
+    body: Final = {
+        "id": "chatcmpl-budget",
+        "model": "gpt-5.4-nano",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": _BUDGET_REPLY},
+                "finish_reason": "stop",
+            }
+        ],
+        **({"usage": usage} if usage is not None else {}),
+    }
+    response: Final = convert_to_model_response_object(
+        response_object=body, model_response_object=ModelResponse()
+    )
+    assert isinstance(response, ModelResponse)
+    return logging_obj.response_cost_calculator(result=response), response
+
+
+def test_a_reply_without_usage_is_priced_from_locally_counted_tokens(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cost, response = _price_converted_reply(None)
+
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
+    assert any("returned no token usage" in record.getMessage() for record in caplog.records)
+
+
+def test_a_reply_with_malformed_usage_is_priced_from_locally_counted_tokens() -> None:
+    cost, response = _price_converted_reply(
+        {"prompt_tokens": "oops", "completion_tokens": None, "total_tokens": 0}
+    )
+
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
+
+
+def test_a_reply_whose_provider_reports_zero_tokens_stays_at_zero() -> None:
+    cost, _response = _price_converted_reply({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+    assert cost == 0.0

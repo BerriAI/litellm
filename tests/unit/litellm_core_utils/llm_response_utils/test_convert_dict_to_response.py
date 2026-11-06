@@ -3267,3 +3267,50 @@ def test_url_citation_annotations_keep_provider_keys() -> None:
 
     assert message.annotations == [_URL_CITATION]
     assert "annotations" not in (message.provider_specific_fields or {})
+
+
+def _chat_completion_dict(usage: object | None) -> dict[str, object]:
+    return {
+        "id": "chatcmpl-usage",
+        "model": "gpt-5.4-nano",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        **({"usage": usage} if usage is not None else {}),
+    }
+
+
+def test_missing_usage_still_returns_a_response() -> None:
+    model_response: Final = convert_to_model_response_object(
+        response_object=_chat_completion_dict(None),
+        model_response_object=ModelResponse(),
+    )
+    assert model_response.usage.prompt_tokens == 0
+    assert model_response.usage.completion_tokens == 0
+
+
+def test_malformed_usage_still_returns_a_response() -> None:
+    model_response: Final = convert_to_model_response_object(
+        response_object=_chat_completion_dict(
+            {"prompt_tokens": "oops", "completion_tokens": None, "total_tokens": 0}
+        ),
+        model_response_object=ModelResponse(),
+    )
+    assert model_response.usage.prompt_tokens == 0
+    assert model_response.usage.completion_tokens == 0
+
+
+def test_reported_usage_is_kept() -> None:
+    model_response: Final = convert_to_model_response_object(
+        response_object=_chat_completion_dict(
+            {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+        ),
+        model_response_object=ModelResponse(),
+    )
+    assert model_response.usage.prompt_tokens == 10
+    assert model_response.usage.completion_tokens == 20
+    assert model_response.usage.total_tokens == 30

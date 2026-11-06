@@ -53,6 +53,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
+    UnreportedUsage,
     Usage,
     chat_completion_tool_call_from_dict,
 )
@@ -63,6 +64,24 @@ from .get_headers import get_response_headers
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+def _usage_from_provider_payload(raw_usage: object) -> Usage:
+    if isinstance(raw_usage, Usage):
+        return raw_usage
+    if not isinstance(raw_usage, dict):
+        verbose_logger.warning(
+            "Provider returned malformed usage (%s). This reply will be priced from locally counted tokens.",
+            type(raw_usage).__name__,
+        )
+        return UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    try:
+        return litellm.Usage(**raw_usage)
+    except (ValidationError, TypeError, ValueError):
+        verbose_logger.warning(
+            "Provider returned malformed usage. This reply will be priced from locally counted tokens."
+        )
+        return UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
@@ -913,8 +932,9 @@ def convert_to_model_response_object(
             model_response_object.choices = choice_list
 
             if "usage" in response_object and response_object["usage"] is not None:
-                usage_object: Final = litellm.Usage(**response_object["usage"])
-                setattr(model_response_object, "usage", usage_object)
+                model_response_object.usage = _usage_from_provider_payload(response_object["usage"])
+            else:
+                model_response_object.usage = UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
             if "created" in response_object:
                 model_response_object.created = safe_convert_created_field(response_object["created"])
 
