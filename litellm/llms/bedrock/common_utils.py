@@ -455,7 +455,7 @@ def is_bedrock_stream_permission_denial(status_code: int, error_text: str) -> bo
 def warn_bedrock_native_output_stream_denied(model: str) -> None:
     verbose_logger.warning(
         "Bedrock denied bedrock:InvokeModelWithResponseStream for model=%s, so litellm sent the structured output "
-        "request again as a buffered stream with the JSON tool. Allow that action to stream native structured output.",
+        "request again as a buffered stream. Allow that action to stream it.",
         model,
     )
 

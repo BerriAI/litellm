@@ -27,6 +27,7 @@ NativeOutputFallbackFactory: TypeAlias = Callable[[], NativeOutputFallback | Non
 class _SelectedFallback:
     fallback: NativeOutputFallback
     native_output_retry: bool
+    buffered_native_output: bool = False
 
 
 _RetryFor: TypeAlias = Callable[[BaseLLMException], _SelectedFallback | None]
@@ -50,14 +51,21 @@ def _buffered_stream_retry(fallback: NativeOutputFallbackFactory, model: str) ->
 
 
 def _native_output_retry(
-    error: BaseLLMException, fallback: NativeOutputFallbackFactory | None, model: str
-) -> NativeOutputFallback | None:
-    if fallback is None:
-        return None
-    if is_bedrock_native_output_rejection(error.status_code, error.message):
-        return _native_output_rejection_retry(error, fallback, model)
-    if is_bedrock_stream_permission_denial(error.status_code, error.message):
-        return _buffered_stream_retry(fallback, model)
+    error: BaseLLMException,
+    fallback: NativeOutputFallbackFactory | None,
+    buffered_stream_fallback: NativeOutputFallbackFactory | None,
+    model: str,
+) -> _SelectedFallback | None:
+    if fallback is not None and is_bedrock_native_output_rejection(error.status_code, error.message):
+        rejection_retry: Final = _native_output_rejection_retry(error, fallback, model)
+        return None if rejection_retry is None else _SelectedFallback(rejection_retry, native_output_retry=True)
+    if buffered_stream_fallback is not None and is_bedrock_stream_permission_denial(error.status_code, error.message):
+        stream_retry: Final = _buffered_stream_retry(buffered_stream_fallback, model)
+        return (
+            None
+            if stream_retry is None
+            else _SelectedFallback(stream_retry, native_output_retry=True, buffered_native_output=True)
+        )
     return None
 
 
@@ -75,12 +83,13 @@ def _strict_tools_retry(
 def _fallback_for(
     error: BaseLLMException,
     fallback: NativeOutputFallbackFactory | None,
+    buffered_stream_fallback: NativeOutputFallbackFactory | None,
     strict_tools_fallback: NativeOutputFallbackFactory | None,
     model: str,
 ) -> _SelectedFallback | None:
-    native_output_retry: Final = _native_output_retry(error, fallback, model)
+    native_output_retry: Final = _native_output_retry(error, fallback, buffered_stream_fallback, model)
     if native_output_retry is not None:
-        return _SelectedFallback(native_output_retry, native_output_retry=True)
+        return native_output_retry
     strict_tools_retry: Final = _strict_tools_retry(error, strict_tools_fallback, model)
     if strict_tools_retry is None:
         return None
@@ -107,10 +116,27 @@ def _strict_tools_retry_after_native_output_retry(
     return composed_retry
 
 
+def _retry_after_native_output_retry(
+    error: BaseLLMException,
+    retry: _SelectedFallback,
+    fallback: NativeOutputFallbackFactory | None,
+    strict_tools_fallback: NativeOutputFallbackFactory | None,
+    model: str,
+) -> NativeOutputFallback | None:
+    if (
+        retry.buffered_native_output
+        and fallback is not None
+        and is_bedrock_native_output_rejection(error.status_code, error.message)
+    ):
+        return _native_output_rejection_retry(error, fallback, model)
+    return _strict_tools_retry_after_native_output_retry(error, retry, strict_tools_fallback, model)
+
+
 async def _await_with_native_output_fallback(
     first_attempt: Coroutine[object, object, NativeOutputResponse],
     attempt: NativeOutputAttempt,
     retry_for: _RetryFor,
+    fallback: NativeOutputFallbackFactory | None,
     strict_tools_fallback: NativeOutputFallbackFactory | None,
     model: str,
 ) -> NativeOutputResponse:
@@ -124,9 +150,7 @@ async def _await_with_native_output_fallback(
         second_attempt: Final = attempt(retry.fallback)
         return await second_attempt if isinstance(second_attempt, Coroutine) else second_attempt
     except BaseLLMException as error:
-        composed_retry: Final = _strict_tools_retry_after_native_output_retry(
-            error, retry, strict_tools_fallback, model
-        )
+        composed_retry: Final = _retry_after_native_output_retry(error, retry, fallback, strict_tools_fallback, model)
         if composed_retry is None:
             raise
     third_attempt: Final = attempt(composed_retry)
@@ -138,11 +162,16 @@ def call_with_native_output_fallback(
     fallback: NativeOutputFallbackFactory | None,
     model: str,
     strict_tools_fallback: NativeOutputFallbackFactory | None = None,
+    buffered_stream_fallback: NativeOutputFallbackFactory | None = None,
 ) -> NativeOutputAttemptResult:
-    if fallback is None and strict_tools_fallback is None:
+    if fallback is None and strict_tools_fallback is None and buffered_stream_fallback is None:
         return attempt(None)
     retry_for: Final = partial(
-        _fallback_for, fallback=fallback, strict_tools_fallback=strict_tools_fallback, model=model
+        _fallback_for,
+        fallback=fallback,
+        buffered_stream_fallback=buffered_stream_fallback,
+        strict_tools_fallback=strict_tools_fallback,
+        model=model,
     )
     try:
         first_attempt: Final = attempt(None)
@@ -153,12 +182,14 @@ def call_with_native_output_fallback(
         try:
             return attempt(retry.fallback)
         except BaseLLMException as retry_error:
-            composed_retry: Final = _strict_tools_retry_after_native_output_retry(
-                retry_error, retry, strict_tools_fallback, model
+            composed_retry: Final = _retry_after_native_output_retry(
+                retry_error, retry, fallback, strict_tools_fallback, model
             )
             if composed_retry is None:
                 raise
             return attempt(composed_retry)
     if isinstance(first_attempt, Coroutine):
-        return _await_with_native_output_fallback(first_attempt, attempt, retry_for, strict_tools_fallback, model)
+        return _await_with_native_output_fallback(
+            first_attempt, attempt, retry_for, fallback, strict_tools_fallback, model
+        )
     return first_attempt
