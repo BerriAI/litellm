@@ -2,6 +2,7 @@ import json
 from typing import Final
 from unittest.mock import MagicMock
 
+import botocore.session
 import httpx
 import pytest
 import respx
@@ -498,11 +499,6 @@ def _sent_filter(retrieve_route: respx.Route) -> object:
             id="aws-native-unchanged",
         ),
         pytest.param(
-            {"equals": {"key": "department", "value": "hr"}, "type": "eq"},
-            {"equals": {"key": "department", "value": "hr"}, "type": "eq"},
-            id="aws-native-with-type-key-unchanged",
-        ),
-        pytest.param(
             {"key": "department", "value": "hr", "operator": "ne"},
             {"notEquals": {"key": "department", "value": "hr"}},
             id="operator-shape-still-mapped",
@@ -557,6 +553,26 @@ async def test_search_sends_openai_filters_as_aws_retrieval_filters(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     retrieve_route: Final = await _search_with_filters(respx_mock, openai_filter)
+
+    assert _sent_filter(retrieve_route) == aws_filter
+
+
+AWS_RETRIEVAL_FILTER_KEYS: Final = tuple(
+    botocore.session.get_session().get_service_model("bedrock-agent-runtime").shape_for("RetrievalFilter").members
+)
+
+
+@pytest.mark.parametrize("aws_key", AWS_RETRIEVAL_FILTER_KEYS)
+@pytest.mark.asyncio
+async def test_search_sends_aws_native_filters_with_a_type_key_unchanged(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, aws_key: str
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    aws_filter: Final = {aws_key: {"key": "department", "value": "hr"}, "type": "eq"}
+
+    retrieve_route: Final = await _search_with_filters(respx_mock, aws_filter)
 
     assert _sent_filter(retrieve_route) == aws_filter
 
