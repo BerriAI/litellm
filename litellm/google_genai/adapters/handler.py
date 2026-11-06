@@ -76,6 +76,7 @@ class GenerateContentToCompletionHandler:
                 *(custom_logging_obj.dynamic_success_callbacks or ()),
                 *(custom_logging_obj.dynamic_async_success_callbacks or ()),
             ]
+            completion_kwargs["failure_callback"] = list(custom_logging_obj.dynamic_failure_callbacks or ())
 
         if stream:
             completion_kwargs["stream"] = stream
