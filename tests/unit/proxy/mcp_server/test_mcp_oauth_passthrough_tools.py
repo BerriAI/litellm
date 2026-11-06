@@ -25,6 +25,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
 )
+from litellm.proxy.mcp_server.scope_challenge import OAuthScopeResponse, is_listing_request
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -375,12 +376,10 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
 
 
 @pytest.mark.asyncio
-async def test_single_server_route_also_absorbs_upstream_auth_error():
+async def test_single_server_route_also_absorbs_upstream_auth_error() -> None:
     """A single-server route (/<server>/mcp) absorbs an upstream-auth error just like the aggregate:
     the failing server contributes no tools and an "auth_required" outcome rather than re-raising.
-    Surfacing it to the client as a 401 + WWW-Authenticate challenge cannot be done from this list
-    handler — the MCP session manager serializes a raise into a JSON-RPC error, not an HTTP 401 — so
-    re-auth surfacing is handled by a request-scope preemptive check, tracked separately."""
+    The 401 a single-server request receives is sent through its scope response, not raised from here."""
     from unittest.mock import patch
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -836,3 +835,73 @@ def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
         requested_resource=f"https://gateway.test{path}",
         configured_resource=f"https://gateway.test{resource_path}",
     ), "the SDK must accept the advertised resource before it can reauthorize"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}', True),
+        (b'{"jsonrpc":"2.0","id":1,"method":"prompts/list"}', True),
+        (b'{"jsonrpc":"2.0","id":1,"method":"resources/list"}', True),
+        (b'{"jsonrpc":"2.0","id":1,"method":"resources/templates/list"}', True),
+        (b'{"jsonrpc":"2.0","id":1,"method":"tools/call"}', False),
+        (b'{"jsonrpc":"2.0","id":1,"method":"initialize"}', False),
+        (b'{"jsonrpc":"2.0","id":1,"method":["tools/list"]}', False),
+        (b'{"jsonrpc":"2.0","id":1}', False),
+        (b"not json", False),
+    ],
+)
+def test_listing_requests_are_recognised_by_method(body: bytes, expected: bool) -> None:
+    assert is_listing_request(body) is expected
+
+
+async def _pending_listing_response(gate: OAuthScopeResponse, send: AsyncMock) -> "asyncio.Task[None]":
+    task: Final = asyncio.create_task(gate({"type": "http.response.start", "status": 200, "headers": []}))
+    await asyncio.sleep(0)
+    send.assert_not_awaited()
+    return task
+
+
+@pytest.mark.asyncio
+async def test_reauth_denial_replaces_the_pending_listing_response_with_the_gateway_challenge() -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp", reauthorize_as="docs")
+    started: Final = await _pending_listing_response(gate, send)
+
+    gate.deny_reauth()
+    await asyncio.wait_for(started, 1)
+
+    start, body = [call.args[0] for call in send.await_args_list]
+    assert start["status"] == 401
+    assert dict(start["headers"])[b"www-authenticate"].decode() == (
+        'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/docs/mcp"'
+    )
+    assert body["body"] == b'{"detail":"Unauthorized"}'
+
+
+@pytest.mark.asyncio
+async def test_a_gate_that_does_not_reauthorize_ignores_a_reauth_denial() -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp")
+    started: Final = await _pending_listing_response(gate, send)
+
+    gate.deny_reauth()
+    assert gate.pending
+    gate.allow()
+    await asyncio.wait_for(started, 1)
+
+    assert [call.args[0]["status"] for call in send.await_args_list] == [200]
+
+
+@pytest.mark.asyncio
+async def test_scope_step_up_denial_still_ignores_an_unauthorized_response() -> None:
+    send: Final = AsyncMock()
+    gate: Final = OAuthScopeResponse(send, "https://gateway.example", "/docs/mcp", reauthorize_as="docs")
+    started: Final = await _pending_listing_response(gate, send)
+
+    gate.deny(MCPUpstreamAuthError(401, None, "docs"))
+    assert gate.pending
+    gate.allow()
+    await asyncio.wait_for(started, 1)
+
+    assert [call.args[0]["status"] for call in send.await_args_list] == [200]
