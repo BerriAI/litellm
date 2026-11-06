@@ -14072,6 +14072,7 @@ class Router:
             request_kwargs=request_kwargs,
             healthy_deployments=healthy_deployments,
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(request_kwargs),
+            request_deployments=request_deployments,
         )
 
         # narrow to whatever `self.routing_plugins` left in candidate_models
