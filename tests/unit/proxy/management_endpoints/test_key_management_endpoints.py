@@ -2110,11 +2110,13 @@ async def test_update_key_end_user_budget_id_folds_into_metadata_and_survives_om
     ("stored_duration", "stored_reset_at", "moves_reset"),
     [
         ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
         ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
         ("30d", None, True),
     ],
 )
-async def test_update_key_moves_the_budget_period_only_when_the_duration_changes(
+async def test_update_key_keeps_a_due_budget_reset_when_the_duration_is_resent(
     stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
 ) -> None:
     existing_key: Final = LiteLLM_VerificationToken(

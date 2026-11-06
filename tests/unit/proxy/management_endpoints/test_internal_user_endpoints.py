@@ -2415,18 +2415,20 @@ async def test_user_status_update_refreshes_cached_user(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("request_fields", "role_default_duration", "moves_reset"),
+    ("request_fields", "role_default_duration", "stored_reset_at", "moves_reset"),
     [
-        ({"budget_duration": "30d"}, None, False),
-        ({"budget_duration": "7d"}, None, True),
-        ({"user_role": LitellmUserRoles.INTERNAL_USER}, "30d", False),
+        ({"budget_duration": "30d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ({"budget_duration": "30d"}, None, datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ({"budget_duration": "7d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ({"user_role": LitellmUserRoles.INTERNAL_USER}, "30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
     ],
 )
-async def test_user_update_moves_the_budget_period_only_when_the_duration_changes(
+async def test_user_update_keeps_a_due_budget_reset_when_the_duration_is_resent(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
     request_fields: dict[str, object],
     role_default_duration: str | None,
+    stored_reset_at: datetime,
     moves_reset: bool,
 ) -> None:
     import litellm
@@ -2437,7 +2439,7 @@ async def test_user_update_moves_the_budget_period_only_when_the_duration_change
     saved_user: Final = LiteLLM_UserTable(
         user_id="user-spruce",
         budget_duration="30d",
-        budget_reset_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        budget_reset_at=stored_reset_at,
     )
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)

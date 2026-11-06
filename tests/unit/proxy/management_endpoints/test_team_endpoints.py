@@ -13218,11 +13218,13 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     ("stored_duration", "stored_reset_at", "moves_reset"),
     [
         ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
         ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
         ("30d", None, True),
     ],
 )
-def test_set_budget_reset_at_moves_the_period_only_when_the_duration_changes(
+def test_set_budget_reset_at_keeps_a_due_reset_when_the_duration_is_resent(
     stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest

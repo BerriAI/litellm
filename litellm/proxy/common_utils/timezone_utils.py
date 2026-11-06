@@ -1,4 +1,5 @@
 from datetime import datetime, time, timezone
+from typing import Final
 
 from pydantic import ConfigDict
 
@@ -81,10 +82,13 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
 
 
-def budget_period_unchanged(
-    requested_duration: object, stored_duration: str | None, stored_reset_at: datetime | None
+def keeps_due_budget_reset(
+    requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None
 ) -> bool:
-    return isinstance(requested_duration, str) and requested_duration == stored_duration and stored_reset_at is not None
+    if stored_reset_at is None or requested_duration != stored_duration:
+        return False
+    stored_utc: Final = stored_reset_at if stored_reset_at.tzinfo else stored_reset_at.replace(tzinfo=timezone.utc)
+    return stored_utc <= datetime.now(timezone.utc)
 
 
 def _is_persistable_budget_duration(budget_duration: str) -> bool:
