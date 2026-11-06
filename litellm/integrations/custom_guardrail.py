@@ -1533,6 +1533,7 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
+            choice_index=request_data.get("guardrail_choice_index"),
             **(tracing_detail or {}),
         )
 
