@@ -2199,6 +2199,10 @@ class _GuardrailWalk(Protocol):
         guardrails_only: bool = False,
     ) -> AsyncGenerator[object, None]: ...
 
+    def post_call_stream_guardrail_names(
+        self, user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object]
+    ) -> tuple[str, ...]: ...
+
 
 async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
@@ -2311,17 +2315,21 @@ def _responses_ws_frame_guard(
             else {**_forwarded_frame_fields(body), **guarded_fields}
         )
         guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
+        output_guardrails: Final = proxy_logging_obj.post_call_stream_guardrail_names(user_api_key_dict, guarded_data)
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
             guardrail_information=guardrail_information,
             pii_tokens=pii_tokens,
             bill_refusal=partial(record_refused_turn, guardrail_information),
+            output_guardrails=output_guardrails,
             guard_output=partial(
                 proxy_logging_obj.async_post_call_streaming_iterator_hook,
                 user_api_key_dict=user_api_key_dict,
                 request_data=_without_pii_tokens(guarded_data),
                 guardrails_only=True,
-            ),
+            )
+            if output_guardrails
+            else None,
         )
 
     return guard

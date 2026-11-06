@@ -2508,6 +2508,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock(side_effect=post_call_stream)
+        proxy_logging_obj.post_call_stream_guardrail_names = MagicMock(return_value=("redactor",))
         user_api_key_dict = MagicMock()
         guard = _responses_ws_frame_guard(
             {"model": "gpt-4o-mini", "litellm_metadata": {}}, user_api_key_dict, proxy_logging_obj, MagicMock()
@@ -2521,11 +2522,30 @@ class TestResponsesWSFirstFrameModelAuth:
         served = [chunk async for chunk in guarded.guard_output(provider_reply())]
 
         assert served == ["the [REDACTED] is out"]
+        assert guarded.output_guardrails == ("redactor",)
+        names_request = proxy_logging_obj.post_call_stream_guardrail_names.call_args.args
+        assert names_request[0] is user_api_key_dict
+        assert names_request[1]["litellm_metadata"]["guardrails"] == ["turn-selected"]
         walk = proxy_logging_obj.async_post_call_streaming_iterator_hook.call_args.kwargs
         assert walk["guardrails_only"] is True
         assert walk["user_api_key_dict"] is user_api_key_dict
         assert walk["request_data"]["input"] == "guarded"
         assert walk["request_data"]["litellm_metadata"]["guardrails"] == ["turn-selected"]
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_leaves_the_reply_alone_when_no_post_call_guardrail_applies(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        proxy_logging_obj.post_call_stream_guardrail_names = MagicMock(return_value=())
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+
+        guarded = await guard(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert (guarded.output_guardrails, guarded.guard_output) == ((), None)
 
     @pytest.mark.asyncio
     async def test_frame_guard_keeps_presidio_s_tokens_from_the_post_call_guardrails(self):
@@ -2541,6 +2561,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock(side_effect=post_call_stream)
+        proxy_logging_obj.post_call_stream_guardrail_names = MagicMock(return_value=("redactor",))
         guard = _responses_ws_frame_guard(
             {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
         )

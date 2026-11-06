@@ -1683,6 +1683,52 @@ class TestWebSocketProjectQuotaEnforcement:
         assert len(handler._open_turns) == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("output_guardrails", "forwarded"),
+        [(("output-redactor",), False), (("pii-mask", "output-redactor"), False), (("pii-mask",), True), ((), True)],
+    )
+    async def test_native_handler_refuses_a_turn_whose_output_guardrails_it_cannot_run(
+        self, monkeypatch, output_guardrails: tuple[str, ...], forwarded: bool
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWebSocketStreaming
+
+        refusal = "this turn's output guardrails can't run on a native Responses WebSocket; send it over HTTP /v1/responses"
+        presidio = MagicMock(spec=["check_pii", "get_presidio_settings_from_request_data", "guardrail_name"])
+        presidio.guardrail_name = "pii-mask"
+        monkeypatch.setattr(litellm, "callbacks", [presidio])
+        bill_refusal = MagicMock()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            return GuardedResponsesWsFrame(frame=frame, output_guardrails=output_guardrails, bill_refusal=bill_refusal)
+
+        mock_backend_ws = MagicMock()
+        mock_backend_ws.send = AsyncMock()
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        mock_websocket.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
+        logging_obj = MagicMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=mock_websocket,
+            backend_ws=mock_backend_ws,
+            logging_obj=logging_obj,
+            first_message=json.dumps({"type": "response.create", "input": "hi"}),
+            frame_guard=guard,
+        )
+        await handler.client_to_backend()
+
+        sent_to_client = [json.loads(call.args[0]) for call in mock_websocket.send_text.call_args_list]
+        refused = {"type": "error", "error": {"type": "invalid_request_error", "message": refusal}}
+        assert (mock_backend_ws.send.await_count, len(handler._open_turns)) == ((1, 1) if forwarded else (0, 0))
+        assert sent_to_client == ([] if forwarded else [refused])
+        assert [str(call.args[0]) for call in bill_refusal.call_args_list] == ([] if forwarded else [refusal])
+        assert str(handler._failure) == ("None" if forwarded else refusal)
+
+    @pytest.mark.asyncio
     async def test_native_handler_forwards_frame_allowed_by_quota_callback(self):
         from unittest.mock import AsyncMock, MagicMock
 
