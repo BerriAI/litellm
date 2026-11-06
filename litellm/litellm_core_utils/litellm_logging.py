@@ -2294,6 +2294,7 @@ class Logging(LiteLLMLoggingBaseClass):
             prompt_tokens: Final = token_counter(
                 model=model,
                 messages=self.messages or [],  # pyright: ignore[reportUnknownMemberType]  # untyped on Logging
+                use_default_image_token_count=True,  # accounting must not fetch a caller's image URL
             )
             completion_tokens: Final = token_counter(
                 model=model, text=get_content_from_model_response(result), count_response_tokens=True

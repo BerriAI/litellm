@@ -14658,13 +14658,15 @@ def _locally_counted_cost() -> float:
     return prompt_tokens * _INPUT_RATE + completion_tokens * _OUTPUT_RATE
 
 
-def _price_reply_with_usage(usage: litellm.Usage) -> float | None:
+def _price_reply_with_usage(
+    usage: litellm.Usage, messages: Sequence[Mapping[str, object]] = _BUDGET_MESSAGES
+) -> float | None:
     from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 
     rates: Final = {"input_cost_per_token": _INPUT_RATE, "output_cost_per_token": _OUTPUT_RATE}
     logging_obj: Final = LitellmLogging(
         model="gpt-5.4-nano",
-        messages=list(_BUDGET_MESSAGES),
+        messages=list(messages),
         stream=False,
         call_type="acompletion",
         start_time=datetime_unit_test(2026, 1, 1, 12, 0, 0),
@@ -14696,6 +14698,37 @@ def test_a_reply_without_usage_is_priced_from_locally_counted_tokens(caplog: pyt
 
 def test_a_reply_whose_provider_reports_zero_tokens_stays_at_zero() -> None:
     assert _price_reply_with_usage(litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)) == 0.0
+
+
+def test_a_reply_without_usage_is_priced_without_fetching_an_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The count runs inside response accounting, so a caller's high-detail image URL must not be downloaded there."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+    from litellm.types.utils import UnreportedUsage
+
+    fetched: list[str] = []
+
+    def record_fetch(data: str) -> tuple[int, int]:
+        fetched.append(data)
+        return (64, 64)
+
+    monkeypatch.setattr(token_counter_module, "get_image_dimensions", record_fetch)
+    image_messages: Final = (
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Write one line about budgets"},
+                {"type": "image_url", "image_url": {"url": "https://images.invalid/slow.png", "detail": "high"}},
+            ],
+        },
+    )
+
+    cost: Final = _price_reply_with_usage(
+        UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0), messages=image_messages
+    )
+
+    assert fetched == []
+    assert cost is not None
+    assert cost > _locally_counted_cost()
 
 
 @pytest.mark.asyncio
