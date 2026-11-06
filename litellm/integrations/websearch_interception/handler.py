@@ -9,7 +9,7 @@ server-side using litellm router's search tools.
 import asyncio
 import math
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
@@ -38,6 +38,7 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_builtin_as_function
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
@@ -261,6 +262,18 @@ class _ParentRequestCorrelation:
 
 
 _NO_ACOMPLETION_NAMED: Final[_AcompletionNamedParams] = {}
+
+
+def _tool_choice_naming_litellm_web_search(
+    kwargs: Mapping[str, object], is_search_tool: Callable[[Mapping[str, object]], bool]
+) -> Mapping[str, object]:
+    if "tool_choice" not in kwargs:
+        return MappingProxyType({})
+    return {
+        "tool_choice": allowed_tools_tool_choice_with_builtin_as_function(
+            kwargs["tool_choice"], is_search_tool, LITELLM_WEB_SEARCH_TOOL_NAME
+        )
+    }
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -514,13 +527,17 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # Keep other tools as-is
                 converted_tools.append(tool)
 
-        kwargs["tools"] = converted_tools
+        converted_kwargs: Final[dict[str, object]] = {
+            **kwargs,
+            "tools": converted_tools,
+            **_tool_choice_naming_litellm_web_search(kwargs, lambda tool: is_search_tool(dict(tool))),
+        }
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            return as_converted_stream(kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
+            return as_converted_stream(converted_kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
 
-        return kwargs
+        return converted_kwargs
 
     def _convert_responses_tools(
         self, kwargs: Mapping[str, object], tools: Sequence[dict[str, object]]
@@ -535,7 +552,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_litellm_web_search_tool_responses() if is_web_search_tool_responses(tool) else tool for tool in tools
         ]
 
-        converted_kwargs: Final = {**kwargs, "tools": converted_tools}
+        converted_kwargs: Final = {
+            **kwargs,
+            "tools": converted_tools,
+            **_tool_choice_naming_litellm_web_search(kwargs, is_web_search_tool_responses),
+        }
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")

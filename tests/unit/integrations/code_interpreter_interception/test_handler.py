@@ -12,6 +12,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 import respx
 
 import litellm
@@ -27,6 +28,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
     LITELLM_CODE_EXECUTION_TOOL_NAME,
     CodeInterpreterInterceptionLogger,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_calls_the_choice_excludes
 from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -1201,6 +1203,38 @@ async def test_extract_tool_calls_reads_object_attributes():
 # ---------------------------------------------------------------------------
 # Sticky session tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "tool_choice"),
+    [
+        (CallTypes.aresponses, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "code_interpreter"}]}),
+        (
+            CallTypes.acompletion,
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "code_interpreter"}]}},
+        ),
+    ],
+)
+async def test_pre_call_lets_an_allowed_tools_choice_listing_code_interpreter_allow_the_run(
+    call_type: CallTypes, tool_choice: dict[str, object]
+):
+    logger: Final = CodeInterpreterInterceptionLogger()
+
+    result: Final = TypeAdapter(dict[str, object]).validate_python(
+        await logger.async_pre_call_deployment_hook(
+            {
+                "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+                "tool_choice": tool_choice,
+                "custom_llm_provider": "openai",
+            },
+            call_type,
+        )
+    )
+
+    assert tool_calls_the_choice_excludes(result["tool_choice"], (LITELLM_CODE_EXECUTION_TOOL_NAME, "get_weather")) == (
+        "get_weather",
+    )
 
 
 @pytest.mark.asyncio
