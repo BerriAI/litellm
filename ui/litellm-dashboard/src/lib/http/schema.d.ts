@@ -8661,6 +8661,8 @@ export interface paths {
          *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above. Example - {"gpt-4": 4096, "gpt-3.5-turbo": 1024}. Takes precedence over the key-wide value.
          *     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
          *     - tag_rpm_limit: Optional[dict] - key-specific per-request-tag rpm limit, keyed by request tag. Example - {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; requests whose tag is absent fall back to the key-level rpm limit.
+         *     - customer_rpm_limit: Optional[dict] - key-specific per-customer rpm limit, keyed by customer (end user) id. Example - {"acme": 100, "globex": 50}. Each key and customer pair gets its own counter, so one customer hitting its limit on this key never blocks another customer or the same customer on another key.
+         *     - customer_tpm_limit: Optional[dict] - key-specific per-customer tpm limit, keyed by customer (end user) id. Example - {"acme": 200000}.
          *     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
          *     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -9121,6 +9123,8 @@ export interface paths {
          *     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
          *     - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
          *     - tag_rpm_limit: Optional[dict] - Per-request-tag RPM limits, keyed by request tag {"cell-1": 1000, "cell-2": 500}. Each tag gets an independent counter; absent tags fall back to the key-level rpm limit.
+         *     - customer_rpm_limit: Optional[dict] - Per-customer RPM limits for this key, keyed by customer (end user) id {"acme": 100, "globex": 50}
+         *     - customer_tpm_limit: Optional[dict] - Per-customer TPM limits for this key, keyed by customer (end user) id {"acme": 200000}
          *     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
          *     - default_estimated_output_tokens: Optional[int] - Proxy admin only. Expected output tokens reserved for TPM limiting when a request omits max_tokens. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[dict] - Proxy admin only. Per-model override of the above {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
@@ -28874,6 +28878,14 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Duration */
             duration?: string | null;
             /** Guardrails */
@@ -33895,6 +33907,14 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -34063,6 +34083,14 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -40664,6 +40692,14 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Duration */
             duration?: string | null;
             /** Guardrails */
@@ -40814,6 +40850,14 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -43438,6 +43482,14 @@ export interface components {
              */
             config: {
                 [key: string]: unknown;
+            } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
@@ -50055,6 +50107,14 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -50727,6 +50787,14 @@ export interface components {
             config: {
                 [key: string]: unknown;
             } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Duration */
             duration?: string | null;
             /** Guardrails */
@@ -50832,6 +50900,14 @@ export interface components {
              */
             config: {
                 [key: string]: unknown;
+            } | null;
+            /** Customer Rpm Limit */
+            customer_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Customer Tpm Limit */
+            customer_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Duration */
             duration?: string | null;

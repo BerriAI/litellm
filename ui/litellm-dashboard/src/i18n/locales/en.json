@@ -2219,6 +2219,8 @@
         "modelTpmLimits": "Model TPM Limits:",
         "modelRpmLimits": "Model RPM Limits:",
         "tagRpmLimits": "Tag RPM Limits:",
+        "customerRpmLimits": "Customer RPM Limits:",
+        "customerTpmLimits": "Customer TPM Limits:",
         "estimatedOutputTokens": "Estimated Output Tokens:",
         "estimatedOutputTokensPerModel": "Estimated Output Tokens Per Model:",
         "unlimited": "Unlimited",
@@ -2294,6 +2296,8 @@
         "estimatedOutputTokensPerModel": "Estimated Output Tokens Per Model",
         "perTagRateLimits": "Per-Tag Rate Limits",
         "perTagRateLimitsHint": "Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.",
+        "perCustomerRateLimits": "Per-Customer Rate Limits",
+        "perCustomerRateLimitsHint": "Cap each customer (the end user id sent as `user` or `x-litellm-customer-id`) on this key with its own RPM and TPM counter. One customer hitting its limit never blocks the others. Customers without a row fall back to the key-level limit.",
         "guardrails": "Guardrails",
         "disableGlobalGuardrails": "Disable Global Guardrails",
         "disableGlobalGuardrailsHint": "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
@@ -2662,6 +2666,10 @@
       "label": "Per-Tag Rate Limits",
       "tooltip": "Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit."
     },
+    "customerRateLimits": {
+      "label": "Per-Customer Rate Limits",
+      "tooltip": "Cap each customer (the end user id sent as `user` or `x-litellm-customer-id`) on this key with its own RPM and TPM counter. One customer hitting its limit never blocks the others. Customers without a row fall back to the key-level limit."
+    },
     "throttle": {
       "label": "Throttle on budget exceeded",
       "tooltip": "When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key."
@@ -2851,6 +2859,16 @@
       "rpmPlaceholder": "RPM",
       "removeTagLimit": "Remove tag limit",
       "addTagLimit": "+ Add Tag Limit"
+    },
+    "customerRateLimitEditor": {
+      "customer": "Customer",
+      "customerPlaceholder": "Customer id (e.g. acme)",
+      "rpmLimit": "RPM limit",
+      "rpmPlaceholder": "RPM",
+      "tpmLimit": "TPM limit",
+      "tpmPlaceholder": "TPM",
+      "removeCustomerLimit": "Remove customer limit",
+      "addCustomerLimit": "+ Add Customer Limit"
     }
   },
   "permissions": {

@@ -4,6 +4,7 @@ import type { RouterSettingsAccordionValue } from "../common_components/RouterSe
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
 import type { ModelMaxBudget } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { tagRowsToLimits, type TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
+import { customerRowsToLimits, type CustomerRateLimitEntry } from "../key_team_helpers/CustomerRateLimitEditor";
 
 export interface KeyLoggingSetting {
   callback_name?: string;
@@ -28,6 +29,7 @@ export interface KeyCreateInput {
   readonly routerSettings: RouterSettingsAccordionValue | null;
   readonly budgetLimits: BudgetWindowEntry[];
   readonly tagRateLimits: TagRateLimitEntry[];
+  readonly customerRateLimits: CustomerRateLimitEntry[];
   readonly budgetFallbacks: Record<string, string[]>;
   readonly modelMaxBudget: ModelMaxBudget;
 }
@@ -190,6 +192,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
     (window) => window.budget_duration && window.max_budget !== null && window.max_budget !== undefined,
   );
   const { tag_rpm_limit } = tagRowsToLimits(input.tagRateLimits);
+  const { customer_rpm_limit, customer_tpm_limit } = customerRowsToLimits(input.customerRateLimits);
   const routerSettings = input.routerSettings?.router_settings;
   const configuredRouterSettings =
     routerSettings &&
@@ -214,6 +217,8 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
       ...(configuredRouterSettings && { router_settings: configuredRouterSettings }),
       ...(validWindows.length > 0 && { budget_limits: validWindows }),
       ...(Object.keys(tag_rpm_limit).length > 0 && { tag_rpm_limit }),
+      ...(Object.keys(customer_rpm_limit).length > 0 && { customer_rpm_limit }),
+      ...(Object.keys(customer_tpm_limit).length > 0 && { customer_tpm_limit }),
       ...(Object.keys(input.budgetFallbacks).length > 0 && { budget_fallbacks: input.budgetFallbacks }),
       ...(Object.keys(input.modelMaxBudget).length > 0 && { model_max_budget: input.modelMaxBudget }),
       ...(values.budget_duration === NEVER_RESETS_BUDGET_DURATION && { budget_duration: null }),

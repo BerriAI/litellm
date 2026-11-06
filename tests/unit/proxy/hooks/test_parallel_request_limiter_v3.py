@@ -10089,3 +10089,75 @@ def test_media_models_resolve_to_each_deployment_base_model():
     assert _resolve_media_models(None, "whisper", None) == ("whisper",)
     assert _resolve_media_models(router, "whisper", None) == ("azure/whisper-1",)
     assert _resolve_media_models(router, "unknown", None) == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_per_customer_rpm_limit_on_key_is_scoped_to_that_customer_v3(monkeypatch):
+    """
+    A key with ``customer_rpm_limit`` caps each customer separately: the capped
+    customer gets a 429 once its allowance on this key is spent while another
+    customer on the same key keeps flowing, and the same customer on another key
+    with the same limit still has its own full allowance.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    limited_key = hash_token("sk-per-customer-rpm")
+    other_key = hash_token("sk-per-customer-rpm-other")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+
+    async def call(api_key: str, customer: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=api_key,
+                rpm_limit=100,
+                end_user_id=customer,
+                metadata={"customer_rpm_limit": {"acme": 2}},
+            ),
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "user": customer},
+            call_type="",
+        )
+
+    await call(limited_key, "acme")
+    await call(limited_key, "acme")
+    with pytest.raises(HTTPException) as exc_info:
+        await call(limited_key, "acme")
+    assert exc_info.value.status_code == 429
+    assert "customer_per_key" in str(exc_info.value.detail)
+
+    for _ in range(5):
+        await call(limited_key, "globex")
+    await call(other_key, "acme")
+    await call(other_key, "acme")
+
+
+def test_per_customer_descriptor_carries_rpm_and_tpm_for_the_requesting_customer_v3():
+    """
+    create_rate_limit_descriptors emits one customer_per_key descriptor keyed by
+    ``{api_key}:{customer}`` with that customer's rpm and tpm, and none when the
+    requesting customer has no configured limit.
+    """
+    api_key = hash_token("sk-per-customer-desc")
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    metadata = {"customer_rpm_limit": {"acme": 5}, "customer_tpm_limit": {"acme": 900, "globex": 50}}
+
+    def descriptors_for(customer: str) -> list[RateLimitDescriptor]:
+        descriptors = handler.create_rate_limit_descriptors(
+            user_api_key_dict=UserAPIKeyAuth(api_key=api_key, end_user_id=customer, metadata=metadata),
+            data={"model": "gpt-3.5-turbo", "user": customer},
+            rpm_limit_type=None,
+            tpm_limit_type=None,
+            model_has_failures=False,
+        )
+        return [d for d in descriptors if d["key"] == "customer_per_key"]
+
+    (acme,) = descriptors_for("acme")
+    assert acme["value"] == f"{api_key}:acme"
+    assert acme["rate_limit"]["requests_per_unit"] == 5
+    assert acme["rate_limit"]["tokens_per_unit"] == 900
+
+    (globex,) = descriptors_for("globex")
+    assert globex["rate_limit"]["requests_per_unit"] is None
+    assert globex["rate_limit"]["tokens_per_unit"] == 50
+
+    assert descriptors_for("initech") == []

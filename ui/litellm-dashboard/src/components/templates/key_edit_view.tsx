@@ -65,6 +65,12 @@ import {
   tagLimitsToRows,
   tagRowsToLimits,
 } from "../key_team_helpers/TagRateLimitEditor";
+import {
+  CustomerRateLimitEditor,
+  CustomerRateLimitEntry,
+  customerLimitsToRows,
+  customerRowsToLimits,
+} from "../key_team_helpers/CustomerRateLimitEditor";
 import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -135,6 +141,9 @@ function KeyEditSession({
   );
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>(
     tagLimitsToRows(keyData.metadata?.tag_rpm_limit),
+  );
+  const [customerRateLimits, setCustomerRateLimits] = useState<CustomerRateLimitEntry[]>(
+    customerLimitsToRows(keyData.metadata?.customer_rpm_limit, keyData.metadata?.customer_tpm_limit),
   );
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
@@ -294,6 +303,9 @@ function KeyEditSession({
       // clears the stored limits ({} overwrites the metadata field).
       const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
       values.tag_rpm_limit = tag_rpm_limit;
+      const { customer_rpm_limit, customer_tpm_limit } = customerRowsToLimits(customerRateLimits);
+      values.customer_rpm_limit = customer_rpm_limit;
+      values.customer_tpm_limit = customer_tpm_limit;
 
       const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
       if (Object.keys(budgetFallbacks).length > 0) {
@@ -633,6 +645,16 @@ function KeyEditSession({
               )}
             </FieldLabel>
             <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+          </Field>
+
+          <Field>
+            <FieldLabel>
+              {labelWithHint(
+                t("keyDetail.keyEditView.fields.perCustomerRateLimits"),
+                t("keyDetail.keyEditView.fields.perCustomerRateLimitsHint"),
+              )}
+            </FieldLabel>
+            <CustomerRateLimitEditor value={customerRateLimits} onChange={setCustomerRateLimits} />
           </Field>
 
           <FormField control={form.control} name="guardrails" label={t("keyDetail.keyEditView.fields.guardrails")}>

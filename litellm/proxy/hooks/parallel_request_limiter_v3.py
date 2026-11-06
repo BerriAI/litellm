@@ -75,6 +75,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
     get_estimated_output_tokens,
+    get_key_customer_rpm_limit,
+    get_key_customer_tpm_limit,
     get_key_own_model_rate_limit,
     get_key_tag_rpm_limit,
     get_model_rate_limit_from_metadata,
@@ -3217,6 +3219,40 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
+    def _add_customer_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        descriptors: list[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-customer rpm/tpm descriptor scoped to the API key.
+
+        The counter is ``{api_key}:{customer}``, so one customer exhausting its
+        allowance on this key never blocks the other customers on the key, nor
+        the same customer calling through another key. Customers without a
+        configured limit fall through to the key-level descriptor.
+        """
+        customer: Final = user_api_key_dict.end_user_id
+        if not user_api_key_dict.api_key or not customer:
+            return
+
+        rpm_limit: Final = get_key_customer_rpm_limit(user_api_key_dict).get(customer)
+        tpm_limit: Final = get_key_customer_tpm_limit(user_api_key_dict).get(customer)
+        if rpm_limit is None and tpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="customer_per_key",
+                value=f"{user_api_key_dict.api_key}:{customer}",
+                rate_limit={
+                    "requests_per_unit": rpm_limit,
+                    "tokens_per_unit": tpm_limit,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
     def _add_mcp_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3632,6 +3668,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._add_tag_per_key_rate_limit_descriptor(
             user_api_key_dict=user_api_key_dict,
             data=data,
+            descriptors=descriptors,
+        )
+
+        self._add_customer_per_key_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
             descriptors=descriptors,
         )
 

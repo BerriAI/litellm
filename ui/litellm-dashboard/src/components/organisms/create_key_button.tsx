@@ -60,6 +60,7 @@ import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/E
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
+import { CustomerRateLimitEditor, CustomerRateLimitEntry } from "../key_team_helpers/CustomerRateLimitEditor";
 import {
   excludeProxyWideSentinel,
   getModelDisplayName,
@@ -292,6 +293,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
+  const [customerRateLimits, setCustomerRateLimits] = useState<CustomerRateLimitEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
   const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
@@ -328,6 +330,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedProjectId(null);
     setBudgetLimits([]);
     setTagRateLimits([]);
+    setCustomerRateLimits([]);
     setBudgetFallbacks({});
     setBudgetFallbacksKey((k) => k + 1);
   };
@@ -468,6 +471,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         budgetLimits,
         modelMaxBudget,
         tagRateLimits,
+        customerRateLimits,
         budgetFallbacks,
       };
       const built = buildKeyCreatePayload(input);
@@ -504,6 +508,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       form.reset(formDefaults);
       setBudgetLimits([]);
       setTagRateLimits([]);
+      setCustomerRateLimits([]);
       setBudgetFallbacks({});
       setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
@@ -1294,6 +1299,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           </span>
                         </FieldLabel>
                         <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+                      </Field>
+                      <Field className="mt-4">
+                        <FieldLabel>
+                          <span>
+                            {t("createKey.customerRateLimits.label")}{" "}
+                            <SimpleTooltip content={t("createKey.customerRateLimits.tooltip")}>
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
+                          </span>
+                        </FieldLabel>
+                        <CustomerRateLimitEditor value={customerRateLimits} onChange={setCustomerRateLimits} />
                       </Field>
                       <MountedFormField
                         className="mt-4"

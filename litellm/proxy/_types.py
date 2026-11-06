@@ -4657,6 +4657,8 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",
     "tag_rpm_limit",
+    "customer_rpm_limit",
+    "customer_tpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
     "enforced_params",

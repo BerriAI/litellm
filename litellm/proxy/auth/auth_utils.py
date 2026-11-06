@@ -7,7 +7,7 @@ from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, TypeAlias
+from typing import Any, Final, Literal, Protocol, TypeAlias, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
@@ -1642,6 +1642,30 @@ def get_key_tag_rpm_limit(
     if user_api_key_dict.metadata:
         return user_api_key_dict.metadata.get("tag_rpm_limit")
     return None
+
+
+_CUSTOMER_LIMIT_MAP: Final[TypeAdapter[dict[str, int]]] = TypeAdapter(dict[str, int])
+
+
+def _key_customer_limit_map(user_api_key_dict: UserAPIKeyAuth, field: str) -> Mapping[str, int]:
+    metadata: Final = cast(Mapping[str, object], user_api_key_dict.metadata or {})  # cast-ok: loose JSON blob
+    raw: Final = metadata.get(field)
+    if raw is None:
+        return MappingProxyType({})
+    try:
+        return MappingProxyType(_CUSTOMER_LIMIT_MAP.validate_python(raw))
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def get_key_customer_rpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, int]:
+    """Per-customer (end user) rpm limits configured on the key, keyed by customer id."""
+    return _key_customer_limit_map(user_api_key_dict, "customer_rpm_limit")
+
+
+def get_key_customer_tpm_limit(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, int]:
+    """Per-customer (end user) tpm limits configured on the key, keyed by customer id."""
+    return _key_customer_limit_map(user_api_key_dict, "customer_tpm_limit")
 
 
 def get_project_model_rpm_limit(

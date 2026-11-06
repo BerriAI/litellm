@@ -52,6 +52,8 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_tpm_limit: dict[object, object] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     tag_rpm_limit: dict[str, int] | None = None
+    customer_rpm_limit: dict[str, int] | None = None
+    customer_tpm_limit: dict[str, int] | None = None
     guardrails: list[str] | None = None
     policies: list[str] | None = None
     prompts: list[str] | None = None

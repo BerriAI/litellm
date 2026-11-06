@@ -3156,6 +3156,40 @@ describe("KeyEditView", () => {
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("tag_rpm_limit", { "test-tag": 7 });
     });
 
+    it("resends the stored per-customer limits on an untouched save", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        metadata: { ...MOCK_KEY_DATA.metadata, customer_rpm_limit: { acme: 7 }, customer_tpm_limit: { acme: 900 } },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("customer_rpm_limit", { acme: 7 });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("customer_tpm_limit", { acme: 900 });
+    });
+
+    it("clears a stored customer limit when its row is removed", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        metadata: { ...MOCK_KEY_DATA.metadata, customer_rpm_limit: { acme: 7 } },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: "Remove customer limit" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("customer_rpm_limit", {});
+    });
+
     const setRpmLimit = (value: string) => {
       fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value } });
     };

@@ -1274,6 +1274,20 @@ export default function KeyInfoView({
                         : t("keyDetail.keyInfoView.settings.unlimited")}
                     </p>
                     <p className="text-sm">
+                      {t("keyDetail.keyInfoView.settings.customerRpmLimits")}{" "}
+                      {currentKeyData.metadata?.customer_rpm_limit &&
+                      Object.keys(currentKeyData.metadata.customer_rpm_limit).length > 0
+                        ? JSON.stringify(currentKeyData.metadata.customer_rpm_limit)
+                        : t("keyDetail.keyInfoView.settings.unlimited")}
+                    </p>
+                    <p className="text-sm">
+                      {t("keyDetail.keyInfoView.settings.customerTpmLimits")}{" "}
+                      {currentKeyData.metadata?.customer_tpm_limit &&
+                      Object.keys(currentKeyData.metadata.customer_tpm_limit).length > 0
+                        ? JSON.stringify(currentKeyData.metadata.customer_tpm_limit)
+                        : t("keyDetail.keyInfoView.settings.unlimited")}
+                    </p>
+                    <p className="text-sm">
                       {t("keyDetail.keyInfoView.settings.estimatedOutputTokens")}{" "}
                       {currentKeyData.metadata?.default_estimated_output_tokens != null
                         ? String(currentKeyData.metadata.default_estimated_output_tokens)

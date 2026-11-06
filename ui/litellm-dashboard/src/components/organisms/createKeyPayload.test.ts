@@ -15,6 +15,7 @@ const baseInput: KeyCreateInput = {
   routerSettings: null,
   budgetLimits: [],
   tagRateLimits: [],
+  customerRateLimits: [],
   budgetFallbacks: {},
   modelMaxBudget: {},
 };
@@ -429,6 +430,34 @@ describe("keys sourced from component state", () => {
         ),
       ),
     ).toStrictEqual(aliasOnly({ tag_rpm_limit: { prod: 10 } }));
+  });
+
+  it("reduces customer rows into customer_rpm_limit and customer_tpm_limit maps", () => {
+    expect(
+      payloadOf(
+        build(
+          { key_alias: "my-key" },
+          {
+            customerRateLimits: [
+              { id: "c-1", customer: "acme", rpm_limit: 10, tpm_limit: 5000 },
+              { id: "c-2", customer: "globex", rpm_limit: null, tpm_limit: 100 },
+              { id: "c-3", customer: " ", rpm_limit: 5, tpm_limit: 5 },
+            ],
+          },
+        ),
+      ),
+    ).toStrictEqual(aliasOnly({ customer_rpm_limit: { acme: 10 }, customer_tpm_limit: { acme: 5000, globex: 100 } }));
+  });
+
+  it("omits customer limit maps when no customer row has a limit", () => {
+    expect(
+      payloadOf(
+        build(
+          { key_alias: "my-key" },
+          { customerRateLimits: [{ id: "c-1", customer: "acme", rpm_limit: null, tpm_limit: null }] },
+        ),
+      ),
+    ).toStrictEqual(aliasOnly());
   });
 
   it("omits tag_rpm_limit when no row is complete", () => {
