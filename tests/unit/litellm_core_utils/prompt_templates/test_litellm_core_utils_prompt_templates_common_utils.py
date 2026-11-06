@@ -3,6 +3,7 @@ import importlib
 import json
 from collections.abc import Mapping
 from typing import Final, cast
+from unittest import mock
 
 import pytest
 
@@ -22,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     system_messages_first,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
 from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -1099,3 +1101,25 @@ def test_unknown_private_name_still_raises_attribute_error_on_common_utils() -> 
     missing_name: Final = "_not_a_moved_helper"
     with pytest.raises(AttributeError, match=missing_name):
         getattr(common_utils, missing_name)
+
+
+def test_old_path_access_warns_from_the_callers_line_with_the_new_home() -> None:
+    moved_name: Final = "_any_of"
+    with pytest.warns(DeprecationWarning, match=r"common_utils\._any_of moved to .*\.json_schema_utils") as caught:
+        getattr(common_utils, moved_name)
+    assert [warning.filename for warning in caught] == [__file__]
+
+
+def test_patching_a_moved_helper_at_its_old_path_reaches_the_callers_in_its_new_home() -> None:
+    patched_result: Final = {"patched": True}
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=patched_result
+    ):
+        assert parse_tool_call_arguments('{"a": 1') == patched_result
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_patching_a_name_common_utils_still_defines_stays_on_common_utils() -> None:
+    with mock.patch.object(common_utils, "invalid_type_message", return_value="patched"):
+        assert common_utils.invalid_type_message("field", 1) == "patched"
+    assert common_utils.invalid_type_message("field", 1) != "patched"

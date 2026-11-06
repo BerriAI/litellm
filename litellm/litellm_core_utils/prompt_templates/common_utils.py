@@ -4,10 +4,12 @@ Common utility functions used for translating messages across providers
 
 import importlib
 import json
+import sys
+import warnings
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from pydantic import TypeAdapter
@@ -1683,10 +1685,34 @@ def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
 
 
-if not TYPE_CHECKING:
+def _moved_name_home(name: str) -> ModuleType:
+    module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
 
-    def __getattr__(name: str) -> object:
-        module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
-        if module_name is None:
-            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-        return getattr(importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}"), name)
+
+class _CommonUtilsModule(ModuleType):
+    def __getattr__(self, name: str) -> object:
+        home: Final = _moved_name_home(name)
+        warnings.warn(
+            f"{self.__name__}.{name} moved to {home.__name__}, import or patch it there",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return getattr(home, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name not in _MOVED_PRIVATE_NAME_MODULES:
+            super().__setattr__(name, value)
+            return
+        setattr(_moved_name_home(name), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name not in _MOVED_PRIVATE_NAME_MODULES:
+            super().__delattr__(name)
+            return
+        delattr(_moved_name_home(name), name)
+
+
+sys.modules[__name__].__class__ = _CommonUtilsModule
