@@ -230,6 +230,19 @@ async def test_a_session_hold_never_crosses_api_keys() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_client_metadata_key_hash_cannot_join_another_keys_session() -> None:
+    switchyard: Final = router(config())
+    owner: Final = {"litellm_session_id": "shared", "litellm_metadata": {"user_api_key_hash": "owner"}}
+    spoofer: Final = {
+        "litellm_session_id": "shared",
+        "metadata": {"user_api_key_hash": "owner"},
+        "litellm_metadata": {"user_api_key_hash": "spoofer"},
+    }
+    assert await pick(switchyard, owner, ("CUDA out of memory",)) == "strong"
+    assert await pick(switchyard, spoofer, ("All tests passed",) * 2) == "fast"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("p_solve", "expected"), [(0.0, "strong"), (1.0, "fast")])
 async def test_llm_judge_verdict_selects_the_target(p_solve: float, expected: str) -> None:
     async def judge(request: Mapping[str, object]) -> ModelResponse:

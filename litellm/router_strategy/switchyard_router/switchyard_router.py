@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
@@ -68,8 +69,9 @@ def _forwarded_header(name: str, session_scoped: bool) -> bool:
 
 
 def _caller_key_hash(request_kwargs: Mapping[str, object]) -> str:
-    buckets: Final = (mapping(request_kwargs.get(name) or {}) for name in ("metadata", "litellm_metadata"))
-    return next((str(key) for bucket in buckets if (key := bucket.get("user_api_key_hash")) is not None), "")
+    internal: Final = mapping(request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs)) or {})
+    key: Final = internal.get("user_api_key_hash")
+    return str(key) if key is not None else ""
 
 
 def _scoped_session(request_kwargs: Mapping[str, object]) -> str | None:
