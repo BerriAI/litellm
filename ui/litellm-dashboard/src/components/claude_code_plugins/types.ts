@@ -3,7 +3,7 @@
  * API request/response shapes are synced from the generated OpenAPI types in @/lib/http/schema.
  */
 
-import type { components } from "@/lib/http/schema";
+import type { components, operations } from "@/lib/http/schema";
 
 export interface PluginSource {
   source: "github" | "url" | "git-subdir" | "archive";
@@ -24,6 +24,8 @@ export type PluginDownloadsResponse = components["schemas"]["PluginDownloadsResp
 export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "version"> & {
   version?: components["schemas"]["RegisterPluginRequest"]["version"];
 };
+
+export type SkillListQuery = NonNullable<operations["list_skills_skill_hub_skills_get"]["parameters"]["query"]>;
 
 export type SkillHubSkill = components["schemas"]["SkillHubSkill"];
 export type SkillMetadata = components["schemas"]["SkillHubMetadata"];

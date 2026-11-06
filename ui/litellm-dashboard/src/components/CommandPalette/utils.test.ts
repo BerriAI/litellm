@@ -59,7 +59,7 @@ describe("visibleMenuGroups", () => {
       });
 
       expect(flattenNavItems(visible).find(({ route }) => route === "skills")).toMatchObject({
-        label: "Skills",
+        label: "Skills Hub",
         route: "skills",
       });
     },

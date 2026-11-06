@@ -143,7 +143,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
-    without_bedrock_native_output_opt_in,
+    for_bedrock_json_tool_retry,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4369,7 +4369,7 @@ def _native_output_fallback(
     first_attempt_params: Mapping[str, object],
     first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback:
-    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    litellm_params: Final = for_bedrock_json_tool_retry(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
         optional_params={
@@ -4391,6 +4391,14 @@ def _converse_native_output_fallback(
 ) -> NativeOutputFallback | None:
     fallback: Final = _native_output_fallback(ctx, first_attempt_params, first_attempt_litellm_params)
     return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
+
+
+def _buffered_stream_fallback(
+    first_attempt_params: Mapping[str, object], first_attempt_litellm_params: Mapping[str, object]
+) -> NativeOutputFallback:
+    return NativeOutputFallback(
+        optional_params={**first_attempt_params, "fake_stream": True}, litellm_params=first_attempt_litellm_params
+    )
 
 
 def _native_output_attempt_timeout(
@@ -4496,17 +4504,25 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             )
 
         converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        converse_uses_native_output: Final = AmazonConverseConfig().uses_native_output(
+            converse_model, converse_params, litellm_params
+        )
         response = call_with_native_output_fallback(
             converse_attempt,
             (
                 partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
-                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                if converse_uses_native_output
                 else None
             ),
             converse_model,
             strict_tools_fallback=(
                 partial(bedrock_strict_tools_fallback, converse_model, converse_params, dict(litellm_params))
                 if drops_unsupported_params(litellm_params.get("drop_params"))
+                else None
+            ),
+            buffered_stream_fallback=(
+                partial(_buffered_stream_fallback, converse_params, dict(litellm_params))
+                if converse_uses_native_output
                 else None
             ),
         )
@@ -4551,15 +4567,20 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             )
 
         invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        invoke_uses_native_output: Final = isinstance(
+            provider_config, AmazonAnthropicClaudeConfig
+        ) and provider_config.uses_native_output(model, invoke_params, litellm_params)
         response = call_with_native_output_fallback(
             invoke_attempt,
-            (
-                partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
-                if isinstance(provider_config, AmazonAnthropicClaudeConfig)
-                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+            partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
+            if invoke_uses_native_output
+            else None,
+            model,
+            buffered_stream_fallback=(
+                partial(_buffered_stream_fallback, invoke_params, dict(litellm_params))
+                if invoke_uses_native_output
                 else None
             ),
-            model,
         )
 
     return response

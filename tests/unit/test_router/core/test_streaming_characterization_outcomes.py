@@ -68,9 +68,10 @@ async def open_messages(core: RouterCore) -> object:
 
 
 async def settle() -> None:
-    """Let the logging and recording tasks a finished stream scheduled run."""
-    for _ in range(20):
-        await asyncio.sleep(0)
+    """Wait for the logging and recording tasks a finished stream scheduled, and any tasks they schedule."""
+    while pending := asyncio.all_tasks() - {asyncio.current_task()}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
 
 
 def eventually(check: Callable[[], bool]) -> None:
