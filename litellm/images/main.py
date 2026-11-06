@@ -806,6 +806,23 @@ def image_edit(
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             model_response: Final = ImageResponse()
+            custom_optional_params: Final = _OBJECT_DICT_ADAPTER.validate_python(
+                {
+                    **kwargs,
+                    **{
+                        key: value
+                        for key, value in {
+                            "mask": mask,
+                            "n": n,
+                            "quality": quality,
+                            "response_format": response_format,
+                            "size": size,
+                            "user": user,
+                        }.items()
+                        if value is not None
+                    },
+                }
+            )
 
             if _is_async:
                 async_custom_client: AsyncHTTPHandler | None = None
@@ -819,7 +836,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=async_custom_client,
@@ -836,7 +853,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=custom_client,

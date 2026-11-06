@@ -9,9 +9,11 @@ import pytest
 import respx
 from openai import AsyncOpenAI
 from openai.types.image import Image
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
@@ -405,3 +407,85 @@ async def test_azure_image_generation_request_body():
         call_args = mock_post.call_args
         request_json = call_args.kwargs.get("json", {})
         assert request_json == expected_body
+
+
+class CustomImageParamsLLM(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: tuple[dict[str, object], ...] = ()
+
+    def image_generation(self, **kwargs: object) -> litellm.ImageResponse:
+        self.requests = (*self.requests, TypeAdapter(dict[str, object]).validate_python(kwargs["optional_params"]))
+        if self.requests[-1].get("user") == "reject":
+            raise CustomLLMError(status_code=429, message="image quota exhausted")
+        return litellm.ImageResponse(created=1700000000, data=[{"b64_json": "aW1hZ2U="}])
+
+    async def aimage_generation(self, **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(**kwargs)
+
+    def image_edit(self, **kwargs: object) -> litellm.ImageResponse:
+        return self.image_generation(**kwargs)
+
+    async def aimage_edit(self, **kwargs: object) -> litellm.ImageResponse:
+        return self.image_edit(**kwargs)
+
+
+@pytest.fixture
+def custom_image_params_handler(monkeypatch: pytest.MonkeyPatch) -> CustomImageParamsLLM:
+    handler: Final = CustomImageParamsLLM()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "image_params_test", "custom_handler": handler}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return handler
+
+
+@pytest.mark.parametrize("operation", ["generation", "edit"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("with_params", [False, True])
+@pytest.mark.asyncio
+async def test_custom_images_receive_standard_params(
+    custom_image_params_handler: CustomImageParamsLLM, operation: str, is_async: bool, with_params: bool
+) -> None:
+    standard_params: Final = {
+        "n": 2,
+        "size": "1024x1024",
+        "quality": "high",
+        "response_format": "b64_json",
+        "user": "image-user",
+        "style": "natural",
+        "background": "transparent",
+        "output_format": "png",
+        "output_compression": 0,
+        "moderation": "low",
+    }
+    supplied: Final = standard_params if with_params else {}
+    request: Final = dict(model="image_params_test/test-model", prompt="draw", **supplied, custom_marker="retained")
+    call: Final = getattr(litellm, ("a" if is_async else "") + "image_" + operation)
+    result: Final = (
+        await call(**request, **({"image": b"input-image", "mask": b"mask-image"} if operation == "edit" else {}))
+        if is_async
+        else call(**request, **({"image": b"input-image", "mask": b"mask-image"} if operation == "edit" else {}))
+    )
+    received: Final = custom_image_params_handler.requests[0]
+    assert {key: value for key, value in received.items() if key in standard_params} == supplied
+    assert received["custom_marker"] == "retained"
+    assert received.get("mask") == (b"mask-image" if operation == "edit" else None)
+    assert result.data[0].b64_json == "aW1hZ2U="
+
+
+@pytest.mark.parametrize("operation", ["generation", "edit"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_images_map_handler_errors_after_forwarding_params(
+    custom_image_params_handler: CustomImageParamsLLM, operation: str, is_async: bool
+) -> None:
+    request: Final = dict(model="image_params_test/test-model", prompt="draw", user="reject")
+    call: Final = getattr(litellm, ("a" if is_async else "") + "image_" + operation)
+    if is_async:
+        with pytest.raises(litellm.RateLimitError, match="image quota exhausted"):
+            await call(**request, **({"image": b"input-image"} if operation == "edit" else {}))
+    else:
+        with pytest.raises(litellm.RateLimitError, match="image quota exhausted"):
+            call(**request, **({"image": b"input-image"} if operation == "edit" else {}))
+    assert custom_image_params_handler.requests[0]["user"] == "reject"

@@ -4046,7 +4046,8 @@ def get_optional_params_image_gen(
                     )
             return non_default_params
 
-    if provider_config is not None:
+    custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
+    if provider_config is not None and custom_handler is None:
         supported_params = provider_config.get_supported_openai_params(model=model or "")
         _check_valid_arg(supported_params=supported_params)
         optional_params = provider_config.map_openai_params(
@@ -4055,11 +4056,7 @@ def get_optional_params_image_gen(
             model=model or "",
             drop_params=litellm.drop_params is True or drop_params is True,
         )
-    elif (
-        custom_llm_provider == "openai"
-        or custom_llm_provider == "azure"
-        or custom_llm_provider in litellm.openai_compatible_providers
-    ):
+    elif custom_llm_provider in ("openai", "azure", *litellm.openai_compatible_providers) or custom_handler is not None:
         optional_params = non_default_params
     elif custom_llm_provider == "bedrock":
         config_class: Final = litellm.BedrockImageGeneration.get_config_class(model=model)
