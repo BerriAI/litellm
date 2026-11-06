@@ -352,28 +352,41 @@ def _first_choice(payload: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return rv.ITEMS.validate_python(payload["choices"])[0]
 
 
-def _streamed_tool_calls(frames: Sequence[Mapping[str, JsonValue]]) -> list[tuple[str, str]]:
-    deltas: Final = [
-        rv.JSON_OBJECT.validate_python(_first_choice(frame)["delta"]) for frame in frames if frame.get("choices")
-    ]
-    opened: Final = rv.ITEMS.validate_python(
-        list(chain.from_iterable(rv.ITEMS.validate_python(delta.get("tool_calls") or []) for delta in deltas))
-    )
+def _call_names(calls: Sequence[Mapping[str, JsonValue]]) -> list[tuple[str, str]]:
     return [
         (str(call["id"]), str(rv.JSON_OBJECT.validate_python(call["function"])["name"]))
-        for call in opened
+        for call in calls
         if call.get("id")
     ]
 
 
+def _deltas(frames: Sequence[Mapping[str, JsonValue]]) -> list[dict[str, JsonValue]]:
+    return [rv.JSON_OBJECT.validate_python(_first_choice(frame)["delta"]) for frame in frames if frame.get("choices")]
+
+
+def _server_tool_calls_of(holder: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
+    fields: Final = rv.JSON_OBJECT.validate_python(holder.get("provider_specific_fields") or {})
+    return rv.ITEMS.validate_python(fields.get("server_tool_calls") or [])
+
+
 def answered_tool_calls(answer: Answer) -> list[tuple[str, str]]:
     if answer.frames:
-        return _streamed_tool_calls(answer.frames)
+        return _call_names(
+            list(
+                chain.from_iterable(rv.ITEMS.validate_python(d.get("tool_calls") or []) for d in _deltas(answer.frames))
+            )
+        )
     message: Final = rv.JSON_OBJECT.validate_python(_first_choice(answer.payload)["message"])
-    return [
-        (str(call["id"]), str(rv.JSON_OBJECT.validate_python(call["function"])["name"]))
-        for call in rv.ITEMS.validate_python(message.get("tool_calls") or [])
-    ]
+    return _call_names(rv.ITEMS.validate_python(message.get("tool_calls") or []))
+
+
+def answered_server_tool_calls(answer: Answer) -> list[tuple[str, str]]:
+    if answer.frames:
+        streamed: Final = _call_names(
+            list(chain.from_iterable(_server_tool_calls_of(d) for d in _deltas(answer.frames)))
+        )
+        return list(dict.fromkeys(streamed))
+    return _call_names(_server_tool_calls_of(rv.JSON_OBJECT.validate_python(_first_choice(answer.payload)["message"])))
 
 
 def response_id(answer: Answer) -> str:
@@ -382,10 +395,8 @@ def response_id(answer: Answer) -> str:
 
 def assert_search_call_answered(answer: Answer, marker: str) -> None:
     assert answer.status == 200, answer.text
-    assert answered_tool_calls(answer) == [
-        (f"srvtoolu_{marker}", _REGEX_TOOL_NAME),
-        (f"toolu_{marker}", "get_weather"),
-    ], answer.text
+    assert answered_server_tool_calls(answer) == [(f"srvtoolu_{marker}", _REGEX_TOOL_NAME)], answer.text
+    assert answered_tool_calls(answer) == [(f"toolu_{marker}", "get_weather")], answer.text
     if answer.frames:
         return
     usage: Final = rv.JSON_OBJECT.validate_python(answer.payload["usage"])

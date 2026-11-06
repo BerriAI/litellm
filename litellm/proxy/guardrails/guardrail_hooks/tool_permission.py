@@ -24,6 +24,11 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.tool_fields import declared_function_name, qualified_member_name
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    anthropic_server_tool_calls,
+    without_anthropic_server_tool_calls,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
@@ -983,7 +988,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         for choice_index, choice in enumerate(response.choices):
             if isinstance(choice, Choices):
-                for tool in choice.message.tool_calls or []:
+                for tool in (*(choice.message.tool_calls or ()), *anthropic_server_tool_calls(choice.message)):
                     tool_calls.append(tool)
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index
@@ -1492,6 +1497,23 @@ class ToolPermissionGuardrail(CustomGuardrail):
                         filtered_tool_calls.append(tool_call)
 
                 choice.message.tool_calls = filtered_tool_calls if filtered_tool_calls else None
+
+                server_error_results = tuple(
+                    error_results.get(self._judged_tool_call(server_tool_call))
+                    for server_tool_call in anthropic_server_tool_calls(choice.message)
+                )
+                if any(server_error_results):
+                    error_messages.extend(result.content for result in server_error_results if result is not None)
+                    without_anthropic_server_tool_calls(
+                        choice.message,
+                        frozenset(
+                            server_tool_call["id"] or ""
+                            for server_tool_call, result in zip(
+                                anthropic_server_tool_call_params(choice.message), server_error_results
+                            )
+                            if result is not None
+                        ),
+                    )
 
                 legacy_tool_call = self._legacy_function_call_to_tool_call(
                     getattr(choice.message, "function_call", None), choice_index
