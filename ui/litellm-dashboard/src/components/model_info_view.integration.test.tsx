@@ -205,6 +205,22 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("should display the model metadata logo in the provider details", async () => {
+    const logoUrl = "https://cdn.example.com/gateway.svg";
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [{ ...defaultModelData, model_info: { ...defaultModelData.model_info, logo_url: logoUrl } }],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("img", { name: "openai logo" })).toHaveAttribute("src", logoUrl);
+    expect(screen.getByRole("heading", { name: "openai" })).toBeInTheDocument();
+  });
+
   it("shows Kubernetes pods for discovery-enabled models", async () => {
     mockUseModelsInfo.mockReturnValue({
       data: {
@@ -583,6 +599,18 @@ describe("ModelInfoView", () => {
     expect(screen.getByText("Output (1080p): $0.12/s")).toBeInTheDocument();
     expect(screen.getByText("Output (4k): $0.30/s")).toBeInTheDocument();
     expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's reason when saving the model settings is rejected", async () => {
+    const rejection = new Error("A strategy router cannot route to itself");
+    mockModelPatchUpdateCall.mockRejectedValueOnce(rejection);
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith(rejection));
   });
 
   it("should display edit settings button when user can edit model", async () => {

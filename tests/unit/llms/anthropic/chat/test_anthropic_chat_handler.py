@@ -17,7 +17,9 @@ from litellm._uuid import uuid
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
+from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -25,7 +27,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
-from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
+from litellm.types.utils import ChatCompletionDeltaToolCall, ChatCompletionMessageToolCall, Choices, ModelResponseStream
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -1966,19 +1968,113 @@ def test_web_search_tool_result_no_extra_tool_calls():
             for tc in parsed.choices[0].delta.tool_calls:
                 tool_calls_emitted.append(tc)
 
-    # Should have exactly 2 tool calls:
-    # 1. From content_block_start (server_tool_use) with id and name
-    # 2. From content_block_delta with the actual query
-    assert len(tool_calls_emitted) == 2, f"Expected 2 tool calls, got {len(tool_calls_emitted)}"
+    assert tool_calls_emitted == []
 
-    # First tool call should have the id and name
-    assert tool_calls_emitted[0]["id"] == "srvtoolu_01ABC123"
-    assert tool_calls_emitted[0]["function"]["name"] == "web_search"
 
-    # Second tool call should have the query arguments
-    assert tool_calls_emitted[1]["function"]["arguments"] == '{"query": "test"}'
+def _server_tool_input_delta(fragment: str) -> dict[str, object]:
+    return {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
 
-    # The {} chunks from web_search_tool_result should NOT have been emitted as tool calls
+
+def _server_search_then_answer(*partial_json: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {}},
+        },
+        *(_server_tool_input_delta(fragment) for fragment in partial_json),
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01Web", "content": []},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "Paris is in France."}},
+        {"type": "content_block_stop", "index": 2},
+    )
+
+
+_SERVER_SEARCH_THEN_ANSWER: Final = _server_search_then_answer('{"query": "Paris"}')
+_CLIENT_TOOL_CALL: Final[tuple[dict[str, object], ...]] = (
+    {
+        "type": "content_block_start",
+        "index": 3,
+        "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 3,
+        "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+    },
+    {"type": "content_block_stop", "index": 3},
+)
+
+
+def _message_delta(stop_reason: str) -> dict[str, object]:
+    return {"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 20}}
+
+
+_PARIS_SEARCH: Final = ("srvtoolu_01Web", "web_search", '{"query": "Paris"}')
+
+
+@pytest.mark.parametrize(
+    ("events", "expected_tool_calls", "expected_finish_reason", "expected_server_tool_call"),
+    [
+        pytest.param(
+            (*_SERVER_SEARCH_THEN_ANSWER, _message_delta("end_turn")), [], "stop", _PARIS_SEARCH, id="server_tool_only"
+        ),
+        pytest.param(
+            (*_SERVER_SEARCH_THEN_ANSWER, *_CLIENT_TOOL_CALL, _message_delta("tool_use")),
+            [("toolu_01Weather", "get_weather", '{"city": "Paris"}')],
+            "tool_calls",
+            _PARIS_SEARCH,
+            id="server_tool_then_client_tool",
+        ),
+        pytest.param(
+            (*_server_search_then_answer('{"que', 'ry": "Pa', 'ris"}'), _message_delta("end_turn")),
+            [],
+            "stop",
+            _PARIS_SEARCH,
+            id="server_tool_input_split_across_deltas",
+        ),
+        pytest.param(
+            (*_server_search_then_answer(), _message_delta("end_turn")),
+            [],
+            "stop",
+            ("srvtoolu_01Web", "web_search", "{}"),
+            id="server_tool_with_empty_input",
+        ),
+    ],
+)
+def test_streamed_server_tool_use_is_not_returned_as_a_client_tool_call(
+    events: tuple[dict[str, object], ...],
+    expected_tool_calls: list[tuple[str, str, str]],
+    expected_finish_reason: str,
+    expected_server_tool_call: tuple[str, str, str],
+):
+    choice: Final = _assemble_stream(events).choices[0]
+    assert isinstance(choice, Choices)
+
+    assert (choice.message.tool_calls is None) == (not expected_tool_calls)
+    assert [
+        (call.id, call.function.name, call.function.arguments)
+        for call in choice.message.tool_calls or ()
+        if isinstance(call, ChatCompletionMessageToolCall)
+    ] == expected_tool_calls
+    assert choice.finish_reason == expected_finish_reason
+    assert choice.message.content == "Paris is in France."
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [expected_server_tool_call]
+    web_search_results: Final = message_field(choice.message.provider_specific_fields, "web_search_results")
+    assert [message_field(result, "tool_use_id") for result in parts_of(web_search_results)] == ["srvtoolu_01Web"]
 
 
 def test_current_content_block_type_tracking():
@@ -3140,6 +3236,118 @@ def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
     assert "".join(contents) == '{"name": "json_tool_call", "parameters": {"tier": 3'
 
 
+def _block_events(
+    index: int, block: dict[str, object], deltas: tuple[dict[str, object], ...]
+) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": block},
+        *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _message_events(*blocks: tuple[dict[str, object], tuple[dict[str, object], ...]]) -> tuple[dict[str, object], ...]:
+    starts_and_deltas: Final = tuple(
+        chain.from_iterable(_block_events(index, block, deltas) for index, (block, deltas) in enumerate(blocks))
+    )
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        *starts_and_deltas,
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 40},
+        },
+    )
+
+
+_THINKING_BLOCK: Final = (
+    {"type": "thinking", "thinking": "", "signature": ""},
+    ({"type": "thinking_delta", "thinking": "7 * 142 = 994"}, {"type": "signature_delta", "signature": "sig"}),
+)
+_PREAMBLE_BLOCK: Final = (
+    {"type": "text", "text": ""},
+    ({"type": "text_delta", "text": "**Working it out:** "}, {"type": "text_delta", "text": "the count is **120**"}),
+)
+
+
+def _json_tool_block(answer: dict[str, object]) -> tuple[dict[str, object], tuple[dict[str, object], ...]]:
+    encoded: Final = json.dumps(answer)
+    return (
+        {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}},
+        tuple({"type": "input_json_delta", "partial_json": part} for part in (encoded[:5], encoded[5:])),
+    )
+
+
+def _parse_stream(
+    events: tuple[dict[str, object], ...], schema: dict[str, object] | None = _STREAMED_PERSON_SCHEMA
+) -> tuple[ModelResponseStream, ...]:
+    iterator: Final = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=None if schema is None else response_format_schema(schema),
+    )
+    return tuple(iterator.chunk_parser(event) for event in events)
+
+
+def _joined_content(chunks: tuple[ModelResponseStream, ...]) -> str:
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_streamed_json_mode_drops_prose_written_before_the_json_tool():
+    chunks: Final = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK, _json_tool_block(_STREAMED_PERSON)))
+
+    assert json.loads(_joined_content(chunks)) == _STREAMED_PERSON
+    assert "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks) == (
+        "7 * 142 = 994"
+    )
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+
+
+def test_streamed_json_mode_returns_prose_when_claude_skips_the_json_tool():
+    chunks: Final = _parse_stream(_message_events(_THINKING_BLOCK, _PREAMBLE_BLOCK))
+
+    assert _joined_content(chunks) == "**Working it out:** the count is **120**"
+
+
+def test_streamed_json_mode_sends_prose_ahead_of_a_caller_tool_call():
+    caller_tool: Final = (
+        {"type": "tool_use", "id": "toolu_2", "name": "get_weather", "input": {}},
+        ({"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},),
+    )
+
+    chunks: Final = _parse_stream(_message_events(_PREAMBLE_BLOCK, caller_tool))
+    tool_chunk_index: Final = next(i for i, chunk in enumerate(chunks) if chunk.choices[0].delta.tool_calls)
+
+    assert _joined_content(chunks[: tool_chunk_index + 1]) == "**Working it out:** the count is **120**"
+    assert chunks[tool_chunk_index].choices[0].delta.tool_calls[0].function.name == "get_weather"
+
+
+def test_streamed_native_output_text_is_not_held_back():
+    answer: Final = json.dumps(_STREAMED_PERSON)
+    text_block: Final = (
+        {"type": "text", "text": ""},
+        tuple({"type": "text_delta", "text": part} for part in (answer[:6], answer[6:])),
+    )
+
+    chunks: Final = _parse_stream(_message_events(text_block), schema=None)
+
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks[2:4]) == (answer[:6], answer[6:])
+
+
 def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schema_property():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_CONTACT})
 
@@ -3565,7 +3773,7 @@ def test_streamed_json_mode_partial_objects_that_repeat_a_field_keep_the_order_t
     assert "".join(contents) == "".join(blocks)
 
 
-def test_streamed_json_mode_text_after_the_answer_follows_the_whole_answer():
+def test_streamed_json_mode_text_after_the_answer_is_dropped_like_the_non_streamed_reply():
     answer = json.dumps(_STREAMED_RISK_OBJECT)
     message_start, *_, message_delta = _json_tool_events(())
     text_block = (
@@ -3576,7 +3784,7 @@ def test_streamed_json_mode_text_after_the_answer_follows_the_whole_answer():
 
     chunks = _json_mode_stream_chunks((message_start, *_json_tool_block_events(0, answer), *text_block, message_delta))
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer + " Done."
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer
 
 
 def test_streamed_json_mode_envelope_whose_label_is_a_property_name_is_still_unwrapped():

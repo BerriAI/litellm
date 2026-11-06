@@ -78,6 +78,11 @@ const KNOWN: &[(&str, &str, &str)] = &[
     ),
     (
         "nested_150",
+        "json.loads",
+        "deeper than MAX_DEPTH: rejected for stack safety, where CPython still parses it",
+    ),
+    (
+        "nested_150",
         "pickle.loads",
         "deeper than MAX_DEPTH: rejected for stack safety, where CPython has no limit",
     ),
@@ -338,6 +343,22 @@ fn to_json_matches_python_json_round_trip(fixtures: &Fixtures) {
                 mismatches.check(row, "to_json", &expected.to_string(), &error.to_string())
             }
         }
+    }
+    mismatches.finish();
+}
+
+/// CPython gives back the same text from `json.dumps(json.loads(text))` for every text its
+/// `json.dumps` wrote here, non-finite floats included, so `loads` must too.
+#[rstest]
+fn loads_reads_back_what_python_json_dumps_wrote(fixtures: &Fixtures) {
+    let mut mismatches = Mismatches::default();
+    for row in &fixtures.rows {
+        let Some(text) = &row.json else { continue };
+        let actual = match json::loads(text).and_then(|value| json::dumps(&value)) {
+            Ok(text) => text,
+            Err(error) => format!("error: {error}"),
+        };
+        mismatches.check(row, "json.loads", text, &actual);
     }
     mismatches.finish();
 }

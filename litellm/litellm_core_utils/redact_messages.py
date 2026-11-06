@@ -12,16 +12,18 @@ import copy
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     get_metadata_variable_name_from_kwargs,
+    has_attributes,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -41,6 +43,11 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+
+class _HasArguments(Protocol):
+    arguments: str
+
 
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
@@ -163,7 +170,7 @@ def _redact_bedrock_guardrail_trace(response: object) -> None:
         }
         response.update(traces)
         return
-    for field, value in ((name, getattr(response, name, None)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
+    for field, value in ((name, attribute_or_none(response, name)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
         if value is not None:
             setattr(response, field, _redacted_bedrock_trace(value))
 
@@ -191,8 +198,8 @@ def _redact_tool_calls(tool_calls) -> None:
     if not tool_calls:
         return
     for tool_call in tool_calls:
-        function = getattr(tool_call, "function", None)
-        if function is not None and hasattr(function, "arguments"):
+        function = attribute_or_none(tool_call, "function")
+        if function is not None and has_attributes(function, _HasArguments, "arguments"):
             function.arguments = REDACTED_BY_LITELLM
 
 
@@ -272,20 +279,90 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
+        **({"reasoning": REDACTED_BY_LITELLM} if fields.get("reasoning") is not None else {}),
+        **({"reasoning_text": REDACTED_BY_LITELLM} if fields.get("reasoning_text") is not None else {}),
         **{
             key: None
             for key in (
                 "thinking_blocks",
                 "reasoningContentBlocks",
+                "reasoningContent",
+                "annotations",
                 "citations",
+                "citation",
+                "citationsContent",
                 "compaction_blocks",
                 "compaction_start",
                 "compaction_delta",
+                "reasoning_details",
+                "web_search_calls",
+                "web_search_results",
+                "tool_results",
+                "code_interpreter_results",
+                "search_results",
+                "rerank_results",
+                "executed_tools",
+                "custom_outputs",
+                "tool_search_items",
                 "token_ids",
             )
             if key in fields
         },
+        **(
+            {"server_tool_calls": _redacted_tool_call_dicts(fields["server_tool_calls"])}
+            if "server_tool_calls" in fields
+            else {}
+        ),
+        **(
+            {"web_search_calls": _redacted_web_search_calls(fields["web_search_calls"])}
+            if "web_search_calls" in fields
+            else {}
+        ),
     }
+
+
+def _redacted_tool_call_dict(call: object) -> object:
+    if (mapping := _as_mapping(call)) is None or (function := _as_mapping(mapping.get("function"))) is None:
+        return call
+    return {**mapping, "function": {**function, "arguments": REDACTED_BY_LITELLM}}
+
+
+def _redacted_tool_call_dicts(calls: object) -> object:
+    return [_redacted_tool_call_dict(call) for call in calls] if isinstance(calls, list) else calls
+
+
+_WEB_ACTION_TEXT_FIELDS: Final = ("query", "url", "pattern")
+_WEB_ACTION_LIST_FIELDS: Final = ("queries", "sources")
+
+
+def _web_action_redactions(action: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{key: REDACTED_BY_LITELLM for key in _WEB_ACTION_TEXT_FIELDS if action.get(key) is not None},
+        **{key: None for key in _WEB_ACTION_LIST_FIELDS if action.get(key) is not None},
+    }
+
+
+def _redacted_web_search_action(action: object) -> object:
+    if isinstance(action, BaseModel):
+        return action.model_copy(update=dict(_web_action_redactions(action.model_dump())))
+    mapping: Final = _as_mapping(action)
+    return action if mapping is None else {**mapping, **_web_action_redactions(mapping)}
+
+
+def _redacted_web_search_call(item: object) -> object:
+    if isinstance(item, BaseModel):
+        action: Final = getattr(item, "action", None)
+        return item if action is None else item.model_copy(update={"action": _redacted_web_search_action(action)})
+    mapping: Final = _as_mapping(item)
+    if mapping is None or mapping.get("action") is None:
+        return item
+    return {**mapping, "action": _redacted_web_search_action(mapping["action"])}
+
+
+def _redacted_web_search_calls(calls: object) -> object:
+    if (mapping := _as_mapping(calls)) is not None:
+        return {key: _redacted_web_search_call(call) for key, call in mapping.items()}
+    return [_redacted_web_search_call(call) for call in calls] if isinstance(calls, list) else calls
 
 
 def _redact_field_when_present(item: object, field: str) -> None:
@@ -319,6 +396,8 @@ def _redact_responses_api_output(output_items):
             output_item.arguments = REDACTED_BY_LITELLM
         if output_type == "custom_tool_call" and hasattr(output_item, "input"):
             output_item.input = REDACTED_BY_LITELLM
+        if output_type == "web_search_call" and getattr(output_item, "action", None) is not None:
+            output_item.action = _redacted_web_search_action(output_item.action)
 
 
 _RESPONSE_ITEMS: Final = TypeAdapter(tuple[object, ...])
@@ -371,6 +450,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
         **(
             {"input": redacted_str}
             if item_mapping.get("type") == "custom_tool_call" and "input" in item_mapping
+            else {}
+        ),
+        **(
+            {"action": _redacted_web_search_action(item_mapping["action"])}
+            if item_mapping.get("type") == "web_search_call" and item_mapping.get("action") is not None
             else {}
         ),
     }

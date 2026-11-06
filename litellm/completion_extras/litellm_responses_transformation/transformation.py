@@ -39,19 +39,22 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_chat_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
-    responses_reasoning_items_from_thinking_blocks,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -346,6 +349,9 @@ _TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_IT
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _json_field(value: object, key: str) -> object:
     return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
 
@@ -422,6 +428,17 @@ def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
 
 def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
+
+
+def _top_level_namespaces(request: object) -> Iterator[object]:
+    tools: Final = _json_list(_json_field(request, "tools")) or ()
+    return (tool for tool in tools if _json_field(tool, "type") == "namespace")
+
+
+def nested_tool_member_names(request: object) -> tuple[str, ...]:
+    tools: Final = (*_top_level_namespaces(request), *additional_tools_in_input(_json_field(request, "input")))
+    members: Final = chain.from_iterable(_namespace_members(tool) for tool in tools)
+    return tuple(chain.from_iterable(_tool_definition_name(member) for member in members))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
@@ -843,8 +860,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Handle message items with output_text content
         if item_type == "message":
-            content_list: Final = item.get("content", [])
-            for content_item in content_list:
+            content_list: Final = _DECODED_JSON.validate_python(item.get("content", []))
+            for content_item in iter_items(content_list):
                 if isinstance(content_item, dict):
                     content_type = content_item.get("type")
                     if content_type == "output_text":
@@ -1180,11 +1197,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             include_namespace=True,
             replay_openai_history=provider == "openai",
         )
-        # OpenAI's Responses API rejects an empty input. For a system-only
-        # request, carry the system message as a system-role input item instead
-        # of instructions, mirroring how non-string system content is already
-        # handled in convert_chat_completion_messages_to_responses_api.
-        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        # Keep the system text in input instead of instructions when the Responses API needs it there.
+        # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
+        typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
+        system_goes_in_input: Final = converted_instructions is not None and (
+            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+        )
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)
             if _drops_audio_input(model, litellm_params)
@@ -1196,12 +1214,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     "type": "message",
                     "role": "system",
                     "content": [{"type": "input_text", "text": converted_instructions}],
-                }
+                },
+                *target_input_items,
             ]
-            if is_system_only_request
+            if system_goes_in_input
             else target_input_items
         )
-        instructions: Final = None if is_system_only_request else converted_instructions
+        instructions: Final = None if system_goes_in_input else converted_instructions
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()
