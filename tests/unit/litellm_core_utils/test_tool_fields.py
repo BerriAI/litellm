@@ -247,8 +247,13 @@ _FORCED_DEEPWIKI: Final = {"type": "function", "function": {"name": "deepwiki"}}
 
 @pytest.mark.parametrize(
     "tool_choice",
-    [_FORCED_DEEPWIKI, {"type": "mcp", "server_label": "deepwiki"}],
-    ids=["function_choice", "responses_mcp_choice"],
+    [
+        _FORCED_DEEPWIKI,
+        {"type": "mcp", "server_label": "deepwiki"},
+        {"type": "mcp", "server_label": "unsent"},
+        {"type": "mcp"},
+    ],
+    ids=["function_choice", "responses_mcp_choice", "mcp_choice_for_an_unsent_server", "unlabeled_mcp_choice"],
 )
 @pytest.mark.parametrize(
     "functions",
