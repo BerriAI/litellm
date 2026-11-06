@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.token_counter import (
     single_encoding_openai_model,
     split_embedding_input_tokens,
 )
+from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.types.router import LiteLLM_Params
@@ -229,10 +230,15 @@ class PreCallFacts:
         return self._has_input and any(limit is not None for limit in self._windows.values())
 
     def _tokenizer_model(self) -> str:
-        named: Final = self._registry._core_deployments_named(self._model) or ()  # pyright: ignore[reportPrivateUsage]  # the host registry's index
+        # A wildcard deployment serves the requested model (`PatternMatchRouter.route`).
+        named: Final = tuple(
+            for_requested_model(record, self._name)
+            for record in self._registry._core_deployments_named(self._model) or ()  # pyright: ignore[reportPrivateUsage]  # the host registry's index
+        )
         return (
             single_encoding_openai_model(
-                served_openai_models(named) or served_openai_models(self._record(id) for id in self._candidates)
+                served_openai_models(named)
+                or served_openai_models(for_requested_model(self._record(id), self._name) for id in self._candidates)
             )
             or ""
         )

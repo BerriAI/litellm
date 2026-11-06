@@ -150,6 +150,7 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
     client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
     monkeypatch.setattr(client, "spend_log_transactions", [])
     monkeypatch.setattr(client, "model_usage_transactions", [])
     writer: Final = DBSpendUpdateWriter()
@@ -521,7 +522,9 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
     assert dict(daily_user.increments)["compression_saved_tokens"] == 7
 
 
-def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_caller_supplied_savings_beyond_json_range_are_clamped_and_never_drop_the_charge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
 
     monkeypatch.setitem(
@@ -552,6 +555,8 @@ def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(m
     )
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     assert dict(restored["metadata"])["accounting_savings"]["compression"] == 0.0
-    assert [dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"] == [
-        0.5
-    ]
+    assert dict(restored["metadata"])["compression_savings"] == {"tokens_saved": 2**53 - 1}
+    assert dict(restored["metadata"])["compression_savings"] == {"tokens_saved": 2**53 - 1}
+    assert [
+        dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"
+    ] == [0.5]

@@ -3324,9 +3324,13 @@ class TestMultiPodBatchCostClaim:
     @pytest.mark.parametrize("failure_phase", ("before_write", "after_write", "external"))
     @pytest.mark.parametrize("collector_enabled", (False, True))
     async def test_builtin_accounting_retries_only_before_a_possible_charge(
-        self, failure_phase: str, collector_enabled: bool
+        self, failure_phase: str, collector_enabled: bool, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import base64
+
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
         from datetime import datetime
 
         import httpx

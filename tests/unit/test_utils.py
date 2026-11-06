@@ -104,6 +104,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    async_pre_call_deployment_hook,
     calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
@@ -8393,6 +8394,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
         ):
@@ -11625,3 +11627,25 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+class _RecordingPreCallDeploymentHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_call_types: tuple[CallTypes | None, ...] = ()
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        self.seen_call_types = (*self.seen_call_types, call_type)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_hands_responses_compact_its_call_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    hook: Final = _RecordingPreCallDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+
+    await async_pre_call_deployment_hook({"model": "gpt-5.4-mini"}, "acompact_responses")
+
+    assert hook.seen_call_types == (CallTypes.acompact_responses,)

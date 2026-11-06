@@ -1,12 +1,10 @@
 """
 The ``litellm.Router`` facade's own helpers in litellm/router.py: how it binds the constructor
-arguments, which members it leaves to the facade, and the module attributes it forwards to the core.
+arguments and which members it leaves to the facade.
 """
 
 import pytest
 
-import litellm.router as router_module
-from litellm import router_python_core
 from litellm.router import Router, _class_descriptor, router_arguments
 
 
@@ -41,12 +39,3 @@ def test_class_descriptor_is_true_for_a_data_descriptor_on_the_class():
 def test_class_descriptor_is_false_for_a_plain_method_or_a_missing_name():
     assert not _class_descriptor(Router, "from_config")
     assert not _class_descriptor(Router, "no_such_member")
-
-
-def test_module_getattr_forwards_old_helpers_to_the_core_module():
-    assert router_module.__getattr__("_stream_pre_content_error") is router_python_core._stream_pre_content_error
-
-
-def test_module_getattr_raises_attribute_error_for_an_unknown_name():
-    with pytest.raises(AttributeError):
-        router_module.__getattr__("no_such_router_helper")

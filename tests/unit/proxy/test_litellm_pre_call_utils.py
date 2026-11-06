@@ -9213,7 +9213,9 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_on_resp
 
 
 @pytest.mark.asyncio
-async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip():
+async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Regression for the #38586 break: a client that planted a reserved key in
     litellm_metadata made the router hand downstream a scrubbed copy, so the proxy's
     post_call write-backs (guardrail telemetry, applied guardrails) landed in a dict the
@@ -9247,13 +9249,13 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
         ]
     )
     forwarded_buckets = []
-    original_acompletion = router._acompletion
+    original_acompletion = litellm.acompletion
 
     async def _spy(*args, **spy_kwargs):
         forwarded_buckets.append(spy_kwargs["metadata"])
         return await original_acompletion(*args, **spy_kwargs)
 
-    router._acompletion = _spy
+    monkeypatch.setattr(litellm, "acompletion", _spy)
 
     await router.acompletion(**request_data)
 

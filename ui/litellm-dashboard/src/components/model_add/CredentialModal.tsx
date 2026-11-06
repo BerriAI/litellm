@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -54,9 +55,9 @@ const AUTH_METHOD_SELECT_ID = "credential_auth_method";
 const API_KEY_FIELDS: readonly string[] = ["api_key"];
 const NO_HIDDEN_FIELDS: readonly string[] = [];
 
-const authMethodItems: { value: AuthMethod; label: string }[] = [
-  { value: "api_key", label: "API key" },
-  { value: "federation", label: "Workload identity federation" },
+const authMethodItems: { value: AuthMethod; labelKey: ParseKeys }[] = [
+  { value: "api_key", labelKey: "modelAdd.credentialModal.authMethods.apiKey" },
+  { value: "federation", labelKey: "modelAdd.credentialModal.authMethods.federation" },
 ];
 
 interface CredentialModalProps {
@@ -242,7 +243,7 @@ export default function CredentialModal({
                     )}
                   </label>
                   <Select
-                    items={authMethodItems}
+                    items={authMethodItems.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
                     value={authMethod}
                     onValueChange={(value) => changeAuthMethod(value as AuthMethod)}
                   >
@@ -252,7 +253,7 @@ export default function CredentialModal({
                     <SelectContent>
                       {authMethodItems.map((item) => (
                         <SelectItem key={item.value} value={item.value}>
-                          {item.label}
+                          {t(item.labelKey)}
                         </SelectItem>
                       ))}
                     </SelectContent>

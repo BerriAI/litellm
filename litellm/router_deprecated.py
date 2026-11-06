@@ -92,10 +92,9 @@ def _note(name: str, replacement: str) -> None:
 def _as_router(obj: "DeprecatedRouterMembers") -> "Router":
     """The Router this mixin is part of (it is mixed into ``litellm.Router`` only)."""
     from litellm.router import Router
-    from litellm.router_python_core import PythonCore
 
-    if isinstance(obj, (Router, PythonCore)):
-        return obj  # pyright: ignore[reportReturnType]  # a PythonCore carries every member the mixin reads
+    if isinstance(obj, Router):
+        return obj
     raise TypeError(f"{type(obj).__name__} is not a litellm.Router; DeprecatedRouterMembers is mixed into Router only")
 
 
@@ -112,9 +111,12 @@ def _public_attribute_error(obj: object, core_name: str, public_name: str, error
 class _DeprecatedAttribute(Generic[_T]):
     """A former Router attribute, read through an entry point. Assignment still replaces it."""
 
-    def __init__(self, replacement: str, read: Callable[["Router"], _T]) -> None:
+    def __init__(self, replacement: str, read: Callable[["Router"], _T], unbound: object = None) -> None:
         self.replacement = replacement
         self.read = read
+        # What a class-level read returns when the core keeps no member of this name: a former
+        # method reads back as a function taking the router, as it did on the Router class.
+        self.unbound = unbound
         self.name = ""
 
     def __set_name__(self, owner: type, name: str) -> None:
@@ -129,7 +131,7 @@ class _DeprecatedAttribute(Generic[_T]):
 
     def __get__(self, obj: "DeprecatedRouterMembers | None", owner: type) -> object:
         if obj is None:
-            return getattr(owner, "_core_" + self.name, self)
+            return getattr(owner, "_core_" + self.name, self if self.unbound is None else self.unbound)
         _note(self.name, self.replacement)
         router: Final = _as_router(obj)
         try:
@@ -216,6 +218,23 @@ def _unreserved_picker(router: "Router") -> Callable[..., Awaitable[object]]:
     return picker
 
 
+async def _async_get_available_deployment(
+    router: "Router",
+    model: str,
+    request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+    messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
+    input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
+    specific_deployment: bool | None = False,
+) -> object:
+    """``Router.async_get_available_deployment`` read on the class: the router's pick, unbound."""
+    return await _unreserved_picker(router)(model, request_kwargs, messages, input, specific_deployment)
+
+
+_async_get_available_deployment.__name__ = _async_get_available_deployment.__qualname__ = (
+    "async_get_available_deployment"
+)
+
+
 def _slack_alerting_logger(router: "Router") -> "SlackAlerting":
     """``observe().slack_alerting_logger``; a router without one has no such attribute, as before."""
     logger: Final = router.observe().slack_alerting_logger
@@ -282,7 +301,9 @@ class DeprecatedRouterMembers:
     cooldown_cache = _attr("health().cooldowns", lambda r: r.health().cooldowns)
     health_state_cache = _attr("health().health_checks", lambda r: r.health().health_checks)
     deployment_latency_map = _attr("health().latency", lambda r: r.health().latency)
-    async_get_available_deployment = _attr("select(model, request_kwargs)", lambda r: _unreserved_picker(r))
+    async_get_available_deployment = _DeprecatedAttribute(
+        "select(model, request_kwargs)", lambda r: _unreserved_picker(r), unbound=_async_get_available_deployment
+    )
 
     # -- observers ------------------------------------------------------------------------------
     slack_alerting_logger = _attr("observe().slack_alerting_logger", _slack_alerting_logger)

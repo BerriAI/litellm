@@ -1797,25 +1797,40 @@ def test_get_agent_fields_appends_inherited_provider_credential_fields():
 
 
 @pytest.mark.parametrize("preference", ["auto_install", None])
-def test_public_skill_hub_echoes_registered_installation_preference(preference):
+def test_public_skill_hub_echoes_registered_installation_preference(preference: str | None) -> None:
+    from collections.abc import Mapping
+
+    from prisma.models import LiteLLM_ClaudeCodePluginTable
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
+    from litellm.repositories.plugin_upload_repository import PluginUploadRepository
     from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+
+    def create(data: Mapping[str, object]) -> LiteLLM_ClaudeCodePluginTable:
+        defaults: Final = {"id": "plugin-id", "enabled": True, "anonymous_download_count": 0}
+        return LiteLLM_ClaudeCodePluginTable.model_validate({**defaults, **data})
+
+    def find_many(where: Mapping[str, object]) -> list[LiteLLM_ClaudeCodePluginTable]:
+        return [create(table.create.call_args.kwargs["data"])]
 
     table: Final = MagicMock()
     table.find_unique = AsyncMock(return_value=None)
-    table.create = AsyncMock(side_effect=lambda data: SimpleNamespace(id="plugin-id", **data))
-    table.find_many = AsyncMock(
-        side_effect=lambda where: [SimpleNamespace(id="plugin-id", **table.create.call_args.kwargs["data"])]
-    )
+    table.create = AsyncMock(side_effect=create)
+    table.find_many = AsyncMock(side_effect=find_many)
     prisma: Final = MagicMock()
     prisma.db.litellm_claudecodeplugintable = table
+    prisma.writer_db = prisma.db
+    prisma.db.tx.return_value.__aenter__.return_value = prisma.db
+    prisma.db.query_raw = AsyncMock(return_value=[])
+    prisma.db.litellm_claudecodepluginversion.create = AsyncMock()
     app: Final = FastAPI()
     app.include_router(router)
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         asyncio.run(
             register_plugin(
+                uploads=PluginUploadRepository(prisma),
                 request=RegisterPluginRequest(
                     name="security-review",
                     source={

@@ -9027,7 +9027,7 @@ class TestStreamingClientDisconnectBilling:
         from litellm.llms.anthropic.messages.adapters.transformation import (
             AnthropicAdapter,
         )
-        from litellm.router import FallbackAwareAnthropicMessagesStream
+        from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream, StreamAttempt
 
         async def _sse_frames() -> AsyncGenerator[bytes, None]:
             yield b"event: message_start\n\n"
@@ -9046,7 +9046,7 @@ class TestStreamingClientDisconnectBilling:
             )
             assert isinstance(source_iterator, AnthropicSSEStream)
             streamed: Final = prepare_response_for_header_attachment(
-                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator)
+                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator, MagicMock(spec=StreamAttempt))
             )
 
             billed: Final = await _bill_partial_streamed_spend_on_disconnect(
@@ -9586,7 +9586,7 @@ def _apply_stream_usage_tracking(
         from litellm.llms.anthropic.messages.responses_adapters.streaming_iterator import (
             AnthropicResponsesStreamWrapper,
         )
-        from litellm.router import FallbackAwareAnthropicMessagesStream
+        from litellm.router_rust.invoke.streaming import FallbackAwareAnthropicMessagesStream, StreamAttempt
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         async def _sse_frames() -> AsyncGenerator[bytes, None]:
@@ -9595,7 +9595,9 @@ def _apply_stream_usage_tracking(
         recorder: Final = _RecordingSuccessLogger()
         stream: Final = await self._start_partial_responses_stream(recorder)
         wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=stream, model="gpt-4o-mini")
-        streamed: Final = FallbackAwareAnthropicMessagesStream(_sse_frames(), wrapper.async_anthropic_sse_wrapper())
+        streamed: Final = FallbackAwareAnthropicMessagesStream(
+            _sse_frames(), wrapper.async_anthropic_sse_wrapper(), MagicMock(spec=StreamAttempt)
+        )
         billed: Final = await self._bill_and_wait(recorder, streamed, stream.logging_obj)
 
         assert billed is True
