@@ -8,6 +8,10 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeAsyncRedis, FakeServer
+from redis.exceptions import ClusterDownError, NoPermissionError, RedisError, ResponseError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -1033,8 +1037,9 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     gc.collect()
     ServiceLogging()
-    assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
-        redis_breaker_state_counts()["closed"]
+    assert (
+        REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"})
+        == (redis_breaker_state_counts()["closed"])
     )
 
 
@@ -1472,6 +1477,411 @@ async def test_async_increment_pipelines_the_ttl_command(
     assert client.values == {"ns:spend:key:k": 3.5}
     assert client.ttls == {"ns:spend:key:k": expected_ttl}
     assert client.round_trips == expected_round_trips
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing", "expected"),
+    [
+        pytest.param(None, 1.5, id="missing key: set to the value"),
+        pytest.param(0.25, 0.25, id="key below the value: kept"),
+        pytest.param(4.0, 4.0, id="key above the value: kept"),
+    ],
+)
+async def test_async_increment_only_if_missing_sets_a_missing_key_and_refreshes_the_ttl(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, existing: float | None, expected: float
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    client: Final = FakeAsyncRedis(server=FakeServer())
+    if existing is not None:
+        await client.set("ns:spend:key:k", existing, ex=5)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        current: Final = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+        after_add: Final = await redis_cache.async_increment(key="spend:key:k", value=2.0, ttl=60, refresh_ttl=True)
+
+    assert current == expected
+    assert after_add == expected + 2.0
+    assert await client.ttl("ns:spend:key:k") == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "stored"),
+    [(6.0, b"6"), (1e-05, b"0.00001"), (6.000000002, b"6.000000002"), (0.1, b"0.1"), (1e-20, b"0"), (-0.0, b"0")],
+)
+async def test_async_increment_only_if_missing_stores_a_missing_key_the_way_an_add_stores_it(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, value: float, stored: bytes
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    client: Final = FakeAsyncRedis(server=FakeServer())
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        current: Final = await redis_cache.async_increment(key="spend:key:k", value=value, ttl=60, only_if_missing=True)
+
+    assert await client.get("ns:spend:key:k") == stored
+    assert current == float(stored)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("existing", "reported"), [pytest.param(None, ["created"], id="created"), pytest.param(7.0, [], id="kept")]
+)
+async def test_async_increment_only_if_missing_reports_only_a_key_it_created(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, existing: float | None, reported: list[str]
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    client: Final = FakeAsyncRedis(server=FakeServer())
+    if existing is not None:
+        await client.set("ns:spend:key:k", existing)
+    created: Final[list[str]] = []
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, only_if_missing=True, on_added=lambda: created.append("created")
+        )
+
+    assert created == reported
+
+
+class _RaisingPipeline:
+    """A pipeline whose execute raises the first error in its replies, as redis-py's does by default."""
+
+    def __init__(self, replies: list[object]) -> None:
+        self.replies = replies
+        self.commands: list[tuple[object, ...]] = []
+
+    async def __aenter__(self) -> "_RaisingPipeline":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    def set(self, name: str, value: str, nx: bool = False, get: bool = False) -> None:
+        self.commands.append(("SET", name, value, nx, get))
+
+    def incrbyfloat(self, name: str, amount: float) -> None:
+        self.commands.append(("INCRBYFLOAT", name, amount))
+
+    def expire(self, name: str, ttl: int) -> None:
+        self.commands.append(("EXPIRE", name, ttl))
+
+    async def execute(self) -> list[object]:
+        first_error: Final = next((reply for reply in self.replies if isinstance(reply, Exception)), None)
+        if first_error is not None:
+            raise first_error
+        return self.replies
+
+
+class _ClusterPipelineAfterADroppedConnection(_RaisingPipeline):
+    """The first attempt reads a dropped connection. As in redis-py 5.3.1's ClusterPipeline.execute, raising is what
+    drives the retry, and ``raise_on_error=False`` hands the error back as a reply instead."""
+
+    async def execute(self, raise_on_error: bool = True) -> list[object]:
+        if not raise_on_error:
+            return [RedisConnectionError("Connection closed by server."), self.replies[1]]
+        return self.replies
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_keeps_the_cluster_retry_of_a_dropped_connection(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    client: Final = MagicMock()
+    client.pipeline.return_value = _ClusterPipelineAfterADroppedConnection([None, True])
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        current: Final = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+
+    assert current == 1.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(NoPermissionError("no permissions to run the 'set' command"), id="denied"),
+        pytest.param(ResponseError("syntax error"), id="redis-before-7-has-no-set-nx-get"),
+        pytest.param(ResponseError("unknown command 'SET'"), id="renamed"),
+        pytest.param(RedisError("SET command doesn't exist in Redis commands"), id="renamed-on-a-cluster-client"),
+    ],
+)
+async def test_async_increment_only_if_missing_adds_the_value_when_the_server_refuses_the_set(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, refusal: Exception
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    add: Final = _RaisingPipeline([7.5, True])
+    client: Final = MagicMock()
+    client.pipeline.side_effect = [_RaisingPipeline([refusal, True]), add]
+    failure_hook: Final = AsyncMock()
+    added: Final = MagicMock()
+
+    with (
+        patch.object(redis_cache, "init_async_client", return_value=client),
+        patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
+    ):
+        current: Final = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
+        )
+    await asyncio.sleep(0)
+
+    assert current == 7.5
+    added.assert_called_once_with()
+    assert add.commands == [("INCRBYFLOAT", "ns:spend:key:k", 1.5), ("EXPIRE", "ns:spend:key:k", 60)]
+    failure_hook.assert_not_awaited()
+    assert redis_cache._circuit_breaker._hard_failure_count == 0
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_reports_a_write_redis_refuses_with_the_add_and_its_error_text(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    add_error: Final = ResponseError("Command # 1 (INCRBYFLOAT ns:spend:key:k 1.5) of pipeline caused error")
+    client: Final = MagicMock()
+    client.pipeline.side_effect = [
+        _RaisingPipeline([ResponseError("Command # 1 (SET) of pipeline caused error"), True]),
+        _RaisingPipeline([add_error, True]),
+    ]
+    failure_hook: Final = AsyncMock()
+    added: Final = MagicMock()
+
+    with (
+        patch.object(redis_cache, "init_async_client", return_value=client),
+        patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
+        pytest.raises(ResponseError) as raised,
+    ):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
+        )
+    await asyncio.sleep(0)
+
+    assert raised.value is add_error
+    added.assert_not_called()
+    failure_hook.assert_awaited_once()
+    assert failure_hook.await_args.kwargs["error"] is add_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(RedisConnectionError("Connection closed by server."), id="dropped-connection"),
+        pytest.param(RedisTimeoutError("Timeout reading from socket"), id="stalled-node"),
+        pytest.param(ClusterDownError("CLUSTERDOWN The cluster is down"), id="cluster-down"),
+    ],
+)
+async def test_async_increment_only_if_missing_sends_no_add_after_a_failure_the_client_already_retried(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, failure: Exception
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    client: Final = MagicMock()
+    client.pipeline.return_value = _RaisingPipeline([failure, True])
+
+    with patch.object(redis_cache, "init_async_client", return_value=client), pytest.raises(type(failure)):
+        await redis_cache.async_increment(key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True)
+
+    assert client.pipeline.call_count == 1
+
+
+class _Keyspace:
+    """String keys as Redis holds them, for pipelines that run each command in order and raise the first error after
+    running the rest, as a non-transaction pipeline does. Commands named in ``refused`` are refused, a pipeline that
+    has run ``writes_before_full`` write commands has the rest refused as Redis does past ``maxmemory``, and pipelines
+    after the first ``reached`` never reach Redis, as when the connection drops."""
+
+    def __init__(
+        self, refused: frozenset[str] = frozenset(), writes_before_full: int | None = None, reached: int | None = None
+    ) -> None:
+        self.values: Final[dict[str, str]] = {}  # mutable-ok: stands in for the Redis keyspace
+        self.refused = refused
+        self.writes_before_full = writes_before_full
+        self.reached = reached
+        self.pipelines = 0
+
+    def pipeline(self, **_: object) -> "_KeyspacePipeline":
+        self.pipelines += 1
+        return _KeyspacePipeline(self, lost=self.reached is not None and self.pipelines > self.reached)
+
+
+class _KeyspacePipeline(_RaisingPipeline):
+    def __init__(self, keyspace: _Keyspace, lost: bool) -> None:
+        super().__init__([])
+        self.keyspace = keyspace
+        self.lost = lost
+        self.writes_left = keyspace.writes_before_full
+
+    def setnx(self, name: str, value: float) -> None:
+        self.commands.append(("SETNX", name, value))
+
+    def _write(self, command: str) -> None:
+        if self.writes_left is not None:
+            if self.writes_left == 0:
+                raise ResponseError("OOM command not allowed when used memory > 'maxmemory'.")
+            self.writes_left -= 1
+
+    def _run(self, command: tuple[object, ...]) -> object:
+        name: Final = str(command[1])
+        held: Final = self.keyspace.values.get(name)
+        if command[0] in self.keyspace.refused:
+            raise NoPermissionError(f"this user has no permissions to run the '{str(command[0]).lower()}' command")
+        if command[0] == "EXPIRE":
+            return held is not None
+        self._write(str(command[0]))
+        if command[0] == "SET":
+            if held is None:
+                self.keyspace.values[name] = str(command[2])
+            return None if held is None else held.encode()
+        if command[0] == "SETNX":
+            if held is None:
+                self.keyspace.values[name] = repr(command[2])
+            return held is None
+        total: Final = float(held or 0) + float(cast(float, command[2]))
+        self.keyspace.values[name] = repr(total)
+        return total
+
+    async def execute(self) -> list[object]:
+        if self.lost:
+            raise RedisConnectionError("Connection closed by server.")
+        replies: Final[list[object]] = []
+        for number, command in enumerate(self.commands, start=1):
+            try:
+                replies.append(self._run(command))
+            except RedisError as e:
+                words: str = " ".join(str(part) for part in command)
+                e.args = (f"Command # {number} ({words}) of pipeline caused error: {e.args}",)
+                replies.append(e)
+        first_error: Final = next((reply for reply in replies if isinstance(reply, Exception)), None)
+        if first_error is not None:
+            raise first_error
+        return replies
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_leaves_a_missing_key_missing_when_the_set_is_refused_and_the_add_lost(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    keyspace: Final = _Keyspace(refused=frozenset(("SET", "SETNX")), reached=1)
+
+    with patch.object(redis_cache, "init_async_client", return_value=keyspace), pytest.raises(RedisConnectionError):
+        await redis_cache.async_increment(key="spend:key:k", value=6.0, ttl=60, refresh_ttl=True, only_if_missing=True)
+
+    assert keyspace.values == {}
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_sets_a_missing_key_once_when_redis_runs_out_of_memory_after_the_set(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    keyspace: Final = _Keyspace(writes_before_full=1)
+    added: Final = MagicMock()
+
+    with patch.object(redis_cache, "init_async_client", return_value=keyspace):
+        current: Final = await redis_cache.async_increment(
+            key="spend:key:k", value=6.0, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
+        )
+
+    assert current == 6.0
+    assert float(keyspace.values["ns:spend:key:k"]) == 6.0
+    assert keyspace.pipelines == 1
+    added.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_raises_a_refused_ttl_command_as_mains_add_does_without_adding_again(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    keyspace: Final = _Keyspace(refused=frozenset(("EXPIRE",)))
+    added: Final = MagicMock()
+
+    with patch.object(redis_cache, "init_async_client", return_value=keyspace), pytest.raises(NoPermissionError):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=6.0, ttl=60, refresh_ttl=True, only_if_missing=True, on_added=added
+        )
+
+    assert keyspace.values == {"ns:spend:key:k": "6"}
+    assert keyspace.pipelines == 1
+    added.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held", ["not-a-number", "0x10", "6_0", " 6", "inf", "nan", "1e999"])
+async def test_async_increment_only_if_missing_leaves_a_value_it_cannot_read_like_incrbyfloat_to_mains_add(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, held: str
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    add: Final = _RaisingPipeline([7.5, True])
+    client: Final = MagicMock()
+    client.pipeline.side_effect = [_RaisingPipeline([held.encode(), True]), add]
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        current: Final = await redis_cache.async_increment(
+            key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+
+    assert current == 7.5
+    assert add.commands == [("INCRBYFLOAT", "ns:spend:key:k", 1.5), ("EXPIRE", "ns:spend:key:k", 60)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [float("inf"), float("nan")])
+async def test_async_increment_only_if_missing_sends_a_value_incrbyfloat_refuses_as_mains_add(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object, value: float
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    add: Final = _RaisingPipeline([ResponseError("increment would produce NaN or Infinity"), True])
+    client: Final = MagicMock()
+    client.pipeline.return_value = add
+
+    with patch.object(redis_cache, "init_async_client", return_value=client), pytest.raises(ResponseError):
+        await redis_cache.async_increment(
+            key="spend:key:k", value=value, ttl=60, refresh_ttl=True, only_if_missing=True
+        )
+
+    assert client.pipeline.call_count == 1
+    assert add.commands[0][0] == "INCRBYFLOAT"
+
+
+@pytest.mark.asyncio
+async def test_async_increment_only_if_missing_reports_a_redis_failure_like_an_increment(
+    monkeypatch: pytest.MonkeyPatch, redis_no_ping: object
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="ns")
+    client: Final = MagicMock()
+    client.pipeline.side_effect = ConnectionError("connection reset")
+    failure_hook: Final = AsyncMock()
+
+    with (
+        patch.object(redis_cache, "init_async_client", return_value=client),
+        patch.object(redis_cache.service_logger_obj, "async_service_failure_hook", failure_hook),
+        pytest.raises(ConnectionError),
+    ):
+        await redis_cache.async_increment(key="spend:key:k", value=1.5, ttl=60, refresh_ttl=True, only_if_missing=True)
+    await asyncio.sleep(0)
+
+    assert failure_hook.await_args.kwargs["call_type"] == "async_increment"
+    assert redis_cache._circuit_breaker._hard_failure_count == 1
 
 
 class _SetRecordingPipeline:

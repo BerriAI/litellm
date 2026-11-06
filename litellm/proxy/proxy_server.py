@@ -682,7 +682,7 @@ from litellm.proxy.db.request_error_tracking import (
     flush_request_errors,
     request_error_accumulator,
 )
-from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
+from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed, late_write_abandoned
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
@@ -981,6 +981,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
     record_spend_counter_value,
     spend_counter_batch_scope,
+    spend_counter_read,
 )
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -4299,6 +4300,7 @@ async def ensure_spend_counter_initialized(
 ) -> None:
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
     if is_warm is False:
+        read: Final = spend_counter_read(counter_key)
         # Shares the per-counter lock with get_current_spend.
         db_spend: Final = await SpendCounterReseed.coalesced(
             prisma_client=prisma_client,
@@ -4310,7 +4312,16 @@ async def ensure_spend_counter_initialized(
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await SpendCounterReseed.add_cached_spend_once(
+                    spend_counter_cache=spend_counter_cache,
+                    counter_key=counter_key,
+                    read=read,
+                    spend=base_spend,
+                    add=lambda: increment_spend_counter_cache(counter_key=counter_key, increment=base_spend),
+                    set_if_missing=lambda on_added: increment_spend_counter_cache(
+                        counter_key=counter_key, increment=base_spend, only_if_missing=True, on_added=on_added
+                    ),
+                )
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
@@ -4413,16 +4424,32 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def increment_spend_counter_cache(counter_key: str, increment: float) -> float | None:
+async def increment_spend_counter_cache(
+    counter_key: str,
+    increment: float,
+    only_if_missing: bool = False,
+    on_added: Callable[[], None] | None = None,
+) -> float | None:
     if spend_counter_cache.redis_cache is not None:
         try:
-            current_value: Final = await spend_counter_cache.redis_cache.async_increment(
-                key=counter_key,
-                value=increment,
-                refresh_ttl=True,
+            current_value: Final = await (
+                spend_counter_cache.redis_cache.async_increment(
+                    key=counter_key,
+                    value=increment,
+                    refresh_ttl=True,
+                    only_if_missing=True,
+                    on_added=on_added,
+                )
+                if only_if_missing
+                else spend_counter_cache.redis_cache.async_increment(
+                    key=counter_key,
+                    value=increment,
+                    refresh_ttl=True,
+                )
             )
         except Exception:
-            await invalidate_spend_counter(counter_key=counter_key)
+            if not late_write_abandoned():
+                await invalidate_spend_counter(counter_key=counter_key)
             raise
         spend_counter_cache.in_memory_cache.set_cache(
             key=counter_key,
@@ -4432,7 +4459,11 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
         return current_value
 
     return await SpendCounterReseed.increment_in_memory(
-        spend_counter_cache=spend_counter_cache, counter_key=counter_key, increment=increment
+        spend_counter_cache=spend_counter_cache,
+        counter_key=counter_key,
+        increment=increment,
+        only_if_missing=only_if_missing,
+        on_added=on_added,
     )
 
 

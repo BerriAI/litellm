@@ -13,22 +13,31 @@ memory in long-lived deployments.
 """
 
 import asyncio
+import functools
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
+from litellm.constants import (
+    SPEND_COUNTER_COLD_SEED_JOIN_SECONDS,
+    SPEND_COUNTER_INCRBYFLOAT_ROUNDING,
+    SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     SPEND_COUNTERS_TARGET,
+    SpendCounterRead,
     read_batched_spend_counter,
     record_spend_counter_value,
+    spend_counter_tick,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
@@ -66,6 +75,93 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
         "Team": "team_id",
     }
 )
+
+
+@dataclass(slots=True)
+class _CachedSpendSeed:
+    """This process adding its cached spend to one cold counter: the add in flight, the tick it started at, the tick
+    the last write of its spend landed at, and that spend."""
+
+    started_at: int = 0
+    landed_at: int = 0
+    landed_spend: float = 0.0
+    in_flight: asyncio.Future[float | None] | None = None
+
+    def on_this_loop(self) -> bool:
+        return self.in_flight is None or self.in_flight.get_loop() is asyncio.get_running_loop()
+
+    def run(self, add: Callable[[], Awaitable[float | None]]) -> Coroutine[object, object, float | None]:
+        """Make ``add`` the add in flight from this call on, and return the coroutine that runs it and publishes its
+        result to the requests waiting on ``in_flight``, which ends cancelled when ``add`` fails or is cancelled."""
+        in_flight: Final[asyncio.Future[float | None]] = asyncio.get_running_loop().create_future()
+        self.started_at = spend_counter_tick()
+        self.in_flight = in_flight
+
+        async def add_and_publish() -> float | None:
+            try:
+                added: Final = await add()
+                in_flight.set_result(added)
+                return added
+            finally:
+                if self.in_flight is in_flight:
+                    self.in_flight = None
+                in_flight.cancel()
+
+        return add_and_publish()
+
+
+@functools.lru_cache(maxsize=SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE)
+def _cached_spend_seed(spend_counter_cache: "DualCache", counter_key: str) -> _CachedSpendSeed:
+    return _CachedSpendSeed()
+
+
+_cold_seed_waited: Final[ContextVar[float]] = ContextVar("cold_spend_seed_waited", default=0.0)
+
+
+async def _wait_for_cold_seed(in_flight: asyncio.Future[float | None]) -> None:
+    """Wait on ``in_flight`` for what this context has left of ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS``."""
+    loop: Final = asyncio.get_running_loop()
+    waited: Final = _cold_seed_waited.get()
+    started: Final = loop.time()
+    await asyncio.wait((in_flight,), timeout=max(0.0, SPEND_COUNTER_COLD_SEED_JOIN_SECONDS - waited))
+    _cold_seed_waited.set(waited + loop.time() - started)
+
+
+_late_writes: Final[set[asyncio.Task[float | None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
+_late_write_abandoned: Final[ContextVar[asyncio.Event | None]] = ContextVar("late_spend_write_abandoned", default=None)
+
+
+def late_write_abandoned() -> bool:
+    """Whether this runs in a late write whose request was cancelled, which main's add would not have outlived."""
+    abandoned: Final = _late_write_abandoned.get()
+    return abandoned is not None and abandoned.is_set()
+
+
+def _late_write_finished(task: asyncio.Task[float | None]) -> None:
+    _late_writes.discard(task)
+    if not task.cancelled():
+        task.exception()
+
+
+async def _landing_even_if_cancelled(write: Coroutine[object, object, float | None]) -> float | None:
+    """Await ``write`` in a task of its own, so cancelling the caller leaves it to land as a command already sent does,
+    and marks it abandoned from then on, so ``late_write_abandoned`` holds inside it."""
+    abandoned: Final = asyncio.Event()
+    context: Final = copy_context()
+    context.run(_late_write_abandoned.set, abandoned)
+    task: Final = context.run(asyncio.ensure_future, write)
+    _late_writes.add(task)
+    task.add_done_callback(_late_write_finished)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        abandoned.set()
+        raise
+
+
+def _redis_breaker_closed(spend_counter_cache: "DualCache") -> bool:
+    redis_cache: Final = spend_counter_cache.redis_cache
+    return redis_cache is None or redis_cache.circuit_breaker_closed
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -113,14 +209,96 @@ class SpendCounterReseed:
             return lock
 
     @staticmethod
+    async def add_cached_spend_once(
+        spend_counter_cache: "DualCache",
+        counter_key: str,
+        read: SpendCounterRead,
+        spend: float,
+        add: Callable[[], Awaitable[float | None]],
+        set_if_missing: Callable[[Callable[[], None]], Awaitable[float | None]],
+    ) -> None:
+        """Run ``add``, this process adding ``spend`` to a cold counter, once for all of this process's requests that
+        read the counter cold before that add landed. A request joins an add that started after its read came back and
+        gets its result, and starts or joins another add when that one fails, is cancelled or wrote nothing after its
+        read went out. A request whose read went out before an add landed, and one still waiting on an add after
+        ``SPEND_COUNTER_COLD_SEED_JOIN_SECONDS`` across its counters, runs ``set_if_missing``, which calls its argument
+        if it added the spend, in place of ``add``, then runs ``add`` too if it did not and the counter holds less than
+        the spend it should already hold, beyond what INCRBYFLOAT's 17 decimal places can round away.
+        Those two steps finish even if the request is cancelled, and stay the add in flight until they do, but once it is
+        cancelled a failure in them leaves the counter as main's cancelled add does, without the DEL. A request on
+        another event loop than the add in flight, one that finds the Redis circuit breaker not closed, and each other
+        process, still run ``add``."""
+        seed: Final = _cached_spend_seed(spend_counter_cache, counter_key)
+
+        def spend_landed() -> None:
+            seed.landed_at = spend_counter_tick()
+            seed.landed_spend = spend
+
+        async def add_spend() -> float | None:
+            added: Final = await add()
+            spend_landed()
+            return added
+
+        async def write_if_short() -> float | None:
+            least: Final = min(spend, seed.landed_spend) if seed.landed_at >= read.sent_at else spend
+            set_added: Final = asyncio.Event()
+
+            def on_added() -> None:
+                set_added.set()
+                spend_landed()
+
+            current: Final = await set_if_missing(on_added)
+            if current is None or set_added.is_set():
+                return current
+            return await add_spend() if least - current > SPEND_COUNTER_INCRBYFLOAT_ROUNDING else current
+
+        async def add_if_short() -> float | None:
+            return await _landing_even_if_cancelled(seed.run(write_if_short))
+
+        async def add_unless_covered() -> float | None:
+            in_flight: Final = seed.in_flight
+            if not seed.on_this_loop() or not _redis_breaker_closed(spend_counter_cache):
+                return await add()
+            if in_flight is None:
+                return await (seed.run(add_spend) if seed.landed_at < read.sent_at else add_if_short())
+            covers: Final = seed.started_at > read.returned_at
+            await _wait_for_cold_seed(in_flight)
+            if not in_flight.done():
+                return await add_if_short()
+            if covers and not in_flight.cancelled() and seed.landed_at >= read.sent_at:
+                return in_flight.result()
+            return await add_unless_covered()
+
+        added: Final = await add_unless_covered()
+        if added is not None:
+            record_spend_counter_value(counter_key, added)
+
+    @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
-    async def increment_in_memory(spend_counter_cache: "DualCache", counter_key: str, increment: float) -> float | None:
-        """Apply local deltas after an in-flight reseed establishes the spend balance."""
+    async def increment_in_memory(
+        spend_counter_cache: "DualCache",
+        counter_key: str,
+        increment: float,
+        only_if_missing: bool = False,
+        on_added: Callable[[], None] | None = None,
+    ) -> float | None:
+        """Apply local deltas after an in-flight reseed establishes the spend balance. With ``only_if_missing``, a
+        counter that exists keeps its value, which is returned, and ``on_added`` runs if this call added to it."""
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            return await spend_counter_cache.async_increment_cache(
+            current: Final[float | None] = (  # pyright: ignore[reportUnknownVariableType]  # untyped in-memory cache
+                spend_counter_cache.in_memory_cache.get_cache(key=counter_key)  # pyright: ignore[reportUnknownMemberType]  # untyped in-memory cache
+                if only_if_missing
+                else None
+            )
+            if current is not None:
+                return float(current)
+            added: Final = await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=increment, local_only=True, refresh_ttl=True
             )
+            if on_added is not None:
+                on_added()
+            return added
 
     @staticmethod
     async def from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
