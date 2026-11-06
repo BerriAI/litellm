@@ -1,4 +1,5 @@
 import hashlib
+from functools import reduce
 from typing import Final
 
 import pytest
@@ -143,3 +144,152 @@ def test_source_size_is_bounded() -> None:
 
 def test_diagnostics_escape_terminal_controls_but_preserve_layout() -> None:
     assert escape_diagnostics("a\x1b[31m\x00\x7f\x9b\n\t") == "a\\x1b[31m\\x00\\x7f\\x9b\n\t"
+
+
+def _array_schema(child: JsonSchema, index: int) -> JsonSchema:
+    return {"type": "array", "items": child}
+
+
+@pytest.mark.parametrize("depth,accepted", [(4, True), (70, False)])
+def test_schema_nesting_is_bounded(depth: int, accepted: bool) -> None:
+    schema: Final = reduce(_array_schema, range(depth), {})
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    if accepted:
+        assert isinstance(result, CompiledProgram), result
+        return
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert "depth limit" in result.message
+
+
+@pytest.mark.parametrize("depth,accepted", [(4, True), (70, False)])
+def test_schema_reference_expansion_is_bounded(depth: int, accepted: bool) -> None:
+    schema: Final[JsonSchema] = {
+        "$defs": {
+            f"N{index}": {"$ref": f"#/$defs/N{index + 1}"} if index < depth else {"type": "integer"}
+            for index in range(depth + 1)
+        },
+        "$ref": "#/$defs/N0",
+    }
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    if accepted:
+        assert isinstance(result, CompiledProgram), result
+        return
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert "depth limit" in result.message
+
+
+def test_schema_reference_cycle_is_rejected() -> None:
+    schema: Final[JsonSchema] = {"$defs": {"X": {"$ref": "#/$defs/X"}}, "$ref": "#/$defs/X"}
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert "recursive schema" in result.message
+
+
+_RECORD: Final[JsonSchema] = {
+    "type": "object",
+    "x-liteflow-record": True,
+    "properties": {"amount": {"type": "integer"}, "label": {"type": ["string", "null"]}},
+    "required": ["amount"],
+    "additionalProperties": False,
+}
+_RECORD_REF: Final[JsonSchema] = {"$ref": "#/$defs/Record"}
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        _RECORD_REF,
+        {"type": "array", "items": _RECORD_REF},
+        {"anyOf": [_RECORD_REF, {"type": "null"}]},
+        {"type": "object", "properties": {"payload": _RECORD_REF}, "additionalProperties": True},
+        {"type": "object", "properties": {}, "additionalProperties": _RECORD_REF},
+        {"$ref": "#/$defs/Envelope"},
+    ],
+)
+def test_registration_accepts_records_in_supported_input_shapes(argument: JsonSchema) -> None:
+    definitions: Final[JsonSchema] = {
+        "Record": _RECORD,
+        "Empty": {**_RECORD, "properties": {}, "required": []},
+        "Envelope": {**_RECORD, "properties": {"child": _RECORD_REF}, "required": ["child"]},
+    }
+    program: Final = _program("def transform(value): return value", output={"$defs": definitions})
+    typed: Final = program.model_copy(
+        update={
+            "input_schema": {
+                **program.input_schema,
+                "properties": {"value": argument},
+                "$defs": definitions,
+            }
+        }
+    )
+    result: Final = compile_program(typed, MontyLimits())
+    assert isinstance(result, CompiledProgram), result
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        _RECORD,
+        {"$defs": {"Record": {**_RECORD, "type": "string"}}},
+        {"$defs": {"Record": {**_RECORD, "properties": {"bad-field": {}}}}},
+        {"$defs": {"str": _RECORD}},
+        {"$defs": {"transform": _RECORD}},
+        {"$defs": {"Record": _RECORD}, "oneOf": [_RECORD_REF, {"type": "null"}]},
+        {"$defs": {"Record": _RECORD}, "anyOf": [_RECORD_REF, {"type": "string"}]},
+        {"$defs": {"Record": _RECORD}, "anyOf": [_RECORD_REF, {"type": "null"}, {"type": "string"}]},
+        {"$defs": {"Record": _RECORD}, "allOf": [_RECORD_REF]},
+    ],
+)
+def test_registration_rejects_ambiguous_or_unconstructible_record_shapes(schema: JsonSchema) -> None:
+    result: Final = compile_program(_program("def transform(value): return value", output=schema), MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"type": "array"},
+        {"properties": {"extra": {}}},
+        {"required": []},
+        {"required": ["value", "extra"]},
+        {"additionalProperties": True},
+    ],
+)
+def test_input_schema_must_require_exactly_the_entry_parameters(changes: JsonSchema) -> None:
+    program: Final = _program("def transform(value): return value")
+    invalid: Final = program.model_copy(update={"input_schema": {**program.input_schema, **changes}})
+    result: Final = compile_program(invalid, MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+
+
+def test_registration_rejects_conflicting_record_definitions() -> None:
+    program: Final = _program("def transform(value): return value", output={"$defs": {"Record": _RECORD}})
+    conflicting: Final = program.model_copy(
+        update={"input_schema": {**program.input_schema, "$defs": {"Record": {**_RECORD, "required": []}}}}
+    )
+    result: Final = compile_program(conflicting, MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.UNSUPPORTED_SCHEMA
+    assert "conflicting" in result.message
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["def transform(value):\n", "def transform(value): return value\ndef transform(value): return 1"],
+)
+def test_registration_rejects_syntax_errors_and_duplicate_entry_names(source: str) -> None:
+    result: Final = compile_program(_program(source), MontyLimits())
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.INVALID_PROGRAM
+
+
+def test_registration_accepts_local_json_pointer_escaping_and_annotations_import() -> None:
+    schema: Final[JsonSchema] = {"$defs": {"a/b~c": {"type": "integer"}}, "$ref": "#/$defs/a~1b~0c"}
+    source: Final = "from __future__ import annotations\ndef transform(value: Missing) -> Unknown: return value"
+    result: Final = compile_program(_program(source, output=schema), MontyLimits())
+    assert isinstance(result, CompiledProgram), result

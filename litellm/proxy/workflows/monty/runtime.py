@@ -49,7 +49,7 @@ def installed_binary() -> BinaryArtifact | MontyFailure:
         return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
 
 
-def _json_issue(value: JsonValue, depth: int, max_depth: int) -> MontyErrorKind | None:
+def _monty_json_issue(value: JsonValue, depth: int, max_depth: int) -> MontyErrorKind | None:
     if depth > max_depth:
         return MontyErrorKind.INPUT_TOO_LARGE
     if value is None or type(value) in (str, int, bool):
@@ -57,7 +57,9 @@ def _json_issue(value: JsonValue, depth: int, max_depth: int) -> MontyErrorKind 
     if type(value) is float:
         return None if math.isfinite(value) else MontyErrorKind.INPUT_INVALID
     if type(value) is list:
-        return next((issue for item in value if (issue := _json_issue(item, depth + 1, max_depth)) is not None), None)
+        return next(
+            (issue for item in value if (issue := _monty_json_issue(item, depth + 1, max_depth)) is not None), None
+        )
     if type(value) is dict:
         if any(type(key) is not str for key in value):
             return MontyErrorKind.INPUT_INVALID
@@ -65,7 +67,7 @@ def _json_issue(value: JsonValue, depth: int, max_depth: int) -> MontyErrorKind 
             (
                 child_issue
                 for item in value.values()
-                if (child_issue := _json_issue(item, depth + 1, max_depth)) is not None
+                if (child_issue := _monty_json_issue(item, depth + 1, max_depth)) is not None
             ),
             None,
         )
@@ -79,7 +81,7 @@ def validate_json(
     too_large: Final = MontyErrorKind.OUTPUT_TOO_LARGE if output else MontyErrorKind.INPUT_TOO_LARGE
     try:
         parsed: Final = _JSON.validate_python(value, strict=True)
-        issue: Final = _json_issue(parsed, 0, max_depth)
+        issue: Final = _monty_json_issue(parsed, 0, max_depth)
         if issue is not None:
             return MontyFailure(
                 too_large if issue == MontyErrorKind.INPUT_TOO_LARGE else invalid, "JSON depth or type invalid"

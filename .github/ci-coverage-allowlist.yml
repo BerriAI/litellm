@@ -5,6 +5,12 @@ description: >-
 
 test_paths:
   - reason: >-
+      Real Monty subprocess tests run locally with the pinned runtime. The integration sandbox
+      directory is outside the existing CI groups by its AGENTS.md policy. Pure compiler and
+      model coverage runs in tests/unit/proxy/workflows/monty
+    paths:
+      - tests/integration/sandbox/test_monty_runtime.py
+  - reason: >-
       litellm.agent() end-to-end suite. It drives the real claude, codex, opencode and pi CLIs and
       deepagents against a live LiteLLM AI Gateway, so it needs those binaries on PATH plus
       LITELLM_PROXY_API_BASE / LITELLM_PROXY_API_KEY, and skips without them. Run manually

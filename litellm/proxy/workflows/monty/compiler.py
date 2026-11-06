@@ -30,6 +30,7 @@ _FORBIDDEN: Final = frozenset(
     }
 )
 _PREFIX: Final = "_liteflow_"
+_MAX_SCHEMA_DEPTH: Final = 64
 _GENERATED_GLOBALS: Final = frozenset({"dataclass", "str", "int", "float", "bool", "list", "dict", "all", "isinstance"})
 
 
@@ -118,32 +119,40 @@ def _resolve(schema: JsonSchema, root: JsonSchema) -> JsonSchema:
     if not isinstance(ref, str):
         return schema
 
-    def descend(value: JsonValue, parts: tuple[str, ...]) -> JsonSchema:
+    def _monty_schema_pointer(value: JsonValue, parts: tuple[str, ...]) -> JsonSchema:
+        if len(parts) > _MAX_SCHEMA_DEPTH:
+            return {}
         if not parts:
             return _mapping(value)
         if isinstance(value, dict):
-            return descend(value.get(parts[0].replace("~1", "/").replace("~0", "~")), parts[1:])
+            return _monty_schema_pointer(value.get(parts[0].replace("~1", "/").replace("~0", "~")), parts[1:])
         if isinstance(value, list) and parts[0].isdigit() and int(parts[0]) < len(value):
-            return descend(value[int(parts[0])], parts[1:])
+            return _monty_schema_pointer(value[int(parts[0])], parts[1:])
         return {}
 
-    return descend(root, tuple(ref[2:].split("/")))
+    return _monty_schema_pointer(root, tuple(ref[2:].split("/")))
 
 
-def _reference_exists(root: JsonValue, parts: tuple[str, ...]) -> bool:
+def _monty_reference_exists(root: JsonValue, parts: tuple[str, ...]) -> bool:
+    if len(parts) > _MAX_SCHEMA_DEPTH:
+        return False
     if not parts:
         return isinstance(root, (dict, bool))
     part: Final = parts[0].replace("~1", "/").replace("~0", "~")
     if isinstance(root, dict) and part in root:
-        return _reference_exists(root[part], parts[1:])
+        return _monty_reference_exists(root[part], parts[1:])
     if isinstance(root, list) and part.isdigit() and int(part) < len(root):
-        return _reference_exists(root[int(part)], parts[1:])
+        return _monty_reference_exists(root[int(part)], parts[1:])
     return False
 
 
-def _schema_error(value: JsonValue, root: JsonSchema) -> str | None:
+def _monty_schema_error(value: JsonValue, root: JsonSchema, depth: int = 0) -> str | None:
+    if depth > _MAX_SCHEMA_DEPTH:
+        return "schema depth limit exceeded"
     if isinstance(value, list):
-        return next((error for item in value if (error := _schema_error(item, root)) is not None), None)
+        return next(
+            (error for item in value if (error := _monty_schema_error(item, root, depth + 1)) is not None), None
+        )
     if not isinstance(value, dict):
         return None
     for key, item in value.items():
@@ -151,9 +160,12 @@ def _schema_error(value: JsonValue, root: JsonSchema) -> str | None:
             return f"unsupported schema keyword {key}"
         if key == "$ref" and (not isinstance(item, str) or not item.startswith("#/")):
             return "only local #/ JSON references are supported"
-        if key == "$ref" and isinstance(item, str) and not _reference_exists(root, tuple(item[2:].split("/"))):
+        if key == "$ref" and isinstance(item, str) and not _monty_reference_exists(root, tuple(item[2:].split("/"))):
             return "local JSON reference target does not exist"
-        if key not in {"const", "enum", "default", "examples"} and (error := _schema_error(item, root)) is not None:
+        if (
+            key not in {"const", "enum", "default", "examples"}
+            and (error := _monty_schema_error(item, root, depth + 1)) is not None
+        ):
             return error
     return None
 
@@ -176,7 +188,7 @@ def _record_union_error(schema: JsonSchema, root: JsonSchema, seen: frozenset[st
     for keyword_name in ("anyOf", "oneOf", "allOf"):
         if not isinstance(alternatives := schema.get(keyword_name), list):
             continue
-        if not any(_contains_record(_mapping(item), root, seen) for item in alternatives):
+        if not any(_monty_contains_record(_mapping(item), root, seen) for item in alternatives):
             continue
         if keyword_name != "anyOf" or len(alternatives) != 2:
             return "records in unions are supported only as Optional X"
@@ -185,26 +197,39 @@ def _record_union_error(schema: JsonSchema, root: JsonSchema, seen: frozenset[st
     return None
 
 
-def _record_error(schema: JsonSchema, root: JsonSchema, seen: frozenset[str] = frozenset()) -> str | None:
+def _monty_record_error(
+    schema: JsonSchema, root: JsonSchema, seen: frozenset[str] = frozenset(), depth: int = 0
+) -> str | None:
+    if depth > _MAX_SCHEMA_DEPTH:
+        return "schema reference depth limit exceeded"
     ref: Final = schema.get("$ref")
     if isinstance(ref, str):
         if ref in seen:
             return "recursive schema references are unsupported"
-        return _record_error(_resolve(schema, root), root, seen | {ref})
+        return _monty_record_error(_resolve(schema, root), root, seen | {ref}, depth + 1)
     if (shape_error := _record_shape_error(schema, root)) is not None:
         return shape_error
     if (union_error := _record_union_error(schema, root, seen)) is not None:
         return union_error
-    return next((error for child in _children(schema) if (error := _record_error(child, root, seen)) is not None), None)
+    return next(
+        (
+            error
+            for child in _children(schema)
+            if (error := _monty_record_error(child, root, seen, depth + 1)) is not None
+        ),
+        None,
+    )
 
 
-def _contains_record(schema: JsonSchema, root: JsonSchema, seen: frozenset[str]) -> bool:
+def _monty_contains_record(schema: JsonSchema, root: JsonSchema, seen: frozenset[str], depth: int = 0) -> bool:
+    if depth > _MAX_SCHEMA_DEPTH:
+        return False
     ref: Final = schema.get("$ref")
     if isinstance(ref, str):
-        return ref not in seen and _contains_record(_resolve(schema, root), root, seen | {ref})
+        return ref not in seen and _monty_contains_record(_resolve(schema, root), root, seen | {ref}, depth + 1)
     if schema.get("x-liteflow-record") is True:
         return True
-    return any(_contains_record(child, root, seen) for child in _children(schema))
+    return any(_monty_contains_record(child, root, seen, depth + 1) for child in _children(schema))
 
 
 def _children(schema: JsonSchema) -> tuple[JsonSchema, ...]:
@@ -228,15 +253,17 @@ def _records(root: JsonSchema) -> tuple[tuple[str, JsonSchema], ...]:
     )
 
 
-def _build(schema: JsonSchema, root: JsonSchema, expression: str, depth: int = 0) -> str:
+def _monty_build(schema: JsonSchema, root: JsonSchema, expression: str, depth: int = 0) -> str:
+    if depth > _MAX_SCHEMA_DEPTH:
+        raise ValueError("schema builder depth limit exceeded")
     resolved: Final = _resolve(schema, root)
     ref: Final = schema.get("$ref")
     if isinstance(ref, str) and "$ref" in resolved:
-        return _build(resolved, root, expression, depth + 1)
+        return _monty_build(resolved, root, expression, depth + 1)
     union: Final = resolved.get("anyOf")
-    if isinstance(union, list) and _contains_record(resolved, root, frozenset()):
+    if isinstance(union, list) and _monty_contains_record(resolved, root, frozenset()):
         other: Final = next(_mapping(item) for item in union if _mapping(item).get("type") != "null")
-        return f"(None if {expression} is None else {_build(other, root, expression, depth + 1)})"
+        return f"(None if {expression} is None else {_monty_build(other, root, expression, depth + 1)})"
     if resolved.get("x-liteflow-record") is True:
         name: Final = next(name for name, candidate in _records(root) if candidate == resolved)
         required: Final = resolved.get("required", [])
@@ -247,7 +274,7 @@ def _build(schema: JsonSchema, root: JsonSchema, expression: str, depth: int = 0
                 if isinstance(required, list) and name in required
                 else f"{expression}.get({name!r})"
             )
-            built: Final = _build(_mapping(child), root, access, depth + 1)
+            built: Final = _monty_build(_mapping(child), root, access, depth + 1)
             return (
                 f"{name}={built}"
                 if isinstance(required, list) and name in required
@@ -261,16 +288,16 @@ def _build(schema: JsonSchema, root: JsonSchema, expression: str, depth: int = 0
         )
     if resolved.get("type") == "array":
         variable: Final = f"{_PREFIX}item{depth}"
-        return f"[{_build(_mapping(resolved.get('items')), root, variable, depth + 1)} for {variable} in {expression}]"
+        return f"[{_monty_build(_mapping(resolved.get('items')), root, variable, depth + 1)} for {variable} in {expression}]"
     if resolved.get("type") == "object" and isinstance(resolved.get("properties"), dict):
         fields: Final = _mapping(resolved.get("properties"))
         variable_key: Final = f"{_PREFIX}key{depth}"
         variable_value: Final = f"{_PREFIX}value{depth}"
         branches: Final = "".join(
-            f"{_build(_mapping(child), root, variable_value, depth + 1)} if {variable_key} == {key!r} else "
+            f"{_monty_build(_mapping(child), root, variable_value, depth + 1)} if {variable_key} == {key!r} else "
             for key, child in fields.items()
         )
-        fallback: Final = _build(_mapping(resolved.get("additionalProperties")), root, variable_value, depth + 1)
+        fallback: Final = _monty_build(_mapping(resolved.get("additionalProperties")), root, variable_value, depth + 1)
         return (
             f"{{{variable_key}: ({branches}{fallback}) for {variable_key}, {variable_value} in {expression}.items()}}"
         )
@@ -317,7 +344,7 @@ def _source(program: PythonProgram) -> str:
     return [False, None]
 """
     arguments: Final = ", ".join(
-        _build(
+        _monty_build(
             _mapping(_mapping(program.input_schema.get("properties")).get(name)),
             program.input_schema,
             f"{_PREFIX}input[{name!r}]",
@@ -338,10 +365,10 @@ def _source(program: PythonProgram) -> str:
 def _schemas_error(program: PythonProgram, tree: ast.Module) -> MontyFailure | None:
     function_names: Final = frozenset(node.name for node in tree.body if isinstance(node, ast.FunctionDef))
     for schema in (program.input_schema, program.output_schema):
-        if (error := _schema_error(schema, schema)) is not None:
+        if (error := _monty_schema_error(schema, schema)) is not None:
             return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, escape_diagnostics(error))
         Draft202012Validator.check_schema(schema)
-        if (record_error := _record_error(schema, schema)) is not None:
+        if (record_error := _monty_record_error(schema, schema)) is not None:
             return MontyFailure(MontyErrorKind.UNSUPPORTED_SCHEMA, escape_diagnostics(record_error))
         for name, _ in _records(schema):
             if not _safe_name(name) or name in _GENERATED_GLOBALS or name in function_names:
