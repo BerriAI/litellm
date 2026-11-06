@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, Protocol, TypeAlias
 
@@ -865,14 +865,19 @@ async def prefetch_named_callback_secrets(logging_entries: object) -> None:
 
 
 def _definition_secret_references(logging_entries: object) -> tuple[str, ...]:
+    definitions: Final = tuple(
+        definition
+        for callback_name, _ in stored_callback_entries(logging_entries)
+        if callback_name is not None and (definition := named_callback_definition(callback_name)) is not None
+    )
+    return tuple(dict.fromkeys(chain.from_iterable(map(_definition_secret_values, definitions))))
+
+
+def _definition_secret_values(definition: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
-        dict.fromkeys(
-            value
-            for callback_name, _ in stored_callback_entries(logging_entries)
-            if callback_name is not None and (definition := named_callback_definition(callback_name)) is not None
-            for key, value in definition.items()
-            if key != "callback_type" and isinstance(value, str) and value.startswith(_SECRET_REFERENCE_PREFIX)
-        )
+        value
+        for key, value in definition.items()
+        if key != "callback_type" and isinstance(value, str) and value.startswith(_SECRET_REFERENCE_PREFIX)
     )
 
 
