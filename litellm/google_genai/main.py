@@ -448,6 +448,7 @@ def generate_content(
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
                 extra_headers=extra_headers,
+                custom_logging_obj=setup_result.litellm_logging_obj if custom_handler is not None else None,
                 **kwargs,
             )
             if custom_handler is not None:
@@ -552,6 +553,7 @@ async def agenerate_content_stream(
                 tools=tools,
                 stream=True,
                 extra_headers=extra_headers,
+                custom_logging_obj=None,
                 **kwargs,
             )
 
@@ -644,6 +646,7 @@ def generate_content_stream(
                 litellm_params=setup_result.litellm_params,
                 stream=True,
                 extra_headers=extra_headers,
+                custom_logging_obj=None,
                 **kwargs,
             )
 

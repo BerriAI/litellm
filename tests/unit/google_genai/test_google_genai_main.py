@@ -588,3 +588,36 @@ async def test_custom_content_adapter_accounts_for_one_success(
         outer_logging.success_handler(result=result)
         assert recorder.sync_calls == ("completion",)
     assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_delivers_per_request_success_callbacks_once(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    global_recorder: Final = ContentSuccessRecorder()
+    request_recorder: Final = ContentSuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [global_recorder])
+    monkeypatch.setattr(litellm, "success_callback", [global_recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [global_recorder])
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
+        success_callback=[request_recorder.async_log_success_event if is_async else request_recorder.log_success_event],
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    if is_async:
+        await asyncio.wait_for(
+            asyncio.gather(request_recorder.async_logged.wait(), global_recorder.async_logged.wait()), timeout=5
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert request_recorder.async_calls == ("acompletion",)
+        assert global_recorder.async_calls == ("acompletion",)
+    else:
+        assert await asyncio.to_thread(request_recorder.sync_logged.wait, 5)
+        assert await asyncio.to_thread(global_recorder.sync_logged.wait, 5)
+        assert request_recorder.sync_calls == ("completion",)
+        assert global_recorder.sync_calls == ("completion",)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
