@@ -292,6 +292,15 @@ def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "be
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
 
 
+def _bedrock_native_output_enabled(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    deployment_flag: Final = (model_info or {}).get("supports_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+
+
 _DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
@@ -312,9 +321,9 @@ def _bedrock_native_output_opt_in(
 def bedrock_supports_native_structured_output(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return _bedrock_native_output_enabled(model, custom_llm_provider, model_info) or _bedrock_native_output_opt_in(
+        model, custom_llm_provider, model_info
+    )
 
 
 def _bedrock_map_native_output_flag(model: str) -> object:
@@ -349,7 +358,7 @@ def bedrock_chat_opts_into_native_structured_output(
     custom_llm_provider: str = "bedrock",
     model_info: Mapping[str, object] | None = None,
 ) -> bool:
-    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+    return _bedrock_native_output_enabled(model, custom_llm_provider, model_info) or (
         thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
     )
 
@@ -370,15 +379,15 @@ def bedrock_chat_uses_native_structured_output(
 def bedrock_native_output_is_deployment_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(
-        model, "supports_native_structured_output", custom_llm_provider
-    ) and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    return not _bedrock_native_output_enabled(model, custom_llm_provider, model_info) and _bedrock_native_output_opt_in(
+        model, custom_llm_provider, model_info
+    )
 
 
 def bedrock_native_output_is_opt_in(
     model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
 ) -> bool:
-    return not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) and (
+    return not _bedrock_native_output_enabled(model, custom_llm_provider, model_info) and (
         _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
         or _bedrock_native_output_replaces_unforceable_tool(model, model_info)
     )
@@ -387,7 +396,21 @@ def bedrock_native_output_is_opt_in(
 def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     return {
         **litellm_params,
-        "model_info": {**deployment_model_info(litellm_params), "supports_bedrock_native_structured_output": False},
+        "model_info": {
+            **deployment_model_info(litellm_params),
+            "supports_bedrock_native_structured_output": False,
+        },
+    }
+
+
+def for_bedrock_json_tool_retry(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    opt_in_disabled: Final = without_bedrock_native_output_opt_in(litellm_params)
+    return {
+        **opt_in_disabled,
+        "model_info": {
+            **deployment_model_info(opt_in_disabled),
+            "supports_native_structured_output": False,
+        },
     }
 
 
@@ -395,6 +418,7 @@ _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs 
 _BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
     _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
     "compilation exceeded limits: Schema is too complex",
+    "The compiled grammar is too large",
     "output_config.format.schema:",
 )
 
@@ -475,8 +499,27 @@ def requests_output_config_format(optional_params: Mapping[str, object]) -> bool
 
 
 def requests_native_output(anthropic_optional_params: Mapping[str, object]) -> bool:
-    return isinstance(anthropic_optional_params.get("output_format"), Mapping) or requests_output_config_format(
-        anthropic_optional_params
+    output_config: Final = json_object_or_none(anthropic_optional_params.get("outputConfig"))
+    return (
+        isinstance(anthropic_optional_params.get("output_format"), Mapping)
+        or requests_output_config_format(anthropic_optional_params)
+        or (
+            anthropic_optional_params.get("json_mode") is True
+            and output_config is not None
+            and isinstance(output_config.get("textFormat"), Mapping)
+        )
+    )
+
+
+def bedrock_native_output_retry_requested(
+    model: str,
+    optional_params: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return requests_native_output(optional_params) and (
+        bedrock_native_output_is_opt_in(model, custom_llm_provider, model_info)
+        or _bedrock_native_output_enabled(model, custom_llm_provider, model_info)
     )
 
 
@@ -518,7 +561,7 @@ def bedrock_native_output_schema(
     model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
-    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+    if _bedrock_native_output_enabled(model, custom_llm_provider, model_info):
         return schema if native_schema is None else native_schema
     if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
         return native_schema
