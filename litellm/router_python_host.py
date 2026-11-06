@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.redis.stores.connection import RedisStores
+    from litellm.redis.stores.router_usage import RouterUsage
     from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
     from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
     from litellm.types.rerank import RerankResponse
@@ -146,6 +148,12 @@ class PythonHost:
         from litellm.caching.caching import DualCache, InMemoryCache
 
         return DualCache(redis_cache=redis_cache_for(config), in_memory_cache=InMemoryCache())
+
+    def router_usage(self, redis: "RedisStores") -> "RouterUsage":
+        """The per-minute tpm/rpm counters a router counts its deployments' calls in, on ``redis``."""
+        from litellm.redis.stores.router_usage import RouterUsageStore
+
+        return RouterUsageStore(redis.router_usage())
 
 
 def redis_cache_for(config: RouterConfig) -> "RedisCache | None":
