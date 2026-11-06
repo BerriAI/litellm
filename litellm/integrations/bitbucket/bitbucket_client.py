@@ -80,7 +80,7 @@ class BitBucketClient:
         self.repository = config.get("repository")
         self.access_token = config.get("access_token")
         self.branch = config.get("branch", "main")
-        self.base_url = config.get("", "https://api.bitbucket.org/2.0")
+        self.base_url = config.get("base_url", "https://api.bitbucket.org/2.0")
         self.auth_method = config.get("auth_method", "token")
         self.username = config.get("username")
 
