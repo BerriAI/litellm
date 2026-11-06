@@ -2367,6 +2367,37 @@ async def _collect(wrapper: CustomStreamWrapper, sync_mode: bool) -> list[ModelR
     return [chunk async for chunk in wrapper]
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stop_reason", ["stop_sequence", "end_turn"])
+@pytest.mark.asyncio
+async def test_bedrock_stream_preserves_native_stop_reason_through_wrapper(
+    logging_obj: Logging, sync_mode: bool, stop_reason: str
+) -> None:
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder: Final = AWSEventStreamDecoder(model="bedrock/claude")
+    upstream: Final = (
+        decoder.converse_chunk_parser({"contentBlockIndex": 0, "delta": {"text": "done"}}),
+        decoder.converse_chunk_parser({"stopReason": stop_reason}),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(upstream)),
+        model="bedrock/claude",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+    terminal: Final = next(chunk for chunk in received if chunk.choices and chunk.choices[0].finish_reason)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in received if chunk.choices) == "done"
+    assert terminal.choices[0].finish_reason == "stop"
+    assert terminal.choices[0].provider_specific_fields == {"native_finish_reason": stop_reason}
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=received)
+    assert assembled is not None
+    assert assembled.choices[0].provider_specific_fields == {"native_finish_reason": stop_reason}
+
+
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "azure", "hosted_vllm"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
