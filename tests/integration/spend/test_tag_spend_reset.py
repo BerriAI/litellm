@@ -3,6 +3,7 @@ import uuid
 from typing import Final
 
 import httpx
+
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database import read_rows
 from tests.integration._support.provider import PROVIDER_URL, SharedProvider
