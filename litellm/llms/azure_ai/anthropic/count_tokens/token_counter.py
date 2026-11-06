@@ -3,12 +3,15 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, claude_count_options
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
@@ -55,6 +58,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+        anthropic_beta: str | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
@@ -73,6 +78,12 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
 
         if not messages:
             return None
+
+        claude_options: Final = claude_count_options(
+            model_to_use, LlmProviders.AZURE_AI, messages, tools, request_options, anthropic_beta, deployment
+        )
+        if isinstance(claude_options, ChatCountTranslationError):
+            return claude_options.response(request_model, model_to_use, "azure_ai_anthropic_api")
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
@@ -95,12 +106,18 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         try:
             result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                messages=messages,
+                messages=messages
+                if claude_options.messages is None
+                else [dict(message) for message in claude_options.messages],
                 api_key=api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
-                tools=tools,
+                tools=tools
+                if claude_options.messages is None
+                else [dict(tool) for tool in claude_options.tools or ()] or None,
                 system=system,
+                optional_params=claude_options.options,
+                betas=claude_options.betas,
             )
 
             if result is not None:

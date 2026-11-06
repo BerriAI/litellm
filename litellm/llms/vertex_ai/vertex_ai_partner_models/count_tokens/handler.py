@@ -6,6 +6,7 @@ Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -91,6 +92,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         model: str,
         request_data: dict[str, Any],
         litellm_params: dict[str, Any],
+        betas: Sequence[str] = (),
     ) -> dict[str, Any]:
         """
         Handle token counting request for a Vertex AI partner model.
@@ -158,7 +160,10 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         )
 
         # Prepare headers
-        headers: Final = {"Authorization": f"Bearer {access_token}"}
+        headers: Final = {
+            "Authorization": f"Bearer {access_token}",
+            **({"anthropic-beta": ",".join(betas)} if betas else {}),
+        }
 
         # Get async HTTP client
         from litellm import LlmProviders

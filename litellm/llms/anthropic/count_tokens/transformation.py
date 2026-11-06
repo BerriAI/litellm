@@ -4,11 +4,14 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
+import copy
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -17,12 +20,17 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.types.llms.openai import ChatCompletionImageObject
+from litellm.types.utils import LlmProviders, TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.types.router import GenericLiteLLMParams
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
-COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
+COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config", "context_management")
 
 
 def _count_image(block: JsonValue) -> JsonValue:
@@ -72,6 +80,202 @@ def _lift_leading_system(
     if isinstance(system, str) and system:
         return conversation, [{"type": "text", "text": system}, *lifted]
     return conversation, lifted or system
+
+
+@dataclass(frozen=True, slots=True)
+class ChatCountTranslationError:
+    message: str
+
+    def response(self, request_model: str, model_used: str, tokenizer_type: str) -> TokenCountResponse:
+        return TokenCountResponse(
+            total_tokens=0,
+            request_model=request_model,
+            model_used=model_used,
+            tokenizer_type=tokenizer_type,
+            error=True,
+            error_message=self.message,
+            status_code=400,
+            rejected_before_provider_call=True,
+        )
+
+
+@with_config(ConfigDict(extra="ignore"))
+class _CountedOptions(TypedDict):
+    thinking: NotRequired[ReadOnly[JsonValue]]
+    tool_choice: NotRequired[ReadOnly[JsonValue]]
+    output_config: NotRequired[ReadOnly[JsonValue]]
+    output_format: NotRequired[ReadOnly[JsonValue]]
+    context_management: NotRequired[ReadOnly[JsonValue]]
+
+
+@with_config(ConfigDict(extra="ignore"))
+class _AnthropicChatRequest(_CountedOptions):
+    messages: ReadOnly[tuple[Mapping[str, JsonValue], ...]]
+    tools: NotRequired[ReadOnly[tuple[Mapping[str, JsonValue], ...]]]
+
+
+_ANTHROPIC_CHAT_REQUEST: Final = TypeAdapter(_AnthropicChatRequest)
+_INFERENCE_PARAMS: Final = TypeAdapter(dict[str, object])
+_HEADERS: Final = TypeAdapter(dict[str, str])
+
+
+def _count_options(request: _CountedOptions) -> Mapping[str, JsonValue]:
+    output_config: Final = request.get("output_config")
+    output_format: Final = request.get("output_format")
+    counted_config: Final = {
+        **(output_config if isinstance(output_config, dict) else {}),
+        **({} if output_format is None else {"format": output_format}),
+    }
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("thinking", request.get("thinking")),
+                ("tool_choice", request.get("tool_choice")),
+                ("output_config", counted_config or None),
+                ("context_management", request.get("context_management")),
+            )
+            if value is not None
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeCountOptions:
+    options: Mapping[str, JsonValue]
+    betas: tuple[str, ...]
+    messages: tuple[Mapping[str, JsonValue], ...] | None
+    tools: tuple[Mapping[str, JsonValue], ...] | None
+
+
+NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=(), messages=None, tools=None)
+_COUNTED_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
+_MAX_TOKENS_ABOVE_ANY_BUDGET: Final = 2**31 - 1
+
+
+_STATUSES_NOT_CAUSED_BY_THE_REQUEST: Final = frozenset({401, 403, 429})
+
+
+def is_request_rejection(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code not in _STATUSES_NOT_CAUSED_BY_THE_REQUEST
+
+
+def deployment_inference_model(deployment: Mapping[str, object] | None) -> str | None:
+    deployment_params: Final = _INFERENCE_PARAMS.validate_python((deployment or {}).get("litellm_params") or {})
+    deployment_model: Final = deployment_params.get("model")
+    if not isinstance(deployment_model, str):
+        return None
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    provider_hint: Final = deployment_params.get("custom_llm_provider")
+    api_base: Final = deployment_params.get("api_base")
+    inference_model, _, _, _ = get_llm_provider(
+        model=deployment_model,
+        custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+        api_base=api_base if isinstance(api_base, str) else None,
+    )
+    return inference_model
+
+
+def _messages_transform(model: str, provider: LlmProviders) -> tuple[str, BaseAnthropicMessagesConfig] | None:
+    from litellm.utils import ProviderConfigManager
+
+    messages_config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(model, provider)
+    return None if messages_config is None else (model, messages_config)
+
+
+def _transform_litellm_params(deployment: Mapping[str, object] | None) -> "GenericLiteLLMParams":
+    from litellm.types.router import GenericLiteLLMParams
+
+    resolved_deployment: Final = deployment or {}
+    deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    return GenericLiteLLMParams.model_validate(
+        {
+            "drop_params": deployment_params.get("drop_params"),
+            "model_info": resolved_deployment.get("model_info"),
+        }
+    )
+
+
+def _claude_count_options_for(
+    messages_config: BaseAnthropicMessagesConfig,
+    model: str,
+    litellm_params: "GenericLiteLLMParams",
+    provider: LlmProviders,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    sent: Mapping[str, JsonValue],
+    anthropic_beta: str | None,
+) -> ClaudeCountOptions:
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    leading_system, conversation = split_leading_system_run(messages)
+    sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
+    sent_params: Final = {
+        **copy.deepcopy(sent),
+        **({"tools": copy.deepcopy([dict(tool) for tool in tools])} if tools else {}),
+    }
+    beta_headers: Final = messages_config.headers_with_anthropic_betas(
+        {"anthropic-beta": anthropic_beta} if anthropic_beta else {}, sent_params, sent_conversation
+    )
+    sent_headers: Final = (
+        _HEADERS.validate_python(
+            update_headers_with_filtered_beta(
+                headers=dict(beta_headers),
+                provider=provider.value,
+                keep=messages_config.model_specific_anthropic_betas(model, litellm_params),
+            )
+        )
+        if messages_config.should_filter_anthropic_beta_headers()
+        else dict(beta_headers)
+    )
+    request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
+        model=model,
+        messages=sent_conversation,
+        anthropic_messages_optional_request_params={**sent_params, "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET},
+        litellm_params=litellm_params,
+        headers=sent_headers,
+    )
+    transformed: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
+    return ClaudeCountOptions(
+        options=_count_options(transformed),
+        betas=messages_config.sent_anthropic_betas(sent_headers, _INFERENCE_PARAMS.validate_python(request)),
+        messages=(*_COUNTED_MESSAGES.validate_python(leading_system), *transformed["messages"]),
+        tools=transformed.get("tools"),
+    )
+
+
+def claude_count_options(
+    model: str,
+    provider: LlmProviders,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    request_options: Mapping[str, JsonValue],
+    anthropic_beta: str | None,
+    deployment: Mapping[str, object] | None,
+) -> ClaudeCountOptions | ChatCountTranslationError:
+    sent: Final = {name: value for name, value in request_options.items() if value is not None}
+    if not sent:
+        return NO_CLAUDE_COUNT_OPTIONS
+    inference_model: Final = deployment_inference_model(deployment)
+    transform: Final = (
+        None if inference_model is None else _messages_transform(inference_model, provider)
+    ) or _messages_transform(model, provider)
+    if transform is None:
+        return NO_CLAUDE_COUNT_OPTIONS
+    transform_model, messages_config = transform
+    litellm_params: Final = _transform_litellm_params(deployment)
+    from litellm.exceptions import BadRequestError
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    try:
+        return _claude_count_options_for(
+            messages_config, transform_model, litellm_params, provider, messages, tools, sent, anthropic_beta
+        )
+    except (AnthropicError, BadRequestError) as e:
+        return ChatCountTranslationError(message=str(e.message))
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
 
 
 class AnthropicCountTokensConfig:
@@ -137,7 +341,7 @@ class AnthropicCountTokensConfig:
             )
         )
 
-    def get_count_tokens_headers(self, auth_header: Mapping[str, str]) -> dict[str, str]:
+    def get_count_tokens_headers(self, auth_header: Mapping[str, str], betas: Sequence[str] = ()) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
         bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
@@ -147,7 +351,7 @@ class AnthropicCountTokensConfig:
             "anthropic-version": "2023-06-01",
             **auth_header,
             "anthropic-beta": merge_anthropic_beta_headers(
-                auth_header.get("anthropic-beta"), ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+                auth_header.get("anthropic-beta"), (ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, *betas)
             ),
         }
 

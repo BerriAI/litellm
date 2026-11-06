@@ -1,12 +1,20 @@
-from collections.abc import Mapping
+import base64
+import json
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_EFFORT_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+)
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -251,3 +259,500 @@ async def test_explicit_mantle_failure_does_not_probe_runtime() -> None:
     assert result.status_code == 404
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert bedrock.posted_hosts() == (MANTLE_HOST,)
+
+
+def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
+    invoke_model: Final = _JSON_BODY.validate_json(request.content)["input"]
+    assert isinstance(invoke_model, dict)
+    encoded: Final = invoke_model["invokeModel"]
+    assert isinstance(encoded, dict) and isinstance(encoded["body"], str)
+    return _JSON_BODY.validate_json(base64.b64decode(encoded["body"]))
+
+
+_CLAUDE_REPLY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+_CONTEXT_EDITS: Final[dict[str, JsonValue]] = {
+    "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
+}
+_THINKING_AND_TOOL_CHOICE: Final[dict[str, JsonValue]] = {
+    "thinking": {"type": "enabled", "budget_tokens": 2000},
+    "tool_choice": {"type": "auto"},
+}
+_WEATHER_TOOL: Final[dict[str, JsonValue]] = {"name": "get_weather", "input_schema": {"type": "object"}}
+
+
+_CITY_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_CITY_FORMAT: Final[dict[str, JsonValue]] = {"output_config": {"format": {"type": "json_schema", "schema": _CITY_SCHEMA}}}
+
+
+_CONTEXT_EDITING_OPTIONS: Final[dict[str, JsonValue]] = {**_THINKING_AND_TOOL_CHOICE, "context_management": _CONTEXT_EDITS}
+
+
+async def _messages_inference_and_count(
+    deployment_model: str,
+    model_to_use: str,
+    request_options: Mapping[str, JsonValue] = _CONTEXT_EDITING_OPTIONS,
+    tool: Mapping[str, JsonValue] = _WEATHER_TOOL,
+    runtime: tuple[int, Mapping[str, object]] = (200, {"inputTokens": 412}),
+    inference_reply: Mapping[str, object] = _CLAUDE_REPLY,
+) -> tuple[_Bedrock, _Bedrock]:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, inference_reply), mantle=(200, inference_reply))
+    await litellm.anthropic_messages(
+        model=deployment_model,
+        messages=MESSAGES,
+        tools=[dict(tool)],
+        max_tokens=4096,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **request_options,
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude",
+        tools=[dict(tool)],
+        request_options=request_options,
+    )
+    assert result is not None
+    assert result.error is False
+    return inference, bedrock
+
+
+def _betas_besides_effort(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    betas: Final = body.get("anthropic_beta") or []
+    assert isinstance(betas, list)
+    return tuple(beta for beta in betas if beta != ANTHROPIC_EFFORT_BETA_HEADER)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "model_to_use"),
+    (
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6"),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+    ),
+)
+async def test_runtime_count_sends_the_options_and_context_edits_invoke_inference_sends(
+    deployment_model: str, model_to_use: str
+) -> None:
+    inference, bedrock = await _messages_inference_and_count(deployment_model, model_to_use)
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted: Final = _invoke_body(bedrock.requests[0])
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
+    assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
+    assert _betas_besides_effort(counted) == _betas_besides_effort(sent)
+    thinking: Final = counted["thinking"]
+    assert isinstance(thinking, dict)
+    budget_tokens: Final = thinking.get("budget_tokens", 0)
+    assert isinstance(budget_tokens, int) and isinstance(counted["max_tokens"], int)
+    assert counted["max_tokens"] > budget_tokens
+
+
+@pytest.mark.asyncio
+async def test_mantle_count_sends_the_options_context_edits_and_beta_mantle_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock_mantle/us.anthropic.claude-opus-5-5", "bedrock_mantle/us.anthropic.claude-opus-5-5"
+    )
+
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)
+    counted: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
+    assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
+    assert "anthropic_beta" not in counted
+    assert bedrock.requests[0].headers["anthropic-beta"] == inference.requests[0].headers["anthropic-beta"]
+
+
+_DISPLAY_THINKING: Final[dict[str, JsonValue]] = {"thinking": {"type": "adaptive", "display": "updates"}}
+
+
+def _sent_betas(request: httpx.Request) -> tuple[str, ...]:
+    return tuple(sorted(beta for beta in request.headers.get("anthropic-beta", "").split(",") if beta))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "request_options", "expected_beta"),
+    (
+        (
+            "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0",
+            {"output_config": {"effort": "low"}},
+            ANTHROPIC_EFFORT_BETA_HEADER,
+        ),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", _DISPLAY_THINKING, ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER),
+    ),
+    ids=("effort", "thinking_display"),
+)
+async def test_runtime_count_sends_the_betas_invoke_inference_sends(
+    deployment_model: str, request_options: dict[str, JsonValue], expected_beta: str
+) -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        deployment_model, deployment_model.removeprefix("bedrock/invoke/"), request_options
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted_betas: Final = _invoke_body(bedrock.requests[0]).get("anthropic_beta")
+    assert counted_betas == _JSON_BODY.validate_json(inference.requests[0].content).get("anthropic_beta")
+    assert isinstance(counted_betas, list) and expected_beta in counted_betas
+
+
+_EFFORT: Final[dict[str, JsonValue]] = {"output_config": {"effort": "low"}}
+_CLEAR_THINKING_EDITS: Final[dict[str, JsonValue]] = {
+    "context_management": {"edits": [{"type": "clear_thinking_20251015"}]}
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_options", "expected_betas"),
+    ((_DISPLAY_THINKING, (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)), (_EFFORT, ())),
+    ids=("thinking_display", "effort"),
+)
+async def test_invoke_count_retried_on_mantle_sends_the_betas_invoke_inference_sends(
+    request_options: dict[str, JsonValue], expected_betas: tuple[str, ...]
+) -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/invoke/us.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-opus-5-5",
+        request_options,
+        runtime=(400, UNSUPPORTED),
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    sent_betas: Final = _JSON_BODY.validate_json(inference.requests[0].content).get("anthropic_beta", [])
+    assert isinstance(sent_betas, list)
+    assert _sent_betas(bedrock.requests[1]) == tuple(sorted(sent_betas)) == expected_betas
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "request_options"),
+    (
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", _EFFORT),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", _CLEAR_THINKING_EDITS),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0", _EFFORT),
+    ),
+    ids=("effort", "clear_thinking_sets_effort", "inference_sends_the_effort_beta"),
+)
+async def test_runtime_count_of_an_effort_sends_the_effort_beta_once_beside_the_betas_invoke_inference_sends(
+    deployment_model: str, request_options: dict[str, JsonValue]
+) -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        deployment_model, deployment_model.removeprefix("bedrock/invoke/"), request_options
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted: Final = _invoke_body(bedrock.requests[0])
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    counted_config: Final = counted.get("output_config")
+    assert isinstance(counted_config, dict) and counted_config.get("effort") == "low"
+    counted_betas: Final = counted.get("anthropic_beta")
+    sent_betas: Final = sent.get("anthropic_beta", [])
+    assert isinstance(counted_betas, list) and isinstance(sent_betas, list)
+    assert counted_betas.count(ANTHROPIC_EFFORT_BETA_HEADER) == 1
+    assert set(counted_betas) - {ANTHROPIC_EFFORT_BETA_HEADER} == set(sent_betas) - {ANTHROPIC_EFFORT_BETA_HEADER}
+
+
+@pytest.mark.asyncio
+async def test_runtime_count_of_an_output_format_sends_only_the_betas_invoke_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-sonnet-4-6",
+        {**_CITY_FORMAT, "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted: Final = _invoke_body(bedrock.requests[0])
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    assert counted.get("output_config") == sent.get("output_config")
+    assert counted.get("anthropic_beta") == sent.get("anthropic_beta")
+
+
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 3, "outputTokens": 1, "totalTokens": 4},
+    "metrics": {"latencyMs": 1},
+}
+_NO_PARALLEL_TOOL_USE: Final[dict[str, JsonValue]] = {
+    "tool_choice": {"type": "auto", "disable_parallel_tool_use": True}
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "inference_reply"),
+    (
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", _CONVERSE_REPLY),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", _CLAUDE_REPLY),
+    ),
+    ids=("converse", "invoke"),
+)
+async def test_runtime_count_sends_disable_parallel_tool_use_only_when_messages_inference_sends_it(
+    deployment_model: str, inference_reply: Mapping[str, object]
+) -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        deployment_model,
+        deployment_model.split("/")[-1],
+        _NO_PARALLEL_TOOL_USE,
+        inference_reply=inference_reply,
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted_tool_choice: Final = _invoke_body(bedrock.requests[0]).get("tool_choice")
+    assert isinstance(counted_tool_choice, dict) and counted_tool_choice.get("type") == "auto"
+    assert ("disable_parallel_tool_use" in counted_tool_choice) == (
+        b"disable_parallel_tool_use" in inference.requests[0].content
+    )
+
+
+@pytest.mark.asyncio
+async def test_count_on_a_stand_in_model_counts_the_messages_and_output_config_the_deployment_model_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/us.anthropic.claude-haiku-5-5", "bedrock_mantle/us.anthropic.claude-opus-5-5", _CITY_FORMAT
+    )
+
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)
+    counted: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    fields: Final = ("messages", "output_config")
+    assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
+
+
+@pytest.mark.asyncio
+async def test_mantle_count_sends_the_thinking_display_beta_mantle_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock_mantle/us.anthropic.claude-opus-5-5", "bedrock_mantle/us.anthropic.claude-opus-5-5", _DISPLAY_THINKING
+    )
+
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)
+    assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0])
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in _sent_betas(bedrock.requests[0])
+
+
+def _mantle_answers(status_code: int, body: Mapping[str, JsonValue]) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(status_code, json=dict(body), request=request)
+
+
+def _mantle_unreachable(error: type[httpx.TransportError]) -> Callable[[httpx.Request], httpx.Response]:
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise error("bedrock-mantle is unreachable", request=request)
+
+    return unreachable
+
+
+_MANTLE_REJECTION: Final[dict[str, JsonValue]] = {
+    "type": "error",
+    "error": {"type": "invalid_request_error", "message": "thinking: unsupported"},
+}
+_MANTLE_FAILURE: Final[dict[str, JsonValue]] = {"type": "error", "error": {"type": "api_error", "message": "down"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_options", "mantle", "expected"),
+    (
+        (_DISPLAY_THINKING, _mantle_unreachable(httpx.ConnectError), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_unreachable(httpx.ReadTimeout), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(503, _MANTLE_FAILURE), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(429, _MANTLE_FAILURE), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(403, _MANTLE_FAILURE), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(400, _MANTLE_REJECTION), (True, 400, "bedrock_mantle_api")),
+        (_DISPLAY_THINKING, _mantle_answers(422, _MANTLE_REJECTION), (True, 422, "bedrock_mantle_api")),
+        (_DISPLAY_THINKING, _mantle_answers(200, {"input_tokens": 2177}), (False, None, "bedrock_mantle_api")),
+        ({}, _mantle_answers(503, _MANTLE_FAILURE), (True, 503, "bedrock_mantle_api")),
+    ),
+    ids=(
+        "mantle-unreachable",
+        "mantle-timeout",
+        "mantle-5xx",
+        "mantle-rate-limit",
+        "mantle-denied",
+        "mantle-rejects-the-options",
+        "mantle-rejects-the-body",
+        "mantle-counts",
+        "no-options-mantle-5xx",
+    ),
+)
+async def test_runtime_rejecting_the_options_is_answered_unless_mantle_counts_or_rejects_the_request(
+    request_options: dict[str, JsonValue],
+    mantle: Callable[[httpx.Request], httpx.Response],
+    expected: tuple[bool, int | None, str],
+) -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if request.url.host == RUNTIME_HOST:
+            return httpx.Response(400, json=UNSUPPORTED, request=request)
+        return mantle(request)
+
+    result: Final = await BedrockTokenCounter(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))
+    ).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-opus-5-5"}
+        },
+        request_model="claude-opus-5-5",
+        request_options=request_options,
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.tokenizer_type) == expected
+
+
+_CALLER_BETAS: Final = (ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value, "context-1m-2025-08-07")
+
+
+@pytest.mark.asyncio
+async def test_runtime_count_sends_the_caller_betas_invoke_inference_keeps_for_the_model() -> None:
+    deployment_model: Final = "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0"
+    model_info: Final[dict[str, JsonValue]] = {"supports_per_turn_control": True}
+    thinking: Final[dict[str, JsonValue]] = {"thinking": {"type": "enabled", "budget_tokens": 2000}}
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.anthropic_messages(
+        model=deployment_model,
+        messages=MESSAGES,
+        max_tokens=4096,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        extra_headers={"anthropic-beta": ",".join(_CALLER_BETAS)},
+        model_info=model_info,
+        **thinking,
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=deployment_model.removeprefix("bedrock/invoke/"),
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}, "model_info": model_info},
+        request_model="claude",
+        request_options=thinking,
+        anthropic_beta=",".join(_CALLER_BETAS),
+    )
+
+    assert result is not None
+    assert result.error is False
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted_betas: Final = _invoke_body(bedrock.requests[0]).get("anthropic_beta")
+    assert counted_betas == _JSON_BODY.validate_json(inference.requests[0].content).get("anthropic_beta")
+    assert isinstance(counted_betas, list) and set(_CALLER_BETAS) <= set(counted_betas)
+
+
+@pytest.mark.asyncio
+async def test_runtime_count_sends_the_tools_invoke_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/invoke/us.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-opus-5-5",
+        _THINKING_AND_TOOL_CHOICE,
+        tool={**_WEATHER_TOOL, "eager_input_streaming": True},
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    assert _invoke_body(bedrock.requests[0])["tools"] == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
+
+
+def _texts(message: JsonValue) -> tuple[str, ...]:
+    content: Final = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return ()
+    return tuple(text for block in content if isinstance(block, dict) and isinstance(text := block.get("text"), str))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("native_output", "request_options", "schema_inlined"),
+    (
+        (False, _CITY_FORMAT, True),
+        (True, _CITY_FORMAT, False),
+        (False, _THINKING_AND_TOOL_CHOICE, False),
+    ),
+    ids=("inlined_schema", "native_schema", "no_format"),
+)
+async def test_runtime_count_counts_the_messages_bedrock_invoke_inference_sends(
+    native_output: bool, request_options: dict[str, JsonValue], schema_inlined: bool
+) -> None:
+    deployment_model: Final = "bedrock/invoke/us.anthropic.claude-count-probe-v1:0"
+    model_info: Final = {"supports_bedrock_native_structured_output": native_output}
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.anthropic_messages(
+        model=deployment_model,
+        messages=MESSAGES,
+        max_tokens=4096,
+        model_info=model_info,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **request_options,
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-count-probe-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}, "model_info": model_info},
+        request_model="claude",
+        request_options=request_options,
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    counted: Final = _invoke_body(bedrock.requests[0])["messages"]
+    assert counted == _JSON_BODY.validate_json(inference.requests[0].content)["messages"]
+    assert isinstance(counted, list)
+    assert (json.dumps(_CITY_SCHEMA) in _texts(counted[-1])) is schema_inlined
+    assert (counted == MESSAGES) is not schema_inlined
+
+
+_THINKING: Final[dict[str, JsonValue]] = {"thinking": {"type": "enabled", "budget_tokens": 2000}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "tools", "request_options"),
+    (
+        (MESSAGES, None, {"output_config": {"effort": "fastest"}}),
+        (MESSAGES, [{"type": 5, "name": "x", "input_schema": {"type": "object"}}], _THINKING),
+        (MESSAGES, ["get_weather"], _THINKING),
+        ([{"role": "user", "content": 5}], None, _THINKING),
+        ([{"role": "user", "content": [{"text": "hi"}]}], None, _THINKING),
+    ),
+    ids=("option_refused", "tool_type_not_a_string", "tool_not_a_mapping", "content_not_iterable", "block_without_type"),
+)
+async def test_claude_count_refuses_options_bedrock_messages_inference_refuses_without_calling_bedrock(
+    messages: list[dict[str, JsonValue]], tools: list[JsonValue] | None, request_options: dict[str, JsonValue]
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-sonnet-4-5",
+        tools=tools,
+        request_options=request_options,
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert bedrock.posted_hosts() == ()

@@ -50,7 +50,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
-from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, should_auto_drop_params_for_agentic_cli
 from litellm.router import Router
 
 router: Final = APIRouter()
@@ -333,12 +333,14 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
 
 
 _COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_REQUEST_OPTIONS: Final = ("thinking", "tool_choice", "output_config", "output_format", "context_management")
 
 
 class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
     request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+    request_options: ReadOnly[Mapping[str, JsonValue]]
 
 
 def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
@@ -348,6 +350,9 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
         "context_management": data.get("context_management"),
         "request_litellm_params": MappingProxyType(
             {"drop_params": True, **sent_params} if auto_drop_params else sent_params
+        ),
+        "request_options": MappingProxyType(
+            {key: data[key] for key in _COUNTED_REQUEST_OPTIONS if data.get(key) is not None}
         ),
     }
 
@@ -381,7 +386,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import count_request_tokens, llm_router, proxy_config
+    from litellm.proxy.proxy_server import count_request_tokens, general_settings_view, llm_router, proxy_config
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -412,6 +417,11 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
+            anthropic_beta=request.headers.get("anthropic-beta"),
+            forward_client_headers=LiteLLMProxyRequestSetup.forwards_client_headers_for_all_models(
+                general_settings_view()
+            )
+            or LiteLLMProxyRequestSetup.forwards_client_headers_for_model_group(token_request.model, user_api_key_dict),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except UnsupportedContentTypeError as e:

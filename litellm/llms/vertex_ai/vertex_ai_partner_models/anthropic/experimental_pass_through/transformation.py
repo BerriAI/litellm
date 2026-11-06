@@ -1,6 +1,8 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, context_management_betas
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -15,6 +17,11 @@ from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
 from ..output_params_utils import sanitize_vertex_anthropic_output_params
+
+
+def _is_web_search(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return isinstance(tool_type, str) and tool_type.startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value)
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -66,59 +73,47 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         headers["content-type"] = "application/json"
 
-        # Add beta headers for Vertex AI
-        tools: Final = optional_params.get("tools", [])
-        beta_values: Final[set[str]] = set()
+        return dict(self.headers_with_anthropic_betas(headers, optional_params, messages)), api_base
 
-        # Get existing beta headers if any
-        existing_beta: Final = headers.get("anthropic-beta")
-        if existing_beta:
-            beta_values.update(b.strip() for b in existing_beta.split(","))
-
-        # Check for context management
-        context_management_param: Final = optional_params.get("context_management")
-        if context_management_param is not None:
-            # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", [])
-            has_compact = False
-            has_other = False
-
-            for edit in edits:
-                edit_type = edit.get("type", "")
-                if edit_type == "compact_20260112":
-                    has_compact = True
-                else:
-                    has_other = True
-
-            # Add compact header if any compact edits exist
-            if has_compact:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-
-            # Add context management header if any other edits exist
-            if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
-
-        # Check for web search tool
-        for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
-                break
-
-        # Check for tool search tools - Vertex AI uses different beta header
-        anthropic_model_info: Final = AnthropicModelInfo()
-        if anthropic_model_info.is_tool_search_used(tools):
-            beta_values.add(get_tool_search_beta_header("vertex_ai"))
-
-        if optional_params.get("safeguards") is not None:
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
-
-        if messages_carry_output_config(messages):
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
-
-        if beta_values:
-            headers["anthropic-beta"] = ",".join(beta_values)
-
-        return headers, api_base
+    def headers_with_anthropic_betas(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        messages: Sequence[object],
+    ) -> Mapping[str, str]:
+        tools: Final = tuple(
+            tool for tool in map(as_str_mapping, iter_items(optional_params.get("tools") or ())) if tool is not None
+        )
+        existing_betas: Final = (headers.get("anthropic-beta") or "").split(",")
+        beta_values: Final = frozenset(
+            (
+                *(beta.strip() for beta in existing_betas if beta.strip()),
+                *context_management_betas(optional_params.get("context_management")),  # pyright: ignore[reportArgumentType]  # optional_params is the config contract's untyped request body
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value,)
+                    if any(map(_is_web_search, tools))
+                    else ()
+                ),
+                *(
+                    (get_tool_search_beta_header("vertex_ai"),)
+                    if AnthropicModelInfo().is_tool_search_used(list(tools))
+                    else ()
+                ),
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,)
+                    if optional_params.get("safeguards") is not None
+                    else ()
+                ),
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value,)
+                    if messages_carry_output_config(messages)
+                    else ()
+                ),
+            )
+        )
+        if not beta_values:
+            return headers
+        return {**headers, "anthropic-beta": ",".join(sorted(beta_values))}
 
     def get_complete_url(
         self,

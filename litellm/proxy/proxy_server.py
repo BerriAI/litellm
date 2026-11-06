@@ -293,7 +293,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import AsyncExitStack, asynccontextmanager
-from functools import lru_cache, partial
+from functools import lru_cache, partial, reduce
 
 import litellm
 import litellm._redis
@@ -640,7 +640,11 @@ from litellm.proxy.list_api.common import (
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    add_litellm_data_to_request,
+    receives_anthropic_api_headers,
+)
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -1316,6 +1320,8 @@ class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_COUNT_REQUEST_OPTIONS: Final = TypeAdapter(Mapping[str, JsonValue])
+_DROPPED_PARAM_PATHS: Final = TypeAdapter(tuple[object, ...])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
@@ -14279,6 +14285,8 @@ async def _try_provider_token_count(
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: CountContextManagement | None = None,
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    anthropic_beta: str | None = None,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14305,6 +14313,8 @@ async def _try_provider_token_count(
             messages_format=messages_format,
             output_format=output_format,
             context_management=context_management,
+            request_options=request_options,
+            anthropic_beta=anthropic_beta,
         )
     except httpx.HTTPStatusError as e:
         return ProviderCountFailure(
@@ -14356,6 +14366,33 @@ async def _provider_token_count(
     if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
         return failure
     raise failure.to_proxy_exception()
+
+
+def _retried_without_rejected_options(
+    count_with: "partial[Awaitable[TokenCountResponse | ProviderCountFailure | None]]",
+    request_options: Mapping[str, JsonValue],
+) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]]:
+    if not request_options:
+        return count_with
+    return partial(_count_retrying_without_options, count_with, tuple(request_options))
+
+
+async def _count_retrying_without_options(
+    count_with: "partial[Awaitable[TokenCountResponse | ProviderCountFailure | None]]",
+    forwarded_options: tuple[str, ...],
+    model: str,
+    region: str | None,
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
+    counted: Final = await count_with(model, region)
+    if not (isinstance(counted, ProviderCountFailure) and counted.rejected_request):
+        return counted
+    verbose_proxy_logger.warning(
+        "Token count for %s %s with the request's %s, so it counts again without them and the caller's betas",
+        model,
+        "could not be built" if counted.rejected_before_provider_call else f"answered {counted.status_code}",
+        ", ".join(forwarded_options),
+    )
+    return await count_with(model, region, request_options=MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -14682,6 +14719,33 @@ def _count_context_management(
     )
 
 
+_STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _deployment_with_request_drop_params(
+    deployment: Mapping[str, object] | None, sent_params: Mapping[str, object]
+) -> Mapping[str, object] | None:
+    if "drop_params" not in sent_params:
+        return deployment
+    resolved_deployment: Final = deployment or {}
+    litellm_params: Final = _STRING_KEYED_MAPPING.validate_python(resolved_deployment.get("litellm_params") or {})
+    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": sent_params["drop_params"]}}
+
+
+def _count_request_options(
+    request_options: Mapping[str, JsonValue],
+    deployment: Mapping[str, object] | None,
+    sent_params: Mapping[str, object],
+) -> Mapping[str, JsonValue]:
+    from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+
+    deployment_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    dropped: Final = {**deployment_params, **sent_params}.get("additional_drop_params")
+    dropped_values: Final = _DROPPED_PARAM_PATHS.validate_python(dropped) if isinstance(dropped, list) else ()
+    dropped_paths: Final = tuple(path for path in dropped_values if isinstance(path, str))
+    return _COUNT_REQUEST_OPTIONS.validate_python(reduce(delete_nested_value, dropped_paths, dict(request_options)))
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -14714,6 +14778,9 @@ async def count_request_tokens(
     output_format: JsonValue = None,
     context_management: JsonValue = None,
     request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+    anthropic_beta: str | None = None,
+    forward_client_headers: bool = False,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14781,23 +14848,40 @@ async def count_request_tokens(
     prompt_only: Final = bool(prompt) and conversation_empty
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    sent_params: Final[Mapping[str, object]] = {
+        **(_router_default_litellm_params(llm_router) if llm_router is not None else {}),
+        **request_litellm_params,
+    }
+    counted_options: Final = _count_request_options(request_options, deployment_view, sent_params)
     ladder: Final = (
         None
         if provider_counter is None
         else await _provider_token_count(
-            count_with=partial(
-                _try_provider_token_count,
-                provider_counter,
-                custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
-                contents=None if prompt_as_message else contents,
-                deployment=deployment,
-                request_model=request.model,
-                tools=tools,
-                system=system,
-                messages_format=messages_format,
-                output_format=output_format,
-                context_management=_count_context_management(context_management, request.model, request_litellm_params),
+            count_with=_retried_without_rejected_options(
+                partial(
+                    _try_provider_token_count,
+                    provider_counter,
+                    custom_llm_provider,
+                    messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                    contents=None if prompt_as_message else contents,
+                    deployment=_deployment_with_request_drop_params(
+                        None if deployment is None else _STRING_KEYED_MAPPING.validate_python(deployment),
+                        sent_params,
+                    ),
+                    request_model=request.model,
+                    tools=tools,
+                    system=system,
+                    messages_format=messages_format,
+                    output_format=output_format,
+                    context_management=_count_context_management(
+                        context_management, request.model, request_litellm_params
+                    ),
+                    request_options=counted_options,
+                    anthropic_beta=anthropic_beta
+                    if forward_client_headers or receives_anthropic_api_headers(custom_llm_provider)
+                    else None,
+                ),
+                counted_options,
             ),
             model_to_use=model_to_use,
             settings=settings,

@@ -2,20 +2,30 @@
 Bedrock Token Counter implementation using the CountTokens API.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.count_tokens.transformation import (
+    NO_CLAUDE_COUNT_OPTIONS,
+    ChatCountTranslationError,
+    ClaudeCountOptions,
+    claude_count_options,
+    deployment_inference_model,
+    is_request_rejection,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 from litellm.types.utils import (
     CountContextManagement,
     LiteLLMPydanticObjectBase,
@@ -58,6 +68,48 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
     )
 
 
+def _mantle_answered_for_runtime(fallback: CountTokensOutcome, forwarded_options: bool) -> bool:
+    return not forwarded_options or isinstance(fallback, CountedTokens) or is_request_rejection(fallback.status_code)
+
+
+def _invoke_fields(options: Mapping[str, JsonValue], betas: Sequence[str]) -> Mapping[str, object]:
+    return {**options, **({"anthropic_beta": list(betas)} if betas else {})}
+
+
+def _sets_effort(options: Mapping[str, JsonValue]) -> bool:
+    output_config: Final = options.get("output_config")
+    return isinstance(output_config, dict) and "effort" in output_config
+
+
+def _runtime_count_betas(claude_options: ClaudeCountOptions) -> tuple[str, ...]:
+    if not _sets_effort(claude_options.options) or ANTHROPIC_EFFORT_BETA_HEADER in claude_options.betas:
+        return claude_options.betas
+    return (*claude_options.betas, ANTHROPIC_EFFORT_BETA_HEADER)
+
+
+def _runs_on_converse(inference_model: str) -> bool:
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(inference_model) is None
+
+
+def _options_converse_sends(
+    request_options: Mapping[str, JsonValue], inference_model: str | None
+) -> Mapping[str, JsonValue]:
+    tool_choice: Final = request_options.get("tool_choice")
+    if (
+        not isinstance(tool_choice, dict)
+        or "disable_parallel_tool_use" not in tool_choice
+        or inference_model is None
+        or not _runs_on_converse(inference_model)
+    ):
+        return request_options
+    return {
+        **request_options,
+        "tool_choice": {key: value for key, value in tool_choice.items() if key != "disable_parallel_tool_use"},
+    }
+
+
 class BedrockTokenCounter(BaseTokenCounter):
     """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
@@ -77,21 +129,19 @@ class BedrockTokenCounter(BaseTokenCounter):
     ) -> bool:
         return custom_llm_provider == LlmProviders.BEDROCK.value
 
-    async def _count_with(
-        self,
-        handler: BedrockCountTokensHandler | BedrockMantleCountTokensHandler,
-        tokenizer_type: str,
-        request_data: dict[str, object],
-        litellm_params: dict[str, object],
-        resolved_model: str,
-    ) -> CountTokensOutcome:
+    def _count_on_mantle(
+        self, request_data: Mapping[str, object], litellm_params: Mapping[str, object], resolved_model: str
+    ) -> Awaitable[Mapping[str, JsonValue]]:
+        return self._mantle_handler.handle_count_tokens_request(
+            request_data=dict(request_data),
+            litellm_params=dict(litellm_params),
+            resolved_model=resolved_model,
+            client=self._client,
+        )
+
+    async def _count_with(self, count: Awaitable[Mapping[str, JsonValue]], tokenizer_type: str) -> CountTokensOutcome:
         try:
-            result: Final = await handler.handle_count_tokens_request(
-                request_data=request_data,
-                litellm_params=litellm_params,
-                resolved_model=resolved_model,
-                client=self._client,
-            )
+            result: Final = await count
             reply: Final = _CountTokensReply.model_validate(result)
         except BedrockError as e:
             verbose_logger.debug(
@@ -115,32 +165,74 @@ class BedrockTokenCounter(BaseTokenCounter):
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
+        request_options: Mapping[str, JsonValue] = MappingProxyType({}),
+        anthropic_beta: str | None = None,
     ) -> TokenCountResponse | None:
         if not messages:
             return None
 
+        use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
+        counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
+        resolved_model: Final = get_bedrock_base_model(counted_model)
+        primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        request_data: Final[dict[str, object]] = {
+        claude_options: Final = (
+            claude_count_options(
+                counted_model,
+                LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
+                messages,
+                tools,
+                _options_converse_sends(request_options, deployment_inference_model(deployment)),
+                anthropic_beta,
+                deployment,
+            )
+            if is_mantle_claude_model(resolved_model)
+            else NO_CLAUDE_COUNT_OPTIONS
+        )
+        if isinstance(claude_options, ChatCountTranslationError):
+            return claude_options.response(request_model, model_to_use, primary_tokenizer)
+        invoke_fields: Final = _invoke_fields(claude_options.options, claude_options.betas)
+        sent_tools: Final = tools if claude_options.messages is None else claude_options.tools
+        counted_request: Final[Mapping[str, object]] = {
             "model": model_to_use,
-            "messages": messages,
-            **({"tools": tools} if tools else {}),
+            "messages": messages
+            if claude_options.messages is None
+            else [dict(message) for message in claude_options.messages],
+            **({"tools": [dict(tool) for tool in sent_tools]} if sent_tools else {}),
             **({"system": system} if system else {}),
         }
-        use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
-        resolved_model: Final = get_bedrock_base_model(model_to_use.removeprefix("bedrock_mantle/"))
+        mantle_request: Final = {**counted_request, **invoke_fields}
+        runtime_request: Final = {
+            **counted_request,
+            **_invoke_fields(claude_options.options, _runtime_count_betas(claude_options)),
+        }
 
-        primary: Final = await self._count_with(
-            self._mantle_handler if use_mantle else self._runtime_handler,
-            MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE,
-            request_data,
-            litellm_params,
-            resolved_model,
-        )
-        outcome: Final = (
+        primary: Final = (
             await self._count_with(
-                self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+                self._count_on_mantle(mantle_request, litellm_params, resolved_model), primary_tokenizer
+            )
+            if use_mantle
+            else await self._count_with(
+                self._runtime_handler.handle_count_tokens_request(
+                    request_data=runtime_request,
+                    litellm_params=litellm_params,
+                    resolved_model=resolved_model,
+                    client=self._client,
+                    input_type="invokeModel" if invoke_fields else None,
+                ),
+                primary_tokenizer,
+            )
+        )
+        fallback: Final = (
+            await self._count_with(
+                self._count_on_mantle(mantle_request, litellm_params, resolved_model), MANTLE_TOKENIZER_TYPE
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
+            else None
+        )
+        outcome: Final = (
+            fallback
+            if fallback is not None and _mantle_answered_for_runtime(fallback, forwarded_options=bool(invoke_fields))
             else primary
         )
         match outcome:

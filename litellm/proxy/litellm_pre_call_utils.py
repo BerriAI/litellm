@@ -1527,27 +1527,33 @@ class LiteLLMProxyRequestSetup:
         return returned_headers
 
     @staticmethod
-    def add_headers_to_llm_call_by_model_group(data: dict, headers: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
-        """
-        Add headers to the LLM call by model group
-        """
+    def forwards_client_headers_for_all_models(general_settings: Mapping[str, object] | None) -> bool:
+        return general_settings is not None and general_settings.get("forward_client_headers_to_llm_api") is True
+
+    @staticmethod
+    def forwards_client_headers_for_model_group(model: str | None, user_api_key_dict: UserAPIKeyAuth) -> bool:
         from litellm.proxy.auth.auth_checks import check_model_access_helper
         from litellm.proxy.proxy_server import llm_router
 
-        data_model: Final = data.get("model")
-
-        if (
-            data_model is not None
+        return (
+            model is not None
             and litellm.model_group_settings is not None
             and litellm.model_group_settings.forward_client_headers_to_llm_api is not None
             and check_model_access_helper(
-                model=data_model,
+                model=model,
                 llm_router=llm_router,
                 models=litellm.model_group_settings.forward_client_headers_to_llm_api,
                 team_model_aliases=user_api_key_dict.team_model_aliases,
                 team_id=user_api_key_dict.team_id,
             )  # handles aliases, wildcards, etc.
-        ):
+        )
+
+    @staticmethod
+    def add_headers_to_llm_call_by_model_group(data: dict, headers: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
+        """
+        Add headers to the LLM call by model group
+        """
+        if LiteLLMProxyRequestSetup.forwards_client_headers_for_model_group(data.get("model"), user_api_key_dict):
             _headers: Final = LiteLLMProxyRequestSetup.add_headers_to_llm_call(headers, user_api_key_dict)
             if _headers != {}:
                 data["headers"] = _headers
@@ -1584,7 +1590,7 @@ class LiteLLMProxyRequestSetup:
         """
         data: Final = LitellmDataForBackendLLMCall()
 
-        if general_settings and general_settings.get("forward_client_headers_to_llm_api") is True:
+        if LiteLLMProxyRequestSetup.forwards_client_headers_for_all_models(general_settings):
             _headers: Final = LiteLLMProxyRequestSetup.add_headers_to_llm_call(headers, user_api_key_dict)
             if _headers != {}:
                 data["headers"] = _headers
@@ -4038,14 +4044,19 @@ async def add_guardrails_from_policy_engine(
     )
 
 
-_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
-    (
-        LlmProviders.ANTHROPIC.value,
-        LlmProviders.BEDROCK.value,
-        LlmProviders.BEDROCK_MANTLE.value,
-        LlmProviders.VERTEX_AI.value,
-    )
+_ANTHROPIC_API_HEADER_PROVIDER_NAMES: Final = (
+    LlmProviders.ANTHROPIC.value,
+    LlmProviders.BEDROCK.value,
+    LlmProviders.BEDROCK_MANTLE.value,
+    LlmProviders.VERTEX_AI.value,
 )
+_ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(_ANTHROPIC_API_HEADER_PROVIDER_NAMES)
+
+
+def receives_anthropic_api_headers(custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider in _ANTHROPIC_API_HEADER_PROVIDER_NAMES
+
+
 _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_FORWARD_PROVIDERS))
 
 

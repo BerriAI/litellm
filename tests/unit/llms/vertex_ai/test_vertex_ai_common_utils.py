@@ -1,7 +1,9 @@
 import copy
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -28,6 +30,7 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
@@ -2291,3 +2294,179 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+_PARTNER_CHAT_TOOL_TURNS: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": "Weather in SF?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+]
+_PARTNER_RESPONSES_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+async def _partner_counted_bodies(
+    model: str, request_options: Mapping[str, JsonValue] = MappingProxyType({})
+) -> tuple[dict[str, object], ...]:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use=model,
+            messages=copy.deepcopy(_PARTNER_CHAT_TOOL_TURNS),
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            tools=[_PARTNER_RESPONSES_TOOL],
+            request_options=request_options,
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    return fake_http_client.posted_bodies
+
+
+_PARTNER_CLAUDE_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+async def _vertex_claude_inference_and_count(
+    tools: list[dict[str, JsonValue]], request_options: Mapping[str, JsonValue]
+) -> tuple[httpx.Request, httpx.Request]:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Weather in SF?"}]
+    sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def vertex(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        return httpx.Response(
+            200, json={"input_tokens": 37} if request.url.path.endswith("count-tokens:rawPredict") else _PARTNER_CLAUDE_REPLY
+        )
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(vertex))
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=client),
+        patch.object(
+            VertexBase, "_ensure_access_token_async", new=AsyncMock(return_value=("fake-token", "test-project"))
+        ),
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "test-project")),
+    ):
+        await litellm.anthropic_messages(
+            model="vertex_ai/claude-haiku-5-5",
+            messages=messages,
+            tools=tools,
+            max_tokens=4096,
+            vertex_project="test-project",
+            vertex_location="us-east5",
+            client=client,
+            **request_options,
+        )
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-haiku-5-5",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            tools=tools,
+            request_options=request_options,
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    inference, count = tuple(sent.get() for _ in range(sent.qsize()))
+    assert count.url.path.endswith("count-tokens:rawPredict")
+    return inference, count
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vertex_messages_inference_sends() -> None:
+    inference, count = await _vertex_claude_inference_and_count(
+        [{"name": "get_weather", "input_schema": {"type": "object"}}],
+        {
+            "thinking": {"type": "enabled", "budget_tokens": 2000},
+            "tool_choice": {"type": "auto"},
+            "context_management": {
+                "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
+            },
+        },
+    )
+
+    counted: Final = TypeAdapter(dict[str, JsonValue]).validate_json(count.content)
+    inferred: Final = TypeAdapter(dict[str, JsonValue]).validate_json(inference.content)
+    fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
+    assert {name: counted.get(name) for name in fields} == {name: inferred.get(name) for name in fields}
+    assert count.headers["anthropic-beta"] == inference.headers["anthropic-beta"]
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_tool_search_beta_vertex_messages_inference_sends() -> None:
+    inference, count = await _vertex_claude_inference_and_count(
+        [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"name": "get_weather", "input_schema": {"type": "object"}, "defer_loading": True},
+        ],
+        {"thinking": {"type": "enabled", "budget_tokens": 2000}},
+    )
+
+    assert count.headers["anthropic-beta"] == inference.headers["anthropic-beta"]
+    assert get_tool_search_beta_header("vertex_ai") in count.headers["anthropic-beta"].split(",")
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_refuses_options_vertex_messages_inference_refuses_before_calling_vertex() -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Weather in SF?"}],
+        contents=None,
+        deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+        request_options={"output_config": {"effort": "fastest"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+
+
+@pytest.mark.asyncio
+async def test_vertex_llama_count_leaves_out_the_claude_only_options() -> None:
+    model: Final = "meta/llama-4-maverick-17b-128e-instruct-maas"
+
+    assert await _partner_counted_bodies(
+        model, request_options={"thinking": {"type": "enabled", "budget_tokens": 2000}}
+    ) == await _partner_counted_bodies(model)

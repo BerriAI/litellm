@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.llms.anthropic.count_tokens.transformation import is_request_rejection
 from litellm.proxy._types import ProxyException
 from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
 from litellm.types.utils import TokenCountResponse
@@ -65,6 +66,10 @@ class ProviderCountFailure:
     @property
     def cannot_count_model(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
+
+    @property
+    def rejected_request(self) -> bool:
+        return is_request_rejection(self.status_code)
 
     def with_hint(self, hint: str) -> "ProviderCountFailure":
         return replace(self, message=_with_hint(self.message, hint))

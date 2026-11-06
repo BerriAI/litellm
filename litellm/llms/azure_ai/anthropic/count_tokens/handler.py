@@ -4,6 +4,7 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -12,7 +13,7 @@ from pydantic import JsonValue
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.common_utils import AnthropicError, merge_anthropic_beta_headers
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
@@ -36,6 +37,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         timeout: float | httpx.Timeout | None = None,
         tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
+        optional_params: Mapping[str, JsonValue] | None = None,
+        betas: Sequence[str] = (),
     ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
@@ -66,6 +69,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                optional_params=optional_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
@@ -98,7 +102,10 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
 
             response: Final = await async_client.post(
                 endpoint_url,
-                headers=headers,
+                headers={
+                    **headers,
+                    "anthropic-beta": merge_anthropic_beta_headers(headers.get("anthropic-beta"), betas),
+                },
                 json=request_body,
                 timeout=request_timeout,
             )

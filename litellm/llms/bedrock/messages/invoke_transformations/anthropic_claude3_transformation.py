@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -77,6 +77,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_ANTHROPIC_BETAS: Final = TypeAdapter(tuple[str, ...])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -99,6 +100,17 @@ class AmazonAnthropicClaudeMessagesConfig(
     @property
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
+
+    def headers_with_anthropic_betas(
+        self,
+        headers: Mapping[str, str],
+        optional_params: Mapping[str, object],
+        messages: Sequence[object],
+    ) -> Mapping[str, str]:
+        return headers
+
+    def sent_anthropic_betas(self, headers: Mapping[str, str], request: Mapping[str, object]) -> tuple[str, ...]:
+        return _ANTHROPIC_BETAS.validate_python(request.get("anthropic_beta") or ())
 
     def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         if bedrock_supports_per_turn_control(
