@@ -22,8 +22,6 @@ from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import bounded_tx, trusted_sql
 
 if TYPE_CHECKING:
-    from prisma import Prisma
-
     from litellm.proxy.utils import PrismaClient
 
 _TABLE: Final = "LiteLLM_ScheduledJobRun"
@@ -246,7 +244,7 @@ _STATE_SQL: Final = f"""
         (SELECT max("finished_at") FROM "{_TABLE}"
             WHERE "job_name" = $1 AND "status" IN ('SUCCEEDED', 'FAILED')) AS "last_finished_at",
         (SELECT max("scheduled_for") FROM "{_TABLE}"
-            WHERE "job_name" = $1 AND "status" <> 'CANCELLED') AS "last_scheduled_for"
+            WHERE "job_name" = $1 AND "status" NOT IN ('CANCELLED', 'PENDING')) AS "last_scheduled_for"
 """
 _PENDING_SQL: Final = f"""
     SELECT "id", "schedule", "scheduled_for" FROM "{_TABLE}"
@@ -334,7 +332,10 @@ class ScheduledJobRunner:
         async with db_span("scheduled_job_tick", _TABLE), bounded_tx(prisma_client, timeout_ms) as tx:
             await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
             await tx.execute_raw(trusted_sql(f"SET LOCAL lock_timeout = {timeout_ms}"))
-            if not await _try_group_lock(tx, self.job.lock_group):
+            locked: Final = _LOCKED.validate_python(
+                await tx.query_raw(trusted_sql(_GROUP_LOCK_SQL), f"litellm_scheduled_job:{self.job.lock_group}")
+            )
+            if not locked or not locked[0].locked:
                 return None
             for reaped in _CLAIMED.validate_python(await tx.query_raw(trusted_sql(_REAP_SQL), self.job.lock_group)):
                 verbose_proxy_logger.warning(
@@ -419,16 +420,6 @@ class ScheduledJobRunner:
         verbose_proxy_logger.info("Scheduled job %s run %s %s", self.job.name, run_id, status)
 
 
-async def _try_group_lock(tx: "Prisma", lock_group: str) -> bool:
-    rows: Final = _LOCKED.validate_python(
-        await tx.query_raw(
-            trusted_sql('SELECT pg_try_advisory_xact_lock(hashtext($1)) AS "locked"'),
-            f"litellm_scheduled_job:{lock_group}",
-        )
-    )
-    return bool(rows) and rows[0].locked
-
-
 class _Locked(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -436,6 +427,7 @@ class _Locked(BaseModel):
 
 
 _LOCKED: Final = TypeAdapter(list[_Locked])
+_GROUP_LOCK_SQL: Final = 'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS "locked"'
 
 
 @lru_cache(maxsize=64)
