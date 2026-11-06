@@ -548,7 +548,10 @@ impl LegacyLogging {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
         };
-        details.set_item("cache_hit", self.cache_key.is_some())?;
+        if self.cache_key.is_some() {
+            // Python stamps `cache_hit` only on a cache hit; a provider result leaves it unset.
+            details.set_item("cache_hit", true)?;
+        }
         details.set_item("cache_key", self.cache_key.as_deref())?;
         Ok(HookStep::Ready(()))
     }
@@ -1135,7 +1138,7 @@ logger._provider_reported_cost = None
                 c"
 assert logger.model_call_details.get('response_cost') is None, logger.model_call_details
 assert logger._provider_reported_cost == reported, logger._provider_reported_cost
-assert logger.model_call_details['cache_hit'] is cache_hit, logger.model_call_details
+assert logger.model_call_details.get('cache_hit') is (True if cache_hit else None), logger.model_call_details
 assert logger.update['custom_llm_provider'] == 'edenai', logger.update
 ",
             );
