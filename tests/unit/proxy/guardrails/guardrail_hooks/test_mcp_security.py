@@ -255,3 +255,30 @@ async def test_allows_saved_toolset_by_name_and_blocks_unknown_name(guardrail, c
     ):
         await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
     assert exc.value.detail["unregistered_servers"] == ["evil_server"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["acompletion", "aresponses"])
+async def test_blocks_the_name_with_the_policy_result_when_the_toolset_read_fails(guardrail, call_type):
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(side_effect=RuntimeError("toolset table unavailable"))
+    data: Final = {
+        "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/research"}],
+        "guardrails": ["test-mcp-security"],
+    }
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            MCPServerManager(),
+        ),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
+    assert exc.value.status_code == 400
+    assert exc.value.detail["unregistered_servers"] == ["research"]

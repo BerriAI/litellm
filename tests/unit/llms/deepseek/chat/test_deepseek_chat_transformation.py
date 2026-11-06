@@ -952,3 +952,33 @@ def test_deepseek_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "tools" not in result
     assert "tool_choice" not in result
     assert "parallel_tool_calls" not in result
+
+
+def test_deepseek_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = DeepSeekChatConfig().map_openai_params(
+        {
+            "tools": [_HOSTED_MCP_TOOL, _function_tool("shell")],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        {},
+        "deepseek-v4-flash",
+        True,
+    )
+    assert result["tools"] == [_function_tool("shell")]
+    assert "tool_choice" not in result
+
+
+def test_deepseek_removes_tool_selection_beside_legacy_functions_when_drop_params_drops_every_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    functions: Final = [{"name": "shell", "parameters": {"type": "object", "properties": {}}}]
+    result: Final = DeepSeekChatConfig().map_openai_params(
+        {"tools": [_HOSTED_MCP_TOOL], "functions": functions, "tool_choice": "required", "parallel_tool_calls": True},
+        {},
+        "deepseek-v4-flash",
+        True,
+    )
+    assert result["functions"] == functions
+    assert "tools" not in result
+    assert "tool_choice" not in result
+    assert "parallel_tool_calls" not in result

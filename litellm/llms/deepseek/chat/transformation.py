@@ -42,9 +42,14 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
+        params_without_hosted_mcp: Final = tool_params_without_hosted_mcp(
+            non_default_params, model=model, route="deepseek", drop_params=drop_params
+        )
         # Let parent handle standard params first
         optional_params = super().map_openai_params(
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="deepseek", drop_params=drop_params),
+            params_without_hosted_mcp
+            if params_without_hosted_mcp is non_default_params
+            else self._drop_unsupported_tools(non_default_params),
             optional_params,
             model,
             drop_params,

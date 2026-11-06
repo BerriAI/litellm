@@ -18,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
+    saved_toolset_exists,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -104,7 +105,6 @@ class MCPSecurityGuardrail(CustomGuardrail):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy.proxy_server import prisma_client
 
         async with global_mcp_server_manager.catalog.operation():
             not_servers: Final = frozenset(
@@ -112,12 +112,4 @@ class MCPSecurityGuardrail(CustomGuardrail):
                 for name in requested_servers
                 if global_mcp_server_manager.get_mcp_server_by_identifier(name) is None
             )
-            if prisma_client is None:
-                return not_servers
-            return frozenset(
-                [
-                    name
-                    for name in not_servers
-                    if await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name) is None
-                ]
-            )
+            return frozenset([name for name in not_servers if not await saved_toolset_exists(name)])
