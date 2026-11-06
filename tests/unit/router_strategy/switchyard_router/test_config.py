@@ -54,6 +54,7 @@ def test_request_rewrite_and_unknown_options_are_rejected(option: str) -> None:
         {"classifier": {}},
         {"options": {"confidence_threshold": 2}},
         {"models": {"capable": "", "efficient": "fast"}},
+        {"models": {"capable": "same", "efficient": "same"}},
         {"models": {"capable": "strong", "efficient": "fast", "judge": "judge"}},
         {"models": {"capable": "strong", "efficient": "fast", "judge": "j"}, "classifier": {"kind": "other"}},
         {

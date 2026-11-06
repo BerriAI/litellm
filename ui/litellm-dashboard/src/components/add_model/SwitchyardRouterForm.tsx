@@ -17,7 +17,7 @@ import SwitchyardConfigFields from "./SwitchyardConfigFields";
 interface Props {
   hidden?: boolean;
   accessToken: string;
-  onSuccess: () => void;
+  onSuccess: (saved: { model_name: string; switchyard_router_config: SwitchyardConfig }) => void;
   routerName?: string;
   onRouterNameChange?: (name: string) => void;
   initial?: { name: string; modelId: string; config: unknown };
@@ -77,7 +77,7 @@ export default function SwitchyardRouterForm({
       };
       if (initial) await modelPatchUpdateCall(accessToken, payload, initial.modelId);
       else await modelCreateCall(accessToken, { ...payload, model_info: {} });
-      onSuccess();
+      onSuccess({ model_name: payload.model_name, switchyard_router_config: validated.data });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Unable to save Switchyard router");
     } finally {

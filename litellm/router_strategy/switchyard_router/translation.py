@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 from litellm.types.decisions import (
     OpenAIChoiceAnswer,
     OpenAIDecisionResponse,
     systemone_choice_key,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CallTypes, ModelResponse
 
 if TYPE_CHECKING:
     from switchyard_rust.libsy import LlmResponse
 
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _SEQUENCE: Final = TypeAdapter(tuple[object, ...])
+_CALL_TYPES: Final = frozenset(call_type.value for call_type in CallTypes)
 
 
 def mapping(value: object) -> Mapping[str, object]:
@@ -78,17 +78,48 @@ def message_to_switchyard(value: object) -> Mapping[str, object]:
     return {"role": role, "content": (*content, *calls)}
 
 
-def request_to_switchyard(
-    messages: Sequence[Mapping[str, object]] | None, request_kwargs: Mapping[str, object]
-) -> Mapping[str, object]:
-    structured: Final = resolve_structured_messages(
-        [dict(message) for message in messages] if messages is not None else None, dict(request_kwargs)
+class ChatConverter(Protocol):
+    def get_structured_messages(
+        self,
+        data: dict[str, object],  # mutable-ok: matches the request converters' existing dict parameter
+        *,
+        keep_tool_errors: bool = False,
+    ) -> Sequence[object] | None: ...
+
+
+def _instantiate(converter: Callable[[], ChatConverter]) -> ChatConverter:
+    return converter()
+
+
+def chat_messages(
+    call_type: str | None,
+    model: str,
+    messages: Sequence[Mapping[str, object]] | None,
+    input: object,
+    request_kwargs: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...] | None:
+    from litellm.llms import load_guardrail_translation_mappings
+
+    converter: Final = (
+        load_guardrail_translation_mappings().get(CallTypes(call_type)) if call_type in _CALL_TYPES else None
     )
-    if not structured:
-        raise ValueError("Switchyard requires structured messages")
+    if converter is None:
+        return None
+    request: Final = {
+        **request_kwargs,
+        "model": model,
+        **({"messages": [dict(message) for message in messages]} if messages is not None else {}),
+        **({"input": input} if input is not None else {}),
+    }
+    return tuple(map(mapping, _instantiate(converter).get_structured_messages(request, keep_tool_errors=True) or ()))
+
+
+def request_to_switchyard(messages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    if not messages:
+        raise ValueError("Switchyard requires at least one message")
     return {
         "model": "auto",
-        "messages": tuple(message_to_switchyard(message) for message in structured),
+        "messages": tuple(message_to_switchyard(message) for message in messages),
         "stream": False,
     }
 

@@ -5024,12 +5024,13 @@ class PythonCore(DeprecatedRouterMembers):
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             start_time: Final = time.time()
-            deployment = await self._core_async_get_available_deployment(
-                model=model,
-                messages=messages,
-                specific_deployment=kwargs.pop("specific_deployment", None),
-                request_kwargs=kwargs,
-            )
+            with self._route_capability_pin("acompletion"):
+                deployment = await self._core_async_get_available_deployment(
+                    model=model,
+                    messages=messages,
+                    specific_deployment=kwargs.pop("specific_deployment", None),
+                    request_kwargs=kwargs,
+                )
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -17063,6 +17064,7 @@ class PythonCore(DeprecatedRouterMembers):
             messages=routing_messages if routing_messages is not None else messages,
             input=input,
             specific_deployment=specific_deployment,
+            call_type=_routed_call_type.get(),
         )
         traced_routed: Final = (
             routed.model_copy(update={"routing_decision": {**provenance, **routed.routing_decision}})

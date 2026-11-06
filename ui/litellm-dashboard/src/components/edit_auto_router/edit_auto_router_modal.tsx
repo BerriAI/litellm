@@ -841,7 +841,17 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = (props) => {
           <SwitchyardRouterForm
             key={props.modelData.model_info.id}
             accessToken={props.accessToken}
-            onSuccess={() => props.onSuccess(props.modelData)}
+            onSuccess={(saved) => {
+              props.onSuccess({
+                ...props.modelData,
+                model_name: saved.model_name,
+                litellm_params: {
+                  ...props.modelData.litellm_params,
+                  switchyard_router_config: saved.switchyard_router_config,
+                },
+              });
+              props.onCancel();
+            }}
             initial={{
               name: props.modelData.model_name,
               modelId: props.modelData.model_info.id,

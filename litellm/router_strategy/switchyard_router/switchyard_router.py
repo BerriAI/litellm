@@ -15,6 +15,7 @@ from litellm.router_strategy.switchyard_router.config import (
     SwitchyardRouterConfig,
 )
 from litellm.router_strategy.switchyard_router.translation import (
+    chat_messages,
     decision_request,
     decision_response,
     judge_request,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 JudgeCompletion: TypeAlias = Callable[[Mapping[str, object]], Awaitable[ModelResponse]]
 DecisionCompletion: TypeAlias = Callable[[Mapping[str, object]], Awaitable[OpenAIDecisionResponse]]
 FallbackReason: TypeAlias = Literal[
+    "unsupported_request_type",
     "unsupported_content",
     "libsy_error",
     "unexpected_judge_call",
@@ -112,6 +114,7 @@ class SwitchyardRouter:
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
             },
             "proxy_server_request": {"body": request},
+            "num_retries": 0,
             "turn_off_message_logging": effective_turn_off_message_logging(caller),
             **parent_session_kwargs(caller),
         }
@@ -170,15 +173,19 @@ class SwitchyardRouter:
         messages: Sequence[Mapping[str, object]] | None = None,
         input: object = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> PreRoutingHookResponse | None:
         from switchyard_rust.libsy import LibsyError, Step
 
         if model != self.model_name:
             return None
         try:
-            request: Final = request_to_switchyard(messages, request_kwargs)
+            chat: Final = chat_messages(call_type, model, messages, input, request_kwargs)
+            request: Final = request_to_switchyard(chat) if chat is not None else None
         except (ValueError, KeyError, TypeError):
             return self._fallback("unsupported_content", messages)
+        if request is None:
+            return self._fallback("unsupported_request_type", messages)
         judge: Final = self.config.models.judge
         try:
             async for step in self.algorithm.run_stream(

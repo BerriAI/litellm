@@ -72,6 +72,8 @@ class StageModels(BaseModel):
     def reject_recursive_targets(self) -> StageModels:
         if any(name.startswith("auto_router/") for name in (self.capable, self.efficient, self.judge or "")):
             raise ValueError("Switchyard targets must be concrete model groups, not auto-router markers")
+        if self.capable == self.efficient:
+            raise ValueError("The capable and efficient models must be different model groups")
         return self
 
 
