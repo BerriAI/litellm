@@ -1,5 +1,6 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Github, Slack } from "lucide-react";
@@ -39,11 +40,13 @@ const COMMUNITY = [
     Icon: Github,
   },
 ] as const;
-const DOCS = [
-  { href: "https://docs.litellm.ai/docs/", label: "Docs" },
-  { href: "https://docs.litellm.ai/release_notes", label: "Releases" },
+type ResourceLink = { href: string; label: ParseKeys };
+
+const DOCS: readonly ResourceLink[] = [
+  { href: "https://docs.litellm.ai/docs/", label: "shell.dashboardResources.links.docs" },
+  { href: "https://docs.litellm.ai/release_notes", label: "shell.dashboardResources.links.releases" },
 ];
-const BLOG = { href: "https://docs.litellm.ai/blog", label: "Blog" };
+const BLOG: ResourceLink = { href: "https://docs.litellm.ai/blog", label: "shell.dashboardResources.links.blog" };
 
 export function DashboardCommunityLinks({ className }: { className?: string }) {
   const { t } = useTranslation();
@@ -111,7 +114,10 @@ export function DashboardResources({ children }: { children?: ReactNode }) {
   const { t } = useTranslation();
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
-  const links = [...DOCS, ...(hideBlog ? [] : [BLOG]), ...(hideCommunity ? [] : COMMUNITY)];
+  const links = [
+    ...[...DOCS, ...(hideBlog ? [] : [BLOG])].map((link) => ({ ...link, label: t(link.label) })),
+    ...(hideCommunity ? [] : COMMUNITY),
+  ];
   return (
     <div className="shrink-0 border-t border-border bg-muted/25 px-4 py-2">
       <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="flex flex-wrap gap-x-3 gap-y-1">

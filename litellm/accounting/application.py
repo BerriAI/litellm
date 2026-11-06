@@ -7,6 +7,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_b
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.db.model_usage_rollup import queue_model_usage_upsert
+from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
 from litellm.repositories.accounting_delivery_repository import DeliveryProjection, LedgerTransaction
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ async def apply_deliveries(
     from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
 
     contributions: Final = project_deliveries(deliveries)
+    await apply_rollup_lock_timeout(transaction)
     await writer.apply_accounting_entities(
         prisma_client, proxy_logging_obj, transaction, entity_transactions(contributions)
     )

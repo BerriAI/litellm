@@ -4074,12 +4074,11 @@ class Logging(LiteLLMLoggingBaseClass):
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    if (
-                        callable(callback) is True and is_sync_request and customLogger is not None
-                    ):  # custom logger functions
+                    if callable(callback) is True and is_sync_request:  # custom logger functions
+                        function_logger = customLogger if customLogger is not None else CustomLogger()
                         print_verbose(f"success callbacks: Running Custom Callback Function - {callback}")
 
-                        customLogger.log_event(
+                        function_logger.log_event(
                             kwargs=call_details,
                             response_obj=result,
                             start_time=start_time,
@@ -4406,7 +4405,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 if isinstance(callback, CustomLogger):  # custom logger class
                     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
-                    model_call_details: dict = self.model_call_details
+                    model_call_details: dict = (
+                        self._model_call_details_with_request_messages()
+                        if callback.exempt_from_message_redaction()
+                        else self.model_call_details
+                    )
                     ##################################
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
@@ -4969,6 +4972,21 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
     ) -> None:
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+
+    def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
+        """The success-event payload with the request messages put back where `turn_off_message_logging`
+        redacted them in place, for a callback that routes on the request and never logs it."""
+        request_messages: Final = cast(object, self.messages)  # cast-ok: the request messages are only put back as-is
+        standard_logging_object: Final = self.model_call_details.get("standard_logging_object")
+        return {
+            **self.model_call_details,
+            "messages": request_messages,
+            **(
+                {"standard_logging_object": {**standard_logging_object, "messages": request_messages}}
+                if isinstance(standard_logging_object, dict)
+                else {}
+            ),
+        }
 
     def _get_completed_success_callbacks(
         self, *, asynchronous: bool

@@ -7,9 +7,20 @@ import pytest
 from fastapi import Request
 from prisma import models as prisma_models
 
+from litellm.models.plugin_upload import PluginArchiveMetadata, PluginDownloader, PluginDownloadResult
 from litellm.proxy import proxy_server
 from litellm.proxy.discovery_endpoints.skill_hub_endpoints import public_hub_entries
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
+
+
+@pytest.mark.asyncio
+async def test_download_without_stored_identity_returns_missing_skill() -> None:
+    repository: Final = PluginUploadRepository(MagicMock())
+    result: Final = await repository.record_download(
+        PluginArchiveMetadata("missing", True, {}, None), "digest",
+        PluginDownloader(True, None, None, None, None, None),
+    )
+    assert result is PluginDownloadResult.SKILL_NOT_FOUND
 
 
 def plugin(
@@ -17,7 +28,7 @@ def plugin(
 ) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
     digest: Final = "a" * 64
     return prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id=name, name=name, enabled=True,
+        id=name, name=name, enabled=True, anonymous_download_count=0,
         manifest_json=manifest_json if manifest_json is not None else json.dumps({
             "source": {
                 "source": "archive", "url": f"http://{host}/claude-code/plugins/{name}/archive/{digest}.zip",

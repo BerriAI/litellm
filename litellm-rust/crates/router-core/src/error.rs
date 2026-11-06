@@ -40,7 +40,13 @@ pub enum Error {
     #[error("no deployment serves model `{model}`")]
     UnknownModel { model: String },
     #[error("no deployment of `{model}` is available")]
-    NoHealthyDeployments { model: String },
+    NoHealthyDeployments {
+        model: String,
+        /// The ids of the deployments the request could route to before the cooldown filter
+        /// (`request_deployments`), when the candidate list came up empty; `None` when the
+        /// strategy refused every candidate.
+        request_ids: Option<Vec<String>>,
+    },
     #[error("the attempt failed")]
     Attempt(#[from] AttemptError),
     #[error("the routing cache failed")]
@@ -201,8 +207,9 @@ impl Error {
             Self::UnknownModel { model } => Self::UnknownModel {
                 model: model.clone(),
             },
-            Self::NoHealthyDeployments { model } => Self::NoHealthyDeployments {
+            Self::NoHealthyDeployments { model, request_ids } => Self::NoHealthyDeployments {
                 model: model.clone(),
+                request_ids: request_ids.clone(),
             },
             Self::Paused { model } => Self::Paused {
                 model: model.clone(),

@@ -14,6 +14,7 @@ from litellm.repositories.analytics_budget import (
 
 _SETTINGS: Final = """SELECT current_setting('statement_timeout') AS statement_timeout,
     current_setting('lock_timeout') AS lock_timeout,current_setting('work_mem') AS work_mem,
+    current_setting('hash_mem_multiplier',true) AS hash_mem_multiplier,current_setting('jit') AS jit,
     current_setting('max_parallel_workers_per_gather') AS parallelism"""
 
 
@@ -26,11 +27,14 @@ async def test_analytics_limits_are_transaction_local_and_admission_is_shared(db
         """SELECT EXTRACT(epoch FROM current_setting('statement_timeout')::interval) AS seconds,
         EXTRACT(epoch FROM current_setting('lock_timeout')::interval) AS lock_seconds,
         pg_size_bytes(current_setting('work_mem')) AS bytes,
+        current_setting('hash_mem_multiplier',true)::float AS hash_mem_multiplier,current_setting('jit') AS jit,
         current_setting('max_parallel_workers_per_gather')::int AS parallelism"""
     )
     assert 0 < float(str(limits[0]["seconds"])) <= 5
     assert 0 < float(str(limits[0]["lock_seconds"])) <= 0.1
     assert int(str(limits[0]["bytes"])) <= 1048576
+    assert limits[0]["hash_mem_multiplier"] in (None, 1.0)
+    assert limits[0]["jit"] == "off"
     assert limits[0]["parallelism"] == 0
     assert await db.prisma.writer_db.query_raw(_SETTINGS) == before
     async with database.tx(max_wait=timedelta(seconds=1), timeout=timedelta(seconds=5)) as transaction:

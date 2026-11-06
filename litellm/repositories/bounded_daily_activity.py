@@ -67,12 +67,16 @@ class BoundedDailyActivityRepository:
     async def aggregate(
         self, scope: DailyActivityScope, *, model_limit: int | None = None
     ) -> BoundedDailyActivityResponse:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         if model_limit is not None and not 1 <= model_limit <= 100:
             raise ValueError("model_limit must be between 1 and 100")
         query: Final = build_bounded_daily_activity_sql(scope, model_limit=model_limit)
-        rows: Final = TypeAdapter(tuple[_ActivityRow, ...]).validate_python(
-            await self.database.query_raw(query.sql, *query.params)
-        )
+        async with db_span("daily_activity_query", sql_relation(query.sql)):
+            rows: Final = TypeAdapter(tuple[_ActivityRow, ...]).validate_python(
+                await self.database.query_raw(query.sql, *query.params)
+            )
         total: Final = next(row for row in rows if row.kind == "total")
         other: Final = next((row for row in rows if row.kind == "other"), None)
         days: Final = tuple(

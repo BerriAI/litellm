@@ -52,6 +52,7 @@ import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod";
 import GuardrailsSelect from "./GuardrailsSelect";
@@ -237,7 +238,7 @@ export const grantedMcpServerIds = async ({
   }
   const loadedTeamGroups = await loadTeamGroups().catch(() => null);
   if (loadedTeamGroups === null) {
-    return { kind: "unresolvable", reason: "the team's access groups could not be reloaded" };
+    return { kind: "unresolvable", reason: i18n.t("teams.teamInfo.mcpLookup.teamGroupsReloadFailed") };
   }
   if (sameIdSelection(selectedAccessGroupIds, loadedTeamGroups.ids)) {
     return {
@@ -245,7 +246,7 @@ export const grantedMcpServerIds = async ({
       serverIds: new Set([...direct, ...loadedTeamGroups.serverIds, ...standingServerIds]),
     };
   }
-  return { kind: "unresolvable", reason: "the team's access groups could not be loaded" };
+  return { kind: "unresolvable", reason: i18n.t("teams.teamInfo.mcpLookup.teamGroupsLoadFailed") };
 };
 
 export const retainedMcpToolPermissions = (
@@ -438,12 +439,12 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) =>
       }),
     default_estimated_output_tokens: numericInputSchema.refine(
       estimateChecks.positive.isValid,
-      estimateChecks.positive.message,
+      t(estimateChecks.positive.messageKey),
     ),
     default_estimated_output_tokens_per_model: z
       .string()
       .optional()
-      .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message),
+      .refine(estimateChecks.perModel.isValid, t(estimateChecks.perModel.messageKey)),
     guardrails: z.array(z.string()).optional(),
     disable_global_guardrails: z.boolean().optional(),
     require_trace_id: z.boolean().optional(),
@@ -1399,7 +1400,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const tabItems = [
     {
       key: TEAM_INFO_TAB_KEYS.OVERVIEW,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW],
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW]),
       children: (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           <Card className="block p-6">
@@ -1608,22 +1609,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     },
     {
       key: TEAM_INFO_TAB_KEYS.ACTIVITY,
-      label: t("entityActivity.title"),
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.ACTIVITY]),
       children: activeTab === TEAM_INFO_TAB_KEYS.ACTIVITY ? <EntityActivity scope="team" id={teamId} /> : null,
     },
     {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER]),
       children: <MyUserTab teamId={teamId} />,
     },
     {
       key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]),
       children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
     },
     {
       key: TEAM_INFO_TAB_KEYS.MEMBERS,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS],
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS]),
       children: (
         <TeamMembersComponent
           teamData={teamData}
@@ -1639,12 +1640,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     },
     {
       key: TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS],
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]),
       children: <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />,
     },
     {
       key: TEAM_INFO_TAB_KEYS.SETTINGS,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS],
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS]),
       children: (
         <Card className="block p-6 overflow-y-auto max-h-[65vh]">
           <div className="flex justify-between items-center mb-4">
