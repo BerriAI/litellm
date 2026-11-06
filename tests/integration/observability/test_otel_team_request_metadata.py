@@ -124,6 +124,7 @@ def test_team_newrelic_spans_carry_allowlisted_request_metadata(
             )
         )
 
+    assert sorted(span["kind"] == SERVER_KIND for span in spans) == [False, True], [span["name"] for span in spans]
     assert [{name: span["attributes"].get(name) for name in PROMOTED} for span in spans] == [
         {PROMOTED[0]: correlation, PROMOTED[1]: f"{correlation}-dot"}
     ] * len(spans), [(span["name"], sorted(span["attributes"])) for span in spans]

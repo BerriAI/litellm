@@ -3199,8 +3199,6 @@ class ProxyLogging:
             return None
 
         if not guardrails_only:
-            # Auth seeded identity before the body was parsed; ``requester_metadata`` exists only now,
-            # and a team-only OTel destination has no logger in ``litellm.callbacks`` to seed it.
             seed_request_identity(
                 user_api_key_dict,
                 request_data=cast("Mapping[str, object]", data),  # cast-ok: untyped request body, read with .get

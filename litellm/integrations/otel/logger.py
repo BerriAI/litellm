@@ -1038,9 +1038,7 @@ def seed_request_identity(user_api_key_dict: object, model: str | None = None, r
     logger: Final = _registered_v2_logger()
     if logger is not None:
         logger.seed_request_identity(
-            user_api_key_dict,
-            model=model or model_from_request_data(request_data),
-            request_metadata=metadata_from_request_data(request_data),
+            user_api_key_dict, model=model, request_metadata=metadata_from_request_data(request_data)
         )
 
 
