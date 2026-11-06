@@ -1380,8 +1380,7 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args.kwargs
 
-    # Verify the URL is the Google Cloud TTS API
-    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    assert call_kwargs["url"] == "https://us-texttospeech.googleapis.com/v1/text:synthesize"
 
     # Verify request body structure
     assert "json" in call_kwargs
@@ -1960,6 +1959,26 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_rejects_a_region_cloud_tts_does_
         )
 
     assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_chirp_follows_the_vertexai_location_env(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERTEXAI_LOCATION", "europe-west4")
+    route: Final = respx_mock.post("https://eu-texttospeech.googleapis.com/v1/text:synthesize").mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"eu-audio").decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/chirp",
+        input="Bonjour",
+        voice="fr-FR-Chirp3-HD-Aoede",
+        vertex_credentials=_AUTHORIZED_USER,
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"eu-audio"
 
 
 @pytest.mark.asyncio
