@@ -13,7 +13,7 @@ from typing import (
     Literal,
     Protocol,
     TypeAlias,
-    cast,  # noqa: TID251  # cast-ok: key metadata is an untyped JSON blob, narrowed by TypeAdapter right after
+    cast,  # noqa: TID251  # narrows the untyped key metadata blob in _key_customer_limit_map
 )
 
 from fastapi import HTTPException, Request, status
@@ -1651,7 +1651,7 @@ def get_key_tag_rpm_limit(
     return None
 
 
-_CUSTOMER_LIMIT_MAP: Final[TypeAdapter[dict[str, int]]] = TypeAdapter(dict[str, int])
+_CUSTOMER_LIMIT_MAP: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, int])
 
 
 def _key_customer_limit_map(user_api_key_dict: UserAPIKeyAuth, field: str) -> Mapping[str, int]:

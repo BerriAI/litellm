@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any  # noqa: TID251  # metadata and models stay Any so existing callers keep type-checking
 
 from pydantic import ConfigDict, NonNegativeInt, field_validator
@@ -52,8 +53,8 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_tpm_limit: dict[object, object] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
     tag_rpm_limit: dict[str, int] | None = None
-    customer_rpm_limit: dict[str, NonNegativeInt] | None = None
-    customer_tpm_limit: dict[str, NonNegativeInt] | None = None
+    customer_rpm_limit: Mapping[str, NonNegativeInt] | None = None
+    customer_tpm_limit: Mapping[str, NonNegativeInt] | None = None
     guardrails: list[str] | None = None
     policies: list[str] | None = None
     prompts: list[str] | None = None
