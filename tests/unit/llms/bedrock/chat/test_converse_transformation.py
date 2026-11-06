@@ -5244,6 +5244,44 @@ def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only
     assert ("toolConfig" in request) is not native
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "native"),
+    [
+        ("us.anthropic.claude-opus-5", None, True),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-opus-4-8", None, True),
+        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "disabled"}}, True),
+        ("us-gov.anthropic.claude-opus-5", None, False),
+        ("us-gov.anthropic.claude-opus-4-8", None, False),
+    ],
+    ids=[
+        "opus-5-unset",
+        "opus-5-adaptive",
+        "opus-5-disabled",
+        "opus-4-8-unset",
+        "opus-4-8-adaptive",
+        "opus-4-8-disabled",
+        "opus-5-us-gov",
+        "opus-4-8-us-gov",
+    ],
+)
+def test_opus_5_and_4_8_cost_map_defaults_use_native_output_across_thinking_modes(
+    model: str, thinking_params: Mapping[str, object] | None, native: bool
+) -> None:
+    _, request = _converse_request_for_json_schema(model, False, thinking_params)
+
+    if native:
+        assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+        assert "toolConfig" not in request
+        return
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+
+
 def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         200,
@@ -11599,7 +11637,10 @@ _OUTPUT_CONFIG_FORMAT: Final = {
     ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
-def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(local_model_cost_map, model, request_params):
+def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
+    local_model_cost_map, monkeypatch, model, request_params
+):
+    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
     optional_params: Final = _converse_params(model, None, request_params)
 
     assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})
@@ -11630,7 +11671,10 @@ def test_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from
     assert not AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": model_info})
 
 
-def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(local_model_cost_map):
+def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(
+    local_model_cost_map, monkeypatch
+):
+    monkeypatch.setitem(litellm.model_cost["us.anthropic.claude-opus-4-8"], "supports_native_structured_output", False)
     profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
     litellm_params: Final = {"base_model": "bedrock/us.anthropic.claude-opus-4-8"}
     optional_params: Final = _converse_params(
@@ -11698,8 +11742,9 @@ _BEDROCK_SCHEMA_REFUSAL: Final = "output_config.format.schema: pattern is too co
 )
 @pytest.mark.respx(assert_all_called=True)
 def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_output(
-    caller_params: dict, expected_calls: int, respx_mock: respx.Router, local_model_cost_map: None
+    caller_params: dict, expected_calls: int, respx_mock: respx.Router, local_model_cost_map: None, monkeypatch
 ) -> None:
+    monkeypatch.setitem(litellm.model_cost["us.anthropic.claude-opus-4-8"], "supports_native_structured_output", False)
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
         return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
     )
@@ -11720,6 +11765,61 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_a_default_native_schema_rejection_retries_with_the_json_tool(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model="bedrock/converse/us.anthropic.claude-opus-5",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            thinking={"type": "disabled"},
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 2
+    first_request: Final = json.loads(route.calls[0].request.content)
+    retry_request: Final = json.loads(route.calls[1].request.content)
+    assert "outputConfig" in first_request and "toolConfig" not in first_request
+    assert "toolConfig" in retry_request and "outputConfig" not in retry_request
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_an_unforceable_tool_native_schema_rejection_retries_with_the_json_tool(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model="bedrock/converse/anthropic.claude-fable-5-1",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 2
+    first_request: Final = json.loads(route.calls[0].request.content)
+    retry_request: Final = json.loads(route.calls[1].request.content)
+    assert "outputConfig" in first_request and "toolConfig" not in first_request
+    assert "toolConfig" in retry_request and "outputConfig" not in retry_request
 
 
 CONTROL_PLANE_ENDPOINT: Final = "https://bedrock-fips.us-east-1.amazonaws.com"

@@ -285,6 +285,35 @@ class TestFilterWebSearchDeployments:
         )
         assert result == sample_deployments
 
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 1},
+            {"type": "web_search_20260301", "name": "web_search"},
+            {"googleSearch": {}},
+            {"google_search": {}},
+        ],
+        ids=["anthropic_versioned", "anthropic_newer_version", "gemini_camel_case", "gemini_snake_case"],
+    )
+    def test_a_provider_native_web_search_tool_filters_unsupported(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [{"type": "function"}, tool]})
+        assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "web_search"}},
+            {"codeExecution": {}},
+        ],
+        ids=["function_named_web_search", "gemini_code_execution"],
+    )
+    def test_a_tool_that_is_no_web_search_keeps_every_deployment(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        assert filter_web_search_deployments(sample_deployments, {"tools": [tool]}) == sample_deployments
+
     def test_web_search_preview_filters_unsupported(self, sample_deployments):
         """web_search_preview type should also trigger filtering"""
         request_kwargs = {"tools": [{"type": "web_search_preview"}]}

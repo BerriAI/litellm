@@ -625,7 +625,7 @@ describe("Sidebar (leftnav)", () => {
 
     renderWithProviders(<Sidebar {...defaultProps} />);
 
-    expect(screen.getByRole("link", { name: "Skills" })).toHaveAttribute("href", "/ui/skills");
+    expect(screen.getByRole("link", { name: "Skills Hub" })).toHaveAttribute("href", "/ui/skills");
   });
 
   it.each([

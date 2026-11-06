@@ -26,7 +26,7 @@ async def send_llm_exception_alert(
     ctx: "RoutingContext | None",
     request_kwargs: dict,
     error_traceback_str: str,
-    original_exception,
+    original_exception: Exception,
 ):
     """
     Only runs if router.slack_alerting_logger is set
@@ -34,7 +34,7 @@ async def send_llm_exception_alert(
 
     Parameters:
         ctx (RoutingContext): The router's routing context.
-        original_exception (Any): The original exception that occurred.
+        original_exception (Exception): The original exception that occurred.
 
     Returns:
         None
