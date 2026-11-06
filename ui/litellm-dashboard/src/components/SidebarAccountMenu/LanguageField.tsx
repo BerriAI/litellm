@@ -53,7 +53,7 @@ export default function LanguageField({
         <SelectTrigger id={CONTROL_ID} size="sm" className="w-full">
           <SelectValue />
         </SelectTrigger>
-        <SelectContent align="start" className="w-auto">
+        <SelectContent align="start" className="w-auto min-w-(--anchor-width)">
           {languages.map((language) => (
             <SelectPrimitive.Item
               key={language}
@@ -75,7 +75,9 @@ export default function LanguageField({
         <Trans
           i18nKey="shell.sidebarAccountMenu.language.fallbackNote"
           components={{
-            link: <a href={TRANSLATIONS_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap" />,
+            githubLink: (
+              <a href={TRANSLATIONS_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap" />
+            ),
           }}
         />
       </FieldDescription>

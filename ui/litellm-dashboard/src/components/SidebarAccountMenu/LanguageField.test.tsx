@@ -37,6 +37,15 @@ describe("LanguageField", () => {
     expect(screen.getByRole("option", { name: nativeName("en") })).toBeInTheDocument();
   });
 
+  it("links the fallback note to where translations live", () => {
+    renderField(locales);
+
+    expect(screen.getByRole("link", { name: "Help translate" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("ui/litellm-dashboard/src/i18n/locales"),
+    );
+  });
+
   it("saves the chosen language and reloads the page", async () => {
     const { store, reload } = renderField(locales);
 

@@ -8071,7 +8071,7 @@
       "toggleHideAria": "Toggle hide {{name}}",
       "language": {
         "label": "Language",
-        "fallbackNote": "Missing translations show in English. <link>Help translate</link>"
+        "fallbackNote": "Missing translations show in English. <githubLink>Help translate</githubLink>"
       },
       "changePassword": "Change Password",
       "logout": "Logout"
