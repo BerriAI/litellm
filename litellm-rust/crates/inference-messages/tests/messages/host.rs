@@ -8,7 +8,9 @@ use litellm_host::{
 };
 use litellm_inference_messages::{MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::{
+    MessagesModelCapabilities as AnthropicModelCapabilities, SupportedEffortTiers,
+};
 use rstest::rstest;
 
 use super::*;
@@ -419,7 +421,7 @@ async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
     assert!(host.raw_responses().is_empty());
 }
 
-/// Python logs `optional_params` as what it is about to send, so a dropped param must
+/// Python logs `optional_params` after its requested-param gate, so a dropped param must
 /// not resurface in callbacks.
 #[rstest]
 #[tokio::test]
@@ -449,4 +451,55 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[case::reasoning_effort_on_an_adaptive_model(
+    AnthropicModelCapabilities {
+        supports_reasoning: true,
+        supports_adaptive_thinking: true,
+        supports_output_config: true,
+        effort_tiers: SupportedEffortTiers { low: true, ..SupportedEffortTiers::default() },
+        ..AnthropicModelCapabilities::default()
+    },
+    json!({"reasoning_effort": "low"})
+)]
+#[case::adaptive_payload_on_a_legacy_model(
+    AnthropicModelCapabilities {
+        supports_reasoning: true,
+        ..AnthropicModelCapabilities::default()
+    },
+    json!({"max_tokens": 3000, "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}})
+)]
+#[tokio::test]
+async fn the_request_context_carries_the_requested_reasoning_not_its_translation(
+    call: MessagesCall,
+    #[case] capabilities: AnthropicModelCapabilities,
+    #[case] fields: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                capabilities,
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, fields.clone())
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(
+        optional_params,
+        Value::Object(
+            object(json!({"max_tokens": 16}))
+                .into_iter()
+                .chain(object(fields))
+                .collect()
+        )
+    );
 }
