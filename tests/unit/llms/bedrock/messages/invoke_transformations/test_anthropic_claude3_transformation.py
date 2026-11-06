@@ -4171,17 +4171,6 @@ _THINKING_HISTORY: Final = (
 )
 
 
-@dataclass(slots=True)
-class ScriptedBedrockInvoke:
-    replies: tuple[tuple[int, Mapping[str, object]], ...]
-    bodies: tuple[dict[str, object], ...] = ()
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.bodies = (*self.bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
-        status_code, body = self.replies[len(self.bodies) - 1]
-        return httpx.Response(status_code, json=body)
-
-
 async def _send_bedrock_messages(
     model: str,
     model_info: Mapping[str, object] | None,
