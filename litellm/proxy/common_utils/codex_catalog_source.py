@@ -38,6 +38,7 @@ CODEX_RELEASE_FILE_URL: Final = (
 CODEX_FETCH_TIMEOUT_SECONDS: Final = 2.0
 CODEX_FETCH_FAILURE_TTL_SECONDS: Final = 3600.0
 CODEX_CACHED_VERSIONS: Final = 8
+CODEX_REMEMBERED_FAILURES: Final = 256
 CODEX_FETCHES_PER_MINUTE: Final = 6
 
 _RELEASE_VERSION: Final = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]+)?")
@@ -49,7 +50,7 @@ class CodexStock:
     instructions: str
 
 
-_Value = TypeVar("_Value")
+_Value: Final = TypeVar("_Value")
 
 
 class CodexReleaseClient(Protocol):
@@ -84,8 +85,9 @@ class CodexCatalogSource:
     """Codex's catalog per release: the one fetched from GitHub, else the bundled one.
 
     A fetched catalog is kept for good, a failed fetch is remembered for `failure_ttl` seconds so a blocked egress
-    costs one timeout per worker per version per hour. Fetched and failed versions are each capped at the
-    `max_versions` most recently stored, apart, so versions that fail never push out ones that were fetched.
+    costs one timeout per worker per version per hour. Only the `max_versions` most recently fetched catalogs and
+    the `max_failures` most recent failures are kept, apart, so versions that fail never push out ones that were
+    fetched.
     Requests for a version already being fetched wait on that fetch, and a worker starts at most
     `fetches_per_minute` fetches, serving the bundled catalog past that, so a caller cycling made-up versions
     cannot turn every request into GitHub requests."""
@@ -99,6 +101,7 @@ class CodexCatalogSource:
         timeout: float = CODEX_FETCH_TIMEOUT_SECONDS,
         failure_ttl: float = CODEX_FETCH_FAILURE_TTL_SECONDS,
         max_versions: int = CODEX_CACHED_VERSIONS,
+        max_failures: int = CODEX_REMEMBERED_FAILURES,
         fetches_per_minute: int = CODEX_FETCHES_PER_MINUTE,
     ) -> None:
         self._client: Final = client
@@ -107,6 +110,7 @@ class CodexCatalogSource:
         self._timeout: Final = timeout
         self._failure_ttl: Final = failure_ttl
         self._max_versions: Final = max_versions
+        self._max_failures: Final = max_failures
         self._fetches_per_minute: Final = fetches_per_minute
         self._fetched: Mapping[str, CodexStock] = MappingProxyType({})
         self._failed_until: Mapping[str, float] = MappingProxyType({})
@@ -144,7 +148,7 @@ class CodexCatalogSource:
             self._in_flight = MappingProxyType({key: task for key, task in self._in_flight.items() if key != version})
         if fetched is None:
             self._failed_until = _latest(
-                self._failed_until, version, self._clock() + self._failure_ttl, self._max_versions
+                self._failed_until, version, self._clock() + self._failure_ttl, self._max_failures
             )
             return bundled_codex_stock()
         self._fetched = _latest(self._fetched, version, fetched, self._max_versions)

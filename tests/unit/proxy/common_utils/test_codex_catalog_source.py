@@ -193,6 +193,18 @@ async def test_versions_that_fail_never_push_out_a_fetched_one() -> None:
     assert len(github.requested) == fetches
 
 
+async def test_a_failed_version_keeps_its_cooldown_past_the_fetched_catalog_cap() -> None:
+    github: Final = _GitHub({}, fail=_unreachable)
+    source: Final = _source(github, max_versions=2)
+    for made_up in ("9.9.1", "9.9.2", "9.9.3", "9.9.4"):
+        await source.stock(made_up)
+    fetches: Final = len(github.requested)
+
+    await source.stock("9.9.1")
+
+    assert len(github.requested) == fetches, github.requested
+
+
 async def test_a_worker_starts_at_most_its_fetch_budget_each_minute() -> None:
     github: Final = _GitHub({})
     clock: Final = _Clock()
