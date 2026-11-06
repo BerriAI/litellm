@@ -98,3 +98,4 @@ def test_k03_sync_stream_with_normal_frames_delivers_the_text_and_a_stop() -> No
         assert consumed.text == _ANSWER, consumed
         assert consumed.finish_reasons[-1] == "stop", consumed
         assert len(wire.drain()) == 1
+

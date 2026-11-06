@@ -796,6 +796,80 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
 
 
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_converts_pdf_image_url_data_uri_to_document(llm_provider: str) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {"type": "image_url", "image_url": {"url": f"data:application/pdf;base64,{pdf_data}"}},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+@pytest.mark.parametrize("llm_provider", ("anthropic", "vertex_ai"))
+def test_anthropic_messages_pt_uses_pdf_format_for_generic_mime_data_uri(llm_provider: str) -> None:
+    pdf_data = "JVBERi0xLjQK"
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:application/octet-stream;base64,{pdf_data}",
+                            "format": "application/pdf",
+                        },
+                    },
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider=llm_provider,
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_data},
+    }
+
+
+def test_anthropic_messages_pt_keeps_png_image_url_as_image() -> None:
+    image_data = "iVBORw0KGgo="
+    result: Final = anthropic_messages_pt(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": f"data:image/png;base64,{image_data}"},
+                ],
+            }
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+    assert result[0]["content"][1] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": image_data},
+    }
+
+
 EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
     "empty_user_message",
     [{"role": "user", "content": None}, {"role": "user", "content": []}, {"role": "user"}],
@@ -1819,6 +1893,25 @@ def test_bedrock_tools_unpack_defs():
     ]
 
     _bedrock_tools_pt(tools=tools)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": ["object", "null"]},
+        {"type": "object", "properties": {"tier": {"type": "integer"}}, "$defs": [{"type": "string"}]},
+    ],
+    ids=["root_type_list", "defs_list"],
+)
+def test_bedrock_tools_pt_sends_malformed_parameters_as_an_object_schema(parameters: dict[str, object]) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools: Final = [{"type": "function", "function": {"name": "json_tool_call", "parameters": parameters}}]
+
+    input_schema: Final = _bedrock_tools_pt(tools=tools)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert input_schema["type"] == "object"
+    assert "$defs" not in input_schema
 
 
 def test_bedrock_tools_pt_strict_parameter():
