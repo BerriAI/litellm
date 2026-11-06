@@ -192,6 +192,19 @@ async def _run(prisma, users, caller=ADMIN, license=None, generate_key=_no_keys)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", "  employee-42  ", " \t"])
+async def test_bulk_keeps_existing_user_id_generation_and_whitespace_behavior(user_id: str | None) -> None:
+    prisma: Final = _FakePrisma()
+    response: Final = await _run(prisma, [{"user_id": user_id}])
+    result: Final = response.data[0]
+    assert result.success
+    assert result.user_id
+    assert result.user_id in prisma.db.litellm_usertable.rows
+    if user_id:
+        assert result.user_id == user_id
+
+
+@pytest.mark.asyncio
 async def test_creates_users_and_team_membership_in_every_store():
     prisma = _FakePrisma(teams=[_team("t1", [Member(user_id="existing", role="admin")]), _team("t2")])
     response = await _run(

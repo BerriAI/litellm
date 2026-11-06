@@ -11,16 +11,15 @@ import pytest
 import respx
 
 import litellm
-
-
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
-    encrypted_reasoning_signature,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -3302,7 +3301,6 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
     """
     Regression test: input_tokens should equal prompt_tokens when there are no cached tokens.
     """
-    from litellm.types.utils import PromptTokensDetailsWrapper
 
     # Create OpenAI format response without cached tokens
     usage = Usage(

@@ -8,9 +8,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
-from httpx import Headers
 import pytest
 import respx
+from httpx import Headers
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -22,21 +22,24 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature,
+)
 from litellm.llms.anthropic.chat import ModelResponseIterator
-from litellm.llms.anthropic.common_utils import AnthropicError, process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
+from litellm.llms.anthropic.common_utils import AnthropicError, process_anthropic_headers
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
-from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -1424,6 +1427,33 @@ def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(m
     assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
 
 
+def test_dict_fields_take_the_unforced_json_tool_on_a_default_thinking_model(local_model_cost_map):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-5",
+        drop_params=False,
+    )
+
+    assert "output_format" not in optional_params
+    assert "tool_choice" not in optional_params
+    assert [
+        (tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]
+    ] == [("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})]
+
+
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2629,6 +2659,46 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
         # Claude 3.7 model should get 64000 (64K default, 128K requires beta header)
         config_claude37 = AnthropicConfig.get_config(model="claude-3-7-sonnet-20250219")
         assert config_claude37["max_tokens"] == 64000
+
+
+def test_transform_request_uses_deployment_max_output_tokens_before_catalog() -> None:
+    model: Final = "claude-sonnet-4-6"
+    catalog_max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    config: Final = AnthropicConfig()
+
+    configured: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+    catalog_default: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    non_mapping_model_info: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": "invalid"},
+        headers={},
+    )
+    requested: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 654},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+
+    assert configured["max_tokens"] == 987
+    assert catalog_default["max_tokens"] == catalog_max_output_tokens
+    assert non_mapping_model_info["max_tokens"] == catalog_max_output_tokens
+    assert requested["max_tokens"] == 654
 
 
 def test_get_config_without_model_uses_fallback():
@@ -4477,7 +4547,9 @@ def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
     ],
 )
 def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
-    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}]
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}
+    ]
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
         _anthropic_body(copy.deepcopy(messages))
@@ -4488,7 +4560,12 @@ def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(mar
 
 def test_transform_request_names_the_marker_ttl_rule_for_a_ttl_only_claude_takes():
     messages: Final = [
-        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}]}
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+            ],
+        }
     ]
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="optional ttl of '30m' or '12h'"):
@@ -6909,6 +6986,63 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
     assert "tool_choice" not in result
 
 
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "forced"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}, False),
+        ("claude-opus-5", {}, False),
+        ("claude-sonnet-5", {}, False),
+        ("claude-haiku-5-5", {}, False),
+        ("claude-fable-5", {"reasoning_effort": "none"}, False),
+        ("claude-opus-4-8", {}, True),
+        ("claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("claude-haiku-5-5", {"reasoning_effort": "none"}, True),
+    ],
+    ids=[
+        "opus-4-8-adaptive",
+        "opus-5-default-thinking",
+        "sonnet-5-default-thinking",
+        "haiku-5-5-default-thinking",
+        "fable-5-always-on-reasoning-effort-none",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+        "haiku-5-5-reasoning-effort-none",
+    ],
+)
+def test_response_format_tool_is_forced_only_when_the_model_will_not_think(
+    set_native_structured_output, model, thinking_params, forced
+):
+    set_native_structured_output(model, None)
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "capital",
+                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert [tool["name"] for tool in request["tools"]] == ["json_tool_call"]
+    assert (request.get("tool_choice") == {"name": "json_tool_call", "type": "tool"}) is forced
+    assert request["tools"][0].get("description") == (None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION)
+
+
 def _eager_chat_function(**extra: object) -> dict[str, object]:
     return {
         "name": "write_file",
@@ -8935,9 +9069,10 @@ async def test_anthropic_api_max_completion_tokens(model: str):
 
 
 def test_anthropic_tool_cache_control():
-    from litellm.utils import return_raw_request
-    from litellm.types.utils import CallTypes
     import json
+
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
 
     tool_content = "Result: 4. " * 1000
     messages = [
@@ -10249,7 +10384,9 @@ def test_chat_response_without_input_transformations_adds_no_key() -> None:
 def test_json_mode_chat_response_keeps_input_transformations() -> None:
     completion_response: Final = {
         **_input_transformations_response(),
-        "content": [{"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}],
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}
+        ],
         "stop_reason": "tool_use",
     }
     result: Final = AnthropicConfig().transform_response(
@@ -10689,7 +10826,9 @@ def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_fo
                 {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [{"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+                    "tool_calls": [
+                        {"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    ],
                 },
                 {"role": "tool", "tool_call_id": "5", "content": "rain"},
             ],
@@ -10726,9 +10865,15 @@ def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_t
 
 def _five_cache_hint_conversation() -> list[dict[str, object]]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
         {"role": "assistant", "content": "answer 2"},
         {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
@@ -10905,3 +11050,24 @@ def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_
 
     assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
     assert json.dumps(body).count('"cache_control"') == 4
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
+def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
+    local_model_cost_map, model: str
+):
+    """What get_supported_openai_params says about temperature/top_p must match what
+    map_openai_params does with them under drop_params, so a caller that pre-flights
+    from the list is never told a param is fine that the request path then drops."""
+    config = AnthropicConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    sent = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
+    assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)

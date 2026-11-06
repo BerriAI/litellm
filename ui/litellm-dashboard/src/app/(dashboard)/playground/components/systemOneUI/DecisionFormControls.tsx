@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Plus, Trash2 } from "lucide-react";
 import { useId, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { IssueList } from "./ValidationFeedback";
 import type { PayloadValidation } from "./lib/validatePayload";
 
@@ -34,9 +35,12 @@ export function QuestionCardHeader({
   removeLabel: string;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Question {index + 1}</span>
+      <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        {t("playground.systemOne.decisionFormControls.question", { number: index + 1 })}
+      </span>
       <RemoveButton label={removeLabel} onClick={onRemove} />
     </div>
   );
