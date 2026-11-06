@@ -26,7 +26,7 @@ directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no
 tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
-CircleCI's integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
+CircleCI's integration groups run every file here except the OCI tests, which no CI runs, and
 the files in `GITHUB_FILES` in `run.py`. `test-integration.yml` runs the same groups through the same
 `run_integration.sh` on GitHub Actions, on main every three hours from 8am to 8pm Pacific Monday to Saturday,
 and on a pull request when someone adds the `run-ci` label. Neither runs every pull request, so a new file here
@@ -40,6 +40,11 @@ together with its dedicated job, and list a new dedicated GitHub workflow with t
 `DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check
 fails a file here that a GitHub workflow runs unless it is in `GITHUB_FILES` and that workflow owns its
 directory (#46780)
+
+The Monty sandbox tests are an explicit exception. `test-integration.yml` owns `sandbox/` and runs
+`uv run --no-sync pytest tests/integration/sandbox/test_monty_runtime.py -q` in its focused Monty job
+on pull requests, scheduled runs and manual `all` or `monty` runs. It installs the proxy extra and
+needs no gateway, database, Redis or credentials. Keep subprocess and timing tests here, not in unit tests
 
 ## Fixtures that boot a proxy
 

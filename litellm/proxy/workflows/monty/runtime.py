@@ -14,13 +14,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError
 from pydantic import JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
 from .compiler import escape_diagnostics
 from .models import CompiledProgram, JsonSchema, MontyErrorKind, MontyFailure, MontyLimits, MontySuccess
+from .validation import ValidatorProcess
 
 if TYPE_CHECKING:
     from pydantic_monty import AsyncMonty, AsyncMontySession, CollectString, MontyRuntimeError
@@ -74,9 +73,7 @@ def _monty_json_issue(value: JsonValue, depth: int, max_depth: int) -> MontyErro
     return MontyErrorKind.INPUT_INVALID
 
 
-def validate_json(
-    value: object, schema: JsonSchema, *, max_bytes: int, max_depth: int, output: bool = False
-) -> JsonValue | MontyFailure:
+def validate_json(value: object, *, max_bytes: int, max_depth: int, output: bool = False) -> JsonValue | MontyFailure:
     invalid: Final = MontyErrorKind.OUTPUT_INVALID if output else MontyErrorKind.INPUT_INVALID
     too_large: Final = MontyErrorKind.OUTPUT_TOO_LARGE if output else MontyErrorKind.INPUT_TOO_LARGE
     try:
@@ -89,13 +86,11 @@ def validate_json(
         encoded: Final = json.dumps(parsed, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > max_bytes:
             return MontyFailure(too_large, "JSON byte limit exceeded")
-        validator: Final = Draft202012Validator(schema)
-        validator.validate(parsed)  # pyright: ignore[reportUnknownMemberType]  # upstream kwargs are untyped
     except PydanticValidationError as exc:
         if '"type":"recursion_loop"' in exc.json():
             return MontyFailure(too_large, "JSON depth limit exceeded")
         return MontyFailure(invalid, escape_diagnostics(str(exc))[:4096])
-    except (ValidationError, ValueError, OverflowError, RecursionError) as exc:
+    except (ValueError, OverflowError, RecursionError) as exc:
         return MontyFailure(invalid, escape_diagnostics(str(exc))[:4096])
     else:
         return parsed
@@ -152,6 +147,7 @@ class MontyRuntime:
         self._pool: AsyncMonty | None = None
         self._slots = asyncio.Semaphore(limits.max_concurrent_workers)
         self._admitted = 0
+        self._validators = tuple(ValidatorProcess() for _ in range(limits.max_concurrent_workers))
 
     async def start(self) -> MontyFailure | None:
         if self._pool is not None:
@@ -174,6 +170,11 @@ class MontyRuntime:
                 feed_duration_limit_grace=0.1,
             )
             await pool.__aenter__()
+            validators: Final = await asyncio.gather(*(worker.start() for worker in self._validators))
+            if (failure := next((result for result in validators if result is not None), None)) is not None:
+                await asyncio.gather(*(worker.close() for worker in self._validators))
+                await pool.__aexit__(None, None, None)
+                return failure
             self._pool = pool
         except (ImportError, OSError, ValueError, RuntimeError) as exc:
             return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
@@ -183,6 +184,7 @@ class MontyRuntime:
     async def close(self) -> None:
         pool: Final = self._pool
         self._pool = None
+        await asyncio.gather(*(worker.close() for worker in self._validators))
         if pool is not None:
             await pool.__aexit__(None, None, None)
 
@@ -200,22 +202,27 @@ class MontyRuntime:
         try:
             async with asyncio.timeout_at(asyncio.get_running_loop().time() + deadline_monotonic - time.monotonic()):
                 async with self._slots:
-                    validated: Final = validate_json(
-                        input,
-                        compiled.input_schema,
-                        max_bytes=self.limits.max_input_bytes,
-                        max_depth=self.limits.max_input_depth,
-                    )
-                    if isinstance(validated, MontyFailure):
-                        return validated
-                    return await self._execute(compiled, validated, deadline_monotonic, started)
+                    worker: Final = next(worker for worker in self._validators if not worker.busy)
+                    worker.busy = True
+                    try:
+                        validated: Final = await self._validate(
+                            input, compiled.input_schema, worker, deadline_monotonic
+                        )
+                        if isinstance(validated, MontyFailure):
+                            return validated
+                        return await self._execute(compiled, validated, deadline_monotonic, started, worker)
+                    except asyncio.CancelledError:
+                        await worker.close()
+                        raise
+                    finally:
+                        worker.busy = False
         except TimeoutError:
             return MontyFailure(MontyErrorKind.TIMEOUT, "node deadline expired")
         finally:
             self._admitted -= 1
 
     async def _execute(
-        self, compiled: CompiledProgram, input: JsonValue, deadline: float, started: float
+        self, compiled: CompiledProgram, input: JsonValue, deadline: float, started: float, worker: ValidatorProcess
     ) -> MontySuccess | MontyFailure:
         from pydantic_monty import CollectString, MontyCrashedError, MontyRuntimeError, MontySyntaxError, ResourceLimits
 
@@ -248,7 +255,7 @@ class MontyRuntime:
                         ),
                         strict=True,
                     )
-                    return self._output(result, compiled, collector.output, deadline, started)
+                    return await self._output(result, compiled, collector.output, deadline, started, worker)
                 except asyncio.CancelledError:
                     _kill(session)
                     raise
@@ -264,8 +271,14 @@ class MontyRuntime:
         except (ValueError, OSError) as exc:
             return MontyFailure(MontyErrorKind.RUNTIME_ERROR, escape_diagnostics(str(exc))[:4096])
 
-    def _output(
-        self, result: object, compiled: CompiledProgram, stdout: str, deadline: float, started: float
+    async def _output(
+        self,
+        result: object,
+        compiled: CompiledProgram,
+        stdout: str,
+        deadline: float,
+        started: float,
+        worker: ValidatorProcess,
     ) -> MontySuccess | MontyFailure:
         try:
             envelope: Final = _JSON.validate_python(result, strict=True)
@@ -273,18 +286,26 @@ class MontyRuntime:
             return MontyFailure(MontyErrorKind.OUTPUT_INVALID, "return value is not strict JSON")
         if not isinstance(envelope, list) or len(envelope) != 2 or envelope[0] is not True:
             return MontyFailure(MontyErrorKind.OUTPUT_INVALID, "return value is not strict JSON")
-        output: Final = validate_json(
-            envelope[1],
-            compiled.output_schema,
-            max_bytes=self.limits.max_output_bytes,
-            max_depth=self.limits.max_output_depth,
-            output=True,
-        )
+        output: Final = await self._validate(envelope[1], compiled.output_schema, worker, deadline, output=True)
         if isinstance(output, MontyFailure):
             return output
         if time.monotonic() >= deadline:
             return MontyFailure(MontyErrorKind.TIMEOUT, "node deadline expired during validation")
         return MontySuccess(output, escape_diagnostics(stdout), int((time.monotonic() - started) * 1000))
+
+    async def _validate(
+        self, value: object, schema: JsonSchema, worker: ValidatorProcess, deadline: float, *, output: bool = False
+    ) -> JsonValue | MontyFailure:
+        parsed: Final = validate_json(
+            value,
+            max_bytes=self.limits.max_output_bytes if output else self.limits.max_input_bytes,
+            max_depth=self.limits.max_output_depth if output else self.limits.max_input_depth,
+            output=output,
+        )
+        if isinstance(parsed, MontyFailure):
+            return parsed
+        failure: Final = await worker.validate(parsed, schema, deadline=deadline, output=output)
+        return failure if failure is not None else parsed
 
     async def evaluate_predicate(
         self, compiled: CompiledProgram, input: object, *, deadline_monotonic: float

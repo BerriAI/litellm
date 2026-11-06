@@ -27,6 +27,7 @@ GROUPS: Final = MappingProxyType(
 )
 GITHUB_FILES: Final = frozenset(
     {
+        "tests/integration/sandbox/test_monty_runtime.py",
         "tests/integration/database/test_roi_observed.py",
         "tests/integration/database/image/test_component_image_serves_offline.py",
         "tests/integration/database/image/test_image_admin_mcp.py",

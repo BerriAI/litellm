@@ -55,7 +55,7 @@ def _compile(
     return result
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def runtime() -> AsyncIterator[MontyRuntime]:
     instance: Final = MontyRuntime(MontyLimits(max_concurrent_workers=1, max_queued_waiters=1))
     assert await instance.start() is None
@@ -370,6 +370,152 @@ async def test_invalid_bound_input_is_rejected(runtime: MontyRuntime) -> None:
     )
     assert isinstance(result, MontyFailure)
     assert result.kind == MontyErrorKind.INPUT_INVALID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["default", "pattern", "enum", "$ref", "$ref-like"])
+async def test_keyword_looking_properties_validate_as_data(runtime: MontyRuntime, name: str) -> None:
+    schema: Final[JsonSchema] = {
+        "type": "object",
+        "properties": {name: {"type": "string"}},
+        "required": [name],
+        "additionalProperties": False,
+    }
+    compiled: Final = _compile("def transform(value): return value", schema, schema)
+    result: Final = await _run(runtime, compiled, {name: "data"})
+    assert isinstance(result, MontySuccess), result
+    assert result.output == {name: "data"}
+    invalid: Final = await _run(runtime, compiled, {name: 1})
+    assert isinstance(invalid, MontyFailure), invalid
+    assert invalid.kind == MontyErrorKind.INPUT_INVALID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", [False, True])
+async def test_bypassed_remote_schema_never_retrieves_from_host(runtime: MontyRuntime, output: bool) -> None:
+    requests: Final[asyncio.Queue[bytes]] = asyncio.Queue()
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        requests.put_nowait(await reader.readuntil(b"\r\n\r\n"))
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server: Final = await asyncio.start_server(respond, "127.0.0.1", 0)
+    async with server:
+        port: Final = server.sockets[0].getsockname()[1]
+        schema: Final[JsonSchema] = {"properties": {"default": {"$ref": f"http://127.0.0.1:{port}/schema"}}}
+        compiled: Final = _compile("def transform(value): return value")
+        bypassed: Final = (
+            replace(compiled, output_schema=schema)
+            if output
+            else replace(compiled, input_schema={"properties": {"value": schema}})
+        )
+        result: Final = await _run(runtime, bypassed, {"default": 1})
+        assert isinstance(result, MontyFailure), result
+        assert result.kind == (MontyErrorKind.OUTPUT_INVALID if output else MontyErrorKind.INPUT_INVALID)
+        assert requests.empty()
+
+
+def _slow_schema(depth: int) -> JsonSchema:
+    definitions: Final[JsonSchema] = {
+        f"N{index}": {"anyOf": [{"$ref": f"#/$defs/N{index + 1}"}, {"$ref": f"#/$defs/N{index + 1}"}]}
+        for index in range(depth)
+    }
+    return {**definitions, f"N{depth}": {"type": "string"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", [False, True])
+async def test_expensive_allowed_validation_times_out_without_blocking_and_recovers(
+    runtime: MontyRuntime, output: bool
+) -> None:
+    ticks: Final[asyncio.Queue[float]] = asyncio.Queue()
+    done: Final = asyncio.Event()
+
+    async def heartbeat() -> None:
+        while not done.is_set():
+            ticks.put_nowait(time.monotonic())
+            await asyncio.sleep(0.005)
+
+    schema: Final = _slow_schema(22)
+    ref: Final[JsonSchema] = {"$ref": "#/$defs/N0"}
+    compiled: Final = _compile(
+        "def transform(value): return value", ref if output else {}, {} if output else ref, schema
+    )
+    pulse: Final = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0.01)
+    started: Final = time.monotonic()
+    try:
+        result: Final = await runtime.run_program(compiled, {"value": None}, deadline_monotonic=started + 0.15)
+        elapsed: Final = time.monotonic() - started
+    finally:
+        done.set()
+        await pulse
+    assert isinstance(result, MontyFailure), result
+    assert result.kind == MontyErrorKind.TIMEOUT
+    assert 0.1 <= elapsed < 0.5  # test-quality-ok: validation enforces the node deadline
+    observations: Final = tuple(ticks.get_nowait() for _ in range(ticks.qsize())) + (time.monotonic(),)
+    assert len(observations) > 5
+    assert max(later - earlier for earlier, later in zip(observations, observations[1:])) < 0.05
+    recovered: Final = await _run(runtime, _compile("def transform(value): return value"), "recovered")
+    assert isinstance(recovered, MontySuccess), recovered
+    assert recovered.output == "recovered"
+
+
+def _validator_pids() -> frozenset[int]:
+    def is_validator(child: psutil.Process) -> bool:
+        try:
+            return any(argument.endswith("_validator_worker.py") for argument in child.cmdline())
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return False
+
+    return frozenset(child.pid for child in psutil.Process().children() if is_validator(child))
+
+
+@pytest.mark.asyncio
+async def test_validator_environment_is_empty_and_close_reaps_processes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITEFLOW_VALIDATOR_CANARY", "fake-value-no-credential")
+    previous: Final = _validator_pids()
+    instance: Final = MontyRuntime(MontyLimits(max_concurrent_workers=1))
+    assert await instance.start() is None
+    try:
+        created: Final = _validator_pids() - previous
+        assert len(created) == 1
+        pid: Final = next(iter(created))
+        assert b"LITEFLOW_VALIDATOR_CANARY" not in Path(f"/proc/{pid}/environ").read_bytes()
+        assert Path(f"/proc/{pid}/environ").read_bytes() == b""
+        result: Final = await _run(instance, _compile("def transform(value): return value"), 1)
+        assert isinstance(result, MontySuccess), result
+        assert _validator_pids() - previous == created
+    finally:
+        await instance.close()
+    assert not (_validator_pids() - previous)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_validator_crash_and_cancellation_release_slot_and_recover(runtime: MontyRuntime, cancel: bool) -> None:
+    pid: Final = next(iter(_validator_pids()))
+    compiled: Final = _compile(
+        "def transform(value): return value", argument={"$ref": "#/$defs/N0"}, definitions=_slow_schema(22)
+    )
+    task: Final = asyncio.create_task(_run(runtime, compiled, None))
+    await asyncio.sleep(0.05)
+    if cancel:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        os.kill(pid, 9)  # test-quality-ok: deliberately crash the owned validator to prove slot and subprocess recovery
+        result: Final = await task
+        assert isinstance(result, MontyFailure), result
+        assert result.kind == MontyErrorKind.WORKER_CRASHED
+    assert pid not in _validator_pids()
+    recovered: Final = await _run(runtime, _compile("def transform(value): return value"), "after failure")
+    assert isinstance(recovered, MontySuccess), recovered
+    assert recovered.output == "after failure"
 
 
 @pytest.mark.asyncio
