@@ -1270,6 +1270,15 @@ def bedrock_supports_tool_search(model: str) -> bool:
     return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
+def bedrock_supports_per_turn_control(model: str, model_info: Mapping[str, object] | None) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    deployment_flag: Final = (model_info or {}).get("supports_per_turn_control")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return AnthropicModelInfo.supports_model_capability(model, "supports_per_turn_control", "bedrock")
+
+
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
     """
     Whether Bedrock accepts a ``ttl`` ("5m"/"1h") on prompt ``cache_control``
