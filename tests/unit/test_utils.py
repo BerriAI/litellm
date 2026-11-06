@@ -13,6 +13,7 @@ import queue
 import threading
 import time
 import uuid
+import warnings
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -11626,3 +11627,32 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+def _client_deprecations(caught: list[warnings.WarningMessage]) -> list[tuple[type[Warning], str]]:
+    return [(warning.category, warning.filename) for warning in caught if "client=" in str(warning.message)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_python_served_call_keeps_the_client_but_warns_once_that_it_is_deprecated(asynchronous: bool) -> None:
+    arguments: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "mock_response": "hi",
+        "client": object(),
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response: Final = await litellm.acompletion(**arguments) if asynchronous else litellm.completion(**arguments)
+
+    assert response.choices[0].message.content == "hi"
+    assert _client_deprecations(caught) == [(DeprecationWarning, __file__)]
+
+
+def test_call_without_a_client_does_not_warn() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        litellm.completion(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="hi")
+
+    assert _client_deprecations(caught) == []

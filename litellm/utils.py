@@ -111,6 +111,7 @@ from litellm.litellm_core_utils.tool_fields import (
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
+from litellm.rust_bridge.deprecated_arguments import warn_deprecated_in
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -1267,6 +1268,7 @@ def function_setup(
     **kwargs: Any,  # kwargs-ok: forwarded to Logging()/callbacks, varies per call_type
 ) -> tuple[LiteLLMLoggingObject, dict[str, Any]]:
     ### NOTICES ###
+    warn_deprecated_in(kwargs)
     if litellm.set_verbose is True:
         verbose_logger.warning(
             "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."

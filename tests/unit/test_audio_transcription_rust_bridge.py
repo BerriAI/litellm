@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Generator
 from typing import Final
 
+import openai
 import pytest
 
 import litellm
@@ -301,3 +303,43 @@ def test_bedrock_transcription_rejects_params_it_cannot_honor(unsupported: dict[
     forwarded: Final = bridge.calls[0].resolved["optional_params"]
     assert forwarded["language"] == "fr"
     assert forwarded.keys().isdisjoint(unsupported)
+
+
+def test_bedrock_transcription_warns_that_a_caller_client_is_ignored() -> None:
+    bridge: Final = SyncBridge()
+    NATIVE_TRANSCRIPTION.override(bridge)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response: Final = litellm.transcription(model=MODEL, file=AUDIO_FILE, client=object())
+
+    ignored: Final = [warning for warning in caught if "client=" in str(warning.message)]
+    assert response.text == "rust"
+    assert len(bridge.calls) == 1
+    assert [(warning.category, warning.filename) for warning in ignored] == [(DeprecationWarning, __file__)]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_atranscription_warns_once_that_a_caller_client_is_deprecated() -> None:
+    bridge: Final = AsyncBridge()
+    NATIVE_ATRANSCRIPTION.override(bridge)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response: Final = await litellm.atranscription(model=MODEL, file=AUDIO_FILE, client=object())
+
+    ignored: Final = [warning for warning in caught if "client=" in str(warning.message)]
+    assert response.text == "async rust"
+    assert [(warning.category, warning.filename) for warning in ignored] == [(DeprecationWarning, __file__)]
+
+
+def test_python_served_transcription_warns_that_a_caller_client_is_deprecated() -> None:
+    client: Final = openai.OpenAI(api_key="sk-test", base_url="http://127.0.0.1:9", max_retries=0)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(openai.APIConnectionError, match="Connection error"):
+            litellm.transcription(model="openai/whisper-1", file=AUDIO_FILE, client=client)
+
+    ignored: Final = [warning for warning in caught if "client=" in str(warning.message)]
+    assert [(warning.category, warning.filename) for warning in ignored] == [(DeprecationWarning, __file__)]
