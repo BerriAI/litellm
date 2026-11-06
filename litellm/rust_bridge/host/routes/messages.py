@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime
 import errno
+import ipaddress
 import os
+import socket
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
@@ -17,7 +19,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.common_utils import AnthropicError, anthropic_pass_through_api_base
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native.handler import (
     _native_messages_config as native_messages_config,  # pyright: ignore[reportPrivateUsage]  # the handler's own config lookup
@@ -26,6 +28,8 @@ from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import known_params, optional_str
@@ -132,6 +136,13 @@ _exception_type: Final = cast(  # cast-ok: the legacy public exception mapper is
     Callable[..., Exception], exception_mapping_utils.exception_type
 )
 _BODY_READ_TIMEOUT: Final = "Timeout on reading data from socket"  # aiohttp's SocketTimeoutError text
+_UNREACHABLE: Final = "could not reach the provider: "
+_SEND_FAILED: Final = "upstream network error: error sending request: client error (SendRequest): "
+_DNS_FAILURE: Final = "failed to lookup address information: "
+_HTTPX_DNS_ERRNO: Final = {
+    "Name or service not known": socket.EAI_NONAME,
+    "Temporary failure in name resolution": socket.EAI_AGAIN,
+}
 _MISSING_KEY: Final = (
     "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
     "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
@@ -199,6 +210,59 @@ def _body_cut(received: int, expected: int | None, reset: bool) -> httpx.Transpo
     return httpx.ReadError(f"{text}. {ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET))!r}")
 
 
+def _connect_failure(native: str, request: Mapping[str, object], request_provider: str) -> str | None:
+    api_base: Final = request.get("api_base")
+    if not isinstance(api_base, str) and request_provider != "anthropic":
+        return None
+    refused: Final = "tcp connect error: Connection refused" in native
+    dns_reason: Final = native.rsplit(_DNS_FAILURE, 1)[1] if _DNS_FAILURE in native else None
+    tls_eof: Final = native.endswith("tls handshake eof")
+    if not http_transport.uses_aiohttp_transport():
+        if refused:
+            return "All connection attempts failed"
+        dns_errno: Final = None if dns_reason is None else _HTTPX_DNS_ERRNO.get(dns_reason)
+        if dns_errno is not None:
+            return f"[Errno {dns_errno}] {dns_reason}"
+        return "" if tls_eof else None
+    url: Final = httpx.URL(api_base if isinstance(api_base, str) else anthropic_pass_through_api_base())
+    port: Final = url.port or (443 if url.scheme == "https" else 80)
+    reason: str | None  # rebind-ok: one branch per connect failure kind
+    if refused:
+        try:
+            address: Final = ipaddress.ip_address(url.host)
+        except ValueError:
+            return None
+        reason = f"Connect call failed {(str(address), port) if address.version == 4 else (str(address), port, 0, 0)}"
+    elif dns_reason is not None:
+        reason = dns_reason
+    elif tls_eof:
+        reason = None
+    else:
+        return None
+    ssl_verify: Final = request.get("ssl_verify")
+    ssl_config: Final = get_ssl_configuration(ssl_verify if isinstance(ssl_verify, bool | str) else None)
+    return f"Cannot connect to host {url.host}:{port} ssl:{'default' if ssl_config is True else ssl_config} [{reason}]"
+
+
+def _transport_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> str | None:
+    """The text Python's HTTP client raises for a call that failed before any response arrived."""
+    native: Final = str(error)
+    if native.startswith(_SEND_FAILED):
+        reset: Final = native.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
+        closed: Final = native.endswith("connection closed before message completed")
+        if http_transport.uses_aiohttp_transport():
+            if reset:
+                return str(ConnectionResetError(errno.ECONNRESET, os.strerror(errno.ECONNRESET)))
+            return "Server disconnected" if closed else native
+        if reset:
+            return ""
+        return "Server disconnected without sending a response." if closed else native
+    if not native.startswith(_UNREACHABLE):
+        return None
+    connect: Final = _connect_failure(native, request, request_provider)
+    return native if connect is None else connect
+
+
 def _upstream_failure(
     error: Exception, request: Mapping[str, object]
 ) -> tuple[int, str, Sequence[tuple[str, str]]] | None:
@@ -215,7 +279,8 @@ def _upstream_failure(
 
 def _provider_error(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception | None:
     """The provider exception Python's `_handle_error` builds for the same failure."""
-    failure: Final = _upstream_failure(error, request)
+    transport: Final = _transport_failure(error, request, request_provider)
+    failure: Final = _upstream_failure(error, request) if transport is None else (500, transport, ())
     if failure is None:
         return None
     status, text, headers = failure
@@ -226,13 +291,17 @@ def _provider_error(error: Exception, request: Mapping[str, object], request_pro
         request.get("model_info"),
         api_base if isinstance(api_base, str) else None,
     )
-    return (
+    provider_error: Final = (
         cast(_ERROR_CLASS, config.get_error_class)(  # cast-ok: the config's untyped headers parameter
             error_message=text, status_code=status, headers=dict(headers)
         )
         if config is not None
         else AnthropicError(status_code=status, message=text, headers=httpx.Headers(headers))
     )
+    if transport is not None and isinstance(provider_error, BaseLLMException):
+        # Python's `_handle_error` gives a failure without a response the status 500.
+        provider_error.status_code_is_synthesized = True
+    return provider_error
 
 
 def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> None:
