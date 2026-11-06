@@ -12,7 +12,7 @@ Ensures cooldowns are applied correctly.
 """
 
 from collections.abc import Mapping, MutableMapping
-from typing import Final, Protocol, cast  # noqa: TID251  # narrows the untyped request dict for mutation
+from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
@@ -84,12 +84,8 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
-class DeploymentParamLookup(Protocol):
-    def get(self, key: str, /) -> object: ...
-
-
 def github_copilot_caller_endpoint_keys(
-    deployment_litellm_params: DeploymentParamLookup, request_kwargs: Mapping[str, object]
+    deployment_litellm_params: Mapping[str, object], request_kwargs: Mapping[str, object]
 ) -> tuple[str, ...]:
     model: Final = deployment_litellm_params.get("model")
     is_github_copilot: Final = deployment_litellm_params.get("custom_llm_provider") == "github_copilot" or (

@@ -249,7 +249,7 @@ def test_booting_without_tokens_lists_login_deployments_and_serves_only_after_to
                     served: Final = _chat(_base_url(owned), key, name, uuid.uuid4().hex)
                     assert served.status == 200, served.text
                     _successes_logged(key, at_least=_CONTROL_CALLS_BEFORE_THE_RELOAD + served_logins)
-                assert peers.auth_connections() == ()
+                peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
                 forwarded: Final = peers.api.drain()
                 assert {dl.bearer(request) for request in forwarded} == {dl.CHATGPT_STORED, dl.COPILOT_ACCESS}
 
@@ -310,7 +310,7 @@ def test_a_token_removed_after_boot_turns_every_request_into_the_refusal(
                         refused: Final = _chat(_base_url(owned), key, name, uuid.uuid4().hex)
                         assert refused.status == 400, refused.text
                         assert refusal in refused.message(), refused.text
-                assert peers.auth_connections() == ()
+                peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
                 tail: Final = owned.log.read_text()
                 assert dl.CHATGPT_USER_CODE not in tail and dl.COPILOT_USER_CODE not in tail, tail[-3000:]
                 control: Final = _chat(_base_url(owned), key, _CONTROL, uuid.uuid4().hex)

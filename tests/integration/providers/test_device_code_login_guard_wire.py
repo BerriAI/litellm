@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import itertools
 import json
-import re
 import threading
 import time
 import uuid
@@ -26,8 +25,9 @@ from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.timing import assert_cut_short, timed
 from integration._support.wire import Request
-from litellm.llms.chatgpt.authenticator import DEVICE_CODE_COOLDOWN_SECONDS
 from pydantic import JsonValue
+
+from litellm.llms.chatgpt.authenticator import DEVICE_CODE_COOLDOWN_SECONDS
 
 pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
@@ -403,7 +403,7 @@ def test_missing_token_is_refused_with_the_login_instructions_before_any_auth_ho
 
 
 @pytest.mark.parametrize("cell", _CELLS, ids=_Cell.name)
-def test_stored_token_serves_the_request_without_an_auth_host_call(scene: _Scene, cell: _Cell) -> None:
+def test_stored_token_serves_the_request_without_a_device_login(scene: _Scene, cell: _Cell) -> None:
     scene.store_valid_token(cell.provider)
     call: Final = scene.call(cell)
     served: Final = _serve(call)
@@ -412,7 +412,10 @@ def test_stored_token_serves_the_request_without_an_auth_host_call(scene: _Scene
     received: Final = scene.rig.peers.api.drain()
     (forwarded,) = _carrying(received, call.marker)
     assert dl.bearer(forwarded) == _STORED_BEARERS[cell.provider], _describe(received)
-    assert scene.rig.peers.auth_connections() == ()
+    if cell.provider == "copilot":
+        scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
+    else:
+        assert scene.rig.peers.auth_connections() == ()
     (row,) = _spend_rows(scene.key)
     assert row["status"] == "success", row
 
@@ -498,7 +501,7 @@ def test_copilot_embeddings_are_served_with_the_stored_access_token(scene: _Scen
     (forwarded,) = scene.rig.peers.api.drain()
     assert (forwarded.method, dl.bearer(forwarded)) == ("POST", dl.COPILOT_ACCESS), forwarded.target
     assert forwarded.target.endswith("/embeddings"), forwarded.target
-    assert scene.rig.peers.auth_connections() == ()
+    scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)
@@ -571,7 +574,67 @@ def test_stored_token_the_provider_rejects_surfaces_its_401_without_a_login(
     assert {dl.bearer(request) for request in _carrying(received, call.marker)} == {
         dl.CHATGPT_REJECTED if provider == "chatgpt" else dl.COPILOT_REJECTED_ACCESS
     }, _describe(received)
+    if provider == "copilot":
+        scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_REJECTED_ACCESS)
+    else:
+        assert scene.rig.peers.auth_connections() == ()
+
+
+@pytest.mark.parametrize("stale_key", (False, True), ids=("missing-api-key", "expired-api-key"))
+def test_copilot_access_token_is_forwarded_without_minting_an_api_key(scene: _Scene, stale_key: bool) -> None:
+    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_ACCESS)
+    if stale_key:
+        dl.write_copilot_key(scene.rig.copilot_dir, dl.COPILOT_REJECTED_KEY, scene.rig.peers.api.url, -3600)
+    legacy_key: Final = scene.rig.copilot_dir / "api-key.json"
+    stored_key: Final = legacy_key.read_bytes() if stale_key else None
+    call: Final = scene.call(_Cell("copilot", "chat", False, "httpx"))
+    served: Final = _serve(call)
+    assert served.status == 200, served.text
+    assert set(rv.MARKER.findall(served.text)) == {call.marker}, served.text
+    scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
+    (forwarded,) = _carrying(scene.rig.peers.api.drain(), call.marker)
+    assert dl.bearer(forwarded) == dl.COPILOT_ACCESS
+    assert (legacy_key.read_bytes() if legacy_key.exists() else None) == stored_key
+
+
+def test_copilot_access_token_serves_when_the_legacy_api_key_path_is_a_directory(scene: _Scene) -> None:
+    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_UNSAVED_KEY_ACCESS)
+    unwritable_key_file: Final = scene.rig.copilot_dir / "api-key.json"
+    unwritable_key_file.mkdir()
+    first: Final = scene.call(_Cell("copilot", "chat", False, "httpx"))
+    first_served: Final = _serve(first)
+    assert first_served.status == 200, first_served.text
+    later: Final = tuple(scene.call(_Cell("copilot", "chat", False, "httpx")) for _ in range(3))
+    later_served: Final = tuple(_serve(call) for call in later)
+    assert [served.status for served in later_served] == [200, 200, 200], [served.text for served in later_served]
+    scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_UNSAVED_KEY_ACCESS)
+    received: Final = scene.rig.peers.api.drain()
+    forwarded: Final = tuple(_carrying(received, call.marker) for call in (first, *later))
+    assert [tuple(dl.bearer(request) for request in requests) for requests in forwarded] == [
+        (dl.COPILOT_UNSAVED_KEY_ACCESS,)
+    ] * 4, _describe(received)
+    assert unwritable_key_file.is_dir()
+
+
+def test_copilot_access_token_github_rejects_fails_the_request_without_a_device_login(scene: _Scene) -> None:
+    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_REJECTED_ACCESS)
+    call: Final = scene.call(_Cell("copilot", "chat", False, "httpx"))
+    served: Final = _serve(call)
+    assert served.status == 401, served.text
+    assert dl.REJECTED_DETAIL in _error_message(served.text), served.text
+    _failure_logged(served)
+    scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_REJECTED_ACCESS)
+    (forwarded,) = _carrying(scene.rig.peers.api.drain(), call.marker)
+    assert (forwarded.method, dl.bearer(forwarded)) == ("POST", dl.COPILOT_REJECTED_ACCESS)
+
+
+def test_expired_copilot_api_key_with_no_access_token_is_refused_before_any_auth_host_call(scene: _Scene) -> None:
+    dl.write_copilot_key(scene.rig.copilot_dir, dl.COPILOT_STORED_KEY, scene.rig.peers.api.url, -3600)
+    served: Final = _serve(scene.call(_Cell("copilot", "responses", False, "httpx")))
+    assert served.status == 400, served.text
+    assert dl.COPILOT_REFUSAL in _error_message(served.text), served.text
     assert scene.rig.peers.auth_connections() == ()
+    assert _describe(scene.rig.peers.api.drain()) == ()
 
 
 _UNUSABLE_CHATGPT_FILES: Final[Mapping[str, str]] = MappingProxyType(
@@ -663,7 +726,10 @@ def test_a_token_mounted_after_a_refusal_serves_without_a_restart_and_removing_i
     after: Final = _serve(scene.call(cell))
     assert after.status == 400, after.text
     assert _REFUSALS[provider] in _error_message(after.text), after.text
-    assert scene.rig.peers.auth_connections() == ()
+    if provider == "copilot":
+        scene.rig.peers.assert_only_copilot_discovery(dl.COPILOT_ACCESS)
+    else:
+        assert scene.rig.peers.auth_connections() == ()
 
 
 _COOLDOWN_SECONDS_LEFT: Final = 45

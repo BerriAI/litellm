@@ -65,6 +65,7 @@ from litellm.types.utils import (
 from litellm.utils import provider_rejectable_params
 
 if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_strategy.auto_router.auto_router import PreRoutingHookResponse
@@ -406,6 +407,13 @@ class PreRoutingStrategies:
         if router._uses_deployment_pin:  # pyright: ignore[reportPrivateUsage]  # the Python router reads the same flag
             self._ensure_deployment_affinity_callback()
 
+    def hand_over_affinity(self, adopt: Callable[[object], None]) -> None:
+        """Give the affinity check registered while the deployments were built, before the optional
+        checks existed, to those checks: they own it from then on, as ``optional_callbacks``."""
+        if self._affinity is not None:
+            adopt(self._affinity)
+            self._affinity = None
+
     def _ensure_deployment_affinity_callback(self) -> None:
         """``_ensure_deployment_affinity_callback``: the affinity check (every global flag off) a
         complexity router's session pin needs, registered once."""
@@ -568,7 +576,9 @@ def _record_routing_decision(
     )
 
 
-def _as_output_cap(value: object) -> int | None:
+def as_output_cap(value: object) -> int | None:
+    """A client-sent output cap coerced to an int: ints, floats and numeric strings, never bools
+    or negatives."""
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         return None
     try:
@@ -578,7 +588,8 @@ def _as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
-def _stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+def stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+    """None means unstamped; an empty mapping means the original caller supplied no limit."""
     stamped: Final = next(
         (
             bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
@@ -593,7 +604,7 @@ def _stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str
         {
             str(carrier): cap
             for carrier, value in stamped.items()
-            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := _as_output_cap(value)) is not None
+            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
         }
     )
 
@@ -601,7 +612,7 @@ def _stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str
 def _restore_client_output_ceiling(
     request_kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs, restored in place
 ) -> None:
-    callers_ceiling: Final = _stamped_client_ceiling(request_kwargs)
+    callers_ceiling: Final = stamped_client_ceiling(request_kwargs)
     if callers_ceiling is None:
         return
     for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
@@ -709,6 +720,10 @@ class PreRouter:
         self._host: Final = host
         self._ctx: Final = ctx
         self._session_cache: Final = DualCache(redis_cache=routing_cache.redis_cache, in_memory_cache=InMemoryCache())
+
+    def attach_redis_cache(self, redis_cache: "RedisCache") -> None:
+        """``update_redis_cache``: the Claude Code session bindings are shared through it from now on."""
+        self._session_cache.attach_redis_cache(redis_cache)
 
     # -- the step --------------------------------------------------------------------------------
 
@@ -1104,4 +1119,4 @@ def _allowlist(params: Mapping[str, object]) -> frozenset[str]:
     return frozenset(entry for entry in declared if isinstance(entry, str))
 
 
-__all__ = ["PreRouter", "PreRoutingStrategies", "is_strategy_marker"]
+__all__ = ["PreRouter", "PreRoutingStrategies", "as_output_cap", "is_strategy_marker", "stamped_client_ceiling"]

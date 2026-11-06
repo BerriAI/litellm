@@ -25,11 +25,12 @@ from pydantic import JsonValue
 CHATGPT_AUTH_HOST: Final = "auth.openai.com"
 GITHUB_HOST: Final = "github.com"
 GITHUB_API_HOST: Final = "api.github.com"
+COPILOT_API_HOST: Final = "api.githubcopilot.com"
 AUTH_HOSTS: Final = (CHATGPT_AUTH_HOST, GITHUB_HOST, GITHUB_API_HOST)
 GHE_HOST: Final = "octo.ghe.com"
 GHE_API_HOST: Final = "api.octo.ghe.com"
 GHE_COPILOT_HOST: Final = "copilot-api.octo.ghe.com"
-TUNNELED_HOSTS: Final = (*AUTH_HOSTS, GHE_HOST, GHE_API_HOST, GHE_COPILOT_HOST)
+TUNNELED_HOSTS: Final = (*AUTH_HOSTS, GHE_HOST, GHE_API_HOST, GHE_COPILOT_HOST, COPILOT_API_HOST)
 CHATGPT_ACCOUNT: Final = "acct-device-login"
 _FAR_FUTURE: Final = 4102444800
 _LONG_AGO: Final = 946684800
@@ -77,11 +78,22 @@ COPILOT_USER_CODE: Final = "COPI-LEAK"
 COPILOT_ACCESS: Final = "device-login-github-access"
 COPILOT_REJECTED_ACCESS: Final = "device-login-github-access-rejected"
 COPILOT_FIRST_LOGIN_ACCESS: Final = "device-login-github-access-first-login"
+COPILOT_UNSAVED_KEY_ACCESS: Final = "device-login-github-access-unsaved-key"
+COPILOT_STORED_KEY: Final = "tid=device-login;stored"
+COPILOT_REJECTED_KEY: Final = "tid=device-login;rejected"
 GHE_ACCESS: Final = "device-login-ghe-access"
 GHE_LOGIN: Final = "octo-user"
 CONTROL_KEY: Final = "device-login-control-key"
 ACCEPTED_BEARERS: Final = frozenset(
-    {CHATGPT_STORED, CHATGPT_REFRESHED, CHATGPT_FIRST_LOGIN, COPILOT_ACCESS, COPILOT_FIRST_LOGIN_ACCESS, CONTROL_KEY}
+    {
+        CHATGPT_STORED,
+        CHATGPT_REFRESHED,
+        CHATGPT_FIRST_LOGIN,
+        COPILOT_ACCESS,
+        COPILOT_FIRST_LOGIN_ACCESS,
+        COPILOT_UNSAVED_KEY_ACCESS,
+        CONTROL_KEY,
+    }
 )
 REJECTED_DETAIL: Final = "the scripted provider rejected this bearer token"
 _DEVICE_AUTH_ID: Final = "device-auth-synthetic"
@@ -173,6 +185,10 @@ def _auth_hosts(grant: threading.Event, vendor: rv.ResponsesVendor) -> Callable[
                 )
             case ("github.com", "POST", "/login/oauth/access_token") if grant.is_set():
                 return _json(200, {"access_token": COPILOT_FIRST_LOGIN_ACCESS, "token_type": "bearer"})
+            case ("api.github.com", "GET", "/copilot_internal/user"):
+                if request.headers.get("authorization") == f"token {COPILOT_REJECTED_ACCESS}":
+                    return _json(401, {"message": "Bad credentials"})
+                return _json(200, {"endpoints": {"api": f"https://{COPILOT_API_HOST}"}})
             case ("octo.ghe.com", "POST", "/login/device/code") if grant.is_set():
                 return _json(
                     200,
@@ -219,8 +235,21 @@ class Switches:
 
 
 @dataclass(frozen=True, slots=True)
+class _ProviderAPI:
+    plain: Wire
+    secure: Wire
+
+    @property
+    def url(self) -> str:
+        return self.plain.url
+
+    def drain(self) -> tuple[Request, ...]:
+        return (*self.plain.drain(), *self.secure.drain())
+
+
+@dataclass(frozen=True, slots=True)
 class Peers:
-    api: Wire
+    api: _ProviderAPI
     auth: Wire
     tunnel: str
     cert: Path
@@ -241,6 +270,14 @@ class Peers:
 
     def auth_connections(self) -> tuple[str, ...]:
         return tuple(self.authorities.get_nowait() for _ in range(self.authorities.qsize()))
+
+    def assert_only_copilot_discovery(self, access_token: str) -> None:
+        assert set(self.auth_connections()) <= {f"{GITHUB_API_HOST}:443"}
+        requests: Final = self.auth.drain()
+        assert {
+            (request.method, request.target, request.headers.get("host"), request.headers.get("authorization"))
+            for request in requests
+        } <= {("GET", "/copilot_internal/user", GITHUB_API_HOST, f"token {access_token}")}, requests
 
     def dropped(self) -> tuple[Hangup, ...]:
         return tuple(self.hangups.get_nowait() for _ in range(self.hangups.qsize()))
@@ -293,9 +330,8 @@ class _TunnelServer(socketserver.ThreadingTCPServer):
 
 @contextmanager
 def _tunnel(
-    destination: Wire, switches: Switches, authorities: SimpleQueue[str], hangups: SimpleQueue[Hangup]
+    destination: Wire, provider: Wire, switches: Switches, authorities: SimpleQueue[str], hangups: SimpleQueue[Hangup]
 ) -> Generator[str]:
-    destination_port: Final = int(destination.url.rsplit(":", 1)[1])
 
     class Tunnel(socketserver.StreamRequestHandler):
         rbufsize = 0
@@ -320,20 +356,24 @@ def _tunnel(
             if len(request_line) < 2:
                 return
             authority: Final = request_line[1]
-            if authority.rsplit(":", 1)[0] not in TUNNELED_HOSTS:
+            host: Final = authority.rsplit(":", 1)[0]
+            if host not in TUNNELED_HOSTS:
                 self.wfile.write(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
                 return
-            authorities.put(authority)
-            if switches.refuse_connect.is_set():
+            is_auth: Final = host != COPILOT_API_HOST
+            if is_auth:
+                authorities.put(authority)
+            if is_auth and switches.refuse_connect.is_set():
                 self.wfile.write(b"HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\n\r\n")
                 return
-            if self.hold(authority, opened, switches.hold_connect) is None:
+            if is_auth and self.hold(authority, opened, switches.hold_connect) is None:
                 return
             self.wfile.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
-            client_hello: Final = self.hold(authority, opened, switches.stall_tls)
+            client_hello: Final = self.hold(authority, opened, switches.stall_tls) if is_auth else b""
             if client_hello is None:
                 return
             self.request.settimeout(10)
+            destination_port: Final = int((destination if is_auth else provider).url.rsplit(":", 1)[1])
             with socket.create_connection(("127.0.0.1", destination_port), timeout=10) as upstream:
                 upstream.sendall(client_hello)
                 outbound: Final = threading.Thread(target=_pipe, args=(self.request, upstream))
@@ -361,10 +401,11 @@ def device_login_peers(directory: Path) -> Generator[Peers]:
     vendor: Final = rv.ResponsesVendor()
     with (
         wire_server(_provider_api(vendor)) as api,
+        wire_server(_provider_api(vendor), tls=server_context(cert, key)) as copilot_api,
         wire_server(_auth_hosts(switches.grant, vendor), tls=server_context(cert, key)) as auth,
-        _tunnel(auth, switches, authorities, hangups) as tunnel,
+        _tunnel(auth, copilot_api, switches, authorities, hangups) as tunnel,
     ):
-        yield Peers(api, auth, tunnel, cert, authorities, hangups, switches)
+        yield Peers(_ProviderAPI(api, copilot_api), auth, tunnel, cert, authorities, hangups, switches)
 
 
 def chatgpt_record(
@@ -385,6 +426,12 @@ def chatgpt_record(
 
 def write_chatgpt(directory: Path, record: Mapping[str, JsonValue]) -> None:
     (directory / "auth.json").write_text(json.dumps(dict(record)))
+
+
+def write_copilot_key(directory: Path, token: str, api_url: str, expires_in: float = 3600) -> None:
+    (directory / "api-key.json").write_text(
+        json.dumps({"token": token, "expires_at": time.time() + expires_in, "endpoints": {"api": api_url}})
+    )
 
 
 def write_copilot_access(directory: Path, access_token: str) -> None:

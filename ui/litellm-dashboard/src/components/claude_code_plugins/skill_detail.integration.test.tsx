@@ -1,5 +1,7 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getProxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import SkillDetail, { skillHubDetail } from "./skill_detail";
@@ -47,6 +49,7 @@ const page = (
 beforeEach(() => {
   vi.clearAllMocks();
   testQueryClient.clear();
+  testQueryClient.setQueryDefaults(["public-skill-install"], { refetchOnWindowFocus: true });
   skillRequestMock.mockReset().mockRejectedValue(new Error("Unexpected skill request"));
   fetchMock.mockReset().mockImplementation((input, init) => {
     const requestUrl = input instanceof Request ? input.url : String(input);
@@ -59,6 +62,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  focusManager.setFocused(undefined);
   setGlobalLitellmHeaderName();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -187,3 +191,74 @@ it.each([skill.source, { source: "archive", url: `${getProxyBaseUrl()}/skill-hub
     expect(await screen.findByText(/No recorded releases yet/)).toBeInTheDocument();
   },
 );
+
+it("copies the selected private install without sharing a session key and reports clipboard results", async () => {
+  const user = userEvent.setup();
+  const pendingCopy = Promise.withResolvers<void>();
+  const writeText = vi.spyOn(navigator.clipboard, "writeText").mockReturnValueOnce(pendingCopy.promise);
+  setGlobalLitellmHeaderName("X-LiteLLM-Key");
+  skillRequestMock.mockResolvedValue(Response.json({ detail: "Not Found" }, { status: 404 }));
+  renderWithProviders(
+    <SkillDetail
+      skill={skillHubDetail({ ...skill, visibility: "private", download_url: "/skill-hub/skills/my-skill/archive" })}
+      onBack={vi.fn()}
+      accessToken="dashboard-token"
+    />,
+  );
+  expect(skillRequestMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "Coding agent" }), "Claude Code");
+  fireEvent.click(screen.getByRole("radio", { name: "All projects" }));
+  const command = screen.getByLabelText("Install command");
+  expect(command).toHaveTextContent("-a claude-code --copy --yes -g");
+  expect(command).toHaveTextContent("X-LiteLLM-Key");
+  expect(command).not.toHaveTextContent("dashboard-token");
+  expect(screen.queryByRole("radio", { name: "Public command" })).not.toBeInTheDocument();
+  expect(skillRequestMock).toHaveBeenCalledWith(
+    `${getProxyBaseUrl()}/.well-known/agent-skills/index.json`,
+    expect.objectContaining({
+      credentials: "omit",
+      redirect: "error",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Copy install command" }));
+  expect(writeText).toHaveBeenCalledWith(command.textContent);
+  expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
+  pendingCopy.resolve();
+  const copiedButton = await screen.findByRole("button", { name: "Copied" });
+  writeText.mockRejectedValueOnce(new Error("Clipboard denied"));
+  fireEvent.click(copiedButton);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not copy the command");
+});
+
+it("offers the indexed public skill name and discards its availability when reopened", async () => {
+  const portablePath = "/skill-hub/skills/my-skill/archive";
+  skillRequestMock.mockResolvedValueOnce(
+    Response.json({
+      skills: [{ name: "my-skill-2", type: "archive", url: `${getProxyBaseUrl()}${portablePath}?digest=sha256:abc` }],
+    }),
+  );
+  renderWithProviders(
+    <SkillDetail
+      skill={skillHubDetail({ ...skill, visibility: "public", download_url: portablePath })}
+      onBack={vi.fn()}
+      accessToken="dashboard-token"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Public command" }));
+  focusManager.setFocused(false);
+  await act(async () => focusManager.setFocused(true));
+  expect(skillRequestMock).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText("Install command")).toHaveTextContent(
+    `DISABLE_TELEMETRY=1 npx skills@1.7.6 add '${getProxyBaseUrl()}' --skill 'my-skill-2' -a codex`,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  const refreshedIndex = Promise.withResolvers<Response>();
+  skillRequestMock.mockReturnValueOnce(refreshedIndex.promise);
+  fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
+  expect(screen.queryByRole("radio", { name: "Public command" })).not.toBeInTheDocument();
+  refreshedIndex.resolve(Response.json({ skills: [] }));
+  expect(screen.getByLabelText("Install command")).toHaveTextContent("LiteLLM API key");
+});
