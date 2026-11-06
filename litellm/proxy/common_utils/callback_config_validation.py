@@ -361,6 +361,9 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     )
     if entry_error is not None:
         return entry_error
+    collision: Final = reference_backend_collision_error(entries)
+    if collision is not None:
+        return collision
     entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
     named_vars: Final = tuple(_backend_entry(entry) for entry in entries)
     return next(
@@ -373,6 +376,46 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
             if error is not None
         ),
         None,
+    )
+
+
+def reference_backend_collision_error(logging_entries: object) -> str | None:
+    """A reference is the only entry its backend may have, since one backend's entries merge into one credential map.
+
+    Otherwise a sibling entry naming the same backend could point the definition's
+    credentials at its own host.
+    """
+    names: Final = tuple(name for name, _ in stored_callback_entries(logging_entries) if name is not None)
+    backends: Final = tuple(callback_backend_name(name) for name in names)
+    return next(
+        (
+            f"callback_settings.{name} already provides the {backend} callback for this key, "
+            f"so no other {backend} entry may sit next to it"
+            for name, backend in zip(names, backends, strict=True)
+            if named_callback_definition(name) is not None and backends.count(backend) > 1
+        ),
+        None,
+    )
+
+
+def drop_entries_shadowing_a_reference(logging_entries: object) -> tuple[Mapping[str, object], ...]:
+    """Keep a reference as the only entry for its backend, so a stored sibling cannot redirect the definition's credentials."""
+    entries: Final = tuple(
+        _STRING_KEYED_MAPPING.validate_python(entry)
+        for entry in (_object_sequence(logging_entries) or ())
+        if isinstance(entry, Mapping)
+    )
+    referenced: Final = frozenset(
+        callback_backend_name(name)
+        for name, _ in stored_callback_entries(entries)
+        if name is not None and named_callback_definition(name) is not None
+    )
+    return tuple(
+        entry
+        for entry in entries
+        if (name := _entry_callback_name(entry)) is None
+        or named_callback_definition(name) is not None
+        or callback_backend_name(name) not in referenced
     )
 
 

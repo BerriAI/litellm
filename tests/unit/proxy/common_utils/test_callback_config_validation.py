@@ -548,7 +548,8 @@ class TestCallbackReferenceEntries:
 
         assert error is not None and "excluded_services" in error and "'langfuse'" in error
 
-    def test_an_inline_entry_cannot_contradict_the_content_setting_its_reference_inherits(self, otel_v2_on):
+    def test_an_inline_entry_cannot_change_the_content_setting_its_reference_inherits(self, otel_v2_on):
+        """The option belongs on the reference entry itself; a same-backend sibling is refused outright."""
         reference: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}
         inline: Final = {
             "callback_name": "arize",
@@ -558,14 +559,28 @@ class TestCallbackReferenceEntries:
 
         error: Final = logging_metadata_config_error({"logging": [reference, inline]})
 
-        assert error is not None and "capture_message_content" in error
+        assert error is not None and "arize_space_a" in error
+        assert logging_metadata_config_error(self._entry("arize_space_a", capture_message_content="no_content")) is None
 
-    def test_an_inline_entry_may_repeat_the_content_setting_its_reference_inherits(self, otel_v2_on):
+    def test_an_inline_entry_cannot_share_the_backend_a_reference_provides(self, otel_v2_on):
+        """One backend's entries merge into one credential map, so an inline sibling could point the definition's secrets at its own host."""
         reference: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}
         inline: Final = {
             "callback_name": "arize",
             "callback_type": "success",
-            "callback_vars": {"capture_message_content": "no_content"},
+            "callback_vars": {"arize_api_key": "mine", "arize_space_id": "attacker-space"},
+        }
+
+        error: Final = logging_metadata_config_error({"logging": [inline, reference]})
+
+        assert error is not None and "arize_space_a" in error and "arize" in error
+
+    def test_an_inline_entry_for_another_backend_may_sit_next_to_a_reference(self, otel_v2_on):
+        reference: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}
+        inline: Final = {
+            "callback_name": "langfuse",
+            "callback_type": "success",
+            "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
         }
 
         assert logging_metadata_config_error({"logging": [reference, inline]}) is None

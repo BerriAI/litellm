@@ -77,6 +77,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.callback_config_validation import drop_entries_shadowing_a_reference
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -1294,7 +1295,7 @@ def get_dynamic_logging_metadata(
     # Key-based callbacks
     #########################################################################################
     if key_dynamic_logging_settings is not None:
-        for item in key_dynamic_logging_settings:
+        for item in _key_entries_for_resolution(key_dynamic_logging_settings, source="key-level"):
             callback = get_resolved_key_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
@@ -1339,6 +1340,23 @@ def get_dynamic_logging_metadata(
             team_id=user_api_key_dict.team_id, proxy_config=proxy_config
         )
     return callback_settings_obj
+
+
+def _key_entries_for_resolution(logging_entries: object, *, source: str) -> tuple[Mapping[str, object], ...]:
+    """A key's entries with those sharing a backend with a ``callback_settings`` reference dropped, so the definition's credentials only ever go where it says."""
+    kept: Final = drop_entries_shadowing_a_reference(logging_entries)
+    dropped: Final = len(_object_sequence(logging_entries) or ()) - len(kept)
+    if dropped:
+        verbose_proxy_logger.warning(
+            "Ignoring %d %s callback metadata entries that share a backend with a callback_settings reference",
+            dropped,
+            source,
+        )
+    return kept
+
+
+def _object_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
 
 
 def _callback_settings_fields(callback_settings_obj: TeamCallbackMetadata) -> Mapping[str, object]:
@@ -1452,7 +1470,7 @@ def resolve_tenant_otel_destinations(
         return ()
     key_entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
     entries: Final = (
-        key_entries
+        _key_entries_for_resolution(key_entries, source="otel-destination")
         if key_entries is not None
         else KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
     )

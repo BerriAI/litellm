@@ -657,3 +657,28 @@ class TestCallbackReferenceKeyUpdates:
 
     def test_a_proxy_admin_can_remove_the_reference(self):
         assert self._check({"note": "edited"}, "proxy_admin") is None
+
+    @pytest.mark.parametrize(
+        "sibling",
+        [
+            {
+                "callback_name": "arize",
+                "callback_type": "success",
+                "callback_vars": {"arize_api_key": "mine", "arize_space_id": "space-b"},
+            },
+            {
+                "callback_name": "langfuse",
+                "callback_type": "success",
+                "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+            },
+        ],
+        ids=["same-backend", "other-backend"],
+    )
+    def test_a_non_admin_cannot_add_an_entry_next_to_the_stored_reference(self, sibling):
+        """Resending the reference unchanged and appending a sibling must not pass, since the sibling joins the reference's credential map."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            self._check({**self._STORED, "logging": [*self._STORED["logging"], sibling]}, "internal_user")
+        assert exc.value.status_code == 403
+        assert "callback_settings reference" in str(exc.value.detail)

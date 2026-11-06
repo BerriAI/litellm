@@ -973,7 +973,9 @@ def raise_on_unauthorized_callback_reference(
             raise HTTPException(status_code=400, detail={"error": overridden})
         return
     stored: Final = _admin_only_entry_keys(existing_metadata or {})
-    if _admin_only_entry_keys(metadata) == stored:
+    if _admin_only_entry_keys(metadata) == stored and (
+        not stored or _entry_keys(metadata) == _entry_keys(existing_metadata or {})
+    ):
         return
     unknown: Final = next(iter(_unknown_callback_names(metadata)), None)
     raise HTTPException(status_code=403, detail={"error": _callback_reference_denied(unknown, stored=bool(stored))})
@@ -981,7 +983,10 @@ def raise_on_unauthorized_callback_reference(
 
 def _callback_reference_denied(unknown_callback_name: str | None, *, stored: bool) -> str:
     if stored:
-        return "Only a proxy admin can change or remove a key's callback_settings reference"
+        return (
+            "Only a proxy admin can change or remove the logging entries of a key that holds a callback_settings "
+            "reference"
+        )
     if unknown_callback_name is None:
         return "Only a proxy admin can point a key at a callback_settings definition"
     return (
@@ -995,6 +1000,14 @@ def _admin_only_entry_keys(metadata: Mapping[str, object]) -> tuple[tuple[str, t
     return (
         *_reference_keys(_callback_references(metadata)),
         *((callback_name, ()) for callback_name in _unknown_callback_names(metadata)),
+    )
+
+
+def _entry_keys(metadata: Mapping[str, object]) -> tuple[tuple[str | None, tuple[tuple[str, str], ...]], ...]:
+    """Every logging entry, since a sibling of a reference shares its backend's merged credential map."""
+    return tuple(
+        (callback_name, tuple(sorted(callback_vars.items())))
+        for callback_name, callback_vars in stored_callback_entries(metadata.get("logging"))
     )
 
 

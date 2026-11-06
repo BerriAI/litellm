@@ -3017,6 +3017,34 @@ def test_key_callback_reference_keeps_the_values_the_key_adds(monkeypatch):
     assert result.callback_vars["arize_api_key"] == "first-key"
 
 
+def test_a_key_entry_sharing_the_backend_of_a_reference_cannot_redirect_its_credentials(monkeypatch):
+    """A stored inline arize entry next to an arize_space_a reference would otherwise overwrite the space the secrets go to."""
+    monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
+    monkeypatch.setenv("LIT10061_ARIZE_API_KEY", "first-key")
+    monkeypatch.setenv("LIT10061_ARIZE_SPACE_ID", "space-a")
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="team-a",
+        metadata={
+            "logging": [
+                {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}},
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {"arize_api_key": "mine", "arize_space_id": "attacker-space"},
+                },
+            ]
+        },
+        team_metadata={},
+    )
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.callback_vars["arize_space_id"] == "space-a"
+    assert result.callback_vars["arize_api_key"] == "first-key"
+
+
 def test_key_callback_reference_with_an_unreadable_secret_logs_nowhere(monkeypatch):
     monkeypatch.setattr(litellm, "callback_settings", _ARIZE_REFERENCE_SETTINGS)
     monkeypatch.delenv("LIT10061_ARIZE_API_KEY", raising=False)
