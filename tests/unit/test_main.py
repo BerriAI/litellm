@@ -2533,9 +2533,7 @@ def non_openai_responses_bridge(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(
-        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
-    )
+    (tmp_path / "access-token").write_text("gho_test")
     litellm.register_model(
         {
             **{
@@ -2579,7 +2577,11 @@ def non_openai_responses_bridge(
             {"api_base": _FOUNDRY_API_BASE, "api_key": "fake-key"},
         ),
         "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
-        "github_copilot": ("github_copilot/gpt-6.1-bridge-test", "https://api.githubcopilot.com/responses", {}),
+        "github_copilot": (
+            "github_copilot/gpt-6.1-bridge-test",
+            "https://api.githubcopilot.com/responses",
+            {"api_base": "https://api.githubcopilot.com"},
+        ),
         "databricks": (
             "databricks/responses/databricks-gpt-bridge-test",
             "https://dbx.example/serving-endpoints/responses",
@@ -6184,6 +6186,79 @@ async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockR
     assert response.text == "hello"
 
 
+def test_transcription_keeps_the_prompt_passed_by_position(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    litellm.transcription(
+        "groq/whisper-large-v3", GROQ_WAV_FILE, "en", "Four score", base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+    )
+
+    sent: Final = route.calls.last.request.content
+    assert b'name="language"\r\n\r\nen\r\n' in sent
+    assert b'name="prompt"\r\n\r\nFour score\r\n' in sent
+
+
+@pytest.mark.parametrize(
+    "provider_body,expected_upload_measurements",
+    [({"text": "hello", "duration": 2.5}, 0), ({"text": "hello"}, 1)],
+    ids=["provider_reports_duration", "provider_omits_duration"],
+)
+def test_transcription_measures_the_upload_only_when_the_provider_omits_the_duration(
+    respx_mock: respx.MockRouter, provider_body: Mapping[str, object], expected_upload_measurements: int
+):
+    respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json=provider_body)
+    )
+
+    with patch.object(
+        litellm_main, "calculate_request_duration", wraps=litellm_main.calculate_request_duration
+    ) as measure_upload:
+        response: Final = litellm.transcription(
+            model="groq/whisper-large-v3", file=GROQ_WAV_FILE, base_url=GROQ_INTERNAL_BASE, api_key="fake-key"
+        )
+
+    assert response.text == "hello"
+    assert measure_upload.call_count == expected_upload_measurements
+
+
+@pytest.mark.parametrize("model_name", ("whisper-1", "gpt-4o-transcribe", "gpt-transcribe"))
+def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_server(
+    respx_mock: respx.MockRouter, model_name: str
+):
+    route: Final = respx_mock.post("https://vllm.internal/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "served by vllm"})
+    )
+
+    response: Final = litellm.transcription(
+        model=f"hosted_vllm/{model_name}",
+        file=GROQ_WAV_FILE,
+        api_base="https://vllm.internal/v1",
+        api_key="fake-key",
+        response_format="verbose_json",
+    )
+
+    assert route.called
+    assert response.text == "served by vllm"
+
+
+def test_openai_gpt_transcribe_still_rejects_non_json_response_formats(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "should not be sent"})
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format 'json' or 'text'"):
+        litellm.transcription(
+            model="openai/gpt-transcribe",
+            file=GROQ_WAV_FILE,
+            api_key="fake-key",
+            response_format="srt",
+        )
+
+    assert not route.called
+
+
 def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/speech").mock(
         return_value=httpx.Response(200, content=b"mp3-bytes")
@@ -7630,6 +7705,7 @@ async def test_bedrock_converse_parses_scripted_response(
     assert json.loads(route.calls[0].request.content) == {
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
         "inferenceConfig": {},
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
     assert response.choices[0].message.content == "Hello from Bedrock."
     assert response.usage.prompt_tokens == 8
@@ -11474,3 +11550,28 @@ async def test_bedrock_strict_tools_limit_rejection_is_not_sent_again_when_no_to
 
     assert error is not None and "Too many strict tools" in str(error)
     assert len(sent) == 1
+
+
+def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller-supplied OpenAI client sends the request to its own base_url, so billing must use that
+    host and not an env-configured FedRAMP or regional base."""
+    import openai
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gov.api.openai.com/v1")
+    captured = {}
+    real_init = litellm.Logging.__init__
+
+    def init_spy(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        captured["logging_obj"] = self
+
+    with patch.object(litellm.Logging, "__init__", init_spy):
+        litellm.completion(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "hi"}],
+            client=openai.OpenAI(api_key="test-key", base_url="https://api.openai.com/v1"),
+            mock_response="ok",
+        )
+
+    assert captured["logging_obj"].litellm_params.get("data_residency") is None

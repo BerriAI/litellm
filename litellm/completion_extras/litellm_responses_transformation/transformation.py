@@ -34,18 +34,20 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
     replay_items,
     requested_phase,
 )
-from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import routed_model_info, supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_chat_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
-    responses_reasoning_items_from_thinking_blocks,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -1166,10 +1168,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
-        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
-            isinstance(base_model, str)
-            and bool(base_model)
-            and supports_openai_prompt_cache_breakpoint(base_model, provider)
+        model_info: Final = routed_model_info(litellm_params.get("model_info"))
+        named_models: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
+        supports_prompt_cache_breakpoint: Final = any(
+            supports_openai_prompt_cache_breakpoint(name, provider, model_info) for name in named_models
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
             messages,
@@ -1180,11 +1182,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             include_namespace=True,
             replay_openai_history=provider == "openai",
         )
-        # OpenAI's Responses API rejects an empty input. For a system-only
-        # request, carry the system message as a system-role input item instead
-        # of instructions, mirroring how non-string system content is already
-        # handled in convert_chat_completion_messages_to_responses_api.
-        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        # Keep the system text in input instead of instructions when the Responses API needs it there.
+        # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
+        typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
+        system_goes_in_input: Final = converted_instructions is not None and (
+            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+        )
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)
             if _drops_audio_input(model, litellm_params)
@@ -1196,12 +1199,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     "type": "message",
                     "role": "system",
                     "content": [{"type": "input_text", "text": converted_instructions}],
-                }
+                },
+                *target_input_items,
             ]
-            if is_system_only_request
+            if system_goes_in_input
             else target_input_items
         )
-        instructions: Final = None if is_system_only_request else converted_instructions
+        instructions: Final = None if system_goes_in_input else converted_instructions
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()
@@ -1234,10 +1238,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Convert back to responses API format for the actual request
 
         api_model: Final = model
-
-        from litellm.types.utils import CallTypes
-
-        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
 
         sanitized_litellm_params: Final = self._build_sanitized_litellm_params(litellm_params)
 

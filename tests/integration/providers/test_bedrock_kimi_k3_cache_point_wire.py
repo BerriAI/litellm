@@ -1251,17 +1251,19 @@ def test_s01_to_s06_an_odd_typed_flag_is_read_as_false_never_as_true(
 
 
 @pytest.mark.timeout(600)
-def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_it_in_place(gateway: Gateway) -> None:
+def test_s10_s11_two_deployments_of_one_arn_keep_their_own_flags_and_a_delete_changes_neither(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("shared")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         flagged: Final = _deployment(
             gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}, cleanup=False
         )
         plain: Final = _deployment(gateway, scenario, wire, f"bedrock/{arn}")
-        for name in (flagged, plain):
+        for name, cache_points in ((flagged, 0), (plain, 2)):
             outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
             _assert_answered(outcome)
-            assert received.cache_points == 0, (name, received.body)
+            assert received.cache_points == cache_points, (name, received.body)
             _success_row(outcome.response_id)
         flagged_identity: Final = _model_id(flagged)
         gateway.post("/model/delete", {"id": flagged_identity})
@@ -1276,7 +1278,7 @@ def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_i
         wire.drain()
         after, after_received = _observe_at(gateway, wire, "chat", _chat_body(plain, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(after)
-        assert after_received.cache_points == 0, after_received.body
+        assert after_received.cache_points == 2, after_received.body
         _success_row(after.response_id)
 
 

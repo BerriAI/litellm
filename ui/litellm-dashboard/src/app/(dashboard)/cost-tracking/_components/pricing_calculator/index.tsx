@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,7 @@ const createDefaultEntry = (): ModelEntry => ({
 });
 
 const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, models }) => {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
   const { debouncedFetchForEntry, removeEntry, getMultiModelResult } = useMultiCostEstimate(accessToken);
@@ -80,11 +82,11 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
         >
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <RadioGroupItem value="day" />
-            Per Day
+            {t("costTracking.pricingCalculator.timePeriod.day")}
           </label>
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <RadioGroupItem value="month" />
-            Per Month
+            {t("costTracking.pricingCalculator.timePeriod.month")}
           </label>
         </RadioGroup>
       </div>
@@ -92,12 +94,19 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[35%]">Model</TableHead>
-            <TableHead className="w-[18%]">Input Tokens</TableHead>
-            <TableHead className="w-[18%]">Output Tokens</TableHead>
-            <TableHead className="w-[20%]">Requests/{timePeriod === "day" ? "Day" : "Month"}</TableHead>
+            <TableHead className="w-[35%]">{t("costTracking.pricingCalculator.columns.model")}</TableHead>
+            <TableHead className="w-[18%]">{t("costTracking.pricingCalculator.columns.inputTokens")}</TableHead>
+            <TableHead className="w-[18%]">{t("costTracking.pricingCalculator.columns.outputTokens")}</TableHead>
+            <TableHead className="w-[20%]">
+              {t("costTracking.pricingCalculator.columns.requestsPer", {
+                period:
+                  timePeriod === "day"
+                    ? t("costTracking.pricingCalculator.columns.periods.day")
+                    : t("costTracking.pricingCalculator.columns.periods.month"),
+              })}
+            </TableHead>
             <TableHead className="w-[50px]">
-              <span className="sr-only">Actions</span>
+              <span className="sr-only">{t("costTracking.pricingCalculator.columns.actions")}</span>
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -109,7 +118,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
                   options={modelOptions}
                   value={record.model || undefined}
                   onValueChange={(value) => handleEntryChange(record.id, "model", value)}
-                  placeholder="Select a model"
+                  placeholder={t("costTracking.pricingCalculator.modelPlaceholder")}
                 />
               </TableCell>
               <TableCell>
@@ -154,7 +163,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={`Remove model row ${index + 1}`}
+                  aria-label={t("costTracking.pricingCalculator.removeRow", { row: index + 1 })}
                   onClick={() => handleRemoveEntry(record.id)}
                   disabled={entries.length === 1}
                   className="text-destructive"
@@ -170,7 +179,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
             <TableCell colSpan={5}>
               <Button variant="outline" onClick={handleAddEntry} className="w-full border-dashed">
                 <Plus className="size-3.5" />
-                Add Another Model
+                {t("costTracking.pricingCalculator.addModel")}
               </Button>
             </TableCell>
           </TableRow>

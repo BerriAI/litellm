@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_cust
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -448,7 +449,7 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
-        or logged_call.get("api_call_start_time") is None
+        or (logged_call.get("api_call_start_time") is None and not caused_by_entra_rejection(exception))
         or _used_a_caller_credential(logged_call)
     )
 

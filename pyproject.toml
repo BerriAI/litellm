@@ -95,6 +95,7 @@ proxy = [
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
     "backports-zstd>=1.0.0,<2.0; python_version < '3.14'",
+    "semver>=3.0.4,<4",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports are all guarded, so it runs on the base SDK plus these packages, and
@@ -155,7 +156,8 @@ stt-vertex-chirp = [
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
     # provider handler so litellm core remains usable without them.
-    "nvidia-riva-client>=2.15.0",
+    "grpcio>=1.67.1,<2.0",
+    "protobuf>=5.26.1,<7.0",
     "soundfile>=0.12.1",
     "audioread>=3.0.1",
     "numpy>=1.26.0",
@@ -241,6 +243,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "nvidia-riva-client==2.16.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -266,6 +269,8 @@ proxy-dev = [
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
     "backports-zstd==1.8.0; python_version < '3.14'",
+    "httptools>=0.7.1,<0.8",
+    "semver>=3.0.4,<4",
 ]
 ci = [
     "psutil==7.2.2",
@@ -274,6 +279,9 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
+    # The Riva tests serve NVIDIA's own message definitions, which checks
+    # LiteLLM's hand-written copy of them on every run.
+    "nvidia-riva-client==2.16.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
@@ -351,6 +359,7 @@ exclude = [
 ]
 
 [tool.uv]
+concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "rust-toolchain.toml" },
@@ -387,11 +396,12 @@ brotli = "2026-10-22T14:01:00Z"
 pypdf = "2026-10-28T17:01:00Z"
 
 [tool.uv.sources]
+litellm-proxy = { workspace = true }
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["enterprise", "litellm-proxy-extras", "packaging/litellm-proxy"]
 
 [tool.commitizen]
 version = "1.109.0"

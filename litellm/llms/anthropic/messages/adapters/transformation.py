@@ -123,14 +123,22 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    anthropic_image_source_to_openai_url,
     anthropic_inline_document,
-    parse_tool_call_arguments,
-    reasoning_content_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    reasoning_content_from_thinking_blocks,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    anthropic_image_source_to_openai_url,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
@@ -380,8 +388,8 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, *, keep_cache_control: bool = False) -> None:
+        self.keep_cache_control: Final = keep_cache_control
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -437,7 +445,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
