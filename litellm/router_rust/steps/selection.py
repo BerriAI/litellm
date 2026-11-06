@@ -30,7 +30,7 @@ from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, reads_deployment_usage
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, end_attempt, reads_deployment_usage
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 if TYPE_CHECKING:
@@ -356,16 +356,17 @@ async def routing_pre_call_checks(
     (``_routing_callbacks``) checks it before the call. A check's error hands the request back and
     fails the attempt; the core records that failure like any other."""
     checks: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
-    counted: Final = reads_deployment_usage(checks)
-    if counted:
-        _ = await counter.charge_request(deployment)
+    charge: Final = await counter.charge_request(deployment) if reads_deployment_usage(checks) else None
     try:
         for callback in checks:
             await callback.async_pre_call_check(dict(deployment), None)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
     except Exception:
-        if counted:
-            await counter.refund_request(deployment)
+        if charge is not None:
+            await counter.refund_request(charge)
         raise
+    finally:
+        if charge is not None:
+            end_attempt(charge)
 
 
 def routing_pre_call_checks_sync(
@@ -373,16 +374,17 @@ def routing_pre_call_checks_sync(
 ) -> None:
     """``routing_strategy_pre_call_checks``: the sync twin, with the sync check of each ``CustomLogger``."""
     checks: Final = tuple(callback for callback in callbacks if isinstance(callback, CustomLogger))
-    counted: Final = reads_deployment_usage(checks)
-    if counted:
-        _ = counter.charge_request_sync(deployment)
+    charge: Final = counter.charge_request_sync(deployment) if reads_deployment_usage(checks) else None
     try:
         for callback in checks:
             callback.pre_call_check(dict(deployment))  # pyright: ignore[reportUnknownMemberType]  # see above
     except Exception:
-        if counted:
-            counter.refund_request_sync(deployment)
+        if charge is not None:
+            counter.refund_request_sync(charge)
         raise
+    finally:
+        if charge is not None:
+            end_attempt(charge)
 
 
 def picked_id(picked: object) -> str | None:

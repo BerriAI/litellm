@@ -116,7 +116,7 @@ class OptionalChecks:
         self._cache: Final = cache
         self._hosted: Final = hosted
         self._ctx: Final = ctx
-        self.usage_counter: Final = DeploymentUsageCounter(cache, charges=self.reads_deployment_usage)
+        self.usage_counter: Final = DeploymentUsageCounter(cache)
         self.optional_callbacks: list[object] | None = None  # mutable-ok: the router's live list, as Python keeps it
         self.router_budget_logger: RouterBudgetLimiting | None = None
         self.provider_budget_config: object = arguments.get("provider_budget_config")
@@ -146,9 +146,7 @@ class OptionalChecks:
     def build(self, checks: object, model_list: object) -> None:
         """The constructor's checks: a budget appends ``router_budget_limiting`` to the list given (in
         place, as Python does), the list is added, a per-group affinity config adds the affinity
-        check, and ``apply_default_settings`` adds the empty default list. The usage counter the
-        checks and selectors read is owned first."""
-        self._own(self.usage_counter)
+        check, and ``apply_default_settings`` adds the empty default list."""
         listed: list[object] | None = checks if isinstance(checks, list) else None  # pyright: ignore[reportUnknownVariableType]  # mutable-ok: appended in place, as Python does  # rebind-ok: the argument as passed
         if RouterBudgetLimiting.should_init_router_budget_limiter(  # pyright: ignore[reportUnknownMemberType]  # untyped model_list
             model_list=model_list if isinstance(model_list, list) else None,  # pyright: ignore[reportUnknownArgumentType]  # the argument as passed
@@ -216,7 +214,8 @@ class OptionalChecks:
             session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,  # pyright: ignore[reportArgumentType]  # same
         )
 
-    def reads_deployment_usage(self) -> bool:
+    def counts_deployment_usage(self) -> bool:
+        """Whether a registered routing callback reads the per-deployment usage counters."""
         return reads_deployment_usage(self.routing_callbacks())
 
     def _own(self, callback: CustomLogger) -> None:

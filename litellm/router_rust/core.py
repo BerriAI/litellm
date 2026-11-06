@@ -207,7 +207,7 @@ from litellm.router_rust.surface.settings import (
 from litellm.router_strategy.least_busy import CALL_IDENTITY, call_id_of, owning_picks, pick_reserves, picks_reserve
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, usage_twins
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
@@ -3533,6 +3533,7 @@ class RustCore(
             )
             for key, amount in zip(keys, amounts)
         ]
+        operations.extend(usage_twins(operations, self._checks.counts_deployment_usage()))
         try:
             values: Final = await self._cache.async_increment_cache_pipeline(increment_list=operations)
         except Exception as e:  # noqa: BLE001  # usage that cannot be written never fails the call, as on the Python router
@@ -5050,7 +5051,7 @@ class _Driver:
         if deferred and response is None:
             return False
         model: Final = call.kwargs.get("model")
-        return self._core.deployment_tracks_usage(
+        return self._core._checks.counts_deployment_usage() or self._core.deployment_tracks_usage(  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             (as_str_mapping(call.kwargs.get("model_info")) or {}).get("id"),
             model if isinstance(model, str) else call.group,
         )

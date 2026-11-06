@@ -18,10 +18,12 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.router_rust.steps.selection import routing_pre_call_checks, routing_pre_call_checks_sync
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, enforcement_tpm_operation
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.router import RouterCacheEnum
 
 TPM_DEPLOYMENT = {
     "tpm": 1000,
@@ -56,14 +58,35 @@ async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, o
     return deployment
 
 
+
+def _count_tokens(cache: DualCache, model_id: str, model: str, tokens: int, now: datetime) -> None:
+    """A served call's tokens as the router's usage write counts them: the enforcement twin of its
+    ``global_router:`` tpm increment."""
+    minute: Final = now.strftime("%H-%M")
+    twin: Final = enforcement_tpm_operation(
+        RedisPipelineIncrementOperation(
+            key=RouterCacheEnum.TPM.value.format(id=model_id, model=model, current_minute=minute), increment_value=tokens, ttl=60
+        )
+    )
+    assert twin is not None
+    cache.increment_cache(key=twin["key"], value=twin["increment_value"], ttl=twin["ttl"])
+
+
+def _count_logged_tokens(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
+    logged: Final = kwargs["standard_logging_object"]
+    assert isinstance(logged, dict)
+    _count_tokens(
+        check.dual_cache, logged["model_id"], logged["hidden_params"]["litellm_model_name"], logged["total_tokens"], check.clock()
+    )
+
 def _log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
     """A logged success as the router fans it out: the counter's tokens, then the check's daily tokens."""
-    _counter(check).log_success_event(kwargs, None, None, None)
+    _count_logged_tokens(check, kwargs)
     check.log_success_event(kwargs, None, None, None)
 
 
 async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
-    await _counter(check).async_log_success_event(kwargs, None, None, None)
+    _count_logged_tokens(check, kwargs)
     await check.async_log_success_event(kwargs, None, None, None)
 
 

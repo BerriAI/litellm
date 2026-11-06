@@ -20,9 +20,9 @@ from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.least_busy import picks_reserve
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
+from litellm.router_utils.deployment_usage_counter import usage_counter_keys
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup
-from litellm.utils import Rules, function_setup
+from litellm.utils import Rules, function_setup, get_utc_datetime
 
 
 def _model_list():
@@ -1177,7 +1177,6 @@ def _ticket_router() -> Router:
 @pytest.mark.parametrize("model", ["lat-model", "ubr-model"])
 async def test_a_deployment_with_rpm_10_serves_ten_requests_a_minute_next_to_a_usage_based_v2_group(model: str):
     router = _ticket_router()
-    counter = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentUsageCounter))
     deployment = router.get_deployment(model_id=f"{model[:3]}-a")
     assert deployment is not None
 
@@ -1186,7 +1185,8 @@ async def test_a_deployment_with_rpm_10_serves_ten_requests_a_minute_next_to_a_u
     ]
 
     assert outcomes == [200] * 10 + [429] * 2, outcomes
-    assert await router.cache.async_get_cache(counter.rpm_key(deployment.model_dump())) == 10
+    _, rpm_key = usage_counter_keys(deployment.model_dump(), get_utc_datetime().strftime("%H-%M"))
+    assert await router.cache.async_get_cache(rpm_key) == 10
 
 
 async def _outcome(router: Router, model: str) -> int:
@@ -1200,12 +1200,11 @@ async def _outcome(router: Router, model: str) -> int:
 @pytest.mark.asyncio
 async def test_a_success_adds_its_tokens_to_the_deployment_once_next_to_a_usage_based_v2_group():
     router = _ticket_router()
-    counter = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentUsageCounter))
     deployment = router.get_deployment(model_id="lat-a")
     assert deployment is not None
 
     response = await router.acompletion(model="lat-model", messages=[{"role": "user", "content": "hi"}])
     await asyncio.sleep(0.2)
 
-    tpm_key: Final = counter.rpm_key(deployment.model_dump()).replace(":rpm:", ":tpm:")
+    tpm_key, _ = usage_counter_keys(deployment.model_dump(), get_utc_datetime().strftime("%H-%M"))
     assert await router.cache.async_get_cache(tpm_key) == response.usage.total_tokens

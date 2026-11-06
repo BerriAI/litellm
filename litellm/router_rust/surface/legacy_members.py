@@ -44,6 +44,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     count_capability_routers,
 )
 from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
+from litellm.router_utils.deployment_usage_counter import end_attempt, usage_twins
 from litellm.router_utils.endpoint_eligibility import endpoint_selection
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
@@ -347,13 +348,13 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         from litellm import exceptions as litellm_exceptions
 
         counter: Final = self._opt.usage_counter
-        _ = await counter.charge_request(deployment, parent_otel_span)
+        charge: Final = await counter.charge_request(deployment, parent_otel_span)
         for callback in self._opt.routing_callbacks():
             if isinstance(callback, CustomLogger):
                 try:
                     await callback.async_pre_call_check(deployment, parent_otel_span)  # pyright: ignore[reportUnknownMemberType]  # see above
                 except litellm_exceptions.RateLimitError as e:
-                    await counter.refund_request(deployment, parent_otel_span)
+                    await counter.refund_request(charge, parent_otel_span)
                     _dispatch_failure(logging_obj, e)
                     _ = set_cooldown_deployments(
                         ctx=RoutingContext(self),  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
@@ -364,9 +365,10 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                     )
                     raise
                 except Exception as e:
-                    await counter.refund_request(deployment, parent_otel_span)
+                    await counter.refund_request(charge, parent_otel_span)
                     _dispatch_failure(logging_obj, e)
                     raise
+        end_attempt(charge)
 
     async def async_callback_filter_deployments(
         self,
@@ -478,7 +480,8 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         then holds what Redis answered."""
         from litellm.types.caching import RedisPipelineIncrementOperation
 
-        if not self._registry_state.cached_deployment_tracks_usage(deployment_id, model_group):
+        counted: Final = self._opt.counts_deployment_usage()
+        if not counted and not self._registry_state.cached_deployment_tracks_usage(deployment_id, model_group):
             return
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
         tpm_key: Final = RouterCacheEnum.TPM.value.format(
@@ -487,10 +490,11 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         rpm_key: Final = RouterCacheEnum.RPM.value.format(
             id=deployment_id, current_minute=current_minute, model=deployment_name
         )
-        operations: Final[Sequence[RedisPipelineIncrementOperation]] = [
+        router_operations: Final[Sequence[RedisPipelineIncrementOperation]] = [
             RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=_USAGE_TTL)
             for key, increment_value in ((tpm_key, total_tokens), (rpm_key, 1))
         ]
+        operations: Final = [*router_operations, *usage_twins(router_operations, counted)]
         values: Final = await self._cache.async_increment_cache_pipeline(
             increment_list=list(operations), parent_otel_span=parent_otel_span
         )

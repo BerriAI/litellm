@@ -14,7 +14,7 @@ is logged the first time such a deployment is seen.
 import contextlib
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -25,6 +25,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.deployment_usage_counter import charged_rpm
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
@@ -133,6 +134,8 @@ class ModelRateLimitingCheck(CustomLogger):
     Unlike the usage-based-routing strategy which uses limits for routing decisions,
     this check actively enforces those limits across ALL routing strategies.
     """
+
+    reads_deployment_usage: ClassVar[bool] = True
 
     def __init__(self, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime) -> None:
         self.dual_cache = dual_cache
@@ -346,7 +349,10 @@ class ModelRateLimitingCheck(CustomLogger):
                     )
 
             if rpm_limit is not None:
-                current_rpm: Final[int | None] = self.dual_cache.get_cache(key=rpm_key)
+                admitted: Final = charged_rpm(rpm_key)
+                current_rpm: Final[int | None] = (
+                    admitted if admitted is not None else self.dual_cache.get_cache(key=rpm_key)
+                )
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
@@ -432,7 +438,12 @@ class ModelRateLimitingCheck(CustomLogger):
                     raise daily.limit_error("tpd", tpd_limit, current_tpd, dt)
 
             if rpm_limit is not None:
-                current_rpm: Final = await self._async_get_current_tpm(rpm_key, rpm_limit, parent_otel_span)
+                admitted: Final = charged_rpm(rpm_key)
+                current_rpm: Final = (
+                    admitted
+                    if admitted is not None
+                    else await self._async_get_current_tpm(rpm_key, rpm_limit, parent_otel_span)
+                )
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",

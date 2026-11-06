@@ -9,6 +9,7 @@ import os
 import time
 import traceback
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
@@ -24,8 +25,9 @@ from litellm.router_rust.steps.selection import routing_pre_call_checks_sync
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
-from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
-from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, enforcement_tpm_operation
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.router import DeploymentTypedDict, RouterCacheEnum, RouterRateLimitError
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_utc_datetime
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -46,13 +48,24 @@ def restore_verbose_logger_level() -> Iterator[None]:
 
 @pytest.mark.usefixtures("restore_verbose_logger_level")
 
-def _router_usage_counter(router: Router) -> DeploymentUsageCounter:
-    return next(callback for callback in router.optional_callbacks or () if isinstance(callback, DeploymentUsageCounter))
+
+def _count_tokens(cache: DualCache, model_id: str, model: str, tokens: int, now: datetime) -> None:
+    """A served call's tokens as the router's usage write counts them: the enforcement twin of its
+    ``global_router:`` tpm increment."""
+    minute: Final = now.strftime("%H-%M")
+    twin: Final = enforcement_tpm_operation(
+        RedisPipelineIncrementOperation(
+            key=RouterCacheEnum.TPM.value.format(id=model_id, model=model, current_minute=minute), increment_value=tokens, ttl=60
+        )
+    )
+    assert twin is not None
+    cache.increment_cache(key=twin["key"], value=twin["increment_value"], ttl=twin["ttl"])
 
 
-def _log_success(handler: LowestTPMLoggingHandler, counter: DeploymentUsageCounter, **kwargs) -> None:
-    """A logged success as the router fans it out: the counter's tokens, then the strategy's hook."""
-    counter.log_success_event(**kwargs)
+def _log_success(handler: LowestTPMLoggingHandler, cache: DualCache, **kwargs) -> None:
+    """A served call as the router counts it: its tokens on the deployment's minute, then the strategy's hook."""
+    logged = kwargs["kwargs"]["standard_logging_object"]
+    _count_tokens(cache, logged["model_id"], logged["hidden_params"]["litellm_model_name"], logged["total_tokens"], get_utc_datetime())
     handler.log_success_event(**kwargs)
 
 
@@ -94,7 +107,7 @@ def test_tpm_rpm_updated():
     routing_pre_call_checks_sync((lowest_tpm_logger,), litellm_deployment_dict, DeploymentUsageCounter(test_cache))
     _log_success(
         lowest_tpm_logger,
-        DeploymentUsageCounter(test_cache),
+        test_cache,
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -155,7 +168,7 @@ def test_get_available_deployments():
     end_time = time.time()
     _log_success(
         lowest_tpm_logger,
-        DeploymentUsageCounter(test_cache),
+        test_cache,
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -184,7 +197,7 @@ def test_get_available_deployments():
     end_time = time.time()
     _log_success(
         lowest_tpm_logger,
-        DeploymentUsageCounter(test_cache),
+        test_cache,
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -264,7 +277,7 @@ def test_router_get_available_deployments():
     end_time = time.time()
     _log_success(
         router.lowesttpm_logger_v2,
-        _router_usage_counter(router),
+        router.cache,
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -290,7 +303,7 @@ def test_router_get_available_deployments():
     end_time = time.time()
     _log_success(
         router.lowesttpm_logger_v2,
-        _router_usage_counter(router),
+        router.cache,
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -354,7 +367,7 @@ def test_router_skip_rate_limited_deployments():
     end_time = time.time()
     _log_success(
         router.lowesttpm_logger_v2,
-        _router_usage_counter(router),
+        router.cache,
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
