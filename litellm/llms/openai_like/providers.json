@@ -314,5 +314,13 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "openscale": {
+    "base_url": "https://api.openscale.so/v1",
+    "api_key_env": "OPENSCALE_API_KEY",
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    }
   }
 }
