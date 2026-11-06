@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
@@ -777,10 +778,16 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     bare_model: Final = model.rsplit("/", 1)[-1]
     params: Final = {**deployment_params, **request_params}
     drop_params: Final = drops_unsupported_params(params.get("drop_params"))
-    chat_params: Final = {
-        **get_non_default_completion_params(params),
-        **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
-    }
+    chat_params: Final = tool_params_without_hosted_mcp(
+        {
+            **get_non_default_completion_params(params),
+            **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
+        },
+        model=bare_model,
+        route="vertex_ai",
+        drop_params=drop_params,
+        remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+    )
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
             f"tool name {RESPONSE_FORMAT_TOOL_NAME!r} is reserved for response_format on Claude, "
@@ -1315,11 +1322,18 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             VertexGeminiConfig.reject_unsupported_sampling_param(
                 model=model, param=", ".join(sampling_params), drop_params=False
             )
+        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
         vertex_params: Final = config.map_openai_params(
             model=model,
-            non_default_params=openai_request_body,
+            non_default_params=tool_params_without_hosted_mcp(
+                openai_request_body,
+                model=model,
+                route="vertex_ai",
+                drop_params=drop_params,
+                remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+            ),
             optional_params={},
-            drop_params=drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params)),
+            drop_params=drop_params,
             allow_integer_enums=False,
         )
         return vertex_params

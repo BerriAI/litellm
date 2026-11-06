@@ -85,7 +85,7 @@ def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
     )
 
 
-async def _toolset_exists(name: str) -> bool:
+async def saved_toolset_exists(name: str) -> bool:
     try:
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -104,7 +104,7 @@ async def _toolset_exists(name: str) -> bool:
 async def _gateway_served_names(
     names: Collection[str],
     servers: Callable[[], Collection[MCPServer]] = _registered_mcp_servers,
-    toolset_exists: Callable[[str], Awaitable[bool]] = _toolset_exists,
+    toolset_exists: Callable[[str], Awaitable[bool]] = saved_toolset_exists,
 ) -> frozenset[str]:
     registered: Final = tuple(servers()) if names else ()
     return frozenset([name for name in names if _registry_serves(name, registered) or await toolset_exists(name)])
