@@ -280,6 +280,15 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
             ),
             id="fully-encoded-scheme",
         ),
+        pytest.param(
+            _user_turn(
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:application/pdf;base64,JVBERi0=", "filename": _MANAGED_UPLOAD},
+                }
+            ),
+            id="media-part-filename",
+        ),
     ),
 )
 def test_s3_media_uris_ignores_what_never_becomes_an_s3_media_source(request_body: dict[str, object]):
