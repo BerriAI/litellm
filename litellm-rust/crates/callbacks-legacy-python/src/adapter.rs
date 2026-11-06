@@ -525,7 +525,11 @@ impl LegacyLogging {
             .getattr("litellm_params")?
             .cast_into::<PyDict>()?
             .copy()?;
-        params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        if self.operation != LoggingOperation::Messages {
+            // Python's Messages handler hands the provider to the logger beside its params, never
+            // in them, and the proxy's logger carries over to the next fallback hop.
+            params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        }
         crate::python::Logging::Update.call(
             py,
             (
@@ -1137,6 +1141,52 @@ assert logger.model_call_details.get('response_cost') is None, logger.model_call
 assert logger._provider_reported_cost == reported, logger._provider_reported_cost
 assert logger.model_call_details['cache_hit'] is cache_hit, logger.model_call_details
 assert logger.update['custom_llm_provider'] == 'edenai', logger.update
+",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::messages(crate::LoggingOperation::Messages, false)]
+    #[case::ocr(crate::LoggingOperation::Ocr, true)]
+    fn result_ready_puts_the_provider_in_the_logged_params_except_for_messages(
+        #[case] operation: crate::LoggingOperation,
+        #[case] in_params: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {}
+logger._provider_reported_cost = None
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                operation,
+                ..legacy_call(py, &locals, false)
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "native-test".into(),
+                    provider: "anthropic".into(),
+                },
+                cost: litellm_host::interceptors::Cost::Deferred,
+                source: litellm_host::interceptors::ResultSource::Provider,
+            };
+            logging.result_ready(py, &facts).unwrap();
+            locals.set_item("in_params", in_params).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert logger.update['custom_llm_provider'] == 'anthropic', logger.update
+assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, logger.update
 ",
             );
         });
