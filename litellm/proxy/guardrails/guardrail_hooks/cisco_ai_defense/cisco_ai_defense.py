@@ -477,7 +477,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         if not all_chunks:
             return
 
-        if not isinstance(all_chunks[0], (ModelResponse, ModelResponseStream)):
+        if not any(isinstance(chunk, (ModelResponse, ModelResponseStream)) for chunk in all_chunks):
             verbose_proxy_logger.warning(
                 "Cisco AI Defense guardrail (%s): unsupported streaming chunk shape (%s) — failing closed.",
                 self.guardrail_name,
