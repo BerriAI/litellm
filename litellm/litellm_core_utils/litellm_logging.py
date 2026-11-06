@@ -221,6 +221,7 @@ from litellm.types.utils import (
     StandardLoggingZeroCostDiagnostic,
     TextCompletionResponse,
     TranscriptionResponse,
+    UnreportedUsage,
     Usage,
     batch_chat_usage,
 )
@@ -2178,10 +2179,11 @@ class Logging(LiteLLMLoggingBaseClass):
             str | None, provider_value
         )
         base_model: Final = get_base_model_from_metadata(model_call_details=self.model_call_details)
+        billed_result: Final = self._with_counted_usage_if_unreported(priced_result, base_model)
 
         try:
             response_cost_calculator_kwargs: Final = {
-                "response_object": priced_result,
+                "response_object": billed_result,
                 "model": model_value,
                 "cache_hit": cost_cache_hit,
                 "custom_llm_provider": cost_custom_llm_provider,
@@ -2242,7 +2244,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 else response_cost
             )
             self._record_zero_cost_diagnostic(
-                priced_result,
+                billed_result,
                 total_response_cost,
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
@@ -2262,7 +2264,7 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("response_cost_failure_debug_information: %s", debug_info)
             self.model_call_details["response_cost_failure_debug_information"] = debug_info
             self._record_zero_cost_diagnostic(
-                priced_result,
+                billed_result,
                 None,
                 calculation_failed=True,
                 litellm_model_name=litellm_model_name,
@@ -2272,6 +2274,48 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def _with_counted_usage_if_unreported(self, result: object, base_model: str | None) -> object:
+        """A reply whose provider sent no usage still carries the placeholder completion() put on it, so price it from
+        locally counted tokens, as the stream builder does for a stream without usage, instead of at $0."""
+        usage: Final[object] = getattr(result, "usage", None)
+        if not isinstance(result, ModelResponse) or not isinstance(usage, UnreportedUsage):
+            return result
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # bare dict parameter
+        )
+        from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
+        from litellm.utils import (
+            token_counter,  # pyright: ignore[reportUnknownVariableType]  # bare dict parameter
+        )
+
+        model: Final = usage_tokenizer_model(self.model, base_model)
+        try:
+            prompt_tokens: Final = token_counter(
+                model=model,
+                messages=self.messages or [],  # pyright: ignore[reportUnknownMemberType]  # untyped on Logging
+            )
+            completion_tokens: Final = token_counter(
+                model=model, text=get_content_from_model_response(result), count_response_tokens=True
+            )
+        except Exception as e:  # noqa: BLE001  # a failed count must not break cost tracking, as in the stream builder
+            verbose_logger.debug("Could not count tokens for a reply without usage: %s", e)
+            return result
+        verbose_logger.warning(
+            "%s returned no token usage, so it is priced from locally counted tokens (%d prompt, %d completion)",
+            single_log_line(self.model),
+            prompt_tokens,
+            completion_tokens,
+        )
+        return result.model_copy(
+            update={
+                "usage": Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                )
+            }
+        )
 
     def _recorded_response_cost(self, cost: float | None) -> float | None:
         if cost is None or finite_cost(cost) is not None:

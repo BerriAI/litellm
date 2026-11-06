@@ -14641,3 +14641,90 @@ def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_bi
     model_map_value: Final = payload["model_map_information"]["model_map_value"]
     assert model_map_value is not None
     assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (3e-06, 7e-06)
+
+
+_INPUT_RATE: Final = 3e-06
+_OUTPUT_RATE: Final = 7e-06
+_BUDGET_MESSAGES: Final = ({"role": "user", "content": "Write one line about budgets"},)
+_BUDGET_REPLY: Final = "A budget is a promise you keep to yourself"
+
+
+def _locally_counted_cost() -> float:
+    from litellm.utils import token_counter
+
+    prompt_tokens: Final = token_counter(model="gpt-5.4-nano", messages=list(_BUDGET_MESSAGES))
+    completion_tokens: Final = token_counter(model="gpt-5.4-nano", text=_BUDGET_REPLY, count_response_tokens=True)
+    assert prompt_tokens > 0 and completion_tokens > 0
+    return prompt_tokens * _INPUT_RATE + completion_tokens * _OUTPUT_RATE
+
+
+def _price_reply_with_usage(usage: litellm.Usage) -> float | None:
+    from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
+
+    rates: Final = {"input_cost_per_token": _INPUT_RATE, "output_cost_per_token": _OUTPUT_RATE}
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.4-nano",
+        messages=list(_BUDGET_MESSAGES),
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime_unit_test(2026, 1, 1, 12, 0, 0),
+        litellm_call_id="reply-without-usage",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano", user="", optional_params={}, litellm_params=rates, custom_llm_provider="openai"
+    )
+    logging_obj.set_per_call_pricing(per_call_model_info("gpt-5.4-nano", "openai", rates, "chat"))
+    response: Final = ModelResponse(
+        model="gpt-5.4-nano",
+        choices=[litellm.Choices(message=litellm.Message(role="assistant", content=_BUDGET_REPLY))],
+    )
+    setattr(response, "usage", usage)
+    return logging_obj.response_cost_calculator(result=response)
+
+
+def test_a_reply_without_usage_is_priced_from_locally_counted_tokens(caplog: pytest.LogCaptureFixture) -> None:
+    """completion() leaves its placeholder usage on a reply whose provider sent none, which must not price as $0."""
+    from litellm.types.utils import UnreportedUsage
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cost: Final = _price_reply_with_usage(UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0))
+
+    assert cost == pytest.approx(_locally_counted_cost())
+    assert any("returned no token usage" in record.getMessage() for record in caplog.records)
+
+
+def test_a_reply_whose_provider_reports_zero_tokens_stays_at_zero() -> None:
+    assert _price_reply_with_usage(litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_acompletion_against_an_upstream_that_omits_usage_is_not_free() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-no-usage",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.4-nano",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": _BUDGET_REPLY}, "finish_reason": "stop"}
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-5.4-nano",
+            api_key="transport-only",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=list(_BUDGET_MESSAGES),
+            input_cost_per_token=_INPUT_RATE,
+            output_cost_per_token=_OUTPUT_RATE,
+            num_retries=0,
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert response._hidden_params["response_cost"] == pytest.approx(_locally_counted_cost())
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 0)
