@@ -55160,8 +55160,8 @@
     "watsonx/core42/jais-13b-chat": {
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0005,
-        "output_cost_per_token": 0.002,
+        "input_cost_per_token": 1.8e-06,
+        "output_cost_per_token": 1.8e-06,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": false,
