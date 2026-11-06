@@ -463,6 +463,34 @@ def test_responses_text_reaches_the_codex_backend_whole() -> None:
     assert json.loads(upstream.call_args.args[0].content)["text"] == text
 
 
+_CONVERSATION: Final = (
+    {"role": "user", "content": "Where is the Eiffel Tower?"},
+    {"role": "assistant", "content": "Paris"},
+    {"role": "user", "content": "And the Louvre?"},
+)
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize(
+    ("client_input", "forwarded_input"),
+    [
+        ("Where is the Eiffel Tower?", [{"role": "user", "content": "Where is the Eiffel Tower?"}]),
+        (list(_CONVERSATION), list(_CONVERSATION)),
+    ],
+    ids=["string", "list"],
+)
+def test_responses_input_reaches_the_codex_backend_as_a_message_list(
+    client_input: str | list[dict[str, str]],
+    forwarded_input: list[dict[str, str]],
+) -> None:
+    upstream: Final = _completed_codex_upstream("Paris")
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    litellm.responses(model="chatgpt/gpt-5.5", input=client_input, client=client)
+
+    assert json.loads(upstream.call_args.args[0].content)["input"] == forwarded_input
+
+
 @pytest.mark.usefixtures("chatgpt_token_dir")
 @pytest.mark.parametrize(
     ("response_format", "expected_format"),
