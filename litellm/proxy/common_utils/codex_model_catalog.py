@@ -606,10 +606,16 @@ def codex_model_list_body(
     label_entries: Sequence[tuple[str, str]] | None = None,
     *,
     client_version: str | None = None,
+    stock: Mapping[str, CodexStockModel] | None = None,
+    instructions: str | None = None,
 ) -> str:
-    """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out."""
+    """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out. `stock` and
+    `instructions` are the requesting Codex release's catalog and prompt, the bundled ones when None."""
     body: Final = codex_models_response_json(
-        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries), client_version=client_version
+        codex_catalog_rows(rows, entries, llm_router, team_id, label_entries),
+        stock=stock,
+        instructions=instructions,
+        client_version=client_version,
     )
     if body.left_out:
         verbose_proxy_logger.warning(
