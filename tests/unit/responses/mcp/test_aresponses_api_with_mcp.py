@@ -1807,8 +1807,15 @@ def _anthropic_call_to_echo() -> httpx.Response:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        _ALLOWED_ONLY_ANOTHER_TOOL,
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["echo"]}]},
+    ],
+)
 async def test_a_dropped_choice_hands_back_an_mcp_call_it_excludes(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
@@ -1824,7 +1831,7 @@ async def test_a_dropped_choice_hands_back_an_mcp_call_it_excludes(
             model="anthropic/claude-haiku-4-5",
             input="Call echo with PING",
             tools=[dict(_ECHO_MCP_TOOL)],
-            tool_choice=_ALLOWED_ONLY_ANOTHER_TOOL,
+            tool_choice=tool_choice,
             drop_params=True,
             api_key="sk-ant-fake",
         )
