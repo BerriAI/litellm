@@ -658,6 +658,16 @@ class TestCallbackReferenceKeyUpdates:
     def test_a_proxy_admin_can_remove_the_reference(self):
         assert self._check({"note": "edited"}, "proxy_admin") is None
 
+    def test_a_non_admin_cannot_change_the_event_type_of_the_stored_reference(self):
+        """Switching the reference from ``success`` to ``failure`` would silently stop logging successful requests."""
+        from fastapi import HTTPException
+
+        entry: Final = {**self._STORED["logging"][0], "callback_type": "failure"}
+        with pytest.raises(HTTPException) as exc:
+            self._check({**self._STORED, "logging": [entry]}, "internal_user")
+        assert exc.value.status_code == 403
+        assert "callback_settings reference" in str(exc.value.detail)
+
     @pytest.mark.parametrize(
         "sibling",
         [

@@ -71,6 +71,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     logging_metadata_config_error,
     named_callback_definition,
     stored_callback_entries,
+    stored_callback_entry_keys,
 )
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -995,20 +996,22 @@ def _callback_reference_denied(unknown_callback_name: str | None, *, stored: boo
     )
 
 
-def _admin_only_entry_keys(metadata: Mapping[str, object]) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+_LoggingEntryKey: TypeAlias = tuple[str | None, str | None, tuple[tuple[str, str], ...]]
+
+
+def _admin_only_entry_keys(metadata: Mapping[str, object]) -> tuple[_LoggingEntryKey, ...]:
     """References to a definition, plus names no callback owns yet, which a later definition would turn into one."""
-    return (
-        *_reference_keys(_callback_references(metadata)),
-        *((callback_name, ()) for callback_name in _unknown_callback_names(metadata)),
-    )
-
-
-def _entry_keys(metadata: Mapping[str, object]) -> tuple[tuple[str | None, tuple[tuple[str, str], ...]], ...]:
-    """Every logging entry, since a sibling of a reference shares its backend's merged credential map."""
+    unknown: Final = frozenset(_unknown_callback_names(metadata))
     return tuple(
-        (callback_name, tuple(sorted(callback_vars.items())))
-        for callback_name, callback_vars in stored_callback_entries(metadata.get("logging"))
+        key
+        for key in _entry_keys(metadata)
+        if key[0] is not None and (key[0] in unknown or named_callback_definition(key[0]) is not None)
     )
+
+
+def _entry_keys(metadata: Mapping[str, object]) -> tuple[_LoggingEntryKey, ...]:
+    """Every logging entry with its event type, since a sibling of a reference shares its backend's merged credential map."""
+    return stored_callback_entry_keys(metadata.get("logging"))
 
 
 def _unknown_callback_names(metadata: Mapping[str, object]) -> tuple[str, ...]:
@@ -1027,10 +1030,6 @@ def _callback_references(metadata: Mapping[str, object]) -> tuple[_CallbackRefer
         for callback_name, callback_vars in stored_callback_entries(metadata.get("logging"))
         if callback_name is not None and (definition := named_callback_definition(callback_name)) is not None
     )
-
-
-def _reference_keys(references: Sequence[_CallbackReference]) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
-    return tuple((name, tuple(sorted(callback_vars.items()))) for name, callback_vars, _ in references)
 
 
 def _overridden_definition_var_error(

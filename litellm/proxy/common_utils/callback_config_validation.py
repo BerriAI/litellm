@@ -440,6 +440,25 @@ def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, 
     return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
 
 
+def stored_callback_entry_keys(
+    logging_entries: object,
+) -> tuple[tuple[str | None, str | None, tuple[tuple[str, str], ...]], ...]:
+    """Every stored ``logging`` entry as a comparable key: name, event type and sorted vars, so no field can change unnoticed."""
+    entries: Final = _object_sequence(logging_entries) or ()
+    return tuple(
+        (_entry_callback_name(entry), _entry_callback_type(entry), tuple(sorted(_entry_callback_vars(entry).items())))
+        for entry in entries
+    )
+
+
+def _entry_callback_type(entry: object) -> str | None:
+    match entry:
+        case {"callback_type": str() as callback_type}:
+            return callback_type
+        case _:
+            return None
+
+
 def _object_sequence(value: object) -> Sequence[object] | None:
     return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
 
