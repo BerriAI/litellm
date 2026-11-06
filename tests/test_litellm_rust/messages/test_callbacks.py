@@ -10,14 +10,15 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
+from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, REQUEST, call
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.results import response_id, with_id
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -108,6 +109,33 @@ async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
     pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
     assert isinstance(pre_call, dict)
     assert request_body(pre_call) == server.requests[0].body
+
+
+@pytest.mark.asyncio
+async def test_pre_api_call_of_a_retried_call_keeps_the_provider_out_of_the_litellm_params(
+    server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+    logging_obj: Final = Logging(
+        model=REQUEST["model"],
+        messages=[],
+        stream=False,
+        start_time=datetime.now(),
+        call_type="anthropic_messages",
+        litellm_call_id=CALL_ID,
+        function_id=CALL_ID,
+        dynamic_input_callbacks=[recorder],
+    )
+
+    await call(server, litellm_logging_obj=logging_obj)
+    await call(server, litellm_logging_obj=logging_obj)
+
+    pre_calls: Final = recorder.wait_for("log_pre_api_call", count=2)
+
+    assert_served_natively(server, count=2)
+    for pre_call in pre_calls:
+        assert isinstance(pre_call.kwargs, dict)
+        assert "custom_llm_provider" not in _OBJECT.validate_python(pre_call.kwargs["litellm_params"])
 
 
 @pytest.mark.asyncio
