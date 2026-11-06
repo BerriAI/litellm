@@ -4190,6 +4190,29 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
     assert _jsonrpc_text_has_top_level_method(truncated) is False
 
 
+@pytest.mark.parametrize(
+    ("text", "method"),
+    [
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}', "tools/list", id="complete"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="cut-after-method"),
+        pytest.param('{"jsonrpc":"2.0","params":{"cursor":"' + "c" * 5000, None, id="cut-before-method"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools/li', None, id="cut-inside-method"),
+        pytest.param('{"jsonrpc":"2.0","params":{"method":"tools/list"},"method":"ping"}', "ping", id="nested-method-first"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"tools\\/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="escaped-slash"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"\\u0074ools/list","params":{"cursor":"' + "c" * 5000, "tools/list", id="unicode-escape"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":"bad\\x","params":{}}', None, id="invalid-escape"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"method":7,"params":{}}', None, id="not-a-string"),
+        pytest.param('{"jsonrpc":"2.0","id":1,"result":{"method":"tools/list"}}', None, id="response"),
+    ],
+)
+def test_jsonrpc_text_method_reads_the_top_level_method_when_the_cut_leaves_it_whole(
+    text: str, method: str | None
+) -> None:
+    from litellm.proxy.mcp_server.server import _jsonrpc_text_method
+
+    assert _jsonrpc_text_method(text) == method
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response_field", ("result", "error"))
 @pytest.mark.parametrize(("character", "bytes_before_cap"), (("", 0), ("x", 0), ("é", 1), ("中", 2), ("😀", 3)))
