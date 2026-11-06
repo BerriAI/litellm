@@ -452,7 +452,7 @@ class BedrockRealtimeGuardrails:
         guarded_item: Final = realtime_guarded_item(client_event)
         if guarded_item is None:
             return _ClientEventRoute.FORWARD
-        role: Final = "tool" if isinstance(guarded_item, RealtimeToolOutput) else guarded_item.role
+        role: Final = "tool" if isinstance(guarded_item, RealtimeToolOutput) else "user"
         match await self._verdict(guarded_item.texts, role, GuardrailEventHooks.pre_call):
             case None:
                 return _ClientEventRoute.FORWARD

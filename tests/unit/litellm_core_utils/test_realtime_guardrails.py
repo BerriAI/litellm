@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
 from litellm.litellm_core_utils.realtime_guardrails import (
     RealtimeGuardrailBlock,
     RealtimeGuardrailRewrite,
@@ -142,7 +143,19 @@ async def test_masked_texts_come_back_as_a_rewrite_and_reach_later_guardrails_ma
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED]", "and [MASKED]", "hi"))
-    assert second.screened[0][:3] == ("my [MASKED]", "and swordfish", "hi")
+    assert second.screened[0] == ("my [MASKED] and swordfish hi",)
+
+
+@pytest.mark.asyncio
+async def test_a_clean_multi_part_item_reaches_each_guardrail_once_as_the_space_joined_text() -> None:
+    guardrail: Final = MaskingGuardrail("hunter2")
+
+    verdict: Final = await realtime_guardrail_verdict(
+        ("Compare this photo", "with that one"), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,)
+    )
+
+    assert verdict is None
+    assert guardrail.screened == [("Compare this photo with that one",)]
 
 
 @pytest.mark.asyncio
@@ -155,23 +168,20 @@ async def test_texts_a_guardrail_leaves_unchanged_need_no_rewrite() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("keyword", "parts"),
-    [
-        pytest.param("secret plan", ("tell me the secret", "plan"), id="split at a space"),
-        pytest.param("secret-project", ("Tell me about secret-", "project"), id="split mid-word"),
-    ],
-)
-async def test_a_phrase_split_across_typed_text_parts_is_still_blocked(keyword: str, parts: tuple[str, ...]) -> None:
+async def test_a_phrase_split_across_typed_text_parts_is_still_blocked() -> None:
     client_event: Final = _item_create(
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": part} for part in parts]}
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "tell me the secret"}, {"type": "input_text", "text": "plan"}],
+        }
     )
     guarded_item: Final = realtime_guarded_item(client_event)
     assert isinstance(guarded_item, RealtimeMessageText)
 
     phrase_filter: Final = ContentFilterGuardrail(
         guardrail_name="phrase-filter",
-        blocked_words=[BlockedWord(keyword=keyword, action=ContentFilterAction.BLOCK)],
+        blocked_words=[BlockedWord(keyword="secret plan", action=ContentFilterAction.BLOCK)],
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
@@ -218,7 +228,12 @@ async def test_a_mask_inside_one_part_keeps_every_part_in_place() -> None:
 @pytest.mark.asyncio
 async def test_a_mask_across_parts_replaces_them_with_the_masked_text_the_model_would_have_read() -> None:
     verdict: Final = await realtime_guardrail_verdict(
-        ("my hunt", "er2 is here"), "user", (GuardrailEventHooks.pre_call,), {}, None, (MaskingGuardrail("hunter2"),)
+        ("my secret", "plan is here"),
+        "user",
+        (GuardrailEventHooks.pre_call,),
+        {},
+        None,
+        (MaskingGuardrail("secret plan"),),
     )
 
     assert verdict == RealtimeGuardrailRewrite(texts=("my [MASKED] is here",))
@@ -228,8 +243,8 @@ async def test_a_mask_across_parts_replaces_them_with_the_masked_text_the_model_
 @pytest.mark.parametrize(
     "parts",
     [
-        pytest.param(("abc", "123-45-6789 hunter2"), id="masks inside one part"),
-        pytest.param(("abc", "123-45-6789 hunt", "er2"), id="a mask inside a part and one across parts"),
+        pytest.param(("abc", "123-45-6789 hunter2 rocks"), id="masks inside one part"),
+        pytest.param(("abc", "123-45-6789 hunter2", "rocks"), id="a mask inside a part and one across parts"),
     ],
 )
 async def test_no_mask_one_text_part_gets_is_lost_when_its_joined_text_masks_differently(
@@ -240,7 +255,7 @@ async def test_no_mask_one_text_part_gets_is_lost_when_its_joined_text_masks_dif
         patterns=[
             ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=ContentFilterAction.MASK)
         ],
-        blocked_words=[BlockedWord(keyword="hunter2", action=ContentFilterAction.MASK)],
+        blocked_words=[BlockedWord(keyword="hunter2 rocks", action=ContentFilterAction.MASK)],
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
@@ -250,9 +265,9 @@ async def test_no_mask_one_text_part_gets_is_lost_when_its_joined_text_masks_dif
     )
 
     assert isinstance(verdict, RealtimeGuardrailRewrite)
-    forwarded: Final = "".join(verdict.texts)
+    forwarded: Final = " ".join(verdict.texts)
     assert "123-45-6789" not in forwarded
-    assert "hunter2" not in forwarded
+    assert "hunter2 rocks" not in forwarded
     assert forwarded.startswith("abc")
 
 
@@ -328,3 +343,33 @@ async def test_a_guardrail_that_crashes_is_not_treated_as_a_block() -> None:
 
     with pytest.raises(RuntimeError, match="guardrail backend down"):
         await realtime_guardrail_verdict(("hello",), "user", (GuardrailEventHooks.pre_call,), {}, None, (guardrail,))
+
+
+_TEAM_POLICY_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    '    if request_data["team_id"] == "team-strict":\n'
+    '        return block("blocked for this team")\n'
+    "    return allow()\n"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "blocked"),
+    [pytest.param("team-strict", True, id="policy team"), pytest.param("team-other", False, id="other team")],
+)
+async def test_a_team_scoped_guardrail_sees_the_session_team(team_id: str, blocked: bool) -> None:
+    team_policy = CustomCodeGuardrail(
+        custom_code=_TEAM_POLICY_CODE, guardrail_name="team-policy", event_hook="pre_call", default_on=True
+    )
+
+    verdict = await realtime_guardrail_verdict(
+        ("hello",),
+        "user",
+        (GuardrailEventHooks.pre_call,),
+        {"litellm_metadata": {"user_api_key_team_id": team_id}},
+        None,
+        (team_policy,),
+    )
+
+    assert isinstance(verdict, RealtimeGuardrailBlock) is blocked

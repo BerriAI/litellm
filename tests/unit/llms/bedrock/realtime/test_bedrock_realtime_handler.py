@@ -1937,7 +1937,9 @@ class TestBedrockRealtimeGuardrails:
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
 
     @pytest.mark.asyncio
-    async def test_a_system_message_the_guardrail_skips_reaches_bedrock(self, stub_aws_models: None) -> None:
+    async def test_a_system_message_nova_receives_as_a_user_turn_is_screened_by_a_system_skipping_guardrail(
+        self, stub_aws_models: None
+    ) -> None:
         guardrail: Final = SystemSkippingGuardrail(
             "hunter2",
             guardrail_name="no_secrets",
@@ -1946,13 +1948,10 @@ class TestBedrockRealtimeGuardrails:
             realtime_violation_message=self.VIOLATION,
         )
 
-        stream, client_ws = await self._forward_client(
-            [self._user_text(self.BLOCKED_TEXT, role="system"), self._user_text(self.BLOCKED_TEXT)], guardrail
-        )
+        stream, client_ws = await self._forward_client([self._user_text(self.BLOCKED_TEXT, role="system")], guardrail)
 
-        assert self.BLOCKED_TEXT in json.dumps(self._bedrock_events(stream))
+        assert "hunter2" not in json.dumps(self._bedrock_events(stream))
         assert [error["message"] for error in self._guardrail_errors(client_ws)] == [self.VIOLATION]
-        assert guardrail.checked == [((self.BLOCKED_TEXT,), None)]
 
     @pytest.mark.asyncio
     async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_response_create(

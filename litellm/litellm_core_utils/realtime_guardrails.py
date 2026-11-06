@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import ModifyResponseException
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -132,7 +133,7 @@ def _violation_text(error: Exception) -> str:
 
 
 def _is_guardrail_block(error: Exception) -> bool:
-    return hasattr(error, "status_code") or isinstance(error, ValueError)
+    return hasattr(error, "status_code") or isinstance(error, (ValueError, ModifyResponseException))
 
 
 def _screened_texts(screened: object, texts: tuple[str, ...]) -> tuple[str, ...]:
@@ -145,12 +146,12 @@ def _screened_texts(screened: object, texts: tuple[str, ...]) -> tuple[str, ...]
 
 
 async def _guardrail_outcome(
-    guardrail: "CustomGuardrail", texts: tuple[str, ...], user_api_key_dict: object | None
+    guardrail: "CustomGuardrail", texts: tuple[str, ...], request_data: Mapping[str, object]
 ) -> RealtimeGuardrailBlock | tuple[str, ...]:
     try:
         screened: Final = await guardrail.apply_guardrail(
             inputs={"texts": list(texts), "images": []},
-            request_data={"user_api_key_dict": user_api_key_dict},
+            request_data=dict(request_data),
             input_type="request",
         )
     except Exception as error:
@@ -166,42 +167,27 @@ async def _guardrail_outcome(
 
 
 async def _screen(
-    guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], user_api_key_dict: object | None
+    guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
 ) -> RealtimeGuardrailBlock | tuple[str, ...]:
     if not guardrails:
         return texts
-    outcome: Final = await _guardrail_outcome(guardrails[0], texts, user_api_key_dict)
+    outcome: Final = await _guardrail_outcome(guardrails[0], texts, request_data)
     if isinstance(outcome, RealtimeGuardrailBlock):
         return outcome
-    return await _screen(guardrails[1:], outcome, user_api_key_dict)
+    return await _screen(guardrails[1:], outcome, request_data)
 
 
-def _joins(texts: tuple[str, ...]) -> tuple[str, str]:
-    return "".join(texts), " ".join(texts)
-
-
-def _screening_texts(texts: tuple[str, ...]) -> tuple[str, ...]:
-    return texts if len(texts) < 2 else (*texts, *_joins(texts))
-
-
-async def _rewritten_texts(
-    guardrails: Sequence["CustomGuardrail"],
-    texts: tuple[str, ...],
-    screened: tuple[str, ...],
-    user_api_key_dict: object | None,
+async def _rewritten_parts(
+    guardrails: Sequence["CustomGuardrail"], texts: tuple[str, ...], request_data: Mapping[str, object]
 ) -> RealtimeGuardrailBlock | tuple[str, ...]:
-    parts: Final = screened[: len(texts)]
-    if len(texts) < 2:
+    parts: Final = await _screen(guardrails, texts, request_data)
+    if isinstance(parts, RealtimeGuardrailBlock):
         return parts
-    joins: Final = _joins(parts)
-    screened_joins: Final = (
-        screened[len(texts) :] if parts == texts else await _screen(guardrails, joins, user_api_key_dict)
-    )
-    if isinstance(screened_joins, RealtimeGuardrailBlock):
-        return screened_joins
-    if screened_joins == joins:
-        return parts
-    return (screened_joins[0],) if screened_joins[0] != joins[0] else (screened_joins[1],)
+    rejoined: Final = (" ".join(parts),)
+    screened_rejoined: Final = await _screen(guardrails, rejoined, request_data)
+    if isinstance(screened_rejoined, RealtimeGuardrailBlock):
+        return screened_rejoined
+    return parts if screened_rejoined == rejoined else screened_rejoined
 
 
 def _in_role_scope(guardrail: "CustomGuardrail", role: str) -> bool:
@@ -251,10 +237,14 @@ async def realtime_guardrail_verdict(
         if guardrail is not None and _in_role_scope(guardrail, role)
     }
     in_scope: Final = tuple(guardrails.values())
-    screened: Final = await _screen(in_scope, _screening_texts(texts), user_api_key_dict)
+    guardrail_request_data: Final = {**request_data, "user_api_key_dict": user_api_key_dict}
+    joined: Final = (" ".join(texts),)
+    screened: Final = await _screen(in_scope, joined, guardrail_request_data)
     if isinstance(screened, RealtimeGuardrailBlock):
         return screened
-    rewritten: Final = await _rewritten_texts(in_scope, texts, screened, user_api_key_dict)
+    if screened == joined:
+        return None
+    rewritten: Final = screened if len(texts) < 2 else await _rewritten_parts(in_scope, texts, guardrail_request_data)
     if isinstance(rewritten, RealtimeGuardrailBlock):
         return rewritten
     return None if rewritten == texts else RealtimeGuardrailRewrite(texts=rewritten)
