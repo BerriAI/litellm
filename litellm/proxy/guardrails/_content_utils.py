@@ -97,10 +97,14 @@ def _text_object(value: object) -> Mapping[str, object] | None:
         return None
 
 
+class DuplicateToolArgumentKeyError(ValueError):
+    pass
+
+
 def _tool_json_object(pairs: Sequence[tuple[str, JsonValue]]) -> JsonValue:
     value: Final = dict(pairs)
     if len(value) != len(pairs):
-        raise ValueError("Duplicate tool argument keys")
+        raise DuplicateToolArgumentKeyError("Duplicate tool argument keys")
     return value
 
 
@@ -111,7 +115,7 @@ def _finite_number(literal: str) -> float:
     return number
 
 
-def _tool_arguments(arguments: str) -> JsonValue:
+def parse_tool_arguments(arguments: str) -> JsonValue:
     parsed: Final = _tool_json(
         json.loads(
             arguments,
@@ -363,7 +367,7 @@ def walk_user_text(
         if not isinstance(arguments, str) or not arguments:
             return arguments
         try:
-            parsed: Final = _tool_arguments(arguments)
+            parsed: Final = parse_tool_arguments(arguments)
         except (ValueError, RecursionError):
             visited += 1  # rebind-ok: malformed arguments still undergo the text callback
             return visit(arguments)
