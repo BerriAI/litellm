@@ -5,15 +5,26 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
+from fakeredis import TcpFakeServer
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import Span
 from prometheus_client import REGISTRY
 from redis import exceptions as redis_exceptions
 
 import litellm
+from litellm._internal_context import service_target, set_request_parent_otel_span
+from litellm.caching.redis_batch import request_redis_batch_scope
+from litellm.caching.redis_cache import RedisCache
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel import OpenTelemetryV2Config
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.plumbing import providers
+from litellm.redis.stores.auth_cache import AUTH_CACHE_TARGET, AuthCacheSettings, AuthCacheStore
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.rust_bridge.host import redis_events
 
 
@@ -114,6 +125,102 @@ def otel(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TracerProvider, InMe
     provider: Final = providers.build_tracer_provider(config, exporter=exporter)
     monkeypatch.setattr(litellm, "service_callback", [OpenTelemetryV2(config=config, tracer_provider=provider)])
     yield provider, exporter
+
+
+@pytest.fixture
+def fake_redis_port() -> Iterator[int]:
+    server: Final = TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.server_address[1]
+    server.shutdown()
+    server.server_close()
+
+
+def _children(exporter: InMemorySpanExporter, parent: Span) -> tuple[ReadableSpan, ...]:
+    parent_id: Final = parent.get_span_context().span_id
+    return tuple(
+        span for span in exporter.get_finished_spans() if span.parent is not None and span.parent.span_id == parent_id
+    )
+
+
+async def _spans_under(exporter: InMemorySpanExporter, parent: Span, polls: int = 100) -> tuple[tuple[str, str], ...]:
+    children: Final = _children(exporter, parent)
+    if children or polls == 0:
+        return tuple(sorted((span.name, span.status.status_code.name) for span in children))
+    await asyncio.sleep(0.05)
+    return await _spans_under(exporter, parent, polls - 1)
+
+
+async def test_a_native_auth_cache_read_reports_the_redis_span_redis_cache_reported(
+    fake_redis_port: int, otel: tuple[TracerProvider, InMemorySpanExporter]
+):
+    provider, exporter = otel
+    tracer: Final = provider.get_tracer(__name__)
+    redis_cache: Final = RedisCache(host="127.0.0.1", port=fake_redis_port)
+    store: Final = AuthCacheStore(connect(redis_cache).auth_cache(AuthCacheSettings(200, 60)))
+    python_request: Final = tracer.start_span("python request")
+    native_request: Final = tracer.start_span("native request")
+
+    with trace.use_span(python_request, end_on_exit=True):
+        with service_target(AUTH_CACHE_TARGET):
+            await redis_cache.async_get_cache("python-key", parent_otel_span=python_request)
+    with trace.use_span(native_request, end_on_exit=True):
+        await store.get("native-key")
+
+    reported_by_redis_cache: Final = await _spans_under(exporter, python_request)
+    assert reported_by_redis_cache
+    assert await _spans_under(exporter, native_request) == reported_by_redis_cache
+
+
+async def test_a_post_call_batch_flushed_by_its_deadline_reports_its_redis_span_under_the_request(
+    fake_redis_port: int, otel: tuple[TracerProvider, InMemorySpanExporter]
+):
+    provider, exporter = otel
+    tracer: Final = provider.get_tracer(__name__)
+    store: Final = SpendCounterStore(connect(RedisCache(host="127.0.0.1", port=fake_redis_port)).spend_counters())
+    request: Final = tracer.start_span("request")
+
+    async def native_post_call() -> tuple[tuple[str, str], ...]:
+        with trace.use_span(request, end_on_exit=True):
+            set_request_parent_otel_span(request)
+            with request_redis_batch_scope(post_call_deadline=0.05):
+                assert store.increment_many_post_call((("spend:key:k", 1.0),))
+            return await _spans_under(exporter, request)
+
+    assert await asyncio.create_task(native_post_call())
+
+
+@pytest.fixture
+def legacy_otel(monkeypatch: pytest.MonkeyPatch) -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=provider)
+    monkeypatch.setattr(litellm, "service_callback", [logger])
+    return provider, exporter
+
+
+async def test_a_native_read_in_a_legacy_otel_request_reports_its_redis_span_under_the_request(
+    fake_redis_port: int, legacy_otel: tuple[TracerProvider, InMemorySpanExporter]
+):
+    provider, exporter = legacy_otel
+    tracer: Final = provider.get_tracer(__name__)
+    redis_cache: Final = RedisCache(host="127.0.0.1", port=fake_redis_port)
+    store: Final = AuthCacheStore(connect(redis_cache).auth_cache(AuthCacheSettings(200, 60)))
+    python_request: Final = tracer.start_span("python request")
+    native_request: Final = tracer.start_span("native request")
+
+    async def native_request_read() -> None:
+        set_request_parent_otel_span(native_request)
+        await store.get("native-key")
+
+    with service_target(AUTH_CACHE_TARGET):
+        await redis_cache.async_get_cache("python-key", parent_otel_span=python_request)
+    await asyncio.create_task(native_request_read())
+
+    reported_by_redis_cache: Final = await _spans_under(exporter, python_request)
+    assert reported_by_redis_cache
+    assert await _spans_under(exporter, native_request) == reported_by_redis_cache
 
 
 class _EndedSpans(SpanProcessor):

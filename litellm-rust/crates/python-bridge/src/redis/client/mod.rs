@@ -18,7 +18,7 @@ use pyo3::{
     exceptions::{PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
     sync::MutexExt,
-    types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple},
+    types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple},
 };
 
 use self::credentials::PythonCredentialSource;
@@ -40,16 +40,18 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
 
     fn extract(kwargs: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let py = kwargs.py();
+        let source = PyDict::new(py);
+        let mapping = kwargs.cast::<PyMapping>()?;
+        source.update(&mapping)?;
         let plain = PyDict::new(py);
         let mut host_objects = Vec::new();
-        for (name, value) in kwargs.cast::<PyDict>()?.iter() {
+        for (name, value) in source.iter() {
             match value.is_none() || is_plain(&value) {
                 true => plain.set_item(&name, value)?,
                 false => host_objects.push(name.extract::<String>()?),
             }
         }
-        let credential_provider = kwargs
-            .cast::<PyDict>()?
+        let credential_provider = source
             .get_item("credential_provider")?
             .filter(|provider| !provider.is_none() && !is_plain(provider))
             .map(Bound::unbind);
@@ -65,25 +67,42 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
     }
 }
 
-/// `litellm.constants`' `REDIS_CIRCUIT_BREAKER_*`, which Python reads from the environment once.
-pub(crate) struct RedisBreaker(BreakerConfig);
+/// `litellm.redis.store_settings.RedisBreakerSettings`, which `RedisCache` fills from `litellm.constants`.
+#[derive(FromPyObject)]
+pub(crate) struct RedisBreaker {
+    #[pyo3(attribute)]
+    failure_threshold: u32,
+    #[pyo3(attribute)]
+    recovery_timeout: f64,
+    #[pyo3(attribute)]
+    timeout_min_duration: f64,
+}
 
-impl<'a, 'py> FromPyObject<'a, 'py> for RedisBreaker {
-    type Error = PyErr;
-
-    fn extract(breaker: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let (failure_threshold, recovery_timeout, timeout_min_duration): (u32, f64, f64) =
-            breaker.extract()?;
+impl RedisBreaker {
+    fn config(&self) -> PyResult<BreakerConfig> {
         let seconds = |seconds: f64| {
             Duration::try_from_secs_f64(seconds)
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+                .map_err(|error| PyValueError::new_err(error.to_string()))
         };
-        Ok(Self(BreakerConfig {
-            failure_threshold,
-            recovery_timeout: seconds(recovery_timeout)?,
-            timeout_min_duration: seconds(timeout_min_duration)?,
-        }))
+        Ok(BreakerConfig {
+            failure_threshold: self.failure_threshold,
+            recovery_timeout: seconds(self.recovery_timeout)?,
+            timeout_min_duration: seconds(self.timeout_min_duration)?,
+        })
     }
+}
+
+/// `litellm.redis.store_settings.RedisStoreSettings`, which a `RedisCache` captures when it is built.
+#[derive(FromPyObject)]
+pub(crate) struct StoreSettings {
+    #[pyo3(attribute)]
+    redis_kwargs: RedisSpec,
+    #[pyo3(attribute)]
+    namespace: Option<String>,
+    #[pyo3(attribute)]
+    default_ttl: f64,
+    #[pyo3(attribute)]
+    breaker: Option<RedisBreaker>,
 }
 
 fn is_plain(value: &Bound<'_, PyAny>) -> bool {
@@ -119,7 +138,7 @@ fn shared_client(
     py: Python<'_>,
     spec: RedisSpec,
     namespace: Option<String>,
-    breaker: Option<RedisBreaker>,
+    breaker: Option<BreakerConfig>,
 ) -> PyResult<Option<RedisClient>> {
     let environment: SharedEnvironment = Arc::new(ProcessEnvironment);
     let RedisSpec {
@@ -176,7 +195,7 @@ fn shared_client(
     }
     let connected = {
         let _runtime = runtime.enter();
-        litellm_redis_connect::connect(resolved.clone(), host, breaker.map(|breaker| breaker.0))
+        litellm_redis_connect::connect(resolved.clone(), host, breaker)
     };
     let client = match connected {
         Ok(client) => client,
@@ -205,15 +224,15 @@ pub(crate) struct NativeRedisClient {
 impl NativeRedisClient {
     /// `None` when redis-py would fail only once a command connects, which leaves every store given it on memory.
     #[staticmethod]
-    #[pyo3(signature = (redis_kwargs, *, default_ttl_seconds, namespace = None, breaker = None))]
-    fn connect(
-        py: Python<'_>,
-        redis_kwargs: RedisSpec,
-        default_ttl_seconds: f64,
-        namespace: Option<String>,
-        breaker: Option<RedisBreaker>,
-    ) -> PyResult<Option<Self>> {
-        let default_ttl = number::seconds(default_ttl_seconds).map_err(seconds_error)?;
+    fn connect(py: Python<'_>, settings: StoreSettings) -> PyResult<Option<Self>> {
+        let StoreSettings {
+            redis_kwargs,
+            namespace,
+            default_ttl,
+            breaker,
+        } = settings;
+        let default_ttl = number::seconds(default_ttl).map_err(seconds_error)?;
+        let breaker = breaker.as_ref().map(RedisBreaker::config).transpose()?;
         Ok(
             shared_client(py, redis_kwargs, namespace, breaker)?.map(|client| Self {
                 client,

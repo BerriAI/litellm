@@ -490,6 +490,51 @@ def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_decla
     assert input_cost > 0 and output_cost > 0
 
 
+@pytest.mark.parametrize(
+    ("deployment_model_info", "native"),
+    [
+        ({}, True),
+        ({"supports_bedrock_native_structured_output": False}, False),
+        ({"supports_native_structured_output": True, "supports_bedrock_native_structured_output": False}, True),
+    ],
+    ids=["native-by-default", "bedrock-opt-out", "explicit-generic-flag"],
+)
+def test_model_info_reports_a_deployment_bedrock_native_output_opt_out(
+    local_model_cost_map: None, deployment_model_info: dict[str, object], native: bool
+) -> None:
+    info: Final = proxy_server._enrich_model_info_with_litellm_data(
+        {
+            "model_name": "sonnet",
+            "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+            "model_info": {"id": "sonnet-deployment", **deployment_model_info},
+        }
+    )["model_info"]
+
+    assert info["supports_native_structured_output"] is native
+
+
+@pytest.mark.parametrize(
+    ("model", "by_default"),
+    [("bedrock/us.anthropic.claude-opus-4-7", True), ("bedrock/us.anthropic.claude-sonnet-5", False)],
+    ids=["set-on-a-model-the-cost-map-leaves-on-the-json-tool", "unset-on-a-model-the-cost-map-makes-native"],
+)
+def test_model_info_ignores_a_deployment_by_default_key_the_router_reads_only_from_the_cost_map(
+    local_model_cost_map: None, model: str, by_default: bool
+) -> None:
+    def reported_native(deployment_model_info: dict[str, object]) -> object:
+        return proxy_server._enrich_model_info_with_litellm_data(
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": model},
+                "model_info": {"id": "claude-deployment", **deployment_model_info},
+            }
+        )["model_info"]["supports_native_structured_output"]
+
+    assert reported_native({"supports_bedrock_native_structured_output_by_default": by_default}) is reported_native(
+        {}
+    )
+
+
 def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],

@@ -142,6 +142,7 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     count_capability_routers,
     gated_capabilities_of,
     is_complexity_router_model,
+    strategy_router_dependencies,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
@@ -355,6 +356,22 @@ async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment
     return deployment_pydantic_obj
 
 
+def _self_routing_violation(
+    model_name: str | None,
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> str | None:
+    if not model_name:
+        return None
+    effective_params: Final = {
+        **(_decrypted_litellm_params(existing_params) if existing_params is not None else {}),
+        **(_dump_without_none(incoming_params) if incoming_params is not None else {}),
+    }
+    if any(dependency.model_name == model_name for dependency in strategy_router_dependencies(effective_params)):
+        return f"A strategy router cannot route to itself: {model_name} is listed as one of its own models"
+    return None
+
+
 def _strategy_router_write_violation(
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None,
@@ -374,6 +391,11 @@ def _strategy_router_write_violation(
     """
     if incoming_params is None:
         return None
+    from litellm.router_strategy.switchyard_router.config import validate_switchyard_config_write
+
+    switchyard_violation: Final = validate_switchyard_config_write(incoming_params.switchyard_router_config)
+    if switchyard_violation is not None:
+        return switchyard_violation
     config_violation: Final = validate_complexity_router_config_write(
         complexity_router_config=(
             _effective_complexity_router_config(incoming_params, existing_params)
@@ -406,8 +428,11 @@ def _strategy_router_write_violation(
 def _raise_on_strategy_router_write_violation(
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None,
+    model_name: str | None = None,
 ) -> None:
-    violation = _strategy_router_write_violation(incoming_params=incoming_params, existing_params=existing_params)
+    violation: Final = _self_routing_violation(model_name, incoming_params, existing_params) or (
+        _strategy_router_write_violation(incoming_params=incoming_params, existing_params=existing_params)
+    )
     if violation is None:
         return
     raise ProxyException(
@@ -1751,6 +1776,7 @@ async def patch_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=incoming_params,
             existing_params=remaining_params,
+            model_name=patch_data.model_name or db_model.model_name,
         )
 
         written_team_id: Final = (
@@ -3120,6 +3146,7 @@ async def add_new_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
+            model_name=model_params.model_name,
         )
 
         _raise_if_rate_limits_required_but_missing(
@@ -3325,6 +3352,7 @@ async def update_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
+            model_name=model_params.model_name or deployment.model_name,
         )
         renamed_to: Final = (
             model_params.model_name
@@ -4028,6 +4056,7 @@ async def clear_cache() -> ReconcileOutcome:
                 llm_router.registry().plugins("complexity").pop(model_name, None)
                 llm_router.registry().plugins("adaptive").pop(model_name, None)
                 llm_router.registry().plugins("quality").pop(model_name, None)
+                llm_router.registry().plugins("switchyard").pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
