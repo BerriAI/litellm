@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
 import type { OverviewTotals } from "./overviewData";
 import UsageStatStrip from "./UsageStatStrip";
 
@@ -18,6 +19,8 @@ const totals: OverviewTotals = {
   avgLatencyMs: 250,
   successRate: 80,
 };
+
+const asRendered = (text: string) => text.replace(/\s+/g, " ");
 
 const defaultProps = {
   results: [],
@@ -56,5 +59,37 @@ describe("UsageStatStrip token breakdown", () => {
     expect(screen.queryByRole("button", { name: "View token breakdown" })).not.toBeInTheDocument();
     expect(screen.queryByText("ok")).not.toBeInTheDocument();
     expect(screen.queryByText("failed")).not.toBeInTheDocument();
+  });
+});
+
+describe("UsageStatStrip in another UI language", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en");
+    i18n.removeResourceBundle("de", "translation");
+  });
+
+  it("should format every value in the selected language and keep money in US dollars", async () => {
+    i18n.addResourceBundle("de", "translation", {});
+    await i18n.changeLanguage("de");
+    const german = new Intl.NumberFormat("de");
+    const dollars = new Intl.NumberFormat("de", { style: "currency", currency: "USD" });
+    const euros = new Intl.NumberFormat("de", { style: "currency", currency: "EUR" });
+    const dollarsToFourPlaces = new Intl.NumberFormat("de", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 4,
+    });
+    const oneDecimal = new Intl.NumberFormat("de", { minimumFractionDigits: 1 });
+    const milliseconds = new Intl.NumberFormat("de", { style: "unit", unit: "millisecond", unitDisplay: "narrow" });
+
+    render(<UsageStatStrip {...defaultProps} budget={1500} />);
+
+    expect(screen.getByText(asRendered(dollars.format(42.5)))).toBeInTheDocument();
+    expect(screen.getByText(asRendered(`of ${dollars.format(1500)} budget`))).toBeInTheDocument();
+    expect(screen.getByText(asRendered(dollarsToFourPlaces.format(4.25)))).toBeInTheDocument();
+    expect(screen.getByText(asRendered(milliseconds.format(250)))).toBeInTheDocument();
+    expect(screen.getByText(`${oneDecimal.format(80)}% success rate`)).toBeInTheDocument();
+    expect(screen.getByTitle(`${german.format(9123456)} tokens`)).toBeInTheDocument();
+    expect(screen.queryByText(asRendered(euros.format(42.5)))).not.toBeInTheDocument();
   });
 });
