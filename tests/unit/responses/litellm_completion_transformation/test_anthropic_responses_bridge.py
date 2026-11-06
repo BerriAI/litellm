@@ -349,7 +349,10 @@ async def _follow_up_messages(
 
 
 async def _follow_up_messages_after(
-    spend_log: Mapping[str, object], model: str, custom_llm_provider: str
+    spend_log: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    tools: Sequence[Mapping[str, object]] = (),
 ) -> Sequence[object]:
     with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([spend_log])):
         request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
@@ -358,6 +361,7 @@ async def _follow_up_messages_after(
                 "model": model,
                 "custom_llm_provider": custom_llm_provider,
                 "messages": [{"role": "user", "content": "And in Osaka?"}],
+                **({"tools": [dict(tool) for tool in tools]} if tools else {}),
             },
             instructions=None,
         )
@@ -805,3 +809,15 @@ async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_
     messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, model, custom_llm_provider)
 
     assert _history_tool_ids(messages) == (["toolu_01Weather"], ["toolu_01Weather"])
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_keeps_a_stored_search_for_a_claude_sent_anthropics_own_search_tool() -> None:
+    messages: Final = await _follow_up_messages_after(
+        _STATELESS_SEARCH_TURN,
+        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic",
+        tools=({"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},),
+    )
+
+    assert _history_tool_ids(messages)[0] == ["srvtoolu_01Search", "toolu_01Weather"]
