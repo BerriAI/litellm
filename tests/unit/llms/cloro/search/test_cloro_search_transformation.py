@@ -82,6 +82,21 @@ async def test_asearch_sends_cloro_body_and_maps_results(monkeypatch):
     assert response._hidden_params["response_cost"] == pytest.approx(7 * per_credit)
 
 
+@pytest.mark.parametrize(
+    ("domains", "expected_query"),
+    [
+        (["-example.com"], "(q) -site:example.com"),
+        (["-a.com", "-b.com"], "(q) -site:a.com -site:b.com"),
+        (["a.com", "b.com", "-c.com"], "(q) (site:a.com OR site:b.com) -site:c.com"),
+    ],
+)
+def test_excluded_domains_become_negative_site_terms(domains: list[str], expected_query: str):
+    body: Final = CloroSearchConfig().transform_search_request(
+        query="q", optional_params={"search_domain_filter": domains}
+    )
+    assert body["query"] == expected_query
+
+
 def test_country_defaults_to_us_because_cloro_requires_it():
     body: Final = CloroSearchConfig().transform_search_request(query=["rank", "tracker"], optional_params={})
     assert body == {"query": "rank tracker", "country": "US"}

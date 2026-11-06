@@ -78,7 +78,7 @@ class CloroSearchConfig(BaseSearchConfig):
     ) -> dict[str, object]:  # mutable-ok: the http handler sends this as the JSON body
         """
         Unified params -> cloro body: ``query`` (list joined with spaces, ``search_domain_filter``
-        folded in as ``site:`` operators), ``country`` upper-cased and sent as ``US`` when absent,
+        folded in as ``site:`` and ``-site:`` operators), ``country`` upper-cased and sent as ``US`` when absent,
         because cloro requires it. ``max_results`` has no cloro equivalent: one call returns one
         Google results page, and the response is cut to ``max_results``. ``max_tokens_per_page`` is
         dropped. Everything outside the unified spec (``include``, ``device``, ``location``,
@@ -155,10 +155,17 @@ def _domain_filter(raw: object) -> tuple[str, ...]:
 
 
 def _with_site_filters(query: str, domains: tuple[str, ...]) -> str:
+    """A leading ``-`` excludes a domain, as in Perplexity's ``search_domain_filter``. Included
+    domains are joined with ``OR``; each excluded domain is a separate ``-site:`` term."""
     if not domains:
         return query
-    site_clause: Final = " OR ".join(f"site:{domain}" for domain in domains)
-    return f"({query}) ({site_clause})"
+    included: Final = [d for d in domains if not d.startswith("-")]
+    excluded: Final = [d[1:] for d in domains if d.startswith("-") and len(d) > 1]
+    clauses: Final = [f"({query})"]
+    if included:
+        clauses.append("(" + " OR ".join(f"site:{d}" for d in included) + ")")
+    clauses.extend(f"-site:{d}" for d in excluded)
+    return " ".join(clauses)
 
 
 def _max_results(optional_params: object) -> int | None:
