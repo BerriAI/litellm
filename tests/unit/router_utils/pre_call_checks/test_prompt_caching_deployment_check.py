@@ -352,15 +352,29 @@ async def test_async_filter_deployments_does_not_pin_to_a_deployment_that_failed
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize(
-    "retry_breadcrumbs",
+    "retry_breadcrumbs,fallback_depth",
     [
-        {"previous_models": ("not-a-record", {"deployment_id": None}, {"deployment_id": "dep-2"})},
-        {"previous_models": ({"deployment_id": "dep-1"},), "request_retry_count": 5},
+        (
+            {
+                "previous_models": ("not-a-record", {"deployment_id": None}, {"deployment_id": "dep-2"}),
+                "attempted_retries": 1,
+            },
+            0,
+        ),
+        ({"previous_models": ({"deployment_id": "dep-1"},), "attempted_retries": 5}, 0),
+        (
+            {"previous_models": ({"deployment_id": "dep-2"},), "attempted_retries": 0, "request_retry_count": 1},
+            1,
+        ),
     ],
-    ids=["failed_record_beside_malformed_ones", "records_trimmed_past_the_breadcrumb_limit"],
+    ids=[
+        "failed_record_beside_malformed_ones",
+        "records_trimmed_past_the_breadcrumb_limit",
+        "fallback_hop_after_the_pinned_deployment_failed",
+    ],
 )
 async def test_async_filter_deployments_does_not_pin_to_a_deployment_an_earlier_attempt_failed_on(
-    metadata_key: str, retry_breadcrumbs: Mapping[str, object]
+    metadata_key: str, retry_breadcrumbs: Mapping[str, object], fallback_depth: int
 ):
     cache: Final = DualCache()
     check: Final = PromptCachingDeploymentCheck(cache=cache)
@@ -371,14 +385,31 @@ async def test_async_filter_deployments_does_not_pin_to_a_deployment_an_earlier_
         model=MODEL_GROUP_ALIAS,
         healthy_deployments=_deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6"),
         messages=messages,
-        request_kwargs={metadata_key: dict(retry_breadcrumbs)},
+        request_kwargs={metadata_key: dict(retry_breadcrumbs), "fallback_depth": fallback_depth},
     ) == _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    "retry_breadcrumbs",
+    [
+        {"previous_models": ({"deployment_id": "dep-1"},), "attempted_retries": 1},
+        {
+            "previous_models": ({"deployment_id": "dep-2"}, {"deployment_id": "dep-1"}),
+            "attempted_retries": 1,
+            "request_retry_count": 7,
+        },
+        {"previous_models": ({"deployment_id": "dep-2"},), "attempted_retries": 0, "request_retry_count": 5},
+    ],
+    ids=[
+        "earlier_attempt_failed_on_another_deployment",
+        "pinned_deployment_failed_only_in_an_earlier_request",
+        "first_attempt_with_records_from_earlier_requests",
+    ],
+)
 async def test_async_filter_deployments_keeps_the_pin_after_an_earlier_attempt_failed_on_another_deployment(
-    metadata_key: str,
+    metadata_key: str, retry_breadcrumbs: Mapping[str, object]
 ):
     cache: Final = DualCache()
     check: Final = PromptCachingDeploymentCheck(cache=cache)
@@ -390,7 +421,7 @@ async def test_async_filter_deployments_keeps_the_pin_after_an_earlier_attempt_f
         model=MODEL_GROUP_ALIAS,
         healthy_deployments=deployments,
         messages=messages,
-        request_kwargs={metadata_key: {"previous_models": ({"deployment_id": "dep-1"},), "request_retry_count": 1}},
+        request_kwargs={metadata_key: dict(retry_breadcrumbs)},
     ) == [deployments[1]]
 
 
@@ -2092,7 +2123,10 @@ async def test_logger_serializing_the_request_metadata_never_sees_the_prompt_cac
     [
         ({}, ("dep-2",)),
         ({"_excluded_deployment_ids": ["dep-2"]}, ("dep-1", "dep-2")),
-        ({"litellm_metadata": {"previous_models": ({"deployment_id": "dep-2"},)}}, ("dep-1", "dep-2")),
+        (
+            {"litellm_metadata": {"previous_models": ({"deployment_id": "dep-2"},), "attempted_retries": 1}},
+            ("dep-1", "dep-2"),
+        ),
     ],
     ids=[
         "previous_deployment_healthy",
@@ -2219,7 +2253,10 @@ def _router_with_a_pinned_backup_deployment(num_retries: int, deployment_tags: t
     )
 
 
-async def _pin_to_backup_and_send(router: litellm.Router, surface: str, request_tags: tuple[str, ...] = ()) -> str:
+async def _pin_to_backup_and_send(
+    router: litellm.Router, surface: str, request_metadata: dict[str, object] | None = None
+) -> str:
+    metadata_to_send: Final = request_metadata if request_metadata is not None else {}
     check: Final = next(
         callback for callback in router.optional_callbacks or () if isinstance(callback, PromptCachingDeploymentCheck)
     )
@@ -2235,7 +2272,7 @@ async def _pin_to_backup_and_send(router: litellm.Router, surface: str, request_
             model=MODEL_GROUP_ALIAS,
             input=_marked_responses_input(),
             mock_response="ok",
-            litellm_metadata={"tags": list(request_tags)},
+            litellm_metadata=metadata_to_send,
         )
         return responses_reply._hidden_params["model_id"]
     messages: Final = _messages(word_count=5000)
@@ -2243,7 +2280,7 @@ async def _pin_to_backup_and_send(router: litellm.Router, surface: str, request_
         model_id="dep-2", messages=messages, tools=None
     )
     chat_reply: Final = await router.acompletion(
-        model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok", metadata={"tags": list(request_tags)}
+        model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok", metadata=metadata_to_send
     )
     return chat_reply._hidden_params["model_id"]
 
@@ -2283,7 +2320,37 @@ async def test_pin_holds_when_the_request_tags_only_constrain_the_deployments(
     monkeypatch.setattr(litellm, "callbacks", [])
     router: Final = _router_with_a_pinned_backup_deployment(num_retries=0, deployment_tags=("eu",))
 
-    assert await _pin_to_backup_and_send(router, surface, request_tags) == "dep-2"
+    assert await _pin_to_backup_and_send(router, surface, {"tags": list(request_tags)}) == "dep-2"
+
+
+async def _send_unmarked_request(router: litellm.Router, surface: str, request_metadata: dict[str, object]) -> None:
+    if surface == "responses":
+        await router.aresponses(
+            model=MODEL_GROUP_ALIAS, input="hello", mock_response="ok", litellm_metadata=request_metadata
+        )
+        return
+    await router.acompletion(
+        model=MODEL_GROUP_ALIAS,
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+        metadata=request_metadata,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+async def test_a_metadata_dict_reused_after_a_failed_request_still_pins(monkeypatch, surface: str):
+    deployments_down: Final = _DeploymentsDown(frozenset({"dep-1", "dep-2"}))
+    monkeypatch.setattr(litellm, "callbacks", [deployments_down])
+    router: Final = _router_with_a_pinned_backup_deployment(num_retries=RETRY_BREADCRUMB_LIMIT + 2)
+    reused_metadata: Final[dict[str, object]] = {}
+    with pytest.raises(litellm.InternalServerError):
+        await _send_unmarked_request(router, surface, reused_metadata)
+    monkeypatch.setattr(
+        litellm, "callbacks", [callback for callback in litellm.callbacks if callback is not deployments_down]
+    )
+
+    assert await _pin_to_backup_and_send(router, surface, reused_metadata) == "dep-2"
 
 
 class _KeepOnlyModel:

@@ -55,22 +55,29 @@ def as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
 
 
 def deployment_failed_in_request(request_kwargs: Mapping[str, object], deployment_id: str) -> bool:
+    failure_count_key: Final = _failure_count_key(request_kwargs)
     return (
         deployment_id in as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids"))
         or deployment_id in as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids"))
-        or _retry_breadcrumbs_cover(request_kwargs.get("litellm_metadata"), deployment_id)
-        or _retry_breadcrumbs_cover(request_kwargs.get("metadata"), deployment_id)
+        or _retry_breadcrumbs_cover(request_kwargs.get("litellm_metadata"), deployment_id, failure_count_key)
+        or _retry_breadcrumbs_cover(request_kwargs.get("metadata"), deployment_id, failure_count_key)
     )
 
 
-def _retry_breadcrumbs_cover(metadata: object, deployment_id: str) -> bool:
+def _failure_count_key(request_kwargs: Mapping[str, object]) -> str:
+    fallback_depth: Final = request_kwargs.get("fallback_depth")
+    return "request_retry_count" if type(fallback_depth) is int and fallback_depth > 0 else "attempted_retries"
+
+
+def _retry_breadcrumbs_cover(metadata: object, deployment_id: str, failure_count_key: str) -> bool:
     breadcrumbs: Final = as_str_mapping(metadata)
     if breadcrumbs is None:
         return False
     attempts: Final = _as_attempts(breadcrumbs.get("previous_models"))
-    retry_count: Final = breadcrumbs.get("request_retry_count")
-    return (type(retry_count) is int and retry_count > len(attempts)) or any(
-        _attempt_deployment_id(attempt) == deployment_id for attempt in attempts
+    count: Final = breadcrumbs.get(failure_count_key)
+    failures: Final = count if type(count) is int and count > 0 else 0
+    return failures > len(attempts) or any(
+        _attempt_deployment_id(attempt) == deployment_id for attempt in attempts[len(attempts) - failures :]
     )
 
 
