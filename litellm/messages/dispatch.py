@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
 from types import MappingProxyType
@@ -199,6 +200,9 @@ async def _native_amessages(
     args: tuple[object, ...],
     kwargs: Mapping[str, object],
 ) -> MessagesResult:
+    # Python's handler leaves the event loop (run_in_executor) before it builds the provider body, so
+    # tasks scheduled next to the call, such as the proxy's during_call guardrails, edit the request first
+    await asyncio.sleep(0)
     # Python's async @client wrapper stamps these on every failure; the proxy reads `timeout` for
     # the x-litellm-timeout header and the router reads `num_retries`.
     try:

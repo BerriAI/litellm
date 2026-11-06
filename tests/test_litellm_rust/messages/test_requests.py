@@ -1,3 +1,4 @@
+import asyncio
 from typing import Final
 
 import pytest
@@ -146,3 +147,20 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
+
+
+@pytest.mark.asyncio
+async def test_in_place_edits_from_a_task_started_before_the_call_reach_the_wire(server: RecordingServer) -> None:
+    messages: Final = [{"role": "user", "content": "during about secret"}]
+
+    async def mask() -> None:
+        messages[0]["content"] = "during about [REDACTED]"
+
+    async def during_call() -> None:
+        await asyncio.gather(mask())
+
+    guardrail: Final = asyncio.create_task(during_call())
+    await asyncio.gather(guardrail, call(server, messages=messages))
+
+    body, _ = sent(server)
+    assert body["messages"] == [{"role": "user", "content": "during about [REDACTED]"}]
