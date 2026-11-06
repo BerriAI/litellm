@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     )
 
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 # The key router-core's merge reads as an opaque value (``router-core/src/model_info.rs``).
 _OPAQUE_KEY: Final = "__litellm_python_value__"
@@ -760,6 +761,20 @@ class HostModelInfo:
             ]
         )
         return tuple(wire.from_wire(tier) for tier in tiers)
+
+    def _core_get_pinned_reasoning_efforts(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
+        """
+        Return the litellm_params.reasoning_effort each deployment a request
+        from team_id to model_name can route to (see _routable_deployments)
+        pins, unvalidated and in model_list order, None for a deployment that
+        pins none; the caller decides how the deployments combine.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]).get("reasoning_effort")
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
 
     def _core_get_configured_max_input_tokens(
         self, model_name: str, team_id: str | None = None

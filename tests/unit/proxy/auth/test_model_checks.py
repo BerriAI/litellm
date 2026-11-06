@@ -35,6 +35,15 @@ def test_get_team_models_for_all_models_and_team_only_models():
     assert set(result) == set(combined_models)
 
 
+def test_get_team_models_lists_models_in_the_order_the_team_set_them() -> None:
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    team_models: Final = ["zeta", "alpha", "mu", "beta", "omega", "kappa", "delta", "all-proxy-models"]
+    result: Final = get_team_models(team_models, ["proxy-b", "proxy-a"], {"grp": ["g1"]}, True)
+
+    assert result == [*team_models, "proxy-b", "proxy-a", "grp", "g1"]
+
+
 def test_get_team_models_all_proxy_models_includes_access_groups():
     """
     When a team has 'all-proxy-models' and include_model_access_groups=True,

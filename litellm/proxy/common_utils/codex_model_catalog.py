@@ -24,8 +24,10 @@ a newer tag.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import cache
 from itertools import accumulate, pairwise
 from pathlib import Path
@@ -33,7 +35,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from packaging.version import Version
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.codex_model_translation import (
@@ -61,6 +63,8 @@ CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
 _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _NO_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -119,6 +123,7 @@ class CodexStockCatalog(LiteLLMBaseModel):
 
 CodexCatalogEntry = CodexFallbackModel | CodexStockModel
 CodexAliasDefaults: TypeAlias = Literal["codex", "deployment"]
+_NATIVE_ALIAS_DEFAULTS: Final[CodexAliasDefaults] = "deployment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +413,7 @@ def _entry(
         stock_model.upgrade if stock_model.upgrade is not None and stock_model.upgrade.model in served else None
     )
     is_alias: Final = row.id != stock_model.slug
+    deployment_decides: Final = is_alias and alias_defaults == "deployment"
     stock_name: Final = row.id if is_alias else stock_model.display_name
     listing: Final = {
         "slug": row.id,
@@ -417,12 +423,18 @@ def _entry(
         "supported_in_api": True,
         "upgrade": upgrade,
         **({} if search_tool is None else {"supports_search_tool": search_tool}),
-        **(_deployment_defaults(row, stock_model) if is_alias and alias_defaults == "deployment" else {}),
+        **(_deployment_defaults(row, stock_model) if deployment_decides else {}),
         **_configured_window(row, stock_model),
     }
     if configured is None:
         return stock_model.model_copy(update={**_priced_tiers(row, stock_model), **listing})
-    return stock_model.model_copy(update={**listing, **_tier_fields(stock_model, configured)})
+    return stock_model.model_copy(
+        update={
+            **listing,
+            **_tier_fields(stock_model, configured),
+            **({"default_service_tier": None} if deployment_decides else {}),
+        }
+    )
 
 
 def _serialized(entry: CodexCatalogEntry) -> str:
@@ -435,13 +447,12 @@ def _bytes_left_after(left: int, size: int) -> int:
     return left - size if size <= left else left
 
 
-def _fits(serialized: Sequence[str], byte_limit: int | None) -> tuple[bool, ...]:
-    """Whether each entry, taken in order, fits in what is left of a body of at most `byte_limit`
-    bytes: an entry larger than the bytes left is passed over and a smaller one after it is still
-    taken, each entry counted with its separating comma and the last one's comma given back."""
-    if byte_limit is None:
+def _fits(serialized: Sequence[str], budget: int | None) -> tuple[bool, ...]:
+    """Whether each entry, taken in order, fits in what is left of `budget` bytes: an entry larger
+    than the bytes left is passed over and a smaller one after it is still taken, each entry
+    counted with its separating comma."""
+    if budget is None:
         return (True,) * len(serialized)
-    budget: Final = byte_limit - len(_BODY_PREFIX) - len(_BODY_SUFFIX) + 1
     left: Final = tuple(
         accumulate((len(entry.encode()) + 1 for entry in serialized), _bytes_left_after, initial=budget)
     )
@@ -449,15 +460,32 @@ def _fits(serialized: Sequence[str], byte_limit: int | None) -> tuple[bool, ...]
 
 
 def _kept_positions(
-    entries: Sequence[CodexCatalogEntry], serialized: Sequence[str], byte_limit: int | None
+    entries: Sequence[CodexCatalogEntry], serialized: Sequence[str], budget: int | None
 ) -> frozenset[int]:
     """The listing positions that survive the byte limit: an entry offering a service tier is taken
     ahead of one offering none, each group in listing order, since a model without a tier is driven
     by name just as well off Codex's bundled catalog; an entry too large for the bytes left never
     costs the smaller ones after it their place."""
     survival: Final = sorted(range(len(entries)), key=lambda position: (not entries[position].service_tiers, position))
-    fits: Final = _fits(tuple(serialized[position] for position in survival), byte_limit)
+    fits: Final = _fits(tuple(serialized[position] for position in survival), budget)
     return frozenset(position for position, fit in zip(survival, fits, strict=True) if fit)
+
+
+def _entries(
+    drivable: Sequence[CodexCatalogRow],
+    stock: Mapping[str, CodexStockModel] | None,
+    instructions: str | None,
+    first_priority: int,
+    alias_defaults: CodexAliasDefaults,
+    client_version: str | None,
+) -> tuple[CodexCatalogEntry, ...]:
+    known: Final = bundled_codex_models() if stock is None else stock
+    prompt: Final = codex_base_instructions() if instructions is None else instructions
+    served: Final = frozenset(row.id for row in drivable)
+    return tuple(
+        _entry(first_priority + index, row, known, served, prompt, alias_defaults, client_version)
+        for index, row in enumerate(drivable)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,20 +523,85 @@ def codex_models_response_json(
     requesting Codex's version, which decides the reasoning levels a fallback entry may offer; None counts
     as a version too old for custom levels.
     """
-    known: Final = bundled_codex_models() if stock is None else stock
-    prompt: Final = codex_base_instructions() if instructions is None else instructions
     drivable: Final = tuple(row for row in rows if _codex_can_drive(row.id, row.mode))
-    served: Final = frozenset(row.id for row in drivable)
-    entries: Final = tuple(
-        _entry(index, row, known, served, prompt, alias_defaults, client_version) for index, row in enumerate(drivable)
-    )
+    entries: Final = _entries(drivable, stock, instructions, 0, alias_defaults, client_version)
     serialized: Final = tuple(_serialized(entry) for entry in entries)
-    kept: Final = _kept_positions(entries, serialized, byte_limit)
+    kept: Final = _kept_positions(
+        entries, serialized, None if byte_limit is None else byte_limit - len(_BODY_PREFIX) - len(_BODY_SUFFIX) + 1
+    )
     return CodexCatalogBody(
         json=f"{_BODY_PREFIX}{','.join(serialized[position] for position in sorted(kept))}{_BODY_SUFFIX}",
         listed=tuple(row.id for position, row in enumerate(drivable) if position in kept),
         left_out=tuple(row.id for position, row in enumerate(drivable) if position not in kept),
     )
+
+
+def _priority(model: Mapping[str, object]) -> int:
+    priority: Final = model.get("priority")
+    return priority if isinstance(priority, int) else -1
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"))
+
+
+def _entry_json(entry: CodexCatalogEntry) -> Mapping[str, object]:
+    return _JSON_OBJECT.validate_python(entry.model_dump(mode="json", exclude_unset=isinstance(entry, CodexStockModel)))
+
+
+def merged_codex_catalog(
+    upstream_body: bytes,
+    rows: Sequence[CodexCatalogRow],
+    *,
+    stock: Mapping[str, CodexStockModel] | None = None,
+    instructions: str | None = None,
+    byte_limit: int = CODEX_CATALOG_BYTE_LIMIT,
+    client_version: str | None = None,
+) -> str | None:
+    try:
+        top: Final = _JSON_OBJECT.validate_json(upstream_body)
+        upstream: Final = _JSON_OBJECTS.validate_python(top.get("models"))
+    except ValidationError:
+        return None
+    slugs: Final = frozenset(model.get("slug") for model in upstream)
+    added: Final = tuple(row for row in rows if _codex_can_drive(row.id, row.mode) and row.id not in slugs)
+    first_priority: Final = max((_priority(model) for model in upstream), default=-1) + 1
+    entries: Final = _entries(added, stock, instructions, first_priority, _NATIVE_ALIAS_DEFAULTS, client_version)
+    added_models: Final = tuple(_entry_json(entry) for entry in entries)
+    serialized: Final = tuple(_compact_json(model) for model in added_models)
+    budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))
+    kept: Final = tuple(sorted(_kept_positions(entries, serialized, budget)))
+    if len(kept) < len(entries):
+        verbose_proxy_logger.warning(
+            "Codex native model catalog left out %d of %d LiteLLM models to stay within Codex's %d byte limit",
+            len(entries) - len(kept),
+            len(entries),
+            byte_limit,
+        )
+    if not kept:
+        return None
+    return _compact_json({**top, "models": [*upstream, *(added_models[position] for position in kept)]})
+
+
+def _canonical_value(value: object) -> object:
+    return value.model_dump(mode="json") if isinstance(value, BaseModel) else repr(value)
+
+
+def codex_catalog_etag(upstream_etag: str, rows: Sequence[CodexCatalogRow]) -> str:
+    canonical: Final = json.dumps(
+        [asdict(row) for row in rows], sort_keys=True, separators=(",", ":"), default=_canonical_value
+    )
+    digest: Final = hashlib.sha256(json.dumps([upstream_etag, canonical]).encode()).hexdigest()
+    return f'"{digest}"'
+
+
+def upstream_codex_slugs(upstream_body: bytes) -> frozenset[str] | None:
+    try:
+        upstream: Final = _JSON_OBJECTS.validate_python(_JSON_OBJECT.validate_json(upstream_body).get("models"))
+    except ValidationError:
+        return None
+    slugs: Final = (model.get("slug") for model in upstream)
+    return frozenset(slug for slug in slugs if isinstance(slug, str))
 
 
 def _group_reasoning_efforts(
@@ -518,6 +611,11 @@ def _group_reasoning_efforts(
         return None
     group: Final = registry.group(lookup_id, include_hidden=True, team_id=team_id)
     return group.supported_reasoning_efforts if group is not None else None
+
+
+def _shared_pinned_effort(pinned: tuple[object, ...]) -> str | None:
+    first: Final = next(iter(pinned), None)
+    return first if isinstance(first, str) and all(effort == first for effort in pinned) else None
 
 
 def deployment_capabilities(model_info: Mapping[str, object] | None, model_id: str) -> CodexDeploymentCapabilities:
@@ -562,6 +660,11 @@ def _catalog_row(
             registry.resolve(lookup_id, kind="upstream_provider", team_id=team_id) if registry is not None else None
         ),
         display_name=registry.group(label_id, field="display_name") if registry is not None else None,
+        reasoning_effort=(
+            _shared_pinned_effort(registry.group(lookup_id, field="pinned_reasoning_efforts", team_id=team_id))
+            if registry is not None
+            else None
+        ),
         service_tiers=registry.group(lookup_id, field="service_tiers", team_id=team_id) if registry is not None else (),
         supported_reasoning_efforts=_group_reasoning_efforts(row, lookup_id, registry, team_id),
         search_tool_support=(
@@ -619,3 +722,21 @@ def codex_model_list_body(
             ", ".join(body.left_out),
         )
     return body.json
+
+
+def codex_entry_names_default_reasoning_level(
+    model_id: str, llm_router: Router, team_id: str | None, client_version: str | None
+) -> bool:
+    """Whether the native catalog entry for `model_id` names a `default_reasoning_level`. Codex's model picker
+    sends reasoning effort `none` for a model whose entry names none, while showing that choice as
+    "default"."""
+    listed: Final[ModelInfoResponse] = {"id": model_id, "object": "model", "created": 0, "owned_by": ""}
+    (entry,) = _entries(
+        (_catalog_row(listed, model_id, model_id, llm_router, team_id),),
+        None,
+        "",
+        0,
+        _NATIVE_ALIAS_DEFAULTS,
+        client_version,
+    )
+    return _entry_json(entry).get("default_reasoning_level") is not None
