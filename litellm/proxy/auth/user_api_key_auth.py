@@ -301,6 +301,17 @@ async def _normalize_claude_model(
     rewrite_request_model(request_data, request, source)
 
 
+_CODEX_NATIVE_RESPONSES_ROUTE: Final = "/backend-api/codex/responses"
+
+
+def _is_codex_native_litellm_turn(route: str, model: object, llm_router: litellm.Router, team_id: str | None) -> bool:
+    if route != _CODEX_NATIVE_RESPONSES_ROUTE:
+        return False
+    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import routes_to_litellm
+
+    return routes_to_litellm(model, llm_router, team_id)
+
+
 async def _resolve_router_settings_model_group_alias(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     valid_token: UserAPIKeyAuth,
@@ -317,9 +328,12 @@ async def _resolve_router_settings_model_group_alias(
     if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
         return
     request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
-    if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
-        return
     requested: Final = request_data.get("model")
+    if request_dispatched_to_pass_through_endpoint(request) or (
+        request_dispatched_to_provider_pass_through(request)
+        and not _is_codex_native_litellm_turn(route, requested, llm_router, valid_token.team_id)
+    ):
+        return
     if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
         return
     settings: Final = await proxy_config.get_hierarchical_router_settings(
@@ -337,9 +351,6 @@ async def _resolve_router_settings_model_group_alias(
     )
     request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
     rewrite_request_model(request_data, request, target)
-
-
-_CODEX_NATIVE_RESPONSES_ROUTE: Final = "/backend-api/codex/responses"
 
 
 def _resolve_codex_native_chatgpt_model(

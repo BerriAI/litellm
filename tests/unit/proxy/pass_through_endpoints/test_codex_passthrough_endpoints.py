@@ -682,6 +682,84 @@ def test_native_route_serves_only_the_models_the_key_allows(
     assert [json.loads(call.request.content)["model"] for call in chatgpt.calls] == ([model] if allowed else [])
 
 
+def _key_with_alias_to_budgeted_target(monkeypatch: pytest.MonkeyPatch, target_budget: float) -> str:
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(
+        proxy_server, "llm_router", Router(model_list=[_open_weights("group-a"), _open_weights("group-b")])
+    )
+    key: Final = f"sk-test-alias-budget-{target_budget}"
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            models=["group-a", "group-b"],
+            router_settings={"model_group_alias": {"group-a": "group-b"}},
+            model_max_budget={"group-b": {"max_budget": target_budget, "budget_duration": "1d"}},
+        ),
+    )
+    return key
+
+
+def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=0.0)
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "group-a", "input": "Hello"},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert response.json()["error"]["type"] == "budget_exceeded", response.text
+    assert "model=group-b" in response.json()["error"]["message"]
+    assert not provider.called
+
+
+def test_native_route_serves_a_saved_alias_target_within_budget_under_the_requested_name(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=5.0)
+    _account_catalog(respx_mock)
+    provider: Final = _open_weights_provider(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": "group-a", "input": "Hello"},
+        headers={**_ACCOUNT_HEADERS, "x-litellm-api-key": key},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["model"] == "group-a"
+    assert json.loads(provider.calls.last.request.content)["model"].endswith("/group-b")
+
+
+def test_native_route_keeps_a_chatgpt_turn_on_the_subscription_despite_a_saved_alias(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    mixed_router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    key: Final = "sk-test-alias-on-a-chatgpt-name"
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth(
+            token=hash_token(key),
+            models=[_BUNDLED_SLUG, "open-weights"],
+            router_settings={"model_group_alias": {_BUNDLED_SLUG: "open-weights"}},
+        ),
+    )
+    provider: Final = _open_weights_provider(respx_mock)
+    chatgpt: Final = _chatgpt_responses(respx_mock)
+    response: Final = client.post(
+        "/backend-api/codex/responses",
+        json={"model": _BUNDLED_SLUG, "input": "Hello", "stream": True},
+        headers={**_HEADERS, "x-litellm-api-key": key},
+    )
+    assert response.status_code == 200, response.text
+    assert not provider.called
+    assert [json.loads(call.request.content)["model"] for call in chatgpt.calls] == [_BUNDLED_SLUG]
+
+
 def test_v1_request_for_a_gpt_name_still_reaches_the_catch_all_with_the_access_group_recipe(
     client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router
 ) -> None:

@@ -2,6 +2,8 @@
 Unit tests for ToolPolicyGuardrail.
 """
 
+from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import (
     ToolPolicyGuardrail,
 )
@@ -224,7 +227,23 @@ async def test_blocked_tool_loaded_by_a_replayed_tool_search_raises_next_to_allo
     assert exc_info.value.detail["blocked_tools"] == ["run_shell"]
 
 
-def _responses_request(tools: list, item_tools: list) -> dict:
+async def _install_tool_policies(monkeypatch: pytest.MonkeyPatch, input_policies: Mapping[str, str]) -> None:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(tool_name=name, input_policy=policy, output_policy="untrusted")
+            for name, policy in input_policies.items()
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
+    registry = tool_registry_writer.ToolPolicyRegistry()
+    await registry.sync_tool_policy_from_db(prisma_client)
+    monkeypatch.setattr(tool_registry_writer, "_tool_policy_registry", registry)
+
+
+def _responses_request(
+    tools: Sequence[Mapping[str, object]], item_tools: Sequence[Mapping[str, object]]
+) -> dict[str, object]:
     return {
         "user_api_key_request_route": "/v1/responses",
         "tools": tools,
@@ -263,32 +282,30 @@ def _responses_request(tools: list, item_tools: list) -> dict:
     ],
     ids=["additional_tools_item", "namespace_in_item", "top_level_mcp"],
 )
-async def test_blocked_tool_raises_next_to_a_top_level_function_tool(guardrail, request_data):
-    with patch(
-        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
-        return_value=_registry_mock({"get_weather": "untrusted", "drop_database": "blocked"}),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs=_tool_request_inputs(["get_weather"]),
-                request_data=request_data,
-                input_type="request",
-            )
+async def test_blocked_tool_raises_next_to_a_top_level_function_tool(
+    guardrail: ToolPolicyGuardrail, request_data: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_tool_policies(monkeypatch, {"get_weather": "untrusted", "drop_database": "blocked"})
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs=_tool_request_inputs(["get_weather"]),
+            request_data=request_data,
+            input_type="request",
+        )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["blocked_tools"] == ["drop_database"]
 
 
 @pytest.mark.asyncio
-async def test_blocked_tool_defined_at_the_top_level_and_in_an_item_is_named_once(guardrail):
+async def test_blocked_tool_defined_at_the_top_level_and_in_an_item_is_named_once(
+    guardrail: ToolPolicyGuardrail, monkeypatch: pytest.MonkeyPatch
+) -> None:
     tool = {"type": "function", "name": "drop_database"}
-    with patch(
-        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
-        return_value=_registry_mock({"drop_database": "blocked"}),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs=_tool_request_inputs(["drop_database"]),
-                request_data=_responses_request([tool], [tool]),
-                input_type="request",
-            )
+    await _install_tool_policies(monkeypatch, {"drop_database": "blocked"})
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs=_tool_request_inputs(["drop_database"]),
+            request_data=_responses_request([tool], [tool]),
+            input_type="request",
+        )
     assert exc_info.value.detail["blocked_tools"] == ["drop_database"]

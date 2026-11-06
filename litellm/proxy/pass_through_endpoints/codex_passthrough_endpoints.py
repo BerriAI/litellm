@@ -127,7 +127,7 @@ def _candidate_deployments(model: str, llm_router: "Router", team_id: str | None
     return tuple(deployment for deployment in candidates if deployment is not None)
 
 
-def _routes_to_litellm(model: object, llm_router: "Router | None", team_id: str | None) -> bool:
+def routes_to_litellm(model: object, llm_router: "Router | None", team_id: str | None) -> bool:
     if (
         not isinstance(model, str)
         or llm_router is None
@@ -268,7 +268,7 @@ async def _serves_through_litellm(
     headers: Mapping[str, str],
     cache: _SharedCache,
 ) -> bool:
-    if not _routes_to_litellm(model, llm_router, user_api_key_dict.team_id) or not _may_call_litellm_responses(
+    if not routes_to_litellm(model, llm_router, user_api_key_dict.team_id) or not _may_call_litellm_responses(
         user_api_key_dict
     ):
         return False
@@ -501,7 +501,7 @@ async def _litellm_catalog_rows(
             type(error).__name__,
         )
         return ()
-    return tuple(row for row in rows if _routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
+    return tuple(row for row in rows if routes_to_litellm(row.id, llm_router, user_api_key_dict.team_id))
 
 
 def _models_etag_caller(user_api_key_dict: UserAPIKeyAuth, gateway_token: str) -> str:
