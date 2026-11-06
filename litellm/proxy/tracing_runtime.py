@@ -31,7 +31,7 @@ async def provide_receiver(request: Request) -> TraceReceiver | None:
 
 async def provide_storage(request: Request) -> LensTraceStorage | None:
     tracing: Final = await provide_receiver(request)
-    return tracing.storage if tracing is not None else None
+    return tracing.storage if tracing is not None and isinstance(tracing.storage, LensTraceStorage) else None
 
 
 @asynccontextmanager

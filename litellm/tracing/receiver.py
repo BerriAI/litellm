@@ -4,12 +4,13 @@ from typing import Final
 from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT, AGENT_TRACING_LIST_PAGE_SIZE
 from litellm.tracing.generated.models import TraceAgentsParams
 from litellm.tracing.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
+from litellm.tracing.spend_logs import SpendLogTraceStorage
 from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgent, TraceAgentList
 
 
 class TraceReceiver:
-    def __init__(self, storage: LensTraceStorage) -> None:
+    def __init__(self, storage: LensTraceStorage | SpendLogTraceStorage) -> None:
         self.storage: Final = storage
 
     async def list_traces(self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None) -> TracePage:

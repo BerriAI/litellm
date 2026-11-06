@@ -27,8 +27,9 @@ from litellm.constants import (
     TRACE_READ_RETRY_AFTER_SECONDS,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
+from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_spend_log_read_scope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
@@ -54,6 +55,7 @@ from litellm.tracing.generated.types import (
     TraceScope,
 )
 from litellm.tracing.otlp_http import encode_otlp_response
+from litellm.tracing.spend_logs import SpendLogTraceStorage
 from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgentList
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -61,6 +63,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
+_SQL_NEEDS_LENS_DETAIL: Final = "Trace SQL queries need the Lens service. Configure LITELLM_LENS_URL."
 
 
 async def current_time_ms() -> int:
@@ -84,6 +87,10 @@ async def provide_trace_access(
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceAccessContext:
+    if tracing is not None and isinstance(tracing.storage, SpendLogTraceStorage):
+        RouteChecks.should_call_route(route="/spend/logs/ui", valid_token=auth)
+        spend_scope: Final = await resolve_spend_log_read_scope(auth, log_team_lookup)
+        return TraceAccessContext(tracing, spend_scope if auth.user_id or isinstance(spend_scope, AllRows) else None)
     read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     return TraceAccessContext(tracing, read_scope)
 
@@ -250,6 +257,8 @@ async def provide_trace_query_access(
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceQueryAccess:
     storage: Final = require_receiver(tracing).storage
+    if isinstance(storage, SpendLogTraceStorage):
+        raise HTTPException(status_code=501, detail=_SQL_NEEDS_LENS_DETAIL)
     scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     if scope is None:
         raise HTTPException(status_code=403, detail="Not allowed to view logs")

@@ -1938,7 +1938,15 @@ class LiteLLMProxyRequestSetup:
         """
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
 
-        metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
+        normalized_headers: Final = MappingProxyType(
+            {k.lower(): v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)}
+        )
+        agent_name_from_header: Final = normalized_headers.get("x-litellm-agent-name", "").strip()
+        metadata_from_headers: Final = (
+            LitellmMetadataFromRequestHeaders(agent_name=agent_name_from_header)
+            if agent_name_from_header
+            else LitellmMetadataFromRequestHeaders()
+        )
         request_body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
         _drop_client_session_metadata(request_body)
         spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
@@ -1949,12 +1957,9 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
-        normalized_headers: Final = MappingProxyType(
-            {k.lower(): v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)}
-        )
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
-        chain_id: Final = get_chain_id_from_headers(dict(headers))
+        chain_id: Final = get_chain_id_from_headers(dict(normalized_headers))
         child_tier_metadata: Final = _child_tier_session_metadata(
             normalized_headers, request_body, _metadata_variable_name
         )

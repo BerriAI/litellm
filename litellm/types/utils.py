@@ -3499,6 +3499,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     Specific metadata k,v pairs logged to integration for easier cost tracking and prompt management
     """
 
+    agent_name: ReadOnly[NotRequired[str | None]]
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
     user_agent: str | None

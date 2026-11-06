@@ -11443,3 +11443,18 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+def test_agent_name_header_survives_spend_logging_without_an_agent_registration(metadata_field: str) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
+
+    data = {metadata_field: {"agent_name": "body-default"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"X-LiteLLM-Agent-Name": " Support agent "},
+        data=data,
+        _metadata_variable_name=metadata_field,
+    )
+    stored = _get_spend_logs_metadata(data[metadata_field])
+    assert stored["agent_name"] == "Support agent"
+    assert data[metadata_field].get("agent_id") is None

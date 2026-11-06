@@ -7,7 +7,6 @@ import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from types import ModuleType
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -29,14 +28,15 @@ from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKe
 from litellm.proxy.auth.authorization import OwnedRows, ReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
+from litellm.proxy.tracing_runtime import manage_tracing
+from litellm.tracing import TraceReceiver
 from litellm.tracing.errors import TraceChanged
 from litellm.tracing.generated.models import TraceQueryHelp
 from litellm.tracing.generated.responses import TraceSQLResponse
-from litellm.tracing.generated.types import AllQueryScope, TraceScope
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing import TraceReceiver
+from litellm.tracing.generated.types import TraceScope
 from litellm.tracing.remote import RemoteTraceStore
+from litellm.tracing.spend_logs import SpendLogTraceStorage
+from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing.types import TraceAgent, TraceAgentList
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
@@ -692,6 +692,32 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
     storage.query_help.assert_not_called()
 
 
+@pytest.mark.parametrize("request_", (("post", "/v1/traces/query"), ("get", "/v1/traces/query/help")))
+def test_sql_routes_need_the_lens_service_when_traces_come_from_spend_logs(
+    client: TestClient, request_: tuple[str, str]
+) -> None:
+    spend_logs: Final = TraceReceiver(storage=SpendLogTraceStorage(lambda: None))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: spend_logs
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    method, path = request_
+    response: Final = client.request(method, path, json={"sql": "SELECT 1"} if method == "post" else None)
+    assert response.status_code == 501, response.text
+    assert "Lens service" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(("allowed_routes", "status_code"), ((["llm_api_routes"], 403), (None, 200)))
+def test_spend_log_traces_need_the_same_route_access_as_the_logs_page(
+    client: TestClient, allowed_routes: list[str] | None, status_code: int
+) -> None:
+    spend_logs: Final = TraceReceiver(storage=SpendLogTraceStorage(lambda: None))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: spend_logs
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="user", token="hashed-key", allowed_routes=allowed_routes
+    )
+    response: Final = client.get("/v1/traces")
+    assert response.status_code == status_code, response.text
+
+
 def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER
@@ -1009,8 +1035,12 @@ async def test_storage_preserves_page_cursor_and_normalizes_remote_trace_data(
 
     def accept(request: httpx.Request) -> httpx.Response:
         assert json.loads(request.content) == {
-            "operation": "trace", "scope": {**scope, "team_ids": []}, "trace_id": "t1", "trace_ref": "run",
-            "cursor": cursor, "page_size": page_size,
+            "operation": "trace",
+            "scope": {**scope, "team_ids": []},
+            "trace_id": "t1",
+            "trace_ref": "run",
+            "cursor": cursor,
+            "page_size": page_size,
         }
         return httpx.Response(200, json={**TRACE_RESPONSE, "next_cursor": "more"})
 
@@ -1026,7 +1056,9 @@ async def test_storage_validates_the_remote_query_help_value() -> None:
     async with httpx.AsyncClient(
         base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json=QUERY_HELP))
     ) as client:
-        assert await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret") == TraceQueryHelp.model_validate(QUERY_HELP)
+        assert await LensTraceStorage(RemoteTraceStore(client)).query_help(
+            {"kind": "all"}, "secret"
+        ) == TraceQueryHelp.model_validate(QUERY_HELP)
 
 
 @pytest.mark.parametrize(
@@ -1050,7 +1082,33 @@ async def test_storage_validates_the_remote_query_help_value() -> None:
 )
 async def test_storage_rejects_remote_query_help_that_drifts_from_the_contract(drift: Mapping[str, object]) -> None:
     async with httpx.AsyncClient(
-        base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift}))
+        base_url="http://lens",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={**QUERY_HELP, **drift})),
     ) as client:
         with pytest.raises(RuntimeError, match="invalid response"):
             await LensTraceStorage(RemoteTraceStore(client)).query_help({"kind": "all"}, "secret")
+
+
+@pytest.mark.parametrize(
+    "path", ["/v1/traces", "/v1/traces/agents", "/v1/traces/session", "/v1/traces/session/spans/call"]
+)
+def test_spend_log_traces_require_spend_log_route_access(client: TestClient, path: str) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(
+        storage=SpendLogTraceStorage(lambda: None)
+    )
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=["llm_api_routes"]
+    )
+    response: Final = client.get(path)
+    assert response.status_code == 403
+
+
+def test_spend_log_traces_allow_a_dashboard_session(client: TestClient) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(
+        storage=SpendLogTraceStorage(lambda: None)
+    )
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=["/spend/logs/ui", "/v1/traces"]
+    )
+    response: Final = client.get("/v1/traces")
+    assert response.status_code == 200 and response.json()["data"] == []
