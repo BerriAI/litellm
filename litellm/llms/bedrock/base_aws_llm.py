@@ -1535,7 +1535,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_region_name: str,
         endpoint_type: Literal["runtime", "agent", "agentcore"] | None = "runtime",
     ) -> tuple[str, str]:
-        runtime_endpoint: Final = aws_bedrock_runtime_endpoint or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        configured_endpoint: Final = (
+            aws_bedrock_runtime_endpoint if isinstance(aws_bedrock_runtime_endpoint, str) else None
+        )
+        runtime_endpoint: Final = configured_endpoint or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
         endpoint_url: Final = (
             api_base
             or runtime_endpoint
