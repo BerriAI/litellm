@@ -42,6 +42,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.redis.store_settings import RedisStoreSettings
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -472,15 +473,21 @@ _LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
 
 
 def redis_breaker_state_counts() -> Mapping[str, int]:
-    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger."""
-    return MappingProxyType(dict(Counter(breaker.state for breaker in _LIVE_BREAKERS)))
+    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger.
+
+    Counts the Python breakers of every live ``RedisCache`` and the breaker of every native Redis
+    client the router stores built, since each opens and closes on its own."""
+    from litellm.rust_bridge._native import native_redis_breaker_states
+
+    python_states: Final = Counter(breaker.state for breaker in _LIVE_BREAKERS)
+    return MappingProxyType(dict(python_states + Counter(native_redis_breaker_states())))
 
 
 class RedisCircuitBreakerOpenError(Exception):
     pass
 
 
-class _RedisTimeoutLogThrottle:
+class RedisTimeoutLogThrottle:
     """Admits one Redis timeout log line per interval and counts the timeouts it suppressed in between."""
 
     def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic) -> None:
@@ -503,7 +510,7 @@ class _RedisTimeoutLogThrottle:
             return suppressed
 
 
-_redis_timeout_log_throttle: Final = _RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
+redis_timeout_log_throttle: Final = RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
 
 
 def log_redis_failure(
@@ -516,7 +523,7 @@ def log_redis_failure(
     if not is_redis_timeout_failure(exc):
         logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
         return
-    suppressed: Final = _redis_timeout_log_throttle.admit()
+    suppressed: Final = redis_timeout_log_throttle.admit()
     if suppressed is None:
         logger.debug("%s: %s", message, exc, stacklevel=2)
         return
@@ -639,6 +646,8 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
+    store_settings: RedisStoreSettings | None = None
+
     def __init__(
         self,
         host=None,
@@ -705,6 +714,11 @@ class RedisCache(BaseCache):
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+        self.store_settings = RedisStoreSettings(
+            redis_kwargs=MappingProxyType(dict(redis_kwargs)),
+            namespace=namespace,
+            default_ttl=self.default_ttl,
+        )
 
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
         return call()
