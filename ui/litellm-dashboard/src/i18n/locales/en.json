@@ -8085,6 +8085,10 @@
       "copyUserId": "Copy user ID",
       "hideAria": "Hide <name/>",
       "toggleHideAria": "Toggle hide {{name}}",
+      "language": {
+        "label": "Language",
+        "fallbackNote": "Missing translations show in English. <githubLink>Help translate</githubLink>"
+      },
       "changePassword": "Change Password",
       "logout": "Logout"
     },
