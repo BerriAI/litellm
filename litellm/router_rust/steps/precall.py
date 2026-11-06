@@ -22,10 +22,10 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.token_counter import (
-    embedding_text_input,
     offload_token_count,
     served_openai_models,
     single_encoding_openai_model,
+    split_embedding_input_tokens,
 )
 from litellm.router_attempt import for_requested_model
 from litellm.router_python_host import python_host
@@ -62,11 +62,8 @@ def count_tokens(
     fits_within: int = 0,
 ) -> int:
     """``_count_pre_call_check_tokens``: messages, or Responses input normalized to messages, plus
-    the tools and Anthropic ``system`` block the message list never carries. Embedding media is left
-    out of the input when an item of ``deployments`` declares image embedding input. An
-    embedding batch (a list of texts, token IDs or token ID lists) counts as its longest input, and
-    a text of at most ``fits_within`` UTF-8 bytes counts as its byte length without the tokenizer:
-    a token is never shorter than a byte, so it fits any window of that size."""
+    the tools and Anthropic ``system`` block the message list never carries. Embedding media an
+    item of ``deployments`` reads as media is left out of the input: it never counts as text."""
     from litellm.llms.anthropic.messages.native.utils import anthropic_system_to_openai_message
 
     extras: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else MappingProxyType({})
@@ -84,7 +81,7 @@ def count_tokens(
             LiteLLMCompletionResponsesConfig,
         )
 
-        text_input: Final = embedding_text_input(input, partial(deployment_backend_models, deployments))
+        text_input, _ = split_embedding_input_tokens(input, partial(deployment_backend_models, deployments))
         embedding_tokens: Final = _longest_embedding_input_tokens(host, text_input, tokenizer_model, fits_within)
         if embedding_tokens is not None:
             return embedding_tokens
@@ -100,20 +97,25 @@ def count_tokens(
 def _longest_embedding_input_tokens(
     host: "PythonHost", value: object, tokenizer_model: str, fits_within: int
 ) -> int | None:
-    """An embedding model's context window bounds each input on its own, so a batch is never summed.
-    None when ``value`` is not an embedding batch, which leaves it to the Responses input count."""
     items: Final = _items(value) if _is_list(value) else ()
     if not items:
         return None
     texts: Final = tuple(item for item in items if isinstance(item, str))
     if len(texts) == len(items):
-        counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
-        return max(_text_tokens(counter, tokenizer_model, text, fits_within) for text in texts)
+        return _longest_text_tokens(host, texts, tokenizer_model, fits_within)
     if all(_is_token_id(item) for item in items):
         return _token_id_count(host, len(items))
     if all(_is_token_id_list(item) for item in items):
         return _token_id_count(host, max(len(_items(item)) for item in items))
     return None
+
+
+def _longest_text_tokens(host: "PythonHost", texts: Sequence[str], tokenizer_model: str, fits_within: int) -> int:
+    if not tokenizer_model:
+        # the default tokenizer overcounts non-English text, so only an OpenAI tokenizer may refuse a batch
+        return 0
+    counter: Final = host.invoke("token_counter")  # pyright: ignore[reportUnknownMemberType]  # see count_tokens
+    return max(_text_tokens(counter, tokenizer_model, text, fits_within) for text in texts)
 
 
 def _text_tokens(counter: Callable[..., int], tokenizer_model: str, text: str, fits_within: int) -> int:
@@ -130,7 +132,6 @@ def _is_token_id_list(value: object) -> bool:
 
 
 def _token_id_count(host: "PythonHost", count: int) -> int:
-    """Token IDs need no tokenizer, but honor ``disable_token_counter`` the way counted text does."""
     return 0 if host.dynamic().disable_token_counter else count
 
 

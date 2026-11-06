@@ -4122,16 +4122,14 @@ def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_te
 
 
 @pytest.mark.parametrize(
-    ("backend", "caption", "fits"),
+    ("backend", "fits"),
     [
-        pytest.param("vertex_ai/gemini-embedding-2", "a red car", True, id="image-backend-short-caption"),
-        pytest.param("vertex_ai/gemini-embedding-2", "word " * 40, False, id="image-backend-oversized-caption"),
-        pytest.param("text-embedding-3-small", "a red car", False, id="text-only-backend-counts-the-image"),
+        pytest.param("vertex_ai/gemini-embedding-2", True, id="image-backend-without-an-openai-tokenizer"),
+        pytest.param("text-embedding-3-small", False, id="text-only-backend-counts-the-image"),
     ],
 )
-def test_context_window_pre_call_check_counts_each_caption_next_to_an_embedding_image(
-    backend: str, caption: str, fits: bool, caplog
-):
+def test_context_window_pre_call_check_on_a_caption_next_to_an_embedding_image(backend: str, fits: bool, caplog):
+    caption: Final = "word " * 40
     router: Final = _embedding_context_router(backend, window=20)
     deployments: Final = router.registry().deployments("embedder")
 

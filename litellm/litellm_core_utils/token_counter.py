@@ -666,19 +666,14 @@ def _is_pdf_block(block: Mapping[str, object]) -> bool:
     return (_block_str_field(block, "file", "file_data") or "").startswith("data:application/pdf")
 
 
-def _bedrock_base_model(resolved_model: str) -> str:
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-    return BedrockModelInfo.get_base_model(resolved_model.removeprefix("async_invoke/"))
-
-
 def _bedrock_data_uri_media_scope(
     resolved_model: str, media: Sequence[Mapping[str, object]]
 ) -> _DataUriMediaScope | None:
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
     from litellm.utils import supports_embedding_image_input
 
-    base_model: Final = _bedrock_base_model(resolved_model)
+    base_model: Final = BedrockModelInfo.get_base_model(resolved_model.removeprefix("async_invoke/"))
     if not supports_embedding_image_input(f"bedrock/{base_model}"):
         return None
     match BaseAWSLLM.get_bedrock_embedding_provider(base_model):
@@ -725,33 +720,6 @@ def split_embedding_input_tokens(
         return value, 0
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
     return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
-
-
-def _embeds_media(model: str) -> bool:
-    from litellm.utils import supports_embedding_image_input
-
-    try:
-        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model)
-    except litellm.exceptions.BadRequestError:
-        return False
-    return supports_embedding_image_input(
-        f"bedrock/{_bedrock_base_model(resolved_model)}" if provider == "bedrock" else model
-    )
-
-
-def embedding_text_input(value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]]) -> _EmbeddingInputT:
-    """``value`` without its media when a backend in ``media_models`` declares image embedding input.
-    The pre-call check holds one count for the whole group, so an image backend is never refused over
-    media it embeds, and only a group of text-only backends, which read a data URI as text, counts it."""
-    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
-
-    text, media = split_embedding_media_for_tpm(value)
-    if not media:
-        return value
-    models: Final = tuple(media_models())
-    if not any(map(_embeds_media, models)):
-        return value
-    return cast(_EmbeddingInputT, text)  # cast-ok: the projection keeps the input's container shape
 
 
 def embedding_aware_token_count(
