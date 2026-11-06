@@ -28,6 +28,7 @@ def row(
     error: str | None = None,
     spend: float = 0.01,
     agent_id: str | None = None,
+    request: Mapping[str, object] | None = None,
 ) -> SpendLogRow:
     metadata: Final = {
         "user_agent": user_agent,
@@ -48,7 +49,7 @@ def row(
         request_tags=json.dumps(list(tags)),
         metadata=json.dumps(metadata),
         messages="{}",
-        proxy_server_request=json.dumps({"messages": messages, "tags": list(tags)}),
+        proxy_server_request=json.dumps(request or {"messages": messages, "tags": list(tags)}),
         response=json.dumps(response or {}),
     )
 
@@ -402,3 +403,11 @@ def test_request_agent_name_groups_calls_without_tags_or_registered_identity() -
     assert trace["summary"]["agent_names"] == ("Support agent",)
     assert trace["summary"]["llm_calls"] == 2
     assert {span["agent"] for span in trace["spans"]} == {"Support agent"}
+
+
+def test_responses_api_input_is_read_from_the_stored_request() -> None:
+    trace: Final = build_trace(
+        (row("r1", "00.000", "01.000", tags=("agent:triage",), request={"model": "gpt-5", "input": "refund me"}),)
+    )
+
+    assert trace["summary"]["input_preview"] == "refund me"
