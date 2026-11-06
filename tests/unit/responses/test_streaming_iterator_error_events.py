@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
@@ -91,6 +92,67 @@ def test_streamed_flex_unavailable_maps_to_429(error_type: str | None, error_cod
 
 def test_streamed_unrelated_server_error_still_maps_to_500() -> None:
     assert _status_code_for_error_fields("server_error", "server_error") == 500
+
+
+FLEX_UNAVAILABLE_ERROR: Final = {
+    "type": "resource_unavailable",
+    "code": "flex_unavailable",
+    "message": "Flex processing is temporarily unavailable. Please try again later or use standard processing.",
+}
+
+
+def _flex_outage_sse(kind: str) -> str:
+    pending: Final = {
+        "id": "resp_flex",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "gpt-5",
+        "status": "in_progress",
+        "output": [],
+    }
+    failure: Final = (
+        {"type": "error", "sequence_number": 1, "error": FLEX_UNAVAILABLE_ERROR}
+        if kind == "error"
+        else {
+            "type": "response.failed",
+            "sequence_number": 1,
+            "response": {**pending, "status": "failed", "error": FLEX_UNAVAILABLE_ERROR},
+        }
+    )
+    events: Final = ({"type": "response.created", "sequence_number": 0, "response": pending}, failure)
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("error", "response.failed"))
+async def test_streamed_flex_outage_raises_rate_limit_like_the_non_streamed_path(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    async_client: Final = AsyncHTTPHandler(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, text=_flex_outage_sse(kind)
+            )
+        )
+    )
+    try:
+        stream: Final = await litellm.aresponses(
+            model="openai/gpt-5",
+            input="hi",
+            service_tier="flex",
+            stream=True,
+            api_key="sk-test",
+            client=async_client,
+        )
+        with pytest.raises(MidStreamFallbackError) as raised:
+            _ = [event async for event in stream]
+    finally:
+        await async_client.close()
+    assert raised.value.status_code == 429, raised.value
+    assert isinstance(raised.value.original_exception, litellm.RateLimitError), raised.value.original_exception
+    assert "Flex processing is temporarily unavailable" in str(raised.value.original_exception)
 
 
 @pytest.mark.parametrize("provider", ("openai", "azure", "bedrock"))
