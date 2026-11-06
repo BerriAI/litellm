@@ -31,7 +31,7 @@ _SECRET_REFERENCE_PREFIX: Final = "os.environ/"
 _CALLBACK_TYPES: Final[frozenset[str]] = frozenset({"success", "failure", "success_and_failure"})
 _STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
-LoggingEntryKey: TypeAlias = tuple[str | None, str | None, tuple[tuple[str, str], ...]]
+LoggingEntryKey: TypeAlias = tuple[str | None, str | None, tuple[tuple[str, str], ...] | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,12 +86,37 @@ def callback_definitions_error(callback_settings: Mapping[str, object]) -> str |
     A typo in a field or secret name would otherwise surface only on the first request
     of a key that already depends on the definition. Errors name the field, never its value.
     """
+    malformed: Final = next(
+        (error for name, raw in callback_settings.items() if (error := _malformed_callback_type_error(name, raw))),
+        None,
+    )
+    if malformed is not None:
+        return malformed
     definitions: Final = (
         definition
         for name, raw in callback_settings.items()
         if (definition := _parsed_definition(name, raw)) is not None
     )
-    return next((error for definition in definitions if (error := _definition_error(definition)) is not None), None)
+    return next(
+        (
+            definition_error
+            for definition in definitions
+            if (definition_error := _definition_error(definition)) is not None
+        ),
+        None,
+    )
+
+
+def _malformed_callback_type_error(name: str, raw: object) -> str | None:
+    """An entry that names ``callback_type`` but not as a string would be skipped as a plain setting and never serve a key."""
+    if not isinstance(raw, Mapping):
+        return None
+    setting: Final = _STRING_KEYED_MAPPING.validate_python(raw)
+    if _CALLBACK_TYPE_FIELD not in setting or isinstance(setting[_CALLBACK_TYPE_FIELD], str):
+        return None
+    return (
+        f"callback_settings.{name}.callback_type must be the name of a callback, got {setting[_CALLBACK_TYPE_FIELD]!r}"
+    )
 
 
 def _definition_error(definition: CallbackDefinition) -> str | None:
@@ -135,39 +160,77 @@ def _definition_backend_error(definition: CallbackDefinition) -> str | None:
 
 
 def callback_reference_error(logging_entries: object) -> str | None:
-    """A ``callback_settings`` reference is a name only, and the only entry for its backend.
-
-    Every entry's vars merge into one map per backend at request time, so a value on the
-    reference or on a sibling naming the same backend could point the definition's
-    credentials somewhere else.
-    """
+    """A ``callback_settings`` reference is a name only, and no other entry on the key may share its backend or credentials."""
     entries: Final = stored_callback_entries(logging_entries)
-    backends: Final = tuple(None if name is None else callback_backend_name(name) for name, _ in entries)
-    return next((error for error in _reference_errors(entries, backends) if error is not None), None)
+    conflicts: Final = reference_conflicts(logging_entries)
+    return next((error for error in _reference_errors(entries, conflicts) if error is not None), None)
 
 
 def _reference_errors(
-    entries: Sequence[tuple[str | None, Mapping[str, str]]], backends: Sequence[str | None]
+    entries: Sequence[tuple[str | None, Mapping[str, str]]], conflicts: frozenset[str]
 ) -> Iterator[str | None]:
-    for (name, callback_vars), backend in zip(entries, backends, strict=True):
-        if name is None or callback_definition(name) is None:
+    for name, callback_vars in entries:
+        if name is None:
+            continue
+        if (definition := callback_definition(name)) is None:
             continue
         if callback_vars:
             yield f"callback_settings.{name} is referenced by name only, so the entry may not carry callback_vars"
-        elif backends.count(backend) > 1:
+        elif name in conflicts:
             yield (
-                f"callback_settings.{name} already provides the {backend} callback for this key, "
-                f"so no other {backend} entry may sit next to it"
+                f"callback_settings.{name} already provides the {definition.backend} callback and its credentials "
+                "for this key, so no other entry may name that backend or carry a value of the same credential family"
             )
 
 
+def reference_conflicts(logging_entries: object) -> frozenset[str]:
+    """The references on a key that share a backend or a credential family with another entry on it.
+
+    Every entry's vars merge into one map at request time and each callback reads its
+    family's credentials from that map, so a sibling with its own ``langfuse_host`` next
+    to a ``langfuse_otel`` reference would send the definition's secrets there.
+    """
+    entries: Final = stored_callback_entries(logging_entries)
+    scopes: Final = tuple(_entry_scope(name, callback_vars) for name, callback_vars in entries)
+    return frozenset(
+        name
+        for index, ((name, _), scope) in enumerate(zip(entries, scopes, strict=True))
+        if name is not None and callback_definition(name) is not None and _overlaps_another(scope, scopes, index)
+    )
+
+
+def _overlaps_another(scope: frozenset[str], scopes: Sequence[frozenset[str]], index: int) -> bool:
+    return any(scope & other for other_index, other in enumerate(scopes) if other_index != index)
+
+
+def _entry_scope(name: str | None, callback_vars: Mapping[str, str]) -> frozenset[str]:
+    """The backend an entry runs on plus every credential family its vars configure."""
+    if name is None:
+        return frozenset()
+    definition: Final = callback_definition(name)
+    variables: Final = callback_vars if definition is None else definition.callback_vars
+    backend: Final = name if definition is None else definition.backend
+    return frozenset({backend, *(family for var in variables if (family := _family_of(var)) is not None)})
+
+
 def logging_entry_keys(logging_entries: object) -> tuple[LoggingEntryKey, ...]:
-    """Every ``logging`` entry as a comparable value: name, event type and sorted vars, so no field changes unnoticed."""
+    """Every ``logging`` entry as a comparable value: name, event type and sorted vars, so no field changes unnoticed.
+
+    A missing or malformed ``callback_vars`` is kept distinct from an empty one, since the
+    runtime rejects the former and would skip the entry's callback.
+    """
     entries: Final = _object_sequence(logging_entries) or ()
     return tuple(
-        (_entry_callback_name(entry), _entry_callback_type(entry), tuple(sorted(_entry_callback_vars(entry).items())))
-        for entry in entries
+        (_entry_callback_name(entry), _entry_callback_type(entry), _entry_callback_vars_key(entry)) for entry in entries
     )
+
+
+def _entry_callback_vars_key(entry: object) -> tuple[tuple[str, str], ...] | None:
+    match entry:
+        case {"callback_vars": Mapping()}:
+            return tuple(sorted(_entry_callback_vars(entry).items()))
+        case _:
+            return None
 
 
 def callback_config_error(
@@ -524,9 +587,16 @@ def _logging_entry_error(entry: object) -> str | None:
     if callback_type_error is not None:
         return callback_type_error
     callback_name: Final = typed_entry.get("callback_name")
-    callback_vars_raw: Final = typed_entry.get("callback_vars")
-    if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
+    if not isinstance(callback_name, str):
         return None
+    definition: Final = callback_definition(callback_name)
+    callback_type_raw: Final = typed_entry.get("callback_type")
+    callback_type: Final = callback_type_raw if isinstance(callback_type_raw, str) else None
+    if definition is not None:
+        return callback_config_error(definition.backend, definition.callback_vars, callback_type)
+    callback_vars_raw: Final = typed_entry.get("callback_vars")
+    if not isinstance(callback_vars_raw, Mapping):
+        return f"logging entry {callback_name!r} needs a callback_vars object, pass {{}} when it has no values"
     callback_vars: Final[Mapping[object, object]] = cast(  # cast-ok: Mapping check preserves arbitrary key types
         Mapping[object, object], callback_vars_raw
     )
@@ -540,12 +610,7 @@ def _logging_entry_error(entry: object) -> str | None:
     )
     if destination_var_error is not None:
         return destination_var_error
-    callback_type_raw: Final = typed_entry.get("callback_type")
-    return callback_config_error(
-        callback_name,
-        _entry_callback_vars(typed_entry),
-        callback_type_raw if isinstance(callback_type_raw, str) else None,
-    )
+    return callback_config_error(callback_name, _entry_callback_vars(typed_entry), callback_type)
 
 
 def _arize_sampling_rate_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:

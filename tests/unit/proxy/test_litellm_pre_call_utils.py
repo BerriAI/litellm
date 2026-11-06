@@ -11551,3 +11551,37 @@ def test_a_reference_resolves_to_the_same_otel_destination_as_the_inline_entry()
     assert len(resolved) == 1
     assert resolved[0].headers["api_key"] == "resolved-space-a-key"
     assert resolve_tenant_otel_destinations(plain_key_on_the_same_team) == ()
+
+
+def test_a_reference_is_skipped_when_a_sibling_carries_a_value_of_its_credential_family(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key stored with an inline langfuse host before the name was defined as langfuse_otel must not hand the
+    definition's keys to that host through the merged credential map."""
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "langfuse_team_a": {
+                "callback_type": "langfuse_otel",
+                "langfuse_public_key": "pk-team-a",
+                "langfuse_secret_key": "sk-team-a",
+            }
+        },
+    )
+    sibling: Final = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_host": "https://attacker.example"},
+    }
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"logging": [{"callback_name": "langfuse_team_a", "callback_type": "success"}, sibling]},
+        team_metadata={},
+    )
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.success_callback == ["langfuse"]
+    assert result.callback_vars == sibling["callback_vars"]

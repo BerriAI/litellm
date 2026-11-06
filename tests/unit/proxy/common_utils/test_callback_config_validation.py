@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     cross_entry_family_error,
     logging_entry_keys,
     logging_metadata_config_error,
+    reference_conflicts,
 )
 
 
@@ -687,3 +688,83 @@ def test_logging_entry_keys_keep_a_malformed_callback_type_distinct_from_a_missi
     assert logging_entry_keys([entry]) == logging_entry_keys([{**entry, "callback_type": None}])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": []}])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": "success"}])
+
+
+@pytest.fixture
+def langfuse_team_a(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "langfuse_team_a": {
+                "callback_type": "langfuse_otel",
+                "langfuse_public_key": "pk-team-a",
+                "langfuse_secret_key": "sk-team-a",
+                "langfuse_host": "https://langfuse.team-a.example",
+            }
+        },
+    )
+
+
+@pytest.mark.usefixtures("langfuse_team_a")
+def test_a_reference_may_not_sit_next_to_an_entry_of_the_same_credential_family() -> None:
+    """The classic langfuse callback reads langfuse_* credentials from the merged map, so a sibling with its own
+    host next to a langfuse_otel reference would receive the definition's keys."""
+    reference: Final = {"callback_name": "langfuse_team_a", "callback_type": "success"}
+    sibling: Final = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_host": "https://attacker.example"},
+    }
+    other_family: Final = {
+        "callback_name": "datadog",
+        "callback_type": "success",
+        "callback_vars": {"dd_api_key": "dd"},
+    }
+    error: Final = logging_metadata_config_error({"logging": [reference, sibling]})
+    assert error is not None and "langfuse_team_a" in error
+    assert logging_metadata_config_error({"logging": [sibling, reference]}) is not None
+    assert logging_metadata_config_error({"logging": [reference, other_family]}) is None
+    assert reference_conflicts([reference, sibling]) == frozenset({"langfuse_team_a"})
+    assert reference_conflicts([reference, other_family]) == frozenset()
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+def test_a_failure_only_reference_is_held_to_its_definition_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "arize_space_a": {
+                "callback_type": "arize",
+                "arize_api_key": "k",
+                "arize_space_id": "s",
+                "excluded_services": "postgres,redis",
+            }
+        },
+    )
+    failure_only: Final = {"callback_name": "arize_space_a", "callback_type": "failure"}
+    error: Final = logging_metadata_config_error({"logging": [failure_only]})
+    assert error is not None and "excluded_services" in error and "callback_type" in error
+    assert logging_metadata_config_error({"logging": [{**failure_only, "callback_type": "success"}]}) is None
+
+
+@pytest.mark.parametrize("callback_type", [None, 5, ["arize"]])
+def test_a_definition_whose_callback_type_is_not_a_name_fails_config_load(callback_type: object) -> None:
+    error: Final = callback_definitions_error({"space_a": {"callback_type": callback_type, "arize_api_key": "k"}})
+    assert error is not None and "callback_settings.space_a.callback_type" in error
+
+
+def test_an_ordinary_logging_entry_without_callback_vars_is_rejected_at_write_time() -> None:
+    """Stored as sent, the entry fails model validation at request time and its logger silently never runs."""
+    error: Final = logging_metadata_config_error(
+        {"logging": [{"callback_name": "datadog", "callback_type": "success"}]}
+    )
+    assert error is not None and "datadog" in error and "callback_vars" in error
+    assert logging_metadata_config_error({"logging": [{"callback_name": "datadog", "callback_vars": {}}]}) is None
+
+
+def test_logging_entry_keys_keep_missing_callback_vars_distinct_from_empty_ones() -> None:
+    entry: Final = {"callback_name": "datadog", "callback_type": "success"}
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_vars": {}}])
+    assert logging_entry_keys([{**entry, "callback_vars": "x"}]) != logging_entry_keys([{**entry, "callback_vars": {}}])

@@ -77,7 +77,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.callback_config_validation import callback_backend_name, callback_definition
+from litellm.proxy.common_utils.callback_config_validation import callback_definition, reference_conflicts
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -1250,9 +1250,10 @@ _STRING_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 def resolved_key_callbacks(logging_entries: object, *, source: str) -> tuple[AddTeamCallback, ...]:
     """A key's ``logging`` entries as the backends see them, each ``callback_settings`` reference swapped for its definition.
 
-    A reference is honoured only while no other entry on the key names its backend: every
-    entry's vars merge into one map per backend, so a sibling could point the definition's
-    credentials at its own host. The reference's own ``callback_vars`` are never read.
+    A reference is honoured only while no other entry on the key names its backend or
+    carries a value of the same credential family: every entry's vars merge into one map,
+    so a sibling could point the definition's credentials at its own host. The reference's
+    own ``callback_vars`` are never read.
     """
     if not isinstance(logging_entries, Sequence) or isinstance(logging_entries, (str, bytes)):
         return ()
@@ -1261,27 +1262,24 @@ def resolved_key_callbacks(logging_entries: object, *, source: str) -> tuple[Add
         for item in _OBJECT_LIST_ADAPTER.validate_python(logging_entries)
         if isinstance(item, Mapping)
     )
-    backends: Final = tuple(_entry_backend(entry) for entry in entries)
+    conflicts: Final = reference_conflicts(entries)
     return tuple(
         callback
-        for entry, backend in zip(entries, backends, strict=True)
-        if (callback := _resolved_key_callback(entry, source=source, shared_backend=backends.count(backend) > 1))
-        is not None
+        for entry in entries
+        if (callback := _resolved_key_callback(entry, source=source, conflicts=conflicts)) is not None
     )
 
 
-def _entry_backend(entry: Mapping[str, object]) -> str | None:
-    callback_name: Final = entry.get("callback_name")
-    return callback_backend_name(callback_name) if isinstance(callback_name, str) else None
-
-
-def _resolved_key_callback(entry: Mapping[str, object], *, source: str, shared_backend: bool) -> AddTeamCallback | None:
+def _resolved_key_callback(
+    entry: Mapping[str, object], *, source: str, conflicts: frozenset[str]
+) -> AddTeamCallback | None:
     definition: Final = callback_definition(entry.get("callback_name"))
     if definition is None:
         return get_validated_callback_metadata(item=dict(entry), source=source)
-    if shared_backend:
+    if definition.name in conflicts:
         verbose_proxy_logger.warning(
-            "Ignoring %s callback metadata naming callback_settings.%s: another entry on this key names the %s callback",
+            "Ignoring %s callback metadata naming callback_settings.%s: another entry on this key names the %s "
+            "callback or carries a value of its credential family",
             source,
             _sanitize_for_log(definition.name),
             _sanitize_for_log(definition.backend),
