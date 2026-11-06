@@ -267,10 +267,8 @@ describe("TagInfoView save payload", () => {
     await user.click(toggle());
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    expect(mockTagUpdateCall).toHaveBeenCalledWith(
-      "sk-test",
-      expect.objectContaining({ name: "prod-tag", rpm_limit: undefined, tpm_limit: undefined, max_budget: undefined }),
-    );
+    const expected = { name: "prod-tag", rpm_limit: undefined, tpm_limit: undefined, max_budget: undefined };
+    expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expect.objectContaining(expected));
   });
 
   it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
