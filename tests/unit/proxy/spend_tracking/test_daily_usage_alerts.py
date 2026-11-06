@@ -68,7 +68,7 @@ class _BudgetDatabase:
         self.lease_rollback_cancelled = False
 
     @asynccontextmanager
-    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction]:
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncGenerator[AnalyticsTransaction, None]:
         transaction: Final = _BudgetTransaction(self, self.transactions)
         self.transactions += 1
         self.active += 1
