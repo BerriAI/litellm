@@ -141,8 +141,8 @@ export async function runLiteAdmin(options: LiteAdminOptions, client?: OpenAI): 
   active();
   const message = completion.choices[0]?.message;
   if (message?.tool_calls?.length) {
-    options.onMessage(i18n.t("aria.agent.stepLimit"));
+    options.onMessage(i18n.getFixedT("en")("aria.agent.stepLimit"));
   } else if (!message?.content && !message?.refusal) {
-    options.onMessage(i18n.t("aria.agent.noAnswer"));
+    options.onMessage(i18n.getFixedT("en")("aria.agent.noAnswer"));
   }
 }
