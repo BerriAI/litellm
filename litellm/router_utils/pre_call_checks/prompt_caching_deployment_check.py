@@ -19,6 +19,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.bedrock.common_utils import bedrock_cache_point_ttl_supported, bedrock_capability_model
+from litellm.router_utils.common_utils import deployment_ids_failed_in_request
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import (
@@ -152,7 +153,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
                     request_tools,
                 ),
             )
-            if model_id_dict is not None:
+            if model_id_dict is not None and model_id_dict["model_id"] not in deployment_ids_failed_in_request(
+                request_data or {}
+            ):
                 model_id: Final = model_id_dict["model_id"]
                 for deployment in healthy_deployments:
                     if deployment["model_info"]["id"] == model_id:
