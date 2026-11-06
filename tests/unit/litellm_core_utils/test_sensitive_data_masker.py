@@ -615,20 +615,25 @@ def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
 
 
 @pytest.mark.parametrize("key", ["apiKey", "clientSecret", "accessToken", "secretAccessKey", "x-apiKey"])
-def test_is_sensitive_key_splits_camel_case_names(key: str):
-    assert SensitiveDataMasker().is_sensitive_key(key) is True
+def test_split_camel_case_opt_in_catches_camel_case_credential_names(key: str):
+    assert SensitiveDataMasker(split_camel_case=True).is_sensitive_key(key) is True
 
 
-def test_is_sensitive_key_camel_case_split_keeps_pricing_and_count_fields_clear():
-    masker: Final = SensitiveDataMasker()
+@pytest.mark.parametrize("key", ["apiKey", "clientSecret", "tokenCount", "keyAlias", "accessLevel"])
+def test_default_masker_does_not_split_camel_case(key: str):
+    assert SensitiveDataMasker().is_sensitive_key(key) is False
+
+
+def test_split_camel_case_keeps_pricing_and_count_fields_clear():
+    masker: Final = SensitiveDataMasker(split_camel_case=True)
 
     assert masker.is_sensitive_key("maxTokens") is False
     assert masker.is_sensitive_key("inputCostPerToken") is False
 
 
 @pytest.mark.parametrize("key", ["sEt-CoOkIe", "AUTHORIZATION", "Api-Key", "X-API-KEY"])
-def test_is_sensitive_key_camel_case_split_does_not_break_odd_cased_plain_names(key: str):
-    assert SensitiveDataMasker().is_sensitive_key(key) is True
+def test_split_camel_case_does_not_break_odd_cased_plain_names(key: str):
+    assert SensitiveDataMasker(split_camel_case=True).is_sensitive_key(key) is True
 
 
 def test_empty_non_sensitive_overrides_disables_the_cost_exemption():
@@ -650,7 +655,7 @@ def test_redact_credentials_in_payload_drops_listed_keys_at_any_depth_with_the_g
 
     result: Final = redact_credentials_in_payload(
         payload,
-        SensitiveDataMasker(non_sensitive_overrides=frozenset()),
+        SensitiveDataMasker(non_sensitive_overrides=frozenset(), split_camel_case=True),
         dropped_keys=frozenset({"logging", "scim_roles"}),
     )
 

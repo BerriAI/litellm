@@ -143,7 +143,7 @@ def _daily_rows_table(
     raise AssertionError("unreachable")
 
 
-_EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(non_sensitive_overrides=frozenset())
+_EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(non_sensitive_overrides=frozenset(), split_camel_case=True)
 
 
 def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
