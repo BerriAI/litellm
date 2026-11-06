@@ -55,12 +55,31 @@ def _system_item_as_developer(item: ResponseInputItemParam) -> ResponseInputItem
     )
 
 
-def _asks_for_json_object(request: object) -> bool:
-    match request:
-        case {"text": {"format": {"type": "json_object"}}}:
-            return True
+def _mentions_json(value: object) -> bool:
+    match value:
+        case str():
+            return "json" in value.lower()
+        case {"content": object() as content}:
+            return _mentions_json(content)
+        case {"text": object() as text}:
+            return _mentions_json(text)
+        case list():
+            return any(map(_mentions_json, cast("list[object]", value)))  # cast-ok: matched any list
         case _:
             return False
+
+
+def _json_object_instructions_missing_from_input(request: object, base_instructions: str) -> str | None:
+    match request:
+        case {
+            "text": {"format": {"type": "json_object"}},
+            "instructions": str() as instructions,
+            "input": object() as input_items,
+        } if not _mentions_json(input_items):
+            caller_instructions: Final = instructions.replace(base_instructions, "").strip()
+            return caller_instructions if _mentions_json(caller_instructions) else None
+        case _:
+            return None
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -128,9 +147,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
-        asks_for_json_object: Final = _asks_for_json_object(cast(object, request))  # cast-ok: base returns untyped dict
-        if existing_instructions and asks_for_json_object:
-            request["input"] = [{"role": "developer", "content": existing_instructions}, *request["input"]]
+        untyped_request: Final = cast(object, request)  # cast-ok: base returns untyped dict
+        json_instructions: Final = _json_object_instructions_missing_from_input(untyped_request, base_instructions)
+        if json_instructions is not None:
+            request["input"] = [{"role": "developer", "content": json_instructions}, *request["input"]]
             request["instructions"] = base_instructions
         elif existing_instructions:
             if base_instructions not in existing_instructions:
