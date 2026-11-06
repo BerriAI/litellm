@@ -26,11 +26,11 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_secrets::source::Secrets;
 use litellm_tracing::ByteChunk;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
-    Error, MessagesCall, MessagesCallResponse, MessagesRoute,
-    common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
+    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
+    common_utils::{MessagesProvider, merge_messages_header_sources, sendable_headers},
     constants::MESSAGES_TIMEOUT_SECS,
     route::Messages,
     types::invalid_request,
@@ -85,7 +85,10 @@ pub(super) async fn execute(
         ),
     };
     let reported = match &output {
-        MessagesCallResponse::Complete(response) => provider.config().reported_cost(response),
+        MessagesCallResponse::Complete(response) => match response {
+            MessagesBody::Message(message) => provider.config().reported_cost(message),
+            MessagesBody::Unchecked(_) => None,
+        },
         MessagesCallResponse::Stream { .. } => None,
     };
     context
@@ -137,10 +140,10 @@ async fn provider_call(
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
-    let forwarded = string_headers(Some(merge_messages_header_sources([
+    let (forwarded, refused_header) = sendable_headers(merge_messages_header_sources([
         extra_headers.unwrap_or_default(),
         scoped,
-    ])))?;
+    ]));
     let validated = config.validate_environment(
         forwarded,
         api_key.as_deref(),
@@ -194,6 +197,9 @@ async fn provider_call(
             request_context,
         )
         .await?;
+    if let Some(error) = refused_header {
+        return Err(error);
+    }
     let stream = match wire.body.get("stream") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(stream)) => *stream,
@@ -347,8 +353,7 @@ async fn call_provider(
         // body it cannot parse, and the public mapping classifies it by that status.
         return Err(litellm_http::Error::upstream(status, text).into());
     }
-    decode_response(config, &identity.model, &text)
-        .map(|message| MessagesCallResponse::Complete(Box::new(message)))
+    decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -412,15 +417,23 @@ fn decode_response(
     config: &dyn BaseMessagesConfig,
     model: &str,
     text: &str,
-) -> Result<MessagesResponse, Error> {
-    let response = serde_json::from_str(text).map_err(|err| {
-        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
-            "messages response JSON",
-            err,
-        ))
-    })?;
+) -> Result<MessagesBody, Error> {
+    let response = match serde_json::from_str::<MessagesResponse>(text) {
+        Ok(response) => response,
+        Err(err) => {
+            let Ok(mut body) = serde_json::from_str::<Map<String, Value>>(text) else {
+                return Err(Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+                    "messages response JSON",
+                    err,
+                )));
+            };
+            body.entry("stop_sequence").or_insert(Value::Null);
+            return Ok(MessagesBody::Unchecked(body));
+        }
+    };
     config
         .transform_anthropic_messages_response(model, response)
+        .map(|message| MessagesBody::Message(Box::new(message)))
         .map_err(Error::from)
         .map_err(Error::after_send)
 }

@@ -1,5 +1,4 @@
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_http::request::string_headers as shared_string_headers;
 use litellm_llms::tencent::messages::transformation::TENCENT_MESSAGES_CONFIG;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
@@ -18,8 +17,6 @@ use litellm_llms::{
 use serde_json::{Map, Value};
 
 use super::Error;
-
-const HEADER_CONTEXT: &str = "messages";
 
 #[derive(Clone, Copy)]
 pub(crate) struct MessagesProvider {
@@ -72,10 +69,44 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
     Some(MessagesProvider { provider, config })
 }
 
-pub(super) fn string_headers(
-    extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
-    shared_string_headers(HEADER_CONTEXT, extra_headers).map_err(Error::from)
+// Python's httpx refuses a non-string header value only when it builds the request to send, after
+// the logger has the resolved call, and the handler reports that as a provider 500.
+pub(super) fn sendable_headers(
+    extra_headers: Map<String, Value>,
+) -> (Vec<(String, String)>, Option<Error>) {
+    let refused = extra_headers
+        .values()
+        .find(|value| !value.is_string())
+        .map(|value| {
+            litellm_http::Error::upstream(
+                500,
+                format!(
+                    "Header value must be str or bytes, not <class '{}'>",
+                    python_type_name(value)
+                ),
+            )
+            .into()
+        });
+    let headers = extra_headers
+        .into_iter()
+        .filter_map(|(name, value)| match value {
+            Value::String(value) => Some((name, value)),
+            _ => None,
+        })
+        .collect();
+    (headers, refused)
+}
+
+fn python_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Number(number) if number.is_f64() => "float",
+        Value::Number(_) => "int",
+        Value::String(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
 }
 
 #[cfg(test)]
@@ -84,8 +115,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{messages_provider, string_headers};
-    use crate::Error;
+    use super::{messages_provider, sendable_headers};
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
@@ -113,18 +143,26 @@ mod tests {
         assert!(messages_provider(provider, model).is_none());
     }
 
-    #[test]
-    fn string_headers_rejects_non_string_values() {
-        let headers = json!({"x-count": 3}).as_object().unwrap().clone();
-        let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-        assert_eq!(
-            err,
-            Error::Headers(litellm_http::request::HeaderError {
-                context: "messages",
-                name: "x-count".to_string(),
-                actual: "number",
-            })
-        );
+    #[rstest]
+    #[case::int(json!(12345), "int")]
+    #[case::float(json!(1.5), "float")]
+    #[case::bool(json!(true), "bool")]
+    #[case::null(json!(null), "NoneType")]
+    #[case::list(json!([1]), "list")]
+    #[case::dict(json!({"a": 1}), "dict")]
+    fn non_string_header_is_refused_with_pythons_send_error(
+        #[case] value: serde_json::Value,
+        #[case] python_type: &str,
+    ) {
+        let headers = json!({"x-kept": "v", "x-count": value})
+            .as_object()
+            .unwrap()
+            .clone();
+        let (sendable, refused) = sendable_headers(headers);
+        assert_eq!(sendable, vec![("x-kept".to_string(), "v".to_string())]);
+        let refused = refused.expect("non-string header refused");
+        let message = format!("Header value must be str or bytes, not <class '{python_type}'>");
+        assert_eq!(refused.upstream_response(), Some((500, message.as_str())));
     }
 }
 

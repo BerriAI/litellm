@@ -285,6 +285,26 @@ async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(se
 
 
 @pytest.mark.asyncio
+async def test_non_string_header_fails_after_pre_api_call_as_a_provider_500(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        with pytest.raises(
+            litellm.InternalServerError,
+            match=r"AnthropicException - Header value must be str or bytes, not <class 'int'>",
+        ) as raised:
+            await call(server, extra_headers={"x-org": 12345})
+        failures: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert not server.requests
+    assert "log_pre_api_call" in recorder.names
+    logged: Final = _OBJECT.validate_python(failures[0].kwargs)
+    assert logged["exception"] is raised.value
+    logged_call: Final = _OBJECT.validate_python(logged["standard_logging_object"])
+    assert (logged["custom_llm_provider"], logged_call["api_base"]) == ("anthropic", f"{server.base_url}/v1/messages")
+
+
+@pytest.mark.asyncio
 async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingServer) -> None:
     class DropKeywords(CustomLogger):
         async def async_pre_call_deployment_hook(
