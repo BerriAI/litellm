@@ -224,3 +224,55 @@ def test_anthropic_messages_to_a_deployment_that_opts_out_of_breakpoints_carry_n
 
     assert list(_texts_with("cache_control", completion_kwargs)) == []
     assert list(_texts_with("prompt_cache_breakpoint", wire)) == []
+
+
+_OPENAI_GPT_ROW: Final = {"litellm_provider": "openai", "mode": "chat", "supports_prompt_cache_breakpoint": True}
+
+
+@pytest.mark.parametrize(
+    ("model", "extra_kwargs", "keeps_marks"),
+    [
+        pytest.param(
+            "azure/gpt-5.6-sol",
+            {"custom_llm_provider": "azure", "model_info": {"supports_prompt_cache_breakpoint": True}},
+            False,
+            id="azure-chat-forwards-cache-control-unmapped",
+        ),
+        pytest.param(
+            "openai/team-alias",
+            {
+                "custom_llm_provider": "openai",
+                "base_model": "gpt-5.6-sol",
+                "api_base": "https://llm.example.com/v1",
+                "prompt_cache_options": {"mode": "explicit"},
+            },
+            False,
+            id="openai-chat-reads-only-the-served-model",
+        ),
+        pytest.param(
+            "bedrock_mantle/team-alias",
+            {
+                "custom_llm_provider": "bedrock_mantle",
+                "base_model": "openai.gpt-5.6-sol",
+                "prompt_cache_options": {"mode": "explicit"},
+            },
+            True,
+            id="bridge-reads-base-model",
+        ),
+    ],
+)
+def test_anthropic_messages_keep_marks_only_for_a_route_that_turns_them_into_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, model: str, extra_kwargs: dict[str, object], keeps_marks: bool
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "gpt-5.6-sol", _OPENAI_GPT_ROW)
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=json.loads(json.dumps(_CLAUDE_CODE_MESSAGES)),
+        model=model,
+        system=json.loads(json.dumps(_SYSTEM)),
+        extra_kwargs=extra_kwargs,
+    )
+
+    assert bool(list(_texts_with("cache_control", completion_kwargs["messages"]))) is keeps_marks

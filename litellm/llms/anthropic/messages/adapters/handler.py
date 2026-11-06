@@ -397,9 +397,20 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
 
 
+_ROUTES_FORWARDING_CACHE_CONTROL_UNMAPPED: Final = frozenset(("azure",))
+_ROUTES_READING_ONLY_THE_SERVED_MODEL: Final = frozenset(("openai",))
+
+
 def _target_reads_prompt_cache_breakpoint(model: str, call_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = call_kwargs.get("custom_llm_provider")
+    if provider in _ROUTES_FORWARDING_CACHE_CONTROL_UNMAPPED:
+        return False
     base_model: Final = call_kwargs.get("base_model")
-    named_models: Final = (model, base_model) if isinstance(base_model, str) and base_model else (model,)
+    named_models: Final = (
+        (model, base_model)
+        if isinstance(base_model, str) and base_model and provider not in _ROUTES_READING_ONLY_THE_SERVED_MODEL
+        else (model,)
+    )
     return any(call_targets_openai_prompt_cache_breakpoint(name, call_kwargs) for name in named_models)
 
 
