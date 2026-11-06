@@ -705,6 +705,19 @@ def test_sql_routes_need_the_lens_service_when_traces_come_from_spend_logs(
     assert "Lens service" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(("allowed_routes", "status_code"), ((["llm_api_routes"], 403), (None, 200)))
+def test_spend_log_traces_need_the_same_route_access_as_the_logs_page(
+    client: TestClient, allowed_routes: list[str] | None, status_code: int
+) -> None:
+    spend_logs: Final = TraceReceiver(storage=SpendLogTraceStorage(lambda: None))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: spend_logs
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="user", token="hashed-key", allowed_routes=allowed_routes
+    )
+    response: Final = client.get("/v1/traces")
+    assert response.status_code == status_code, response.text
+
+
 def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER

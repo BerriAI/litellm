@@ -29,6 +29,7 @@ from litellm.constants import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
@@ -62,6 +63,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
+SPEND_LOGS_UI_ROUTE: Final = "/spend/logs/ui"
 _SQL_NEEDS_LENS_DETAIL: Final = "Trace SQL queries need the Lens service. Configure LITELLM_LENS_URL."
 
 
@@ -73,11 +75,14 @@ async def current_time_ms() -> int:
 class TraceAccessContext:
     receiver: TraceReceiver | None
     read_scope: ReadScope | None
+    auth: UserAPIKeyAuth
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
         tracing: Final = require_receiver(self.receiver)
         if self.read_scope is None:
             raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
+        if isinstance(tracing.storage, SpendLogTraceStorage):
+            RouteChecks.is_virtual_key_allowed_to_call_route(route=SPEND_LOGS_UI_ROUTE, valid_token=self.auth)
         return tracing, _trace_scope(self.read_scope)
 
 
@@ -87,7 +92,7 @@ async def provide_trace_access(
     log_team_lookup: LogTeamLookupDependency,
 ) -> TraceAccessContext:
     read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
-    return TraceAccessContext(tracing, read_scope)
+    return TraceAccessContext(tracing, read_scope, auth)
 
 
 def _trace_scope(scope: ReadScope) -> TraceScope:

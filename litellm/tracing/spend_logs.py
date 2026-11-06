@@ -4,6 +4,7 @@ A trace is every spend log row sharing a session id. A row's agent comes from an
 `parent_agent:<name>` tag), the row's agent_id, a Claude Agent SDK subagent whose first prompt matches a parent's
 Task/Agent tool call, or the calling framework read from the user agent."""
 
+import asyncio
 import base64
 import json
 from collections.abc import Callable, Mapping, Sequence
@@ -17,6 +18,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
+from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
 from litellm.tracing.generated.types import (
     AgentNode,
@@ -288,7 +290,11 @@ def _request_messages(row: SpendLogRow) -> object:
     stored: Final = _loads(row["messages"])
     if _sequence(stored):
         return stored
-    return _mapping(_loads(row["proxy_server_request"])).get("messages")
+    request: Final = dict(_mapping(_loads(row["proxy_server_request"])))
+    messages: Final = request.get("messages")
+    if _sequence(messages):
+        return messages
+    return resolve_structured_messages(None, request) if request.get("input") else messages
 
 
 def _call(row: SpendLogRow) -> _Call:
@@ -616,6 +622,11 @@ def _scope_sql(scope: TraceScope, first_index: int) -> tuple[str, tuple[object, 
     )
 
 
+def _build_traces(rows: Sequence[SpendLogRow], keys: Sequence[str]) -> tuple[Trace, ...]:
+    groups: Final = tuple(tuple(row for row in rows if row["trace_key"] == key) for key in keys)
+    return tuple(build_trace(own) for own in groups if own)
+
+
 class SpendLogTraceStorage:
     def __init__(self, database: Callable[[], SpendLogReader | None]) -> None:
         self._database: Final = database
@@ -665,16 +676,20 @@ class SpendLogTraceStorage:
         scope_sql, scope_args = _scope_sql(scope, 2)
         rows: Final = await self._query(
             f"""
-            SELECT request_id, {TRACE_KEY_SQL} AS trace_key, call_type, model, status, spend, prompt_tokens,
-                   completion_tokens, "startTime"::text AS start_time, "endTime"::text AS end_time, agent_id,
-                   request_tags::text AS request_tags, metadata::text AS metadata, messages::text AS messages,
-                   proxy_server_request::text AS proxy_server_request, response::text AS response
-            FROM "LiteLLM_SpendLogs"
-            WHERE (session_id = ANY($1::text[]) OR request_id = ANY($1::text[]))
-              AND {TRACE_KEY_SQL} = ANY($1::text[])
-              {scope_sql}
-            ORDER BY "startTime", request_id
-            LIMIT {TRACE_ROW_LIMIT * len(trace_keys)}
+            SELECT * FROM (
+                SELECT request_id, {TRACE_KEY_SQL} AS trace_key, call_type, model, status, spend, prompt_tokens,
+                       completion_tokens, "startTime"::text AS start_time, "endTime"::text AS end_time, agent_id,
+                       request_tags::text AS request_tags, metadata::text AS metadata, messages::text AS messages,
+                       proxy_server_request::text AS proxy_server_request, response::text AS response,
+                       "startTime" AS started_at,
+                       ROW_NUMBER() OVER (PARTITION BY {TRACE_KEY_SQL} ORDER BY "startTime", request_id) AS trace_row
+                FROM "LiteLLM_SpendLogs"
+                WHERE (session_id = ANY($1::text[]) OR request_id = ANY($1::text[]))
+                  AND {TRACE_KEY_SQL} = ANY($1::text[])
+                  {scope_sql}
+            ) AS trace_rows
+            WHERE trace_row <= {TRACE_ROW_LIMIT}
+            ORDER BY started_at, request_id
             """,
             list(trace_keys),
             *scope_args,
@@ -683,8 +698,7 @@ class SpendLogTraceStorage:
 
     async def _traces(self, keys: Sequence[str], scope: TraceScope) -> tuple[Trace, ...]:
         rows: Final = await self._rows(keys, scope)
-        groups: Final = tuple(tuple(row for row in rows if row["trace_key"] == key) for key in keys)
-        return tuple(build_trace(own) for own in groups if own)
+        return await asyncio.to_thread(_build_traces, rows, keys)
 
     async def list_traces(
         self,
@@ -715,7 +729,7 @@ class SpendLogTraceStorage:
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         rows: Final = await self._rows((trace_id,), scope)
-        return _span_detail(rows, span_id) if rows else None
+        return await asyncio.to_thread(_span_detail, rows, span_id) if rows else None
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
