@@ -1,12 +1,16 @@
 import asyncio
 import contextlib
+import math
 import os
 import signal
-from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
-from functools import partial
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, Protocol
 
+import anyio
+from anyio.abc import TaskGroup
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from typing_extensions import assert_never
 
 from litellm.proxy.rust_forward.mode import RUST_HOP
@@ -28,23 +32,49 @@ from litellm.proxy.rust_forward.supervisor.lifecycle import (
 
 PROBE_INTERVAL_SECONDS: Final = 0.05
 
-Launch: TypeAlias = Callable[[asyncio.Queue[Event]], contextlib.AbstractAsyncContextManager[asyncio.subprocess.Process]]
+
+@dataclass(frozen=True, slots=True)
+class SpawnFailed:
+    error: OSError
 
 
-async def run(platform: Platform, binary: str, command: Sequence[str], server: PythonServer) -> int:
-    """Run Python and Rust under ``lifecycle.step`` until it decides the exit status."""
-    events: Final[asyncio.Queue[Event]] = asyncio.Queue()
-    platform.catch(asyncio.get_running_loop(), lambda signum: events.put_nowait(Caught(signum)))
+class Executor(Protocol):
+    async def spawn(self, child: Child) -> SpawnFailed | None: ...
+
+    def send(self, child: Child, signum: signal.Signals) -> None: ...
+
+    async def next_event(self) -> Event: ...
+
+
+async def run(platform: Platform, binary: str, command: Sequence[str], server: PythonServer) -> int | SpawnFailed:
     with platform.private_listener() as private:
-        launches: Final[Mapping[Child, Launch]] = MappingProxyType(
+        specs: Final = MappingProxyType(
             {
-                Child.PYTHON: partial(
-                    _launch_python, platform, python_spec(platform, command, private, server), private.port
-                ),
-                Child.RUST: partial(_launch, platform, Child.RUST, rust_spec(platform, binary, private.port, server)),
+                Child.PYTHON: python_spec(platform, command, private, server),
+                Child.RUST: rust_spec(platform, binary, private.port, server),
             }
         )
-        return await _drive(platform, events, launches)
+        async with open_children(platform, specs, private.port) as children:
+            platform.catch(asyncio.get_running_loop(), children.caught)
+            return await drive(children, platform.stop_signals)
+
+
+async def drive(executor: Executor, stop_signals: frozenset[signal.Signals]) -> int | SpawnFailed:
+    """Carry out what ``lifecycle.step`` decides until it settles the exit status."""
+    state, actions = boot()
+    while True:
+        for action in actions:
+            match action:
+                case Spawn(child):
+                    if (failed := await executor.spawn(child)) is not None:
+                        return failed
+                case Send(child, signum):
+                    executor.send(child, signum)
+                case _:
+                    assert_never(action)
+        if (status := exit_status(state)) is not None:
+            return status
+        state, actions = step(state, await executor.next_event(), stop_signals)
 
 
 def exit_like(status: int) -> int:
@@ -57,33 +87,59 @@ def exit_like(status: int) -> int:
     return 128 + signum
 
 
-async def _drive(platform: Platform, events: asyncio.Queue[Event], launches: Mapping[Child, Launch]) -> int:
-    async with contextlib.AsyncExitStack() as stack:
-        children: Final[dict[Child, asyncio.subprocess.Process]] = {}  # mutable-ok: indexes the stack's children
-        state, actions = boot()
-        while True:
-            for action in actions:
-                match action:
-                    case Spawn(child):
-                        children[child] = await stack.enter_async_context(launches[child](events))
-                    case Send(child, signum):
-                        platform.signal_child(children[child], signum)
-                    case _:
-                        assert_never(action)
-            if (status := exit_status(state)) is not None:
-                return status
-            state, actions = step(state, await events.get(), platform.stop_signals)
+@dataclass(frozen=True, slots=True)
+class Children:
+    platform: Platform
+    specs: Mapping[Child, ChildSpec]
+    private_port: int
+    stack: contextlib.AsyncExitStack
+    tasks: TaskGroup
+    events_in: MemoryObjectSendStream[Event]
+    events_out: MemoryObjectReceiveStream[Event]
+    processes: dict[Child, asyncio.subprocess.Process]  # mutable-ok: the running children the stack owns
+
+    def caught(self, signum: signal.Signals) -> None:
+        with contextlib.suppress(anyio.ClosedResourceError):
+            self.events_in.send_nowait(Caught(signum))
+
+    async def spawn(self, child: Child) -> SpawnFailed | None:
+        try:
+            process: Final = await self.stack.enter_async_context(_process(self.platform, self.specs[child]))
+        except OSError as error:
+            return SpawnFailed(error)
+        self.processes[child] = process
+        self.tasks.start_soon(_report_exit, child, process, self.events_in.clone())
+        if child is Child.PYTHON:
+            probe: Final = self.tasks.start_soon(_report_once_listening, self.private_port, self.events_in.clone())
+            self.stack.callback(probe.cancel)
+        return None
+
+    def send(self, child: Child, signum: signal.Signals) -> None:
+        self.platform.signal_child(self.processes[child], signum)
+
+    async def next_event(self) -> Event:
+        return await self.events_out.receive()
+
+
+# The task group is entered before any child, so on the way out every child is stopped, last spawned first, before
+# the task group waits for the tasks reporting their exits. Signal handlers cannot wait for room, hence the
+# unbounded event buffer.
+@contextlib.asynccontextmanager
+async def open_children(
+    platform: Platform, specs: Mapping[Child, ChildSpec], private_port: int
+) -> AsyncGenerator[Children]:
+    events_in, events_out = anyio.create_memory_object_stream[Event](math.inf)
+    with events_in, events_out:
+        async with contextlib.AsyncExitStack() as stack:
+            tasks: Final = await stack.enter_async_context(anyio.create_task_group())
+            yield Children(platform, specs, private_port, stack, tasks, events_in, events_out, {})
 
 
 # A child's stdin is a pipe only the supervisor holds open, so the child sees EOF as soon as the supervisor is gone,
-# however it went, and shuts down instead of outliving it.
+# however it went, and shuts down instead of outliving it. Stopping is shielded so a cancelled supervisor still waits
+# for the child it is stopping.
 @contextlib.asynccontextmanager
-async def _launch(
-    platform: Platform,
-    child: Child,
-    spec: ChildSpec,
-    events: asyncio.Queue[Event],
-) -> AsyncGenerator[asyncio.subprocess.Process]:
+async def _process(platform: Platform, spec: ChildSpec) -> AsyncGenerator[asyncio.subprocess.Process]:
     process: Final = await asyncio.create_subprocess_exec(
         *spec.argv,
         stdin=asyncio.subprocess.PIPE,
@@ -92,51 +148,36 @@ async def _launch(
         start_new_session=spec.spawn.start_new_session,
         creationflags=spec.spawn.creationflags,
     )
-    waiter: Final = asyncio.create_task(_report_exit(child, process, events))
     try:
         yield process
     finally:
-        platform.stop_group(process)
-        await waiter
+        with anyio.CancelScope(shield=True):
+            platform.stop_group(process)
+            await process.wait()
         if process.stdin is not None:
             process.stdin.close()
 
 
-@contextlib.asynccontextmanager
-async def _launch_python(
-    platform: Platform, spec: ChildSpec, port: int, events: asyncio.Queue[Event]
-) -> AsyncGenerator[asyncio.subprocess.Process]:
-    async with (
-        _launch(platform, Child.PYTHON, spec, events) as process,
-        _in_background(_report_once_listening(port, events)),
-    ):
-        yield process
+async def _report_exit(
+    child: Child, process: asyncio.subprocess.Process, events: MemoryObjectSendStream[Event]
+) -> None:
+    with events:
+        events.send_nowait(ChildExited(child, await process.wait()))
 
 
-async def _report_exit(child: Child, process: asyncio.subprocess.Process, events: asyncio.Queue[Event]) -> None:
-    events.put_nowait(ChildExited(child, await process.wait()))
-
-
-async def _report_once_listening(port: int, events: asyncio.Queue[Event]) -> None:
-    while not await _accepts(port):
-        await asyncio.sleep(PROBE_INTERVAL_SECONDS)
-    events.put_nowait(Probe.PYTHON_LISTENING)
+async def _report_once_listening(port: int, events: MemoryObjectSendStream[Event]) -> None:
+    with events:
+        while not await _accepts(port):
+            await anyio.sleep(PROBE_INTERVAL_SECONDS)
+        events.send_nowait(Probe.PYTHON_LISTENING)
 
 
 async def _accepts(port: int) -> bool:
-    try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection(RUST_HOP, port), PROBE_INTERVAL_SECONDS)
-    except (OSError, asyncio.TimeoutError):
-        return False
-    writer.close()
-    return True
-
-
-@contextlib.asynccontextmanager
-async def _in_background(work: Coroutine[None, None, None]) -> AsyncGenerator[None]:
-    task: Final = asyncio.create_task(work)
-    try:
-        yield
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    with anyio.move_on_after(PROBE_INTERVAL_SECONDS):
+        try:
+            stream: Final = await anyio.connect_tcp(RUST_HOP, port)
+        except OSError:
+            return False
+        await stream.aclose()
+        return True
+    return False

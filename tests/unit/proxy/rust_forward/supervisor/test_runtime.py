@@ -1,12 +1,29 @@
+import signal
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
+import anyio
 import pytest
 
 from litellm.proxy.rust_forward.platform import Platform, current_platform
 from litellm.proxy.rust_forward.platform.windows import WindowsPlatform
 from litellm.proxy.rust_forward.supervisor import supervise
+from litellm.proxy.rust_forward.supervisor.children import ChildSpec
+from litellm.proxy.rust_forward.supervisor.lifecycle import (
+    FAILURE,
+    Action,
+    Caught,
+    Child,
+    ChildExited,
+    Event,
+    Probe,
+    Send,
+    Spawn,
+)
+from litellm.proxy.rust_forward.supervisor.runtime import SpawnFailed, drive, open_children
 from tests.unit.proxy.rust_forward.supervisor._support import python_server
 
 
@@ -43,3 +60,95 @@ def test_rust_opens_the_public_port_only_once_python_listens(tmp_path: Path, mon
     command: Final = (sys.executable, "-I", "-c", PYTHON_CHILD)
     supervise(python_server(), command, scripts_dir=str(tmp_path), platform=_fake_gateway(tmp_path))
     assert (tmp_path / "rust_saw_python_listening").read_text() == "True"
+
+
+TERM: Final = signal.SIGTERM
+POSIX_ONLY: Final = pytest.mark.skipif(sys.platform == "win32", reason="the child traps SIGTERM")
+STOPS: Final = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGQUIT})
+
+
+@dataclass
+class ScriptedExecutor:
+    """Replays a fixed event script and records every action the driver carries out."""
+
+    events: list[Event]
+    failing: frozenset[Child] = frozenset()
+    done: list[Action] = field(default_factory=list)
+
+    async def spawn(self, child: Child) -> SpawnFailed | None:
+        self.done.append(Spawn(child))
+        return SpawnFailed(FileNotFoundError(child.value)) if child in self.failing else None
+
+    def send(self, child: Child, signum: signal.Signals) -> None:
+        self.done.append(Send(child, signum))
+
+    async def next_event(self) -> Event:
+        return self.events.pop(0)
+
+
+async def test_driver_carries_out_each_action_in_order_and_ends_with_pythons_status() -> None:
+    executor: Final = ScriptedExecutor(
+        [Probe.PYTHON_LISTENING, Caught(TERM), ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)]
+    )
+    assert await drive(executor, STOPS) == -15
+    assert executor.done == [Spawn(Child.PYTHON), Spawn(Child.RUST), Send(Child.RUST, TERM), Send(Child.PYTHON, TERM)]
+    assert executor.events == []
+
+
+async def test_driver_stops_python_and_fails_when_rust_is_lost() -> None:
+    executor: Final = ScriptedExecutor(
+        [Probe.PYTHON_LISTENING, ChildExited(Child.RUST, 0), ChildExited(Child.PYTHON, -15)]
+    )
+    assert await drive(executor, STOPS) == FAILURE
+    assert executor.done == [Spawn(Child.PYTHON), Spawn(Child.RUST), Send(Child.PYTHON, TERM)]
+
+
+async def test_driver_asks_for_no_event_once_the_status_is_settled() -> None:
+    executor: Final = ScriptedExecutor([ChildExited(Child.PYTHON, 3), Caught(TERM)])
+    assert await drive(executor, STOPS) == 3
+    assert executor.events == [Caught(TERM)]
+
+
+async def test_driver_returns_a_failed_spawn_without_waiting_for_events() -> None:
+    executor: Final = ScriptedExecutor([Probe.PYTHON_LISTENING, Caught(TERM)], failing=frozenset({Child.RUST}))
+    outcome: Final = await drive(executor, STOPS)
+    assert isinstance(outcome, SpawnFailed)
+    assert executor.events == [Caught(TERM)]
+
+
+def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:
+    spec: Final = ChildSpec(argv, MappingProxyType({}), current_platform().spawn_options(()))
+    return MappingProxyType({Child.PYTHON: spec, Child.RUST: spec})
+
+
+SLOW_TO_STOP: Final = (
+    sys.executable,
+    "-c",
+    "import signal, time; signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.5), exit(0))); time.sleep(30)",
+)
+
+
+@POSIX_ONLY
+async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops() -> None:
+    with anyio.CancelScope() as scope:
+        async with open_children(current_platform(), _children(SLOW_TO_STOP), 1) as children:
+            assert await children.spawn(Child.RUST) is None
+            process: Final = children.processes[Child.RUST]
+            await anyio.sleep(0.3)
+            scope.cancel()
+            await anyio.sleep(1)
+    assert process.returncode == 0
+
+
+async def test_exiting_children_are_reported_as_events() -> None:
+    async with open_children(current_platform(), _children((sys.executable, "-c", "exit(7)")), 1) as children:
+        assert await children.spawn(Child.RUST) is None
+        with anyio.fail_after(5):
+            assert await children.next_event() == ChildExited(Child.RUST, 7)
+
+
+async def test_a_child_that_cannot_start_is_returned_as_a_failure(tmp_path: Path) -> None:
+    async with open_children(current_platform(), _children((str(tmp_path / "missing"),)), 1) as children:
+        outcome: Final = await children.spawn(Child.RUST)
+    assert isinstance(outcome, SpawnFailed)
+    assert isinstance(outcome.error, FileNotFoundError)
