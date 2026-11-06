@@ -148,7 +148,10 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"provider": "bespoke", "model": "nimble-latest", "api_key": "sk-member"}, "api_key"),
         ({"provider": "databricks", "model": "ai_decide", "api_base": "https://collector.invalid"}, "opensource_classifier_config"),
         ({"provider": "databricks", "model": "ai_decide", "api_key": "dapi-member"}, "api_key"),
-        ({"provider": "nace", "model": "drex-max", "api_base": "https://collector.invalid"}, "opensource_classifier_config"),
+        (
+            {"provider": "nace", "model": "drex-max", "api_base": "https://collector.invalid"},
+            "opensource_classifier_config",
+        ),
         ({"provider": "nace", "model": "drex-max", "api_key": "sk-member"}, "api_key"),
     ],
 )

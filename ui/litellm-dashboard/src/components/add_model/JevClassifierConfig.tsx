@@ -14,6 +14,7 @@ const providerDescriptions = {
   laya: "Uses Laya with your configured tiers. Set LAYA_API_BASE on the gateway to connect your Laya server.",
   bespoke:
     "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
+  nace: "Uses Nace Drex with your configured tiers. Set NACE_API_KEY on the gateway.",
   databricks:
     "Uses the Databricks ai_decide AI Function, or a decision serving endpoint you name, with your configured tiers. Set DATABRICKS_API_BASE to https://<workspace-host>/serving-endpoints and DATABRICKS_API_KEY on the gateway.",
 };

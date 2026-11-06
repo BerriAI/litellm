@@ -1495,11 +1495,8 @@ async def test_nace_routes_through_its_console_with_its_own_key_and_accounts_the
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["nace", "typesafe"])
 async def test_only_the_nace_classifier_sends_the_client_header(provider: ClassifierProvider) -> None:
-    seen: Final[list[httpx.Headers]] = []
-
-    def respond(http_request: httpx.Request) -> httpx.Response:
-        seen.append(http_request.headers)
-        return httpx.Response(
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://classifier.test/v1/systemone").respond(
             200,
             json={
                 "model": "drex-max",
@@ -1513,12 +1510,12 @@ async def test_only_the_nace_classifier_sends_the_client_header(provider: Classi
                 },
             },
         )
+        handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream.async_handler))
+        client: Final = HttpJevClassifierClient("secret", "https://classifier.test", handler, provider)
+        await client.evaluate(
+            build_jev_request("Hello", None, "drex-max", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "facts"}), 1.0
+        )
 
-    handler: Final = AsyncHTTPHandler()
-    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    client: Final = HttpJevClassifierClient("secret", "https://classifier.test", handler, provider)
-    await client.evaluate(
-        build_jev_request("Hello", None, "drex-max", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "facts"}), 1.0
+    assert route.calls.last.request.headers.get("x-nace-client") == (
+        f"litellm/{litellm_version}" if provider == "nace" else None
     )
-
-    assert seen[0].get("x-nace-client") == (f"litellm/{litellm_version}" if provider == "nace" else None)
