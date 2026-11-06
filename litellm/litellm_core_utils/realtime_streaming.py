@@ -59,6 +59,7 @@ from .realtime_guardrails import (
     realtime_guarded_item,
     realtime_guardrail_verdict,
     realtime_runner_guardrail,
+    realtime_screening_guardrails,
     rewritten_item,
 )
 
@@ -1677,8 +1678,11 @@ class RealTimeStreaming:
                 (transcript,), "user", item_id, pre_block_backend_message, event_hooks
             )
             return isinstance(verdict, RealtimeGuardrailBlock)
-        if self._has_realtime_guardrails_for_event_hooks(
-            event_hooks or (GuardrailEventHooks.realtime_input_transcription,)
+        if realtime_screening_guardrails(
+            "user",
+            event_hooks or (GuardrailEventHooks.realtime_input_transcription,),
+            {**self.request_data, "stream": True},
+            litellm.callbacks,
         ):
             raise TypeError(f"Realtime guardrails cannot screen a {type(transcript).__name__} transcript")
         return False

@@ -253,6 +253,21 @@ def realtime_runner_guardrail(
     return callback if runs else None
 
 
+def realtime_screening_guardrails(
+    role: str,
+    event_hooks: Sequence["GuardrailEventHooks"],
+    check_data: Mapping[str, object],
+    callbacks: Iterable[object],
+) -> tuple["CustomGuardrail", ...]:
+    runner_guardrails: Final = (realtime_runner_guardrail(callback, check_data, event_hooks) for callback in callbacks)
+    guardrails: Final = {
+        id(guardrail): guardrail
+        for guardrail in runner_guardrails
+        if guardrail is not None and _in_role_scope(guardrail, role)
+    }
+    return tuple(guardrails.values())
+
+
 async def realtime_guardrail_verdict(
     texts: tuple[str, ...],
     role: str,
@@ -262,13 +277,7 @@ async def realtime_guardrail_verdict(
     callbacks: Iterable[object],
 ) -> RealtimeGuardrailVerdict:
     check_data: Final = {**request_data, "transcript": " ".join(texts), "stream": True}
-    runner_guardrails: Final = (realtime_runner_guardrail(callback, check_data, event_hooks) for callback in callbacks)
-    guardrails: Final = {
-        id(guardrail): guardrail
-        for guardrail in runner_guardrails
-        if guardrail is not None and _in_role_scope(guardrail, role)
-    }
-    in_scope: Final = tuple(guardrails.values())
+    in_scope: Final = realtime_screening_guardrails(role, event_hooks, check_data, callbacks)
     guardrail_request_data: Final = {
         **{key: _turn_copy(value) for key, value in request_data.items()},
         "user_api_key_dict": user_api_key_dict,

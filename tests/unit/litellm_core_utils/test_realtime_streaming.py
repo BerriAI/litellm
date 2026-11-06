@@ -1110,6 +1110,63 @@ async def test_a_non_string_transcript_fails_the_session_when_a_transcript_guard
     backend_ws.send.assert_not_called()
 
 
+def _native_lifecycle_transcription_guardrail() -> CustomGuardrail:
+    class _NativeLifecycleGuardrail(CustomGuardrail):
+        use_native_lifecycle_hooks = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    return _NativeLifecycleGuardrail(
+        guardrail_name="test_native_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+def _tool_results_only_transcription_guardrail() -> CustomGuardrail:
+    class _ToolResultsOnlyGuardrail(CustomGuardrail):
+        scan_only_tool_results = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    return _ToolResultsOnlyGuardrail(
+        guardrail_name="test_tool_results_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_factory", [_native_lifecycle_transcription_guardrail, _tool_results_only_transcription_guardrail]
+)
+async def test_a_non_string_transcript_keeps_the_session_when_no_guardrail_would_screen_the_users_turn(
+    guardrail_factory: Callable[[], CustomGuardrail], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail_factory()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": None, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed", "response.done"]
+
+
 @pytest.mark.asyncio
 async def test_transcription_session_captures_usage_and_skips_response_create():
     """
