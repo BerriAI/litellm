@@ -347,7 +347,9 @@ describe("PublicModelHub", () => {
 
     const openai = await screen.findByRole("region", { name: "OpenAI pricing" });
     const aboveThreshold = within(openai).getByRole("rowgroup", { name: "Above 272K tokens" });
-    expect(within(aboveThreshold).getByRole("row", { name: /Cache read/ })).toHaveTextContent("Cache read / 1M tokens$1.00");
+    expect(within(aboveThreshold).getByRole("row", { name: /Cache read/ })).toHaveTextContent(
+      "Cache read / 1M tokens$1.00",
+    );
     expect(within(openai).getByText("0–256K tokens: $0.05 input")).toBeInTheDocument();
     expect(within(screen.getByRole("dialog")).getByText("$2.5000")).toBeInTheDocument();
   });
