@@ -2267,7 +2267,7 @@
   },
   {
     "provider": "LITELLM_PROXY",
-    "provider_display_name": "Litellm Proxy",
+    "provider_display_name": "LiteLLM Gateway",
     "litellm_provider": "litellm_proxy",
     "credential_fields": [
       {
