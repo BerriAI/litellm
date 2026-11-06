@@ -139,6 +139,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_format",
             "response_mime_type",
             "previous_interaction_id",
+            "continuation_token",
         ]
 
     def validate_environment(
@@ -219,6 +220,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "environment",
             "response_modalities",
             "previous_interaction_id",
+            "continuation_token",
         ]
         dropped_keys: Final = (
             frozenset({"agent_config"})
@@ -314,7 +316,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> InteractionsAPIStreamingResponse:
         """Parse streaming chunk."""
         verbose_logger.debug("Google AI Interactions streaming chunk: %s", parsed_chunk)
-        return InteractionsAPIStreamingResponse(**parsed_chunk)
+        return InteractionsAPIStreamingResponse.model_validate(parsed_chunk)
 
     # GET / DELETE / CANCEL - just build URLs, responses match spec directly
 

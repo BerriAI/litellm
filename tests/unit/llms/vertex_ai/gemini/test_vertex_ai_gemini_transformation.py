@@ -1980,7 +1980,6 @@ def test_file_data_field_order():
 
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
-    import json
 
     from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 
@@ -2066,7 +2065,7 @@ def test_extract_file_data_with_path_object():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2105,7 +2104,7 @@ def test_extract_file_data_with_pathlib_path():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2129,7 +2128,7 @@ def test_extract_file_data_with_pathlib_path():
 
 def test_extract_file_data_with_tuple_format():
     """Test that tuple format (with explicit content_type) still works correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
@@ -2152,7 +2151,7 @@ def test_extract_file_data_fallback_to_octet_stream():
     import tempfile
     from pathlib import Path
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         extract_file_data,
     )
 
