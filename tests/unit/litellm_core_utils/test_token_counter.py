@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.token_counter import (
     is_openai_model,
     offload_token_count,
 )
+from litellm.litellm_core_utils import token_counter as token_counter_module
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -3626,3 +3627,32 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)
+
+
+def test_token_counter_stays_fast_on_a_long_model_name() -> None:
+    """/utils/token_counter takes the model name straight from the request body. A caller sending
+    `a/` * 40000 + `x` used to rebuild the tail of the name for every path segment and look each
+    one up, which is quadratic over a name nothing here matches: 8k segments took ~200 ms, and
+    the 80 KB from the report took ~9 s.
+
+    Four times the segments should cost about four times as much, so compare how the two runs
+    scale rather than timing either one on its own. The lookups are the real ones, since the
+    hashing they do is part of what the name costs."""
+    short: Final = _fastest(_listed_openai_model_name_call, "a/" * 1000 + "x")
+    long: Final = _fastest(_listed_openai_model_name_call, "a/" * 4000 + "x")
+
+    assert long <= short * 8, f"4000 segments take {long:.1f} ms, against {short:.1f} for 1000"
+
+
+def _listed_openai_model_name_call(model: str) -> None:
+    token_counter_module._listed_openai_model_name(model)
+
+
+def _fastest(run: Callable[[str], None], model: str, repeats: int = 5) -> float:
+    """Milliseconds of the quickest run: the floor is what the name walk actually costs."""
+    timings: Final = []
+    for _ in range(repeats):
+        started: Final = time.perf_counter()
+        run(model)
+        timings.append((time.perf_counter() - started) * 1000)
+    return min(timings)
