@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from itertools import count, islice
 from types import MappingProxyType
@@ -168,13 +168,18 @@ def _bounded_metrics_json(alias: str) -> str:
     ))"""
 
 
-def build_bounded_daily_activity_sql(scope: DailyActivityScope, *, model_limit: int | None) -> SqlQuery:
-    days: Final = (date.fromisoformat(scope.end_date) - date.fromisoformat(scope.start_date)).days
+def build_bounded_daily_activity_sql(
+    scope: DailyActivityScope, *, model_limit: int | None, utc_now: datetime | None = None
+) -> SqlQuery:
+    start, end = adjust_dates_for_timezone(
+        scope.start_date, scope.end_date, scope.timezone_offset_minutes, scope.include_current_utc_day, utc_now
+    )
+    days: Final = (date.fromisoformat(end) - date.fromisoformat(start)).days
     if not 0 <= days <= 365:
         raise ValueError("Choose an ordered date range of at most 366 days")
     if model_limit is not None and not 1 <= model_limit <= 100:
         raise ValueError("model_limit must be between 1 and 100")
-    where, params = build_where_clause(scope)
+    where, params = build_where_clause(replace(scope, start_date=start, end_date=end, include_current_utc_day=False))
     sentinel: Final = len(params) + 1
     limit_param: Final = len(params) + 2
     metrics: Final = _rollup_metric_select(scope.table)
