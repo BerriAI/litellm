@@ -42,7 +42,16 @@ pub(super) fn invalid_request(err: serde_json::Error) -> Error {
 }
 
 pub type MessagesCallResponse =
-    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
+    CallOutput<MessagesBody, super::route::MessagesStreamHead, Bytes, Error>;
+
+// Python's `transform_anthropic_messages_response` returns any JSON object the provider sends
+// with a 200, message or not, so one that is not a message passes through as sent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessagesBody {
+    Message(Box<MessagesResponse>),
+    Unchecked(Map<String, Value>),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
