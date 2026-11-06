@@ -956,7 +956,7 @@ _UNSUPPORTED: Final = (
         "supports_sampling_params",
         {"temperature": 0.2},
         {},
-        "Only temperature=1 is supported",
+        "does not support parameters: ['temperature']",
         id="temperature_on_a_fixed_sampling_model",
     ),
     pytest.param(
@@ -1211,6 +1211,6 @@ def test_non_claude_mantle_id_with_a_bare_bedrock_twin_keeps_its_route_and_spend
         cost: Final = _mantle_cost(gateway, _LUNA)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(cost), response.text
         _assert_success_row(
-            _spend_row(_BY_CALL_ID, response.headers["x-litellm-call-id"]), model, _LUNA, "responses", cost
+            _spend_row(_BY_CALL_ID, response.headers["x-litellm-call-id"]), model, _LUNA, "acompletion", cost
         )
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", _RESPONSES_PATH)]

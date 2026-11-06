@@ -210,3 +210,27 @@ describe("model colors", () => {
     expect(bucketTotals(series).get("2026-10-01")).toBe(55);
   });
 });
+
+describe("daily key stacks", () => {
+  it("should preserve each day's total when truncated keys are grouped into Other", () => {
+    const first = day("2026-11-01", 10, {});
+    first.metrics.api_requests = 100;
+    first.breakdown.api_keys = {
+      "key-a": { metrics: { ...metrics(3), api_requests: 30 }, metadata: { key_alias: "Support", team_id: null } },
+      "key-b": { metrics: { ...metrics(2), api_requests: 20 }, metadata: { key_alias: "Research", team_id: null } },
+    };
+    const second = day("2026-11-02", 15, {});
+    second.metrics.api_requests = 150;
+    second.breakdown.api_keys = {
+      "key-a": { metrics: { ...metrics(1), api_requests: 10 }, metadata: { key_alias: "Support", team_id: null } },
+      "key-b": { metrics: { ...metrics(8), api_requests: 80 }, metadata: { key_alias: "Research", team_id: null } },
+    };
+    const result = seriesBy([first, second], "api_keys", "requests", 1);
+    expect(result.labels).toEqual(["key-b", "Other"]);
+    expect(result.data.map((row) => [row[result.keys[0]], row[result.keys[1]]])).toEqual([
+      [20, 80],
+      [80, 70],
+    ]);
+    expect([...bucketTotals(result).values()]).toEqual([100, 150]);
+  });
+});

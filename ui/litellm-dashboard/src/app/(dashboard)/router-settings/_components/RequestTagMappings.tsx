@@ -111,7 +111,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
               {t("routerSettings.requestTagMappings.baggageKey")}
               <Input
                 aria-label={t("routerSettings.requestTagMappings.baggageKeyAriaLabel", { number: index + 1 })}
-                placeholder="entrypoint"
+                placeholder="service"
                 value={rule.key}
                 onChange={(event) => update(index, { key: event.target.value })}
               />
@@ -145,7 +145,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                   {t("routerSettings.requestTagMappings.tagPrefix")}
                   <Input
                     aria-label={t("routerSettings.requestTagMappings.tagPrefixAriaLabel", { number: index + 1 })}
-                    placeholder="usecase:"
+                    placeholder="app:"
                     value={rule.tag_prefix ?? ""}
                     onChange={(event) => update(index, { tag_prefix: event.target.value })}
                   />
