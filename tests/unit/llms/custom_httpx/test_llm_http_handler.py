@@ -4890,6 +4890,54 @@ async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_reque
     ]
 
 
+class _StreamRouteConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return f"{api_base}/{'stream' if stream else 'answer'}"
+
+
+def _answers_only_the_non_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/answer"):
+        return httpx.Response(200, json=json.loads(request.content))
+    return httpx.Response(403, json={"message": "not authorized to stream"})
+
+
+def _fake_streamed_completion(acompletion: bool, client: HTTPHandler | AsyncHTTPHandler):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"fake_stream": True},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=acompletion,
+        stream=True,
+        client=client,
+        provider_config=_StreamRouteConfig(),
+    )
+
+
+async def test_a_fake_streamed_completion_is_sent_to_the_non_streaming_route():
+    sync_client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+    )
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+
+    sync_chunks: Final = list(_fake_streamed_completion(acompletion=False, client=sync_client))
+    async_chunks: Final = [
+        chunk async for chunk in await _fake_streamed_completion(acompletion=True, client=async_client)
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+
+
 class _ImageEditRecordingConfig(BaseImageEditConfig):
     def __init__(self):
         self.transform_calls = []

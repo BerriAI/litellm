@@ -920,7 +920,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             model=model,
             optional_params=optional_params,
-            stream=stream,
+            stream=False if fake_stream else stream,
             litellm_params=litellm_params,
         )
 
