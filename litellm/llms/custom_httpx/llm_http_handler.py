@@ -897,7 +897,7 @@ class BaseLLMHTTPHandler:
 
         fake_stream = (
             fake_stream
-            or optional_params.pop("fake_stream", False)
+            or optional_params.pop("fake_stream", False) is True
             or provider_config.should_fake_stream(model=model, custom_llm_provider=custom_llm_provider, stream=stream)
         )
 
@@ -920,7 +920,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             model=model,
             optional_params=optional_params,
-            stream=stream,
+            stream=False if fake_stream else stream,
             litellm_params=litellm_params,
         )
 
@@ -1056,7 +1056,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
                 fake_stream=fake_stream,
             )
-            if provider_config.has_custom_stream_wrapper is True:
+            if provider_config.has_custom_stream_wrapper is True and not fake_stream:
                 return provider_config.get_sync_custom_stream_wrapper(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -1225,7 +1225,7 @@ class BaseLLMHTTPHandler:
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ):
-        if provider_config.has_custom_stream_wrapper is True:
+        if provider_config.has_custom_stream_wrapper is True and not fake_stream:
             return await provider_config.get_async_custom_stream_wrapper(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -2642,6 +2642,7 @@ class BaseLLMHTTPHandler:
                 provider=custom_llm_provider,
                 api_base=affinity_api_base,
                 unlisted="drop" if provider_filters_betas else "forward",
+                keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model, litellm_params),
             )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase

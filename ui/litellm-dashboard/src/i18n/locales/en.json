@@ -6694,13 +6694,17 @@
         "maxBudget": "Max Budget (USD)",
         "maxBudgetHint": "Maximum amount in USD this tag can spend. When reached, requests with this tag will be blocked",
         "resetBudget": "Reset Budget",
-        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours"
+        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours",
+        "tpmLimit": "TPM Limit",
+        "tpmLimitHint": "Maximum tokens per minute across every key and team that sends this tag. Requests over the limit get a 429",
+        "rpmLimit": "RPM Limit",
+        "rpmLimitHint": "Maximum requests per minute across every key and team that sends this tag. Requests over the limit get a 429"
       },
       "budgetSection": "Budget & Rate Limits (Optional)",
-      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
       "submit": "Create Tag",
       "validation": {
-        "nameRequired": "Please input a tag name"
+        "nameRequired": "Please input a tag name",
+        "limitNonnegativeInteger": "Enter a whole number of 0 or more"
       }
     },
     "info": {
@@ -6742,15 +6746,19 @@
         "maxBudget": "Max Budget (USD)",
         "maxBudgetDescription": "Maximum amount in USD this tag can spend",
         "resetBudget": "Reset Budget",
-        "resetBudgetDescription": "How often the budget should reset"
+        "resetBudgetDescription": "How often the budget should reset",
+        "tpmLimit": "TPM Limit",
+        "tpmLimitDescription": "Maximum tokens per minute for this tag, shared across all keys and teams",
+        "rpmLimit": "RPM Limit",
+        "rpmLimitDescription": "Maximum requests per minute for this tag, shared across all keys and teams"
       },
       "budgetSection": "Budget & Rate Limits",
-      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
       "cancel": "Cancel",
       "save": "Save Changes",
       "validation": {
         "nameRequired": "Please input a tag name",
-        "budgetNonnegative": "Enter a nonnegative budget"
+        "budgetNonnegative": "Enter a nonnegative budget",
+        "limitNonnegativeInteger": "Enter a whole number of 0 or more"
       }
     }
   },

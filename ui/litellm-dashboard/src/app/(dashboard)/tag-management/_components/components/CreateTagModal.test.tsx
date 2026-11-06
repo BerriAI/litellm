@@ -61,4 +61,79 @@ describe("CreateTagModal", () => {
     // Form validation should prevent submission
     expect(mockOnSubmit).not.toHaveBeenCalled();
   });
+
+  it("submits TPM and RPM limits typed in the budget section", async () => {
+    const user = userEvent.setup();
+    render(<CreateTagModal {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText("Tag Name"), { target: { value: "limited-tag" } });
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "50000" } });
+    fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value: "120" } });
+
+    await user.click(screen.getByRole("button", { name: /Create Tag/i }));
+
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ tag_name: "limited-tag", tpm_limit: "50000", rpm_limit: "120" }),
+    );
+  });
+
+  it("drops TPM and RPM limits typed in a budget section that was collapsed again", async () => {
+    const user = userEvent.setup();
+    render(<CreateTagModal {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText("Tag Name"), { target: { value: "limited-tag" } });
+    const toggle = () => screen.getByRole("button", { name: /Budget & Rate Limits/ });
+    await user.click(toggle());
+    fireEvent.change(await screen.findByLabelText("RPM Limit"), { target: { value: "120" } });
+    await user.click(toggle());
+
+    await user.click(screen.getByRole("button", { name: /Create Tag/i }));
+
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ tag_name: "limited-tag", rpm_limit: undefined }),
+    );
+  });
+
+  it("rejects a fractional TPM limit", async () => {
+    const user = userEvent.setup();
+    render(<CreateTagModal {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText("Tag Name"), { target: { value: "limited-tag" } });
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "2.5" } });
+
+    await user.click(screen.getByRole("button", { name: /Create Tag/i }));
+
+    expect(await screen.findByText("Enter a whole number of 0 or more")).toBeInTheDocument();
+    expect(mockOnSubmit).not.toHaveBeenCalled();
+  });
+
+  it("no longer tells users that tag rate limits are unsupported", async () => {
+    const user = userEvent.setup();
+    render(<CreateTagModal {...defaultProps} />);
+
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+    await screen.findByLabelText("TPM Limit");
+
+    expect(screen.queryByText(/not currently supported/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /GitHub issue/ })).not.toBeInTheDocument();
+  });
+
+  it("still creates the tag when an invalid limit was left behind in a collapsed budget section", async () => {
+    const user = userEvent.setup();
+    render(<CreateTagModal {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText("Tag Name"), { target: { value: "limited-tag" } });
+    const toggle = () => screen.getByRole("button", { name: /Budget & Rate Limits/ });
+    await user.click(toggle());
+    fireEvent.change(await screen.findByLabelText("TPM Limit"), { target: { value: "-1" } });
+    await user.click(toggle());
+
+    await user.click(screen.getByRole("button", { name: /Create Tag/i }));
+
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ tag_name: "limited-tag", tpm_limit: undefined }),
+    );
+  });
 });

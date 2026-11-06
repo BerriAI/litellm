@@ -1659,6 +1659,11 @@ class RoutingContext:
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
 
+    def arm_cooldown_prefetch(self) -> None:
+        from litellm.router_utils.routing_read_batch import RoutingPrefetch
+
+        RoutingPrefetch.arm_cooldowns(self)
+
     def arm_read_prefetch(
         self,
         model: str,
