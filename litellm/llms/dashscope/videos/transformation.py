@@ -560,7 +560,11 @@ class DashScopeVideoConfig(BaseVideoConfig):
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
         excluded_openrouter: Final = unsupported_video_fields(
-            video_create_optional_params, model, "dashscope", drop_params, frozenset({"duration", "seed"})
+            video_create_optional_params,
+            model,
+            "dashscope",
+            drop_params,
+            frozenset({"duration", "seed", "aspect_ratio", "generate_audio"}),
         )
         unsupported: Final = next(
             (

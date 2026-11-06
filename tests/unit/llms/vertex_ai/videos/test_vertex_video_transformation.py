@@ -973,7 +973,13 @@ class TestImageAndParametersPassthrough:
         assert url.endswith(":predictLongRunning")
 
 
-@pytest.mark.parametrize("field", ["duration", "aspect_ratio", "frame_images", "input_references", "generate_audio", "seed"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_existing_scalar_parameters_remain_accepted(drop_params: bool) -> None:
+    params: Final = {"seed": 7, "duration": 6, "aspect_ratio": "9:16", "generate_audio": False}
+    assert VertexAIVideoConfig().map_openai_params(params, "veo-3.1-generate-001", drop_params) == {}
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
 def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = VertexAIVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):

@@ -198,7 +198,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
           skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
-        _ = unsupported_video_fields(video_create_optional_params, model, "vertex_ai", drop_params)
+        _ = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "vertex_ai",
+            drop_params,
+            frozenset({"duration", "seed", "aspect_ratio", "generate_audio"}),
+        )
         mapped_params: Final[dict[str, object]] = {}
 
         # Map input_reference to image (will be processed in transform_video_create_request)

@@ -1436,7 +1436,13 @@ class TestDashScopeVideoEndToEndRequest:
             await self._wire_request(model="dashscope/wan2.7-t2v", prompt="p", size="854x480")
 
 
-@pytest.mark.parametrize("field", ["aspect_ratio", "frame_images", "input_references", "generate_audio"])
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_existing_scalar_parameters_remain_accepted(drop_params: bool) -> None:
+    params: Final = {"seed": 7, "duration": 6, "aspect_ratio": "9:16", "generate_audio": False}
+    assert DashScopeVideoConfig().map_openai_params(params, "wan3.0-video", drop_params) == params
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
 def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = DashScopeVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
