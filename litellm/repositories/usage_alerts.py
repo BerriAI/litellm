@@ -534,7 +534,12 @@ class UsageAlertsRepository:
     async def key_ownership(self, key_id: str) -> tuple[str | None, str | None] | None:
         rows: Final = TypeAdapter(tuple[_Ownership, ...]).validate_python(
             await self.database.query_raw(
-                'SELECT user_id,team_id FROM "LiteLLM_VerificationToken" WHERE token=$1', key_id
+                """SELECT user_id,team_id FROM "LiteLLM_VerificationToken" WHERE token=$1
+                UNION ALL
+                (SELECT user_id,team_id FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1
+                    AND NOT EXISTS(SELECT 1 FROM "LiteLLM_VerificationToken" WHERE token=$1)
+                    ORDER BY deleted_at DESC,id DESC LIMIT 1)""",
+                key_id,
             )
         )
         return (rows[0].user_id, rows[0].team_id) if rows else None

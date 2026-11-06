@@ -157,7 +157,7 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
             path: Final = f"/issues/{first.id}"
             own: Final = gateway.request("GET", path, key=owner_key)
             assert own.status_code == 200 and own.json()["scope_label"] == "Example checkout"
-            assert own.json()["can_update_status"] is True
+            assert own.json()["can_update_status"] is False, "Broader source scopes require their own write permission"
             assert own.json()["can_view_activity"] is True
             assert gateway.request("GET", path, key=viewer_key).json()["can_update_status"] is False
             assert gateway.request("GET", path, key=info_key).json()["can_update_status"] is False
@@ -204,15 +204,18 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
                 gateway.request(
                     "PATCH", path, {"status": "dismissed", "expected_status": "open"}, key=owner_key
                 ).status_code
-                == 200
+                == 403
             )
+            assert gateway.request("PATCH", path, {"status": "dismissed", "expected_status": "open"}).status_code == 200
+            assert gateway.request("PATCH", path, {"status": "resolved", "expected_status": "open"}).status_code == 409
+            assert gateway.request("GET", f"/issues/{second.id}", key=owner_key).json()["status"] == "open"
+            assert gateway.request("GET", f"/issues/{second.id}", key=owner_key).json()["can_update_status"] is True
             assert (
                 gateway.request(
-                    "PATCH", path, {"status": "resolved", "expected_status": "open"}, key=owner_key
+                    "PATCH", f"/issues/{second.id}", {"status": "dismissed", "expected_status": "open"}, key=owner_key
                 ).status_code
-                == 409
+                == 200
             )
-            assert gateway.request("GET", f"/issues/{second.id}", key=owner_key).json()["status"] == "open"
         finally:
             await _remove_issues(db, (first.id, second.id, global_issue.id))
             await alerts.delete_rule(rule.id)
@@ -782,6 +785,189 @@ async def test_family_settings_preserve_custom_deleted_rules_and_abort_concurren
         edited: Final = await alerts.get_rule(ids[0])
         assert edited is not None and edited.name == "Concurrent edit"
         assert await alerts.get_rule(custom.id) == custom
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_family_edit_requires_a_new_evaluation(db: ManagementDatabase) -> None:
+    async with _family_database(db) as database:
+        borrowed: Final = cast(AlertDatabase, database)  # cast-ok: real generated Prisma query delegate
+        alerts: Final = UsageAlertsRepository(borrowed)
+        store: Final = IssuesRepository(borrowed)
+        await alerts.ensure_default_rules(default_usage_rules())
+        rule: Final = await alerts.get_rule(default_usage_rule_id("key", "spend", "increase"))
+        assert rule is not None
+        await alerts.record_evaluation_status(rule, date.today() - timedelta(days=1), "complete")
+        result: Final = await store.update_family(
+            "spend", IssueFamilyUpdate(policies=(IssueFamilyPolicyUpdate(direction="increase", multiplier=5),))
+        )
+        saved: Final = await alerts.get_rule(rule.id)
+        assert result is not None and saved is not None
+        assert (result.evaluation_status_counts.complete, saved.evaluation_status, saved.last_evaluated_day) == (
+            0,
+            "pending",
+            None,
+        ), "Changed family policy must reset stale evaluation status"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_deleted_key_owner_retains_historical_issue_access(gateway: Gateway, db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        outsider: Final = scenario.user(user_role="internal_user")
+        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
+        reporting_id: Final = sha256(uuid4().bytes).hexdigest()
+        issue: Final = _issue(IssueCohort(scope_type="key", scope_id=reporting_id))
+        await _query(
+            db,
+            'INSERT INTO "LiteLLM_DeletedVerificationToken" (id,token,user_id,models) VALUES ($1,$1,$2,ARRAY[]::text[])',
+            reporting_id,
+            owner,
+        )
+        try:
+            await store.upsert_issue(issue)
+            path: Final = f"/issues/{issue.id}"
+            detail: Final = gateway.request("GET", path, key=owner_key)
+            assert detail.status_code == 200, "Deleted key owner must retain historical issue access"
+            assert detail.json()["can_update_status"] is True
+            assert gateway.request("GET", path, key=outsider_key).status_code == 403
+            assert (
+                gateway.request(
+                    "PATCH", path, {"status": "dismissed", "expected_status": "open"}, key=owner_key
+                ).status_code
+                == 200
+            )
+            await _query(
+                db,
+                'INSERT INTO "LiteLLM_VerificationToken" (token,user_id,models) VALUES ($1,$2,ARRAY[]::text[])',
+                reporting_id,
+                outsider,
+            )
+            assert gateway.request("GET", path, key=owner_key).status_code == 403
+            assert gateway.request("GET", path, key=outsider_key).status_code == 200
+        finally:
+            await _remove_issues(db, (issue.id,))
+            await _query(db, 'DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', reporting_id)
+            await _query(db, 'DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', reporting_id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    issue: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    rule: Final = await alerts.save_rule(
+        UsageAlertRuleInput(
+            name="Scope guard",
+            scope_type="user",
+            scope_id=issue.cohort.scope_id,
+            metric="requests",
+            direction="increase",
+        ),
+        "qa-admin",
+    )
+    assert rule is not None
+    try:
+        source: Final = (
+            await alerts.record_observations(
+                rule,
+                (
+                    UsageAlertObservation(
+                        entity_id=rule.scope_id,
+                        day=issue.observed_on,
+                        observed=420,
+                        baseline=120,
+                        threshold=360,
+                        breached=True,
+                    ),
+                ),
+            )
+        )[0]
+        await store.upsert_issue(issue)
+        await store.add_signals(
+            issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),)
+        )
+        authorized: Final = await store.status_scopes(issue.id)
+        assert authorized == (issue.cohort,)
+        assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=authorized) is not None
+        context: Final = source.model_copy(update={"id": str(uuid4()), "metric": "spend"})
+        same_scope: Final = (IssueSignalInput(source="usage_alert", source_id=context.id, usage_alert=context),)
+        await store.add_signals(issue.id, same_scope)
+        unchanged: Final = await store.get_issue(issue.id)
+        assert unchanged is not None and unchanged.status == "dismissed"
+        await store.add_signals(issue.id, same_scope)
+        assert await store.get_issue(issue.id) == unchanged
+        broader: Final = source.model_copy(update={"id": str(uuid4()), "scope_type": "deployment", "scope_id": None})
+        await store.add_signals(
+            issue.id, (IssueSignalInput(source="usage_alert", source_id=broader.id, usage_alert=broader),)
+        )
+        assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=authorized) is None
+        current: Final = await store.get_issue(issue.id)
+        assert current is not None and current.status == "open"
+        all_scopes: Final = await store.status_scopes(issue.id)
+        assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=all_scopes) is not None
+        broader_context: Final = broader.model_copy(update={"id": str(uuid4()), "metric": "spend"})
+        await store.add_signals(
+            issue.id,
+            (IssueSignalInput(source="usage_alert", source_id=broader_context.id, usage_alert=broader_context),),
+        )
+        repeated_scope: Final = await store.get_issue(issue.id)
+        assert repeated_scope is not None and repeated_scope.status == "dismissed"
+        assert await store.set_status(issue.id, "open", "dismissed") is not None
+        racing: Final = source.model_copy(update={"id": str(uuid4()), "scope_type": "team", "scope_id": "racing-team"})
+        async with asyncio.TaskGroup() as tasks:
+            async with db.prisma.writer_db.tx(timeout=timedelta(seconds=30)) as transaction:
+                await transaction.query_raw('SELECT id FROM "LiteLLM_Issue" WHERE id=$1 FOR UPDATE', issue.id)
+                pid: Final = (
+                    TypeAdapter(tuple[_Pid, ...])
+                    .validate_python(await transaction.query_raw("SELECT pg_backend_pid() AS pid"))[0]
+                    .pid
+                )
+                update: Final = tasks.create_task(
+                    store.set_status(issue.id, "dismissed", "open", authorized_scopes=all_scopes)
+                )
+                async with asyncio.timeout(10):
+                    while (
+                        not TypeAdapter(tuple[_Blocked, ...])
+                        .validate_python(
+                            await _query(
+                                db,
+                                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))) AS blocked",
+                                pid,
+                            )
+                        )[0]
+                        .blocked
+                    ):
+                        await asyncio.sleep(0.01)
+                locked: Final = IssuesRepository(
+                    cast(AlertDatabase, transaction)  # cast-ok: generated Prisma transaction query delegate
+                )
+                await locked.add_signals(
+                    issue.id, (IssueSignalInput(source="usage_alert", source_id=racing.id, usage_alert=racing),)
+                )
+        assert update.result() is None
+        raced: Final = await store.get_issue(issue.id)
+        assert raced is not None and raced.status == "open"
+        await store.add_signals(
+            issue.id,
+            tuple(
+                IssueSignalInput(
+                    source="usage_alert",
+                    source_id=f"scope-{index}",
+                    usage_alert=source.model_copy(update={"id": f"scope-{index}", "scope_id": f"other-user-{index}"}),
+                )
+                for index in range(20)
+            ),
+        )
+        limited: Final = await store.status_scopes(issue.id)
+        assert len(limited) == 11
+        with pytest.raises(ValueError, match="at most 10"):
+            await store.set_status(issue.id, "open", "dismissed", authorized_scopes=limited)
+    finally:
+        await _remove_issues(db, (issue.id,))
+        await alerts.delete_rule(rule.id)
+        await _query(db, 'DELETE FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1', rule.id)
 
 
 @pytest.mark.asyncio(loop_scope="session")

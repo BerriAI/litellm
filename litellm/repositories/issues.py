@@ -248,12 +248,20 @@ class IssuesRepository:
         status: UsageAlertStatus,
         expected_status: UsageAlertStatus,
         actor: str | None = None,
+        authorized_scopes: tuple[IssueCohort, ...] | None = None,
     ) -> Issue | None:
+        if authorized_scopes is not None and len(authorized_scopes) > 10:
+            raise ValueError("Authorize at most 10 alert source scopes")
         changed: Final = TypeAdapter(tuple[_Identifier, ...]).validate_python(
             await self.database.query_raw(
                 f"""WITH candidate AS MATERIALIZED (
                     SELECT i.*,({_STATUS}) AS effective_status {_JOIN} WHERE i.id=$1
                         AND NOT(i.kind='model_deprecation' AND NOT i.active AND $2='open')
+                        AND ($5::jsonb IS NULL OR NOT EXISTS (
+                            SELECT 1 FROM "LiteLLM_IssueSignal" s WHERE s.issue_id=i.id AND NOT EXISTS (
+                                SELECT 1 FROM jsonb_to_recordset($5::jsonb) AS x(scope_type text,scope_id text)
+                                WHERE s.source='usage_alert' AND x.scope_type=s.record->'usage_alert'->>'scope_type'
+                                    AND x.scope_id IS NOT DISTINCT FROM s.record->'usage_alert'->>'scope_id')))
                 ), ack AS (
                     INSERT INTO "LiteLLM_Config" AS prior (param_name,param_value)
                     SELECT ack_key,jsonb_build_object('model',record->'deprecation'->>'usage_model',
@@ -266,17 +274,33 @@ class IssuesRepository:
                     WHERE EXISTS(SELECT 1 FROM candidate i WHERE i.ack_key=prior.param_name
                         AND ({_PRIOR_STATUS})=$3)
                     RETURNING param_name
-                ) UPDATE "LiteLLM_Issue" i SET status=$2,updated_at=CURRENT_TIMESTAMP
-                FROM candidate c WHERE i.id=c.id AND c.effective_status=$3 AND
+                ) UPDATE "LiteLLM_Issue" i SET status=$2,
+                    updated_at=GREATEST(CURRENT_TIMESTAMP,i.updated_at+interval '1 millisecond')
+                FROM candidate c WHERE i.id=c.id AND (c.kind='model_deprecation' OR i.updated_at=c.updated_at)
+                    AND c.effective_status=$3 AND
                     ((c.kind<>'model_deprecation' AND i.status=$3) OR i.ack_key IN(SELECT param_name FROM ack))
                 RETURNING i.id""",
                 issue_id,
                 status,
                 expected_status,
                 actor,
+                json.dumps(tuple(scope.model_dump(mode="json") for scope in authorized_scopes))
+                if authorized_scopes is not None
+                else None,
             )
         )
         return await self.get_issue(issue_id) if changed else None
+
+    async def status_scopes(self, issue_id: str) -> tuple[IssueCohort, ...]:
+        return TypeAdapter(tuple[IssueCohort, ...]).validate_python(
+            await self.database.query_raw(
+                """SELECT DISTINCT CASE WHEN source='usage_alert' THEN record->'usage_alert'->>'scope_type'
+                    ELSE 'deployment' END AS scope_type,
+                    CASE WHEN source='usage_alert' THEN record->'usage_alert'->>'scope_id' END AS scope_id
+                FROM "LiteLLM_IssueSignal" WHERE issue_id=$1 ORDER BY scope_type,scope_id LIMIT 11""",
+                issue_id,
+            )
+        )
 
     async def add_signals(self, issue_id: str, signals: tuple[IssueSignalInput, ...]) -> None:
         await self.add_signal_batch(
@@ -289,11 +313,30 @@ class IssuesRepository:
         if len(signals) > 500:
             raise ValueError("Write at most 500 issue signals per batch")
         await self.database.query_raw(
-            """INSERT INTO "LiteLLM_IssueSignal" (issue_id,source,source_id,record)
-            SELECT DISTINCT ON(x->>'issue_id',x->>'source',x->>'source_id')
-                x->>'issue_id',x->>'source',x->>'source_id',x FROM jsonb_array_elements($1::jsonb) x
-            WHERE EXISTS(SELECT 1 FROM "LiteLLM_Issue" i WHERE i.id=x->>'issue_id')
-            ON CONFLICT(issue_id,source,source_id) DO NOTHING RETURNING source_id""",
+            """WITH incoming AS MATERIALIZED (
+                SELECT DISTINCT ON(x->>'issue_id',x->>'source',x->>'source_id') x AS record
+                FROM jsonb_array_elements($1::jsonb) x
+            ), parents AS MATERIALIZED (
+                SELECT i.id FROM "LiteLLM_Issue" i WHERE i.id IN(SELECT record->>'issue_id' FROM incoming)
+                ORDER BY i.id FOR UPDATE
+            ), added AS (
+                INSERT INTO "LiteLLM_IssueSignal" (issue_id,source,source_id,record)
+                SELECT x.record->>'issue_id',x.record->>'source',x.record->>'source_id',x.record
+                FROM incoming x JOIN parents p ON p.id=x.record->>'issue_id'
+                ON CONFLICT(issue_id,source,source_id) DO NOTHING RETURNING issue_id,source,record
+            ) UPDATE "LiteLLM_Issue" i SET
+                updated_at=GREATEST(CURRENT_TIMESTAMP,i.updated_at+interval '1 millisecond'),
+                status=CASE WHEN i.kind='performance' AND i.active AND i.status<>'open' AND EXISTS (
+                    SELECT 1 FROM added a WHERE a.issue_id=i.id AND a.source='usage_alert'
+                        AND (a.record->'usage_alert'->>'scope_type'<>i.scope_type
+                            OR a.record->'usage_alert'->>'scope_id' IS DISTINCT FROM i.scope_id)
+                        AND NOT EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" prior
+                            WHERE prior.issue_id=i.id AND prior.source='usage_alert'
+                                AND prior.record->'usage_alert'->>'scope_type'=a.record->'usage_alert'->>'scope_type'
+                                AND prior.record->'usage_alert'->>'scope_id'
+                                    IS NOT DISTINCT FROM a.record->'usage_alert'->>'scope_id')
+                ) THEN 'open' ELSE i.status END
+            WHERE i.id IN(SELECT issue_id FROM added) RETURNING i.id""",
             json.dumps(tuple(signal.model_dump(mode="json") for signal in signals)),
         )
 

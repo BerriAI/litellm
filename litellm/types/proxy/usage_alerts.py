@@ -1,9 +1,10 @@
 """Daily usage alert rules and incidents shared by the API and evaluator."""
 
 from datetime import date, datetime
-from typing import Literal, Self, TypeAlias
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 UsageAlertScope: TypeAlias = Literal["deployment", "key", "user", "team", "model"]
 UsageAlertMetric: TypeAlias = Literal["spend", "requests", "latency", "errors", "error_rate"]

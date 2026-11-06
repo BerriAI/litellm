@@ -229,9 +229,7 @@ async def update_usage_alert_rule(
         )
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
     require_notification_access(user, data, rule)
-    saved: Final = await store.save_rule(
-        data, user.user_id, existing=rule, overrides_defaults=user.user_role == LitellmUserRoles.PROXY_ADMIN
-    )
+    saved: Final = await store.save_rule(data, user.user_id, existing=rule, overrides_defaults=rule.overrides_defaults)
     if saved is None:
         raise HTTPException(status_code=409, detail="Alert rule changed while being updated. Refresh and try again")
     return saved

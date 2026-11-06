@@ -25,6 +25,7 @@ from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.issues import (
     Issue,
     IssueActivityResponse,
+    IssueCohort,
     IssueFamily,
     IssueFamilyList,
     IssueFamilySetting,
@@ -106,6 +107,29 @@ async def require_activity_access(issue: Issue, user: User, repository: IssuesRe
         raise HTTPException(status_code=403, detail="Full team Activity permission is required for this investigation")
 
 
+async def require_status_scopes(
+    issue: Issue, user: User, repository: IssueStore, alerts: UsageAlertsRepositoryDep
+) -> tuple[IssueCohort, ...] | None:
+    store: Final = require_repository(alerts)
+    await require_scope(
+        user,
+        store,
+        "model" if issue.cohort.scope_type == "provider" else issue.cohort.scope_type,
+        issue.cohort.scope_id,
+        write=True,
+    )
+    if user.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    scopes: Final = await repository.status_scopes(issue.id)
+    if len(scopes) > 10:
+        raise HTTPException(status_code=403, detail="An administrator must update this alert's status")
+    for scope in scopes:
+        await require_scope(
+            user, store, "model" if scope.scope_type == "provider" else scope.scope_type, scope.scope_id, write=True
+        )
+    return scopes
+
+
 def activity_range(issue: Issue, start_date: date | None, end_date: date | None) -> tuple[date, date]:
     start: Final = start_date or issue.range_start
     end: Final = end_date or issue.range_end
@@ -175,13 +199,7 @@ async def get_issue(
     activity_allowed: Final = await can_view_activity(issue, user, require_issues(repository))
     try:
         require_write_access(user, f"/issues/{issue_id}")
-        await require_scope(
-            user,
-            require_repository(alerts),
-            "model" if issue.cohort.scope_type == "provider" else issue.cohort.scope_type,
-            issue.cohort.scope_id,
-            write=True,
-        )
+        await require_status_scopes(issue, user, require_issues(repository), alerts)
     except HTTPException as exc:
         if exc.status_code != 403:
             raise
@@ -198,11 +216,12 @@ async def update_issue(
     alerts: UsageAlertsRepositoryDep,
 ) -> Issue:
     require_write_access(user, f"/issues/{issue_id}")
-    issue: Final = await authorized_issue(issue_id, user, repository, alerts, write=True)
+    issue: Final = await authorized_issue(issue_id, user, repository, alerts)
+    scopes: Final = await require_status_scopes(issue, user, require_issues(repository), alerts)
     if issue.kind == "model_deprecation" and not issue.active and data.status == "open":
         raise HTTPException(status_code=409, detail="This retirement issue reopens when the model receives new traffic")
     changed: Final = await require_issues(repository).set_status(
-        issue_id, data.status, data.expected_status, user.user_id
+        issue_id, data.status, data.expected_status, user.user_id, authorized_scopes=scopes
     )
     if changed is None:
         raise HTTPException(status_code=409, detail="Issue status changed; reload and retry")
