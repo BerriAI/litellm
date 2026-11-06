@@ -9,9 +9,10 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, JsonValue, StrictBool, StrictStr
 
+from ._compat import timeout
 from ._validator_worker import MAX_MESSAGE_BYTES
 from .compiler import escape_diagnostics
-from .models import JsonSchema, MontyErrorKind, MontyFailure
+from .models import JsonSchema, MontyErrorKind, MontyFailure, MontyLimits
 
 
 class _Response(BaseModel):
@@ -21,7 +22,8 @@ class _Response(BaseModel):
 
 
 class ValidatorProcess:
-    def __init__(self) -> None:
+    def __init__(self, address_space_bytes: int = MontyLimits().worker_address_space_bytes) -> None:
+        self._address_space_bytes = address_space_bytes
         self.busy = False
         self.process: asyncio.subprocess.Process | None = None
 
@@ -29,7 +31,7 @@ class ValidatorProcess:
         if self.process is not None and self.process.returncode is None:
             return None
         try:
-            async with asyncio.timeout(5):
+            async with timeout(5):
                 self.process = await asyncio.create_subprocess_exec(
                     sys.executable,
                     "-I",
@@ -43,10 +45,16 @@ class ValidatorProcess:
                 if self.process.stdout is None or await self.process.stdout.readline() != b"ready\n":
                     await self.close()
                     return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, "validator startup failed")
+                if sys.platform == "linux":
+                    import resource
+
+                    resource.prlimit(
+                        self.process.pid, resource.RLIMIT_AS, (self._address_space_bytes, self._address_space_bytes)
+                    )
         except asyncio.CancelledError:
             await self.close()
             raise
-        except (OSError, ValueError, TimeoutError) as exc:
+        except (OSError, ValueError, asyncio.TimeoutError) as exc:
             await self.close()
             return MontyFailure(MontyErrorKind.RUNTIME_UNAVAILABLE, escape_diagnostics(str(exc)))
         return None
@@ -66,7 +74,7 @@ class ValidatorProcess:
         self, value: JsonValue, schema: JsonSchema, *, deadline: float, output: bool = False
     ) -> MontyFailure | None:
         try:
-            async with asyncio.timeout(max(0, deadline - time.monotonic())):
+            async with timeout(max(0, deadline - time.monotonic())):
                 if (failure := await self.start()) is not None:
                     return failure
                 process: Final = self.process
@@ -89,7 +97,7 @@ class ValidatorProcess:
         except asyncio.CancelledError:
             await self.close()
             raise
-        except TimeoutError:
+        except asyncio.TimeoutError:
             await self.close()
             return MontyFailure(MontyErrorKind.TIMEOUT, "node deadline expired during schema validation")
         except (OSError, ValueError, RecursionError) as exc:

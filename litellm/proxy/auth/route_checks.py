@@ -603,8 +603,10 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
 
-        def _placeholder_to_regex(match: re.Match) -> str:
+        def _placeholder_to_regex(match: re.Match[str]) -> str:
             placeholder: Final = match.group(0).strip("{}")
+            if placeholder == "workflow_id" and match.string.startswith("/v1/workflows/"):
+                return r"(?!runs(?:/|$))[^/]+"
             if not placeholder.endswith(":path"):
                 return r"[^/]+"
             # A ":path" placeholder takes whatever the router's own path

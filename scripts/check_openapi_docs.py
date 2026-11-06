@@ -7,18 +7,22 @@ count them per rule the same delta-vs-base way as the other lint gates. The rule
 OA001  no request body schema (the handler reads ``request.body()`` and never told FastAPI
        what is in it, see ``inline_request_body`` in custom_openapi_spec.py for the fix)
 OA002  no description (the handler has no docstring and the route no ``description=``)
-OA003  the 200 response has no schema (no ``response_model`` and no ``responses={200: ...}``)
+OA003  no 2xx success response has a schema (use ``response_model`` or a schema in ``responses``)
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final, NamedTuple
+
+from pydantic import TypeAdapter
 
 GATED_METHODS: Final = frozenset({"post"})
 SCHEMA_MEDIA_TYPES: Final = ("application/json", "application/sdp", "multipart/form-data")
+SUCCESS_STATUS_CODES: Final = frozenset(str(code) for code in range(200, 300))
+_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 class Violation(NamedTuple):
@@ -28,7 +32,7 @@ class Violation(NamedTuple):
 
 
 def _as_mapping(node: object) -> Mapping[str, object]:
-    return node if isinstance(node, Mapping) else {}
+    return _OBJECT.validate_python(node) if isinstance(node, Mapping) else {}
 
 
 def _content_schema(container: object) -> object:
@@ -45,7 +49,11 @@ def _operation_codes(operation: Mapping[str, object]) -> Iterator[str]:
     description: Final = operation.get("description")
     if not isinstance(description, str) or not description.strip():
         yield "OA002"
-    if not _content_schema(_as_mapping(operation.get("responses")).get("200")):
+    if not any(
+        _content_schema(response)
+        for status, response in _as_mapping(operation.get("responses")).items()
+        if status in SUCCESS_STATUS_CODES
+    ):
         yield "OA003"
 
 
@@ -66,10 +74,10 @@ def proxy_spec() -> Mapping[str, object]:
     return _as_mapping(app.openapi())
 
 
-def main(argv: list[str] = sys.argv[1:]) -> int:
+def main(argv: Sequence[str] = sys.argv[1:]) -> int:
     spec: Final = json.loads(open(argv[0]).read()) if argv else proxy_spec()
     for violation in violations(spec):
-        print(f"{violation.method} {violation.path} {violation.code}")
+        sys.stdout.write(f"{violation.method} {violation.path} {violation.code}\n")
     return 0
 
 

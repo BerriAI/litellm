@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import sys
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -13,6 +14,7 @@ import pytest_asyncio
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.proxy.workflows.monty._compat import timeout
 from litellm.proxy.workflows.monty.compiler import compile_program
 from litellm.proxy.workflows.monty.models import (
     CompiledProgram,
@@ -24,6 +26,7 @@ from litellm.proxy.workflows.monty.models import (
     PythonProgram,
 )
 from litellm.proxy.workflows.monty.runtime import BinaryArtifact, MontyRuntime, installed_binary
+from litellm.proxy.workflows.monty.validation import ValidatorProcess
 from tests.integration._support.process import stop_processes
 
 pytest.importorskip("pydantic_monty")
@@ -426,6 +429,45 @@ def _slow_schema(depth: int) -> JsonSchema:
     return {**definitions, f"N{depth}": {"type": "string"}}
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="address-space limits require Linux prlimit")
+@pytest.mark.asyncio
+async def test_standalone_validator_bounds_child_memory_without_limiting_gateway() -> None:
+    import resource
+
+    parent_limit: Final = resource.getrlimit(resource.RLIMIT_AS)
+    validator: Final = ValidatorProcess()
+    try:
+        assert await validator.start() is None
+        assert validator.process is not None
+        soft, hard = resource.prlimit(validator.process.pid, resource.RLIMIT_AS)
+        assert 0 < soft <= hard <= MontyLimits().worker_address_space_bytes
+        assert resource.getrlimit(resource.RLIMIT_AS) == parent_limit
+        assert await validator.validate("valid", {"type": "string"}, deadline=time.monotonic() + 5) is None
+    finally:
+        await validator.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="address-space limits require Linux prlimit")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", [False, True])
+async def test_validator_memory_exhaustion_fails_closed_and_recovers(output: bool) -> None:
+    instance: Final = MontyRuntime(MontyLimits(max_concurrent_workers=1, worker_address_space_bytes=64 * 1024 * 1024))
+    assert await instance.start() is None
+    ref: Final[JsonSchema] = {"$ref": "#/$defs/N0"}
+    compiled: Final = _compile(
+        "def transform(value): return value", ref if output else {}, {} if output else ref, _slow_schema(22)
+    )
+    try:
+        result: Final = await instance.run_program(compiled, {"value": None}, deadline_monotonic=time.monotonic() + 15)
+        assert isinstance(result, MontyFailure), result
+        assert result.kind == MontyErrorKind.WORKER_CRASHED, result
+        recovered: Final = await _run(instance, _compile("def transform(value): return value"), "recovered")
+        assert isinstance(recovered, MontySuccess), recovered
+        assert recovered.output == "recovered"
+    finally:
+        await instance.close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", [False, True])
 async def test_expensive_allowed_validation_times_out_without_blocking_and_recovers(
@@ -546,7 +588,7 @@ def _worker_pids() -> frozenset[int]:
 
 
 async def _active_worker(previous: frozenset[int]) -> int:
-    async with asyncio.timeout(5):
+    async with timeout(5):
         while True:
             current: Final = _worker_pids() - previous
             if current:
@@ -599,7 +641,7 @@ async def test_fresh_worker_has_no_parent_canary_and_has_address_space_limit(
     task: Final = asyncio.create_task(_run(runtime, _compile("def transform(value):\n while True: pass"), None))
     pid: Final = await _active_worker(previous)
     assert b"LITEFLOW_ENV_CANARY" not in Path(f"/proc/{pid}/environ").read_bytes()
-    async with asyncio.timeout(5):
+    async with timeout(5):
         while str(runtime.limits.worker_address_space_bytes) not in Path(f"/proc/{pid}/limits").read_text():
             await asyncio.sleep(0.01)
     assert str(runtime.limits.worker_address_space_bytes) in Path(f"/proc/{pid}/limits").read_text()

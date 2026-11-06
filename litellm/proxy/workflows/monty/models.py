@@ -1,6 +1,6 @@
 import keyword
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, JsonValue, StringConstraints
@@ -29,7 +29,7 @@ class PythonProgram(BaseModel):
     source_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
-class MontyErrorKind(StrEnum):
+class MontyErrorKind(str, Enum):
     INVALID_PROGRAM = "INVALID_PROGRAM"
     UNSUPPORTED_SCHEMA = "UNSUPPORTED_SCHEMA"
     INPUT_INVALID = "INPUT_INVALID"
@@ -46,6 +46,9 @@ class MontyErrorKind(StrEnum):
     PREDICATE_NOT_BOOL = "PREDICATE_NOT_BOOL"
     CANCELLED = "CANCELLED"
     RUNTIME_UNAVAILABLE = "RUNTIME_UNAVAILABLE"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 @dataclass(frozen=True, slots=True)

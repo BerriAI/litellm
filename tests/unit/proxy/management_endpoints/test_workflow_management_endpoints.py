@@ -4,8 +4,9 @@ Uses FastAPI TestClient with a mocked prisma_client.
 """
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -113,8 +114,15 @@ def _make_prisma_client() -> MagicMock:
 
 
 def _make_app() -> FastAPI:
-    app = FastAPI()
+    from litellm.proxy.deps.repositories import (
+        get_workflow_definition_repository,
+        get_workflow_execution_repository,
+    )
+
+    app: Final = FastAPI()
     app.include_router(router)
+    app.dependency_overrides[get_workflow_definition_repository] = lambda: None
+    app.dependency_overrides[get_workflow_execution_repository] = lambda: None
     return app
 
 
@@ -223,6 +231,7 @@ class TestListWorkflowRuns:
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 1
+        assert self._prisma.db.litellm_workflowrun.find_many.call_args.kwargs["where"]["engine_owned"] is False
 
     @patch("litellm.proxy.proxy_server.prisma_client")
     def test_list_filters_by_status(self, mock_pc):
@@ -734,3 +743,54 @@ class TestAdminViewerReadParity:
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(_require_run(prisma, "run-1", _override_auth_admin_viewer()))
         assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "body"),
+    [
+        ("PATCH", "", {"status": "completed", "output": {"forged": True}}),
+        ("POST", "/events", {"event_type": "step.failed", "step_name": "node-1"}),
+        ("POST", "/messages", {"role": "assistant", "content": "forged result"}),
+    ],
+)
+def test_engine_owned_runs_reject_tracking_writes_even_for_proxy_admin(
+    method: str, suffix: str, body: Mapping[str, object],
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    database: Final = _make_prisma_client()
+    run: Final = _make_run()
+    run.engine_owned = True
+    database.db.litellm_workflowrun.find_unique = AsyncMock(return_value=run)
+    database.db.litellm_workflowrun.update = AsyncMock(return_value=run)
+    database.db.litellm_workflowevent.find_many = AsyncMock(return_value=[])
+    database.db.litellm_workflowmessage.find_many = AsyncMock(return_value=[])
+    database.db.litellm_workflowmessage.create = AsyncMock(return_value=_make_message())
+    app: Final = _make_app()
+    app.dependency_overrides[user_api_key_auth] = _override_auth_admin
+    with patch("litellm.proxy.proxy_server.prisma_client", database), TestClient(app) as client:
+        response: Final = client.request(method, f"/v1/workflows/runs/run-1{suffix}", json=body)
+    assert response.status_code == 403, response.text
+    assert response.json() == {"detail": "Gateway executions cannot be changed through tracking endpoints"}
+    database.db.litellm_workflowrun.update.assert_not_awaited()
+    database.db.litellm_workflowmessage.create.assert_not_awaited()
+    database.db.tx.assert_not_called()
+
+
+@pytest.mark.parametrize("suffix", ["", "/events", "/messages"])
+def test_engine_run_content_is_only_exposed_by_scoped_execution_routes(suffix: str) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    database: Final = _make_prisma_client()
+    run: Final = _make_run()
+    run.engine_owned = True
+    database.db.litellm_workflowrun.find_unique = AsyncMock(return_value=run)
+    database.db.litellm_workflowevent.find_many = AsyncMock()
+    database.db.litellm_workflowmessage.find_many = AsyncMock()
+    app: Final = _make_app()
+    app.dependency_overrides[user_api_key_auth] = _override_auth_admin
+    with patch("litellm.proxy.proxy_server.prisma_client", database), TestClient(app) as client:
+        response: Final = client.get(f"/v1/workflows/runs/run-1{suffix}")
+    assert response.status_code == 404
+    database.db.litellm_workflowevent.find_many.assert_not_awaited()
+    database.db.litellm_workflowmessage.find_many.assert_not_awaited()

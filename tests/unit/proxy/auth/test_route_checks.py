@@ -5130,3 +5130,69 @@ def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
         )
     except HTTPException as exc:
         pytest.fail(f"History visibility could not run: {exc.detail}")
+
+
+@pytest.mark.parametrize("route", [
+    "/v1/workflows",
+    "/v1/workflows/definition-id",
+    "/v1/workflows/definition-id/validate",
+    "/v1/workflows/definition-id/publish",
+])
+def test_definition_management_routes_reach_team_authorization(route: str) -> None:
+    token: Final = UserAPIKeyAuth(
+        user_id="author", team_id="team", user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_routes=["management_routes"],
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None, _user_role=token.user_role, route=route, request=request, valid_token=token, request_data={}
+    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route, token, request) is True
+
+
+@pytest.mark.parametrize("route", [
+    "/v1/workflows/runs",
+    "/v1/workflows/runs/validate",
+    "/v1/workflows/runs/publish",
+    "/v1/workflows/definition-id/delete",
+    "/v1/workflows/definition-id/test",
+])
+def test_definition_route_grants_do_not_grant_run_or_future_actions(route: str) -> None:
+    token: Final = UserAPIKeyAuth(user_id="author", allowed_routes=["workflow_definition_routes"])
+    with pytest.raises(HTTPException) as rejected:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route, token)
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.parametrize("route", [
+    "/v1/workflows/definition-id/test",
+    "/v1/workflows/definition-id/runs",
+    "/v1/workflows/runs/run-id/steps",
+    "/v1/workflows/runs/run-id/definition",
+    "/v1/workflows/runs/run-id/cancel",
+])
+def test_execution_routes_reach_their_scoped_authorization(route: str) -> None:
+    token: Final = UserAPIKeyAuth(
+        user_id="author", team_id="team", user_role=LitellmUserRoles.INTERNAL_USER,
+        allowed_routes=["management_routes"],
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None, _user_role=token.user_role, route=route, request=request, valid_token=token, request_data={}
+    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route, token, request) is True
+
+
+@pytest.mark.parametrize("route", [
+    "/v1/workflows/runs",
+    "/v1/workflows/runs/run-id",
+    "/v1/workflows/runs/run-id/events",
+    "/v1/workflows/runs/run-id/messages",
+])
+def test_execution_route_grants_preserve_legacy_tracking_admission(route: str) -> None:
+    token: Final = UserAPIKeyAuth(user_id="author", allowed_routes=["workflow_execution_routes"])
+    with pytest.raises(HTTPException) as rejected:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route, token)
+    assert rejected.value.status_code == 403
+    assert RouteChecks.check_route_access(route, LiteLLMRoutes.self_managed_routes.value) is False
+    assert RouteChecks.check_route_access(route, LiteLLMRoutes.management_routes.value) is False

@@ -7,7 +7,7 @@ import sys
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from functools import partial
 from io import BytesIO
 from pathlib import Path
@@ -69,7 +69,7 @@ from litellm.proxy.auth.auth_checks import (
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
+from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model, safe_set_request_parsed_body
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
     _check_team_member_model_budget_with_fallback,
@@ -81,6 +81,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
+    authorize_internal_virtual_key,
     run_centralized_common_checks,
     _run_post_custom_auth_checks,
     user_api_key_auth_builder,
@@ -99,6 +100,118 @@ class _RoutingRequest:
         self.headers = headers or {}
         self.query_params = query_params or {}
         self.state = SimpleNamespace()
+
+
+async def _internal_key_cache(
+    monkeypatch: pytest.MonkeyPatch, *, models: tuple[str, ...] = (), max_budget: float | None = None,
+    key_hash: str = "b" * 64,
+) -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    await cache_key_object(
+        hashed_token=key_hash,
+        user_api_key_obj=UserAPIKeyAuth(
+            token=key_hash, team_id="original-team", models=list(models), spend=2.0, max_budget=max_budget,
+        ),
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+    await cache.async_set_cache(
+        key="team_id:original-team", value=LiteLLM_TeamTableCachedObj(team_id="original-team")
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", object())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    counters: Final = DualCache()
+    counters.in_memory_cache.set_cache(key=f"spend:key:{key_hash}", value=2.0)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "spend_counter_cache", counters)
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+    return cache
+
+
+def _internal_management_request() -> Request:
+    return Request({
+        "type": "http", "path": "/workflow/runs", "method": "POST", "headers": (), "query_string": b"",
+    })
+
+
+@pytest.mark.asyncio
+async def test_internal_key_cannot_execute_for_a_different_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    await _internal_key_cache(monkeypatch)
+    request: Final = _internal_management_request()
+    with pytest.raises(HTTPException, match="no longer belongs") as error:
+        await authorize_internal_virtual_key(
+            "b" * 64, request, {"model": "workflow-model"},
+            route="/v1/chat/completions", expected_team_id="another-team",
+        )
+    assert error.value.status_code == 403
+    assert getattr(request.state, "budget_reservation", None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restriction", ["model", "budget"])
+async def test_internal_execution_route_enforces_inference_model_and_key_budget(
+    monkeypatch: pytest.MonkeyPatch, restriction: str,
+) -> None:
+    await _internal_key_cache(
+        monkeypatch,
+        models=("allowed-model",) if restriction == "model" else (),
+        max_budget=1.0 if restriction == "budget" else None,
+    )
+    with pytest.raises(litellm.BudgetExceededError if restriction == "budget" else ProxyException) as error:
+        await authorize_internal_virtual_key(
+            "b" * 64, _internal_management_request(), {"model": "workflow-model"},
+            route="/v1/chat/completions", expected_team_id="original-team",
+        )
+    if restriction == "budget":
+        assert isinstance(error.value, litellm.BudgetExceededError)
+        assert error.value.current_cost == 2.0 and error.value.max_budget == 1.0
+    else:
+        assert isinstance(error.value, ProxyException)
+        assert error.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_internal_execution_route_keeps_proxy_network_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    await _internal_key_cache(monkeypatch)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"allowed_ips": ["192.0.2.1"]})
+    with pytest.raises(HTTPException, match="not allowed") as error:
+        await authorize_internal_virtual_key(
+            "b" * 64, _internal_management_request(), {"model": "workflow-model"},
+            route="/v1/chat/completions", expected_team_id="original-team",
+        )
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_workflow_wrapper_with_model_grant_passes_strict_pricing_but_unpriced_child_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_key: Final = "sk-workflow-pricing-fixture"
+    key_hash: Final = proxy_utils.hash_token(raw_key)
+    await _internal_key_cache(monkeypatch, models=("workflow/example", "unpriced-child"), key_hash=key_hash)
+    router: Final = litellm.Router(
+        model_list=[{
+            "model_name": "unpriced-child",
+            "litellm_params": {"model": "openai/workflow-unpriced-fixture", "api_key": "test-only"},
+        }],
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    request: Final = Request({
+        "type": "http", "path": "/v1/chat/completions", "method": "POST",
+        "headers": ((b"authorization", f"Bearer {raw_key}".encode()),), "query_string": b"",
+    })
+    safe_set_request_parsed_body(request, {"model": "workflow/example", "messages": [{"role": "user", "content": "hello"}]})
+    outer: Final = await user_api_key_auth(request=request, api_key=f"Bearer {raw_key}")
+    assert outer.team_id == "original-team"
+    with pytest.raises(ProxyException) as error:
+        await authorize_internal_virtual_key(
+            key_hash, _internal_management_request(), {"model": "unpriced-child"},
+            route="/v1/chat/completions", expected_team_id="original-team",
+        )
+    assert error.value.type == ProxyErrorTypes.model_cost_map_missing
 
 
 async def _real_model_budget_limiter(
@@ -466,10 +579,17 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
 
 
 @pytest.mark.asyncio
-async def test_post_custom_auth_expired_key_returns_unauthorized():
-    expired_token = UserAPIKeyAuth(
+async def test_post_custom_auth_expired_key_returns_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            current: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+            return current.astimezone(tz) if tz is not None else current.replace(tzinfo=None)
+
+    monkeypatch.setattr("litellm.proxy.auth.user_api_key_auth.datetime", Clock)
+    expired_token: Final = UserAPIKeyAuth(
         token="test_token",
-        expires=datetime.now() - timedelta(minutes=1),
+        expires=Clock(2026, 1, 1, 11, 59, tzinfo=timezone.utc),
     )
 
     with pytest.raises(ProxyException) as exc_info:
