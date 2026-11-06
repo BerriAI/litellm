@@ -226,7 +226,7 @@ _extract_reasoning_content: Final = extract_reasoning_content
 _get_image_mime_type_from_url: Final = get_image_mime_type_from_url
 _parse_content_for_reasoning: Final = parse_content_for_reasoning
 
-_MOVED_PRIVATE_NAME_MODULES: Final = MappingProxyType(
+_MOVED_PRIVATE_NAME_MODULES: Final[Mapping[str, str]] = MappingProxyType(
     {
         **dict.fromkeys(
             ("_decode_vector_store_ids_in_tools",),
@@ -1710,33 +1710,45 @@ def _split_modules_sharing(name: str, value: object) -> tuple[ModuleType, ...]:
     return tuple(module for module in split_modules if _namespace(module).get(name, _UNBOUND) is value)
 
 
+def _warn_old_path(name: str, home: ModuleType) -> None:
+    warnings.warn(
+        f"{__name__}.{name} moved to {home.__name__}, import or patch it there. "
+        "The old path will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+_RELEASED_MOVED_VALUES: Final = MappingProxyType(
+    {name: _namespace(_moved_name_home(name))[name] for name in _MOVED_PRIVATE_NAME_MODULES}
+)
+
+
 class _CommonUtilsModule(ModuleType):
     def __getattr__(self, name: str) -> object:
         home: Final = _moved_name_home(name)
         value: Final = _namespace(home).get(name, _UNBOUND)
         if value is _UNBOUND:
             raise AttributeError(f"module {home.__name__!r} has no attribute {name!r}")
-        warnings.warn(
-            f"{self.__name__}.{name} moved to {home.__name__}, import or patch it there. "
-            "The old path will be removed in a future release",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_old_path(name, home)
         return value
 
     def __setattr__(self, name: str, value: object) -> None:
         if name in _MOVED_PRIVATE_NAME_MODULES:
-            setattr(_moved_name_home(name), name, value)
+            home: Final = _moved_name_home(name)
+            _warn_old_path(name, home)
+            setattr(home, name, value)
             return
         for module in _split_modules_sharing(name, _namespace(self).get(name, _UNBOUND)):
             setattr(module, name, value)
         super().__setattr__(name, value)
 
     def __delattr__(self, name: str) -> None:
-        if name not in _MOVED_PRIVATE_NAME_MODULES:
+        released: Final = _RELEASED_MOVED_VALUES.get(name, _UNBOUND)
+        if released is _UNBOUND:
             super().__delattr__(name)
             return
-        delattr(_moved_name_home(name), name)
+        setattr(_moved_name_home(name), name, released)
 
 
 sys.modules[__name__].__class__ = _CommonUtilsModule

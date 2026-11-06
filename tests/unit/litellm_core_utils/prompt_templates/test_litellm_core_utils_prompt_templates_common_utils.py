@@ -1,3 +1,4 @@
+import contextlib
 import copy
 import importlib
 import json
@@ -1136,11 +1137,28 @@ def test_patching_a_re_exported_helper_at_its_old_path_reaches_the_callers_in_it
 
 
 def test_old_path_patch_restores_the_moved_helper_when_warnings_become_errors_inside_it() -> None:
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(), contextlib.suppress(DeprecationWarning):
         with mock.patch(
             "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None
         ):
             warnings.simplefilter("error", DeprecationWarning)
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_old_path_patch_with_create_leaves_the_moved_helper_in_place() -> None:
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None, create=True
+    ):
+        assert parse_tool_call_arguments("{}") == {}
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_overriding_a_moved_helper_through_the_old_path_warns_and_deleting_it_restores_the_released_one() -> None:
+    moved_name: Final = "_attempt_json_repair"
+    with pytest.warns(DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"):
+        setattr(common_utils, moved_name, mock.Mock(return_value={"overridden": True}))
+    assert parse_tool_call_arguments('{"a": 1') == {"overridden": True}
+    delattr(common_utils, moved_name)
     assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
 
 
