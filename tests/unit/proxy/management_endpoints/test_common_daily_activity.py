@@ -81,12 +81,16 @@ DATABASE_FAILURES: Final = pytest.mark.parametrize(
     ],
 )
 
-NOT_DATABASE_OUTAGES: Final = pytest.mark.parametrize(
-    "bug",
-    [
-        TypeError("not a database failure"),
-        AttributeError("not a database failure"),
+CODE_BUGS: Final = (
+    pytest.param(TypeError("not a database failure"), id="type-error"),
+    pytest.param(AttributeError("not a database failure"), id="attribute-error"),
+)
+REJECTED_QUERIES: Final = (
+    pytest.param(
         DataError({"user_facing_error": {"error_code": "P2010", "message": "not a database failure"}}),
+        id="rejected-query",
+    ),
+    pytest.param(
         TableNotFoundError(
             {
                 "user_facing_error": {
@@ -96,9 +100,10 @@ NOT_DATABASE_OUTAGES: Final = pytest.mark.parametrize(
                 }
             }
         ),
-    ],
-    ids=["type-error", "attribute-error", "rejected-query", "missing-table"],
+        id="missing-table",
+    ),
 )
+NOT_DATABASE_OUTAGES: Final = pytest.mark.parametrize("bug", (*CODE_BUGS, *REJECTED_QUERIES))
 
 
 @pytest.mark.asyncio
@@ -218,12 +223,18 @@ async def test_usage_keeps_spend_when_the_guardrail_lookup_hits_a_database_failu
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookup", ["key_metadata", "user_metadata", "guardrail_spend"])
-@NOT_DATABASE_OUTAGES
-async def test_usage_still_reports_a_lookup_bug_that_is_not_a_database_failure(lookup: str, bug: Exception) -> None:
+@pytest.mark.parametrize("failure", REJECTED_QUERIES)
+async def test_usage_keeps_spend_when_the_guardrail_table_rejects_the_query(failure: Exception) -> None:
     repository: Final = _usage_repository()
-    setattr(repository, lookup, AsyncMock(side_effect=bug))
+    repository.guardrail_spend = AsyncMock(side_effect=failure)
 
+    result: Final = await _get_daily_activity_aggregated(repository, _usage_scope(), include_guardrail_breakdown=True)
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 2.0
+    assert result.results[0].breakdown.guardrails == {}
+
+
+async def _assert_usage_reports_the_bug(repository: MagicMock) -> None:
     with pytest.raises(HTTPException) as error:
         await _get_daily_activity_aggregated(
             repository, _usage_scope(), include_entity_breakdown=True, include_guardrail_breakdown=True
@@ -231,6 +242,25 @@ async def test_usage_still_reports_a_lookup_bug_that_is_not_a_database_failure(l
 
     assert error.value.status_code == 500
     assert error.value.detail == {"error": "Failed to fetch analytics: not a database failure"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["key_metadata", "user_metadata"])
+@NOT_DATABASE_OUTAGES
+async def test_usage_still_reports_a_lookup_bug_that_is_not_a_database_failure(lookup: str, bug: Exception) -> None:
+    repository: Final = _usage_repository()
+    setattr(repository, lookup, AsyncMock(side_effect=bug))
+
+    await _assert_usage_reports_the_bug(repository)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bug", CODE_BUGS)
+async def test_usage_still_reports_a_guardrail_lookup_bug_that_is_not_a_database_error(bug: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.guardrail_spend = AsyncMock(side_effect=bug)
+
+    await _assert_usage_reports_the_bug(repository)
 
 
 def _daily_user_spend_prisma(key_lookup: AsyncMock) -> MagicMock:

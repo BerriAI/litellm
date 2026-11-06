@@ -1119,7 +1119,13 @@ def _with_guardrail_breakdown(
 async def _guardrail_spend_or_empty(
     repository: DailyActivityRepository, scope: DailyActivityScope
 ) -> tuple[GuardrailSpendRow, ...]:
-    return await unless_database_fails(repository.guardrail_spend(scope), (), "its guardrail breakdown")
+    from prisma.errors import PrismaError
+
+    try:
+        return await unless_database_fails(repository.guardrail_spend(scope), (), "its guardrail breakdown")
+    except PrismaError as exc:
+        verbose_proxy_logger.warning("Returning daily activity without its guardrail breakdown: %s", exc)
+        return ()
 
 
 async def _user_entity_metadata(
