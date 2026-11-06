@@ -49,9 +49,7 @@ class FakeVerificationTokenTable:
         self.calls: list[dict[str, object]] = []
 
     async def find_many(self, **kwargs: object) -> tuple[Mock, ...]:
-        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(
-            self, **kwargs
-        )
+        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(self, **kwargs)
         self.calls.append(kwargs)
         return self._records
 
@@ -76,9 +74,7 @@ async def test_create_and_get_tag():
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -171,9 +167,7 @@ async def test_update_tag():
     try:
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             # Setup prisma mocks
             mock_db = Mock()
@@ -579,9 +573,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -634,9 +626,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
         with (
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -687,11 +677,17 @@ async def test_update_tag_resets_spend():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.prisma_client"
+            ) as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+            ),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.spend_counter_store"
+            ) as mock_spend_counter_store,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_store itself; no parameter to inject
         ):
-            mock_spend_counter_cache.redis_cache = None
+            mock_spend_counter_store.set = AsyncMock()
 
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -728,79 +724,16 @@ async def test_update_tag_resets_spend():
             update_call_kwargs = mock_db.litellm_tagtable.update.call_args.kwargs
             assert update_call_kwargs["data"]["spend"] == 0.0
 
-            mock_spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
-                key="spend:tag:batch-jobs", value=0.0, ttl=60
-            )
+            mock_spend_counter_store.set.assert_awaited_once_with("spend:tag:batch-jobs", 0.0, ttl=60)
     finally:
         app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
-async def test_update_tag_resets_spend_in_redis():
-    """POST /tag/update with spend also refreshes the counter in Redis when configured."""
-    from datetime import datetime
-    from unittest.mock import AsyncMock, MagicMock, Mock
-
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user-123",
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-    )
-
-    try:
-        with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
-        ):
-            mock_spend_counter_cache.redis_cache = MagicMock()
-            mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
-
-            mock_db = Mock()
-            mock_prisma.db = mock_db
-
-            existing_tag = Mock()
-            existing_tag.tag_name = "batch-jobs"
-            existing_tag.description = "nightly batch jobs"
-            existing_tag.models = []
-            existing_tag.budget_id = None
-            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
-            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-
-            updated_tag = Mock()
-            updated_tag.tag_name = "batch-jobs"
-            updated_tag.description = "nightly batch jobs"
-            updated_tag.models = []
-            updated_tag.model_info = {}
-            updated_tag.spend = 0.0
-            updated_tag.budget_id = None
-            updated_tag.created_at = datetime.now()
-            updated_tag.updated_at = datetime.now()
-            updated_tag.created_by = "test-user-123"
-            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
-
-            response = client.post(
-                "/tag/update",
-                json={"name": "batch-jobs", "spend": 0},
-                headers={"Authorization": "Bearer sk-test-tag-spend"},
-            )
-            assert response.status_code == 200
-            result = response.json()
-            assert result["tag"]["spend"] == 0.0
-
-            mock_spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
-                key="spend:tag:batch-jobs", value=0.0, ttl=60
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-
-@pytest.mark.asyncio
-async def test_update_tag_resets_spend_redis_failure_does_not_fail_request():
+async def test_update_tag_resets_spend_counter_failure_does_not_fail_request():
     """A Redis error while refreshing the counter must not fail the /tag/update request (best-effort)."""
     from datetime import datetime
-    from unittest.mock import AsyncMock, MagicMock, Mock
+    from unittest.mock import AsyncMock, Mock
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -811,14 +744,17 @@ async def test_update_tag_resets_spend_redis_failure_does_not_fail_request():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.prisma_client"
+            ) as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+            ),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.spend_counter_store"
+            ) as mock_spend_counter_store,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_store itself; no parameter to inject
         ):
-            mock_spend_counter_cache.redis_cache = MagicMock()
-            mock_spend_counter_cache.redis_cache.async_set_cache = AsyncMock(
-                side_effect=Exception("boom")
-            )
+            mock_spend_counter_store.set = AsyncMock(side_effect=Exception("boom"))
 
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -870,9 +806,15 @@ async def test_update_tag_without_spend_does_not_touch_counter_cache():
 
     try:
         with (
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
-            patch("litellm.proxy.proxy_server.spend_counter_cache") as mock_spend_counter_cache,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_cache itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.prisma_client"
+            ) as mock_prisma,  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+            ),  # test-quality-ok: the endpoint imports proxy_server.litellm_proxy_admin_name itself; no parameter to inject
+            patch(
+                "litellm.proxy.proxy_server.spend_counter_store"
+            ) as mock_spend_counter_store,  # test-quality-ok: the endpoint imports proxy_server.spend_counter_store itself; no parameter to inject
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -909,7 +851,7 @@ async def test_update_tag_without_spend_does_not_touch_counter_cache():
             update_call_kwargs = mock_db.litellm_tagtable.update.call_args.kwargs
             assert "spend" not in update_call_kwargs["data"]
 
-            mock_spend_counter_cache.in_memory_cache.set_cache.assert_not_called()
+            mock_spend_counter_store.set.assert_not_called()
     finally:
         app.dependency_overrides.clear()
 
@@ -927,7 +869,9 @@ async def test_update_tag_rejects_non_finite_spend():
     )
 
     try:
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma
+        ):  # test-quality-ok: the endpoint imports proxy_server.prisma_client itself; no parameter to inject
             mock_db = Mock()
             mock_prisma.db = mock_db
             mock_db.litellm_tagtable.update = AsyncMock()
@@ -1059,9 +1003,7 @@ async def test_list_tags_with_dynamic_tags():
             assert "dynamic-tag-2" in tag_names
 
             # Verify dynamic tags include created_at/updated_at
-            dynamic_tags = {
-                t["name"]: t for t in result if t["name"].startswith("dynamic-")
-            }
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
             assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
             assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
 
@@ -1183,9 +1125,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
                 "stored-owned-tag",
                 "dynamic-owned-tag",
             ]
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "internal-user-123"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],
                 where={
@@ -1239,15 +1179,11 @@ async def test_internal_user_list_tags_does_not_500_on_unsupported_prisma_kwarg(
             mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
 
-            response = client.get(
-                "/tag/list", headers={"Authorization": "Bearer new-user-key"}
-            )
+            response = client.get("/tag/list", headers={"Authorization": "Bearer new-user-key"})
 
             assert response.status_code == 200, response.text
             assert response.json() == []
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "brand-new-internal-user"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "brand-new-internal-user"}}]
     finally:
         app.dependency_overrides.clear()
 
@@ -1424,9 +1360,7 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
         assert result == "daily-activity-response"
         assert fake_token_table.calls == []
         mock_get_daily_activity.assert_awaited_once()
-        assert mock_get_daily_activity.await_args.kwargs["api_key"] == [
-            "current-owned-key"
-        ]
+        assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["current-owned-key"]
 
 
 @pytest.mark.asyncio
@@ -1703,9 +1637,7 @@ async def test_add_tag_to_deployment_preserves_encrypted_fields():
         await _add_tag_to_deployment(deployment, "test-tag")
 
         # Verify find_unique was called
-        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-            where={"model_id": "model-123"}
-        )
+        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "model-123"})
 
         # Verify update was called with preserved encrypted fields
         update_call = mock_db.litellm_proxymodeltable.update.call_args
