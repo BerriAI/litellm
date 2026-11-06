@@ -614,7 +614,20 @@ def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
     assert result["api_key"] == "REDACTED"
 
 
-@pytest.mark.parametrize("key", ["apiKey", "clientSecret", "accessToken", "secretAccessKey", "x-apiKey"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "apiKey",
+        "clientSecret",
+        "accessToken",
+        "secretAccessKey",
+        "x-apiKey",
+        "APIKey",
+        "OpenAIAPIKey",
+        "AWSSecret",
+        "XAPIKey",
+    ],
+)
 def test_split_camel_case_opt_in_catches_camel_case_credential_names(key: str):
     assert SensitiveDataMasker(split_camel_case=True).is_sensitive_key(key) is True
 

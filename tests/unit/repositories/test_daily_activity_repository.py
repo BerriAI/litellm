@@ -693,6 +693,10 @@ async def test_export_redacts_credential_named_values_inside_metadata_objects() 
                         "owners": [{"name": "ops", "password": "pw"}],
                         "scim_roles": ["admin"],
                         "langfuse": {"apiKey": "lf", "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}]},
+                        "OpenAIAPIKey": "sk-acronym",
+                        "apikey": "sk-unseparated",
+                        "APIKEY": "sk-upper",
+                        "passwd": "pw-short",
                     },
                     "user_metadata": {
                         "department": "research",
@@ -716,6 +720,10 @@ async def test_export_redacts_credential_named_values_inside_metadata_objects() 
         "webhook": {"url": "https://hooks.example", "auth_token": "REDACTED", "clientSecret": "REDACTED"},
         "owners": [{"name": "ops", "password": "REDACTED"}],
         "langfuse": {"apiKey": "REDACTED"},
+        "OpenAIAPIKey": "REDACTED",
+        "apikey": "REDACTED",
+        "APIKEY": "REDACTED",
+        "passwd": "REDACTED",
     }
     assert rows[0].user_metadata == {
         "department": "research",

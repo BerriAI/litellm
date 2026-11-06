@@ -31,7 +31,7 @@ _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
 )
 
 
-_CAMEL_BOUNDARY: Final = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_CAMEL_BOUNDARY: Final = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def _object_items(data: Mapping[str, object]) -> ItemsView[str, object]:
@@ -92,7 +92,7 @@ class SensitiveDataMasker:
 
         # Split on underscores and hyphens (and, when opted in, camelCase boundaries too) and check whether any
         # segment matches the pattern. This avoids false positives like "max_tokens" matching "token"
-        # but still catches "api_key", "access_token" and, with split_camel_case, "apiKey" and "clientSecret".
+        # but still catches "api_key", "access_token" and, with split_camel_case, "apiKey", "APIKey" and "AWSSecret".
         key_lower: Final = str(key).lower().replace("-", "_")
         camel_lower: Final = (
             _CAMEL_BOUNDARY.sub("_", str(key)).lower().replace("-", "_") if self.split_camel_case else key_lower
