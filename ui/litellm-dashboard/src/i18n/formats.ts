@@ -1,3 +1,4 @@
+import type { DurationFormatConstructor } from "@formatjs/intl-durationformat";
 import type { Formatter } from "i18next";
 
 import { DEFAULT_LANGUAGE } from "./languages";
@@ -51,28 +52,22 @@ const NUMERIC_DATE_TIME = {
 } as const;
 
 const DURATION_UNITS = [
-  { unit: "day", size: 86_400_000, per: Infinity },
-  { unit: "hour", size: 3_600_000, per: 24 },
-  { unit: "minute", size: 60_000, per: 60 },
-  { unit: "second", size: 1_000, per: 60 },
-  { unit: "millisecond", size: 1, per: 1_000 },
+  { unit: "days", size: 86_400_000, per: Infinity },
+  { unit: "hours", size: 3_600_000, per: 24 },
+  { unit: "minutes", size: 60_000, per: 60 },
+  { unit: "seconds", size: 1_000, per: 60 },
+  { unit: "milliseconds", size: 1, per: 1_000 },
 ] as const;
 
+const durationRecord = (milliseconds: number) =>
+  Object.fromEntries(DURATION_UNITS.map(({ unit, size, per }) => [unit, Math.floor(milliseconds / size) % per]));
+
 const duration = cachedFormat((lng: string) => {
-  const units = DURATION_UNITS.map(({ unit, size, per }) => ({
-    size,
-    per,
-    format: new Intl.NumberFormat(lng, { style: "unit", unit, unitDisplay: "narrow" }),
-  }));
-  const seconds = new Intl.NumberFormat(lng, { style: "unit", unit: "second", unitDisplay: "narrow" });
-  const list = new Intl.ListFormat(lng, { type: "unit", style: "narrow" });
-  return (milliseconds: number) => {
-    const parts = units
-      .map(({ size, per, format }) => ({ amount: Math.floor(milliseconds / size) % per, format }))
-      .filter(({ amount }) => amount > 0)
-      .map(({ amount, format }) => format.format(amount));
-    return parts.length > 0 ? list.format(parts) : seconds.format(0);
-  };
+  const DurationFormat: DurationFormatConstructor = Reflect.get(Intl, "DurationFormat");
+  const format = new DurationFormat(lng, { style: "narrow" });
+  const zero = new Intl.NumberFormat(lng, { style: "unit", unit: "second", unitDisplay: "narrow" }).format(0);
+  return (milliseconds: number) =>
+    (Number.isFinite(milliseconds) && format.format(durationRecord(Math.max(0, milliseconds)))) || zero;
 });
 
 const FORMATS = {

@@ -1,3 +1,4 @@
+import { DurationFormat as PolyfilledDurationFormat } from "@formatjs/intl-durationformat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { cachedFormat } from "./formats";
@@ -5,8 +6,6 @@ import i18n from "./i18n";
 import en from "./locales/en.json";
 
 type Messages = { readonly [key: string]: string | Messages };
-type DurationFormatter = { format: (duration: Readonly<Record<string, number>>) => string };
-type DurationFormatConstructor = new (lng: string, options: { style: "narrow" }) => DurationFormatter;
 
 const entries = (node: Messages, prefix: string): ReadonlyArray<readonly [string, string]> =>
   Object.entries(node).flatMap(([key, value]) =>
@@ -21,7 +20,6 @@ const formatsInEnglish = [
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const nativeDurationFormat: DurationFormatConstructor | undefined = Reflect.get(Intl, "DurationFormat");
 
 const durationParts = (ms: number) => ({
   days: Math.floor(ms / DAY),
@@ -79,6 +77,8 @@ describe("format keys in English", () => {
   it("formats durations from milliseconds as the largest whole units, dropping zero units", () => {
     expect(i18n.t("format.duration", { val: 0 })).toBe("0s");
     expect(i18n.t("format.duration", { val: -500 })).toBe("0s");
+    expect(i18n.t("format.duration", { val: 0.5 })).toBe("0s");
+    expect(i18n.t("format.duration", { val: Number.POSITIVE_INFINITY })).toBe("0s");
     expect(i18n.t("format.duration", { val: 123.9 })).toBe("123ms");
     expect(i18n.t("format.duration", { val: 59_000 })).toBe("59s");
     expect(i18n.t("format.duration", { val: 60_000 })).toBe("1m");
@@ -154,13 +154,13 @@ describe("format keys in another UI language", () => {
     );
   });
 
-  it.runIf(nativeDurationFormat !== undefined)("matches Intl.DurationFormat's narrow style", () => {
+  it("matches the DurationFormat polyfill that browsers without it load", () => {
     const languages = ["en", "de", "zh-CN", "ja", "ar"];
     const durations = [1, 999, 59_000, 75_000, 3_723_004, 152 * DAY + 23 * HOUR];
     const mismatches = languages.flatMap((lng) => {
-      const native = nativeDurationFormat ? new nativeDurationFormat(lng, { style: "narrow" }) : undefined;
+      const polyfill = new PolyfilledDurationFormat(lng, { style: "narrow" });
       return durations
-        .map((ms) => [lng, ms, i18n.t("format.duration", { val: ms, lng }), native?.format(durationParts(ms))])
+        .map((ms) => [lng, ms, i18n.t("format.duration", { val: ms, lng }), polyfill.format(durationParts(ms))])
         .filter(([, , ours, theirs]) => ours !== theirs);
     });
     expect(mismatches).toEqual([]);

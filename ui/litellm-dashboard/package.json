@@ -27,6 +27,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.92.0",
     "@base-ui/react": "^1.6.0",
+    "@formatjs/intl-durationformat": "0.12.3",
     "@handlewithcare/react-prosemirror": "3.2.9",
     "@headlessui/tailwindcss": "0.2.2",
     "@heroicons/react": "1.0.6",
