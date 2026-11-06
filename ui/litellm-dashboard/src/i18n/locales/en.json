@@ -16987,7 +16987,6 @@
   "updateModelCredentialsModal": {
     "apiKeyRequired": "Enter a new API key",
     "updated": "API key updated",
-    "updateFailed": "Failed to update API key",
     "title": "Update API Key",
     "description": "Update this model's API key. Only the new key is sent; the rest of the deployment configuration is left untouched.",
     "apiKeyOnlyWarning": "Only the API key is rotated here. Models that authenticate with an Azure AD token, AWS credentials, or a Vertex service-account JSON aren't supported yet; update those from the model's LiteLLM Params for now.",
@@ -17814,7 +17813,6 @@
       "invalidLitellmParams": "LiteLLM Params must be a valid JSON object",
       "invalidModelInfo": "Invalid JSON in Model Info",
       "updateSuccess": "Model settings updated successfully",
-      "updateFailed": "Failed to update model settings",
       "noComplexityTiers": "No complexity tiers are configured yet, so there is nothing to test.",
       "testingConnection": "Testing connection...",
       "connectionSuccess": "Connection test successful!",
