@@ -4396,6 +4396,48 @@ def test_context_window_pre_call_check_counts_an_embedding_image_as_text_on_a_te
         )
 
 
+@pytest.mark.parametrize(
+    ("backend", "fits"),
+    [
+        pytest.param("vertex_ai/gemini-embedding-2", True, id="image-backend-without-an-openai-tokenizer"),
+        pytest.param("text-embedding-3-small", False, id="text-only-backend-counts-the-image"),
+    ],
+)
+def test_context_window_pre_call_check_on_a_caption_next_to_an_embedding_image(backend: str, fits: bool, caplog):
+    caption: Final = "word " * 40
+    router: Final = _embedding_context_router(backend, window=20)
+    deployments: Final = router.registry().deployments("embedder")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        if fits:
+            kept: Final = router._pre_call_checks(
+                model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
+            )
+            assert len(kept) == 1
+        else:
+            with pytest.raises(litellm.ContextWindowExceededError):
+                router._pre_call_checks(
+                    model="embedder", healthy_deployments=deployments, input=[caption, _EMBEDDING_IMAGE_INPUT]
+                )
+
+    assert "failed to count tokens" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_async_pre_call_check_reads_embedding_media_off_the_event_loop():
+    from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+
+    router: Final = _embedding_context_router("vertex_ai/gemini-embedding-2", window=20)
+    caption_and_images: Final = ["a red square", *[_EMBEDDING_IMAGE_INPUT] * 400]
+
+    deployment, took, lags = await timed_with_loop_lags(
+        lambda: router.select("embedder", {}, input=caption_and_images)
+    )
+
+    assert deployment["litellm_params"]["model"] == "vertex_ai/gemini-embedding-2"
+    assert_loop_stayed_free(took, lags)
+
+
 async def test_a_wildcard_route_checks_the_context_window_with_the_requested_openai_models_tokenizer():
     limit: Final = (
         litellm.token_counter(model="openai/gpt-6.1-sol", messages=_MULTILINGUAL_PROMPT)
@@ -4545,6 +4587,173 @@ async def test_aresponses_enforces_context_window_pre_call_check():
             model="small-ctx",
             input="this responses input is definitely much longer than five tokens for sure",
         )
+
+
+def _embedding_router(max_input_tokens: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1, 0.2],
+                },
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one two three four five six"] * 3, id="texts"),
+        pytest.param([list(range(6))] * 3, id="token-id-lists"),
+        pytest.param(list(range(10)), id="token-ids-at-the-limit"),
+    ],
+)
+async def test_aembedding_accepts_a_batch_whose_inputs_each_fit_the_context_window(embedding_input, caplog):
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
+        response: Final = await router.aembedding(model="embed", input=embedding_input)
+
+    assert response.data
+    assert "failed to count tokens" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_rejects_a_batch_with_one_input_over_the_context_window(embedding_input):
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aembedding(model="embed", input=embedding_input)
+
+
+def test_embedding_rejects_a_batch_with_one_input_over_the_context_window():
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router.embedding(model="embed", input=["one", " ".join(["word"] * 20)])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embedding_input",
+    [
+        pytest.param(["one", " ".join(["word"] * 20)], id="texts"),
+        pytest.param(list(range(11)), id="token-ids"),
+        pytest.param([[1], list(range(11))], id="token-id-lists"),
+    ],
+)
+async def test_aembedding_skips_the_context_window_check_when_token_counting_is_disabled(embedding_input, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    router: Final = _embedding_router(max_input_tokens=10)
+
+    response: Final = await router.aembedding(model="embed", input=embedding_input)
+
+    assert response.data
+
+
+async def _until_every_count_slot_is_taken() -> None:
+    from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    from litellm.litellm_core_utils.token_counter import _count_offload_limiter_for_this_loop
+
+    while _count_offload_limiter_for_this_loop().borrowed_tokens < TOKEN_COUNTER_MAX_CONCURRENT_COUNTS:
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches():
+    from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+    window: Final = {"max_input_tokens": 10000}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "sk-test",
+                    "mock_response": [0.1],
+                },
+                "model_info": window,
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+                "model_info": window,
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+    batch: Final = ["word " * 2100] * 76
+    batches: Final = tuple(
+        asyncio.create_task(router.aembedding(model="embed", input=batch))
+        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    )
+    await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
+    chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
+
+    first_done, _ = await asyncio.wait((chat, *batches), return_when=asyncio.FIRST_COMPLETED)
+    await asyncio.gather(chat, *batches)
+
+    assert first_done == {chat}
+
+
+def test_a_routing_plugin_counts_an_embedding_text_batch_by_its_longest_text():
+    long_text: Final = "word " * 4000
+    context: Final = RouterContext(_embedding_router(max_input_tokens=10))
+
+    assert context.count_pre_call_check_tokens(None, ["one", long_text]) == litellm.token_counter(text=long_text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+@pytest.mark.parametrize(
+    "prompt_kwargs",
+    [
+        pytest.param({"instructions": "you are a helpful assistant. " * 20}, id="instructions"),
+        pytest.param(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "description": "look up a record by its identifier. " * 20,
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                    }
+                ]
+            },
+            id="tools",
+        ),
+    ],
+)
+async def test_aresponses_with_empty_input_still_counts_its_other_prompt_content(prompt_kwargs):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 50},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aresponses(model="small-ctx", input=[], **prompt_kwargs)
 
 
 def test_get_deployment_model_info_base_model_flow():
