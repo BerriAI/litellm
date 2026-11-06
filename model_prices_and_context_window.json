@@ -45679,6 +45679,7 @@
     "o1": {
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-10-23",
+        "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
