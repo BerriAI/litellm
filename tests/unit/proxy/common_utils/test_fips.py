@@ -20,6 +20,8 @@ def _fake_openssl(monkeypatch: pytest.MonkeyPatch, *, fips_flag: int, scrypt_ref
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: fips_flag)
     if scrypt_refused:
         monkeypatch.setattr(_hashlib, "scrypt", Mock(side_effect=ValueError("[digital envelope routines] unsupported")))
+    else:
+        monkeypatch.setattr(_hashlib, "scrypt", Mock(return_value=b"\0" * 16))
 
 
 @pytest.mark.parametrize(
