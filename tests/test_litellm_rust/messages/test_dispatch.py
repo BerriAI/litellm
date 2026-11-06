@@ -350,6 +350,32 @@ async def test_anthropic_acreate_routes_through_dispatch() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_timeout", "expected_num_retries"),
+    (
+        ({"timeout": 30.0, "stream_timeout": 0.5, "num_retries": 0}, 30.0, 0),
+        ({"stream": True, "timeout": 30.0, "stream_timeout": 0.5}, 0.5, None),
+        ({"stream": True, "timeout": 30.0}, 30.0, None),
+        ({}, None, None),
+    ),
+)
+async def test_native_failures_carry_the_client_wrapper_timeout(
+    kwargs: Mapping[str, object], expected_timeout: float | None, expected_num_retries: int | None
+) -> None:
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        raise litellm.Timeout(message="timed out", model="claude-sonnet-4-5", llm_provider="anthropic")
+
+    NATIVE_AMESSAGES.override(native)
+    try:
+        with pytest.raises(litellm.Timeout) as raised:
+            await dispatch.anthropic_messages(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5", **kwargs)
+    finally:
+        NATIVE_AMESSAGES.reset()
+    assert getattr(raised.value, "timeout", "unset") == expected_timeout
+    assert getattr(raised.value, "num_retries", None) == expected_num_retries
+
+
+@pytest.mark.asyncio
 async def test_truthy_is_async_hands_off_to_the_async_entry_like_true() -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = response()
