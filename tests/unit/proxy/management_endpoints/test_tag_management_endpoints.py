@@ -231,6 +231,82 @@ async def test_update_tag():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("spend_fields", [{"spend": 0}, {}, {"spend": None}])
+async def test_update_tag_changes_spend_and_invalidates_counter_only_when_provided(
+    spend_fields: Mapping[str, float | None],
+) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    updated_tag: Final = SimpleNamespace(
+        tag_name="reset-tag",
+        description=None,
+        models=[],
+        budget_id=None,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    update_row: Final = AsyncMock(return_value=updated_tag)
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=update_row
+            ),
+            litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        )
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        _tag_cache_doubles(),
+        patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+    ):
+        await update_tag(
+            tag=TagUpdateRequest.model_validate({"name": "reset-tag", **spend_fields}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    update_row.assert_awaited_once_with(
+        where={"tag_name": "reset-tag"},
+        data={
+            "description": None,
+            "models": [],
+            "model_info": "{}",
+            **({"spend": spend_fields["spend"]} if spend_fields.get("spend") is not None else {}),
+        },
+    )
+    if spend_fields.get("spend") is not None:
+        invalidate.assert_awaited_once_with(counter_key="spend:tag:reset-tag")
+    else:
+        invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [float("nan"), float("inf"), float("-inf")])
+async def test_update_tag_rejects_non_finite_spend_before_writing(spend: float) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    update_row: Final = AsyncMock()
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_tagtable=SimpleNamespace(update=update_row))
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+        pytest.raises(HTTPException) as error,
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="reset-tag", spend=spend),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.status_code == 400
+    assert "spend must be a finite number" in str(error.value.detail)
+    update_row.assert_not_awaited()
+    invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_new_tag_persists_a_budget():
     from datetime import datetime
 

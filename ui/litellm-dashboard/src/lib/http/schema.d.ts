@@ -17159,6 +17159,7 @@ export interface paths {
          *
          *     Parameters:
          *     - name: str - The name of the tag to update
+         *     - spend: Optional[float] - Updated spend for the tag
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
@@ -47960,6 +47961,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
