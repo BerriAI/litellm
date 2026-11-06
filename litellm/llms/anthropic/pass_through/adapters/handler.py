@@ -86,7 +86,7 @@ class _ChatTargetReasoning:
 def _messages_without_rejected_reasoning(
     messages: _AnthropicMessages,
     error: litellm.BadRequestError,
-) -> _AnthropicMessages | None:
+) -> "_AnthropicMessages | None":
     error_message: Final = str(error)
     rejected: Final = "invalid_encrypted_content" in error_message or "could not be verified" in error_message
     if not rejected or not messages_carry_encrypted_reasoning(messages):
@@ -99,30 +99,28 @@ async def _acompletion_without_rejected_reasoning(
     completion_kwargs: _CompletionKwargs,
     messages: _AnthropicMessages,
     prepare_replay: _PrepareReplay,
-) -> tuple[_CompletionKwargs, "ChatResult"]:
+) -> "ChatResult":
     try:
-        return completion_kwargs, await litellm.acompletion(**completion_kwargs)
+        return await litellm.acompletion(**completion_kwargs)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(messages, error)
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = prepare_replay(replayed_messages)
-        return replay_kwargs, await litellm.acompletion(**replay_kwargs)
+        return await litellm.acompletion(**prepare_replay(replayed_messages))
 
 
 def _completion_without_rejected_reasoning(
     completion_kwargs: _CompletionKwargs,
     messages: _AnthropicMessages,
     prepare_replay: _PrepareReplay,
-) -> tuple[_CompletionKwargs, "ChatResult | Coroutine[object, object, ChatResult]"]:
+) -> "ChatResult | Coroutine[object, object, ChatResult]":
     try:
-        return completion_kwargs, litellm.completion(**completion_kwargs)
+        return litellm.completion(**completion_kwargs)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(messages, error)
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = prepare_replay(replayed_messages)
-        return replay_kwargs, litellm.completion(**replay_kwargs)
+        return litellm.completion(**prepare_replay(replayed_messages))
 
 
 def _is_compaction_block(block: object) -> bool:
@@ -850,7 +848,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
         initial_kwargs, tool_name_mapping = prepare(messages=effective_messages)
-        completion_kwargs, completion_response = await _acompletion_without_rejected_reasoning(
+        completion_response: Final = await _acompletion_without_rejected_reasoning(
             initial_kwargs, effective_messages, lambda replayed_messages: prepare(messages=replayed_messages)[0]
         )
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
@@ -994,7 +992,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             extra_kwargs=kwargs,
         )
         initial_kwargs, tool_name_mapping = prepare(messages=effective_messages)
-        completion_kwargs, completion_response = _completion_without_rejected_reasoning(
+        completion_response: Final = _completion_without_rejected_reasoning(
             initial_kwargs, effective_messages, lambda replayed_messages: prepare(messages=replayed_messages)[0]
         )
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)

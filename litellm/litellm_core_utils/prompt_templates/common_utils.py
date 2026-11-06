@@ -2292,11 +2292,13 @@ def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
 
 _REASONING_SUMMARY_SEPARATOR: Final = "\n\n"
 
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
+
 
 def _object_sequence(value: object) -> tuple[object, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return ()
-    return tuple(value)
+    return _OBJECT_TUPLE.validate_python(value)
 
 
 def _iter_mappings(value: object) -> tuple[Mapping[str, object], ...]:
