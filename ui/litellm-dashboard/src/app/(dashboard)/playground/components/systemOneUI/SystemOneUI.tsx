@@ -67,7 +67,7 @@ function ExamplesMenu({ onPick }: { onPick: (id: string) => void }) {
       <DropdownMenuContent align="end" className="w-48">
         {DECISION_PRESETS.map((preset) => (
           <DropdownMenuItem key={preset.id} onClick={() => onPick(preset.id)}>
-            {preset.label}
+            {t(preset.label)}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

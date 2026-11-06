@@ -18,6 +18,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     get_deployment_successes_for_current_minute,
 )
@@ -917,6 +918,43 @@ async def test_video_lookup_404_never_cools_down_the_deployment_that_answered(re
     for _ in range(3):
         with pytest.raises(litellm.NotFoundError):
             await router.avideo_status(model="sora", video_id=video_id)
+
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "method", "path"),
+    [
+        ("aget_responses", "GET", ""),
+        ("adelete_responses", "DELETE", ""),
+        ("acancel_responses", "POST", "/cancel"),
+        ("alist_input_items", "GET", "/input_items"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_response_lookup_404_never_cools_down_the_deployment_that_answered(
+    respx_mock: respx.MockRouter, endpoint: str, method: str, path: str
+) -> None:
+    respx_mock.route(method=method, url=f"https://api.openai.com/v1/responses/resp_gone{path}").respond(
+        404, json={"error": {"code": "NotFound", "message": "Response not found"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": api_key},
+                "model_info": {"id": deployment_id},
+            }
+            for api_key, deployment_id in (("key-a", "dep-a"), ("key-b", "dep-b"))
+        ],
+        num_retries=0,
+        allowed_fails=1,
+    )
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "dep-b", "resp_gone")
+
+    for _ in range(3):
+        with pytest.raises(litellm.NotFoundError):
+            await getattr(router, endpoint)(response_id=response_id)
 
     assert await router.cooldown_cache.async_get_active_cooldowns(["dep-a", "dep-b"], parent_otel_span=None) == []
 

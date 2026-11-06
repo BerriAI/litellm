@@ -1,6 +1,8 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import { Mail } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,44 +16,40 @@ import {
 import { uiHref } from "@/utils/uiHref";
 
 const emailSettingsHref = `${uiHref("logging-and-alerts")}?tab=email-alerts`;
-const setupSteps = [
+const setupSteps: readonly { titleKey: ParseKeys; descriptionKey: ParseKeys }[] = [
   {
-    title: "Connect email delivery",
-    description:
-      "Add your SMTP settings and public gateway URL in Email Settings. Send a test email to verify delivery.",
+    titleKey: "alerts.emailSetup.steps.connect.title",
+    descriptionKey: "alerts.emailSetup.steps.connect.description",
   },
   {
-    title: "Enable model deprecation emails",
-    description: "In Email events, turn on Model Deprecations and save. This is off by default.",
+    titleKey: "alerts.emailSetup.steps.enable.title",
+    descriptionKey: "alerts.emailSetup.steps.enable.description",
   },
   {
-    title: "Owners get two reminders",
-    description:
-      "Affected key owners and team admins receive a reminder 30 days before retirement, and one final reminder 1 day before. Recipients are based on actual usage in the last 30 days. Dates are checked in UTC.",
+    titleKey: "alerts.emailSetup.steps.reminders.title",
+    descriptionKey: "alerts.emailSetup.steps.reminders.description",
   },
 ];
 
 export default function DeprecationEmailSetup() {
+  const { t } = useTranslation();
   return (
     <Dialog>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-2">
           <Mail className="size-3.5 shrink-0" aria-hidden />
-          Give affected owners time to migrate. Email reminders at 30 days and 1 day.
+          {t("alerts.emailSetup.summary")}
         </span>
-        <DialogTrigger render={<Button variant="link" size="sm" />}>Set up email reminders</DialogTrigger>
+        <DialogTrigger render={<Button variant="link" size="sm" />}>{t("alerts.emailSetup.trigger")}</DialogTrigger>
       </div>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Set up model deprecation emails</DialogTitle>
-          <DialogDescription>
-            Help key owners and team admins act before a provider retires a model. Only their affected usage is
-            included.
-          </DialogDescription>
+          <DialogTitle>{t("alerts.emailSetup.title")}</DialogTitle>
+          <DialogDescription>{t("alerts.emailSetup.description")}</DialogDescription>
         </DialogHeader>
         <ol className="my-3 space-y-5">
           {setupSteps.map((step, index) => (
-            <li key={step.title} className="flex gap-3">
+            <li key={step.titleKey} className="flex gap-3">
               <span
                 className="flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium"
                 aria-hidden
@@ -59,15 +57,15 @@ export default function DeprecationEmailSetup() {
                 {index + 1}
               </span>
               <div>
-                <h3 className="text-sm font-medium">{step.title}</h3>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+                <h3 className="text-sm font-medium">{t(step.titleKey)}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{t(step.descriptionKey)}</p>
               </div>
             </li>
           ))}
         </ol>
         <DialogFooter>
           <a className={buttonVariants()} href={emailSettingsHref}>
-            Open Email Settings
+            {t("alerts.emailSetup.openSettings")}
           </a>
         </DialogFooter>
       </DialogContent>

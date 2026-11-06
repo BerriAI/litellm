@@ -83,7 +83,7 @@ export default function AutoRouterSimpleSetup({
                   aria-pressed={goal === key}
                   onClick={() => onGoalChange(key as RouterGoal)}
                 >
-                  {label}
+                  {t(label)}
                 </Button>
               ))}
             </div>

@@ -264,10 +264,18 @@ class WalkMetadata:
 
     def hop_kwargs(self, event: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: a fresh dict for the loggers
         """The kwargs the level held after a hop (``kwargs["model"] = target``), as the
-        fallback loggers see them."""
+        fallback loggers see them: the request's own metadata (the proxy's ``user_api_key_*``
+        labels) with the level's walk stamps laid over it, as ``run_async_fallback``'s
+        ``_hop_metadata`` copies it."""
         scope: Final = self._scope(event.get("scope"))
         model: Final = scope.metadata.get("model_group", event.get("to"))
-        return {**self._request, **scope.kwargs, "model": model, self._field: dict(scope.metadata)}
+        request_bucket: Final = as_str_mapping(self._request.get(self._field)) or {}
+        return {
+            **self._request,
+            **scope.kwargs,
+            "model": model,
+            self._field: {**request_bucket, **scope.metadata},
+        }
 
     def log_retry(self, event: Mapping[str, object], error: BaseException | None) -> None:
         """A ``retry_logged`` event: the failure joins the scope's ``previous_models``."""
