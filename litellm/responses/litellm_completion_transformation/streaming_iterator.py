@@ -19,6 +19,11 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     serialize_tool_call_arguments,
 )
 from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
+from litellm.responses.litellm_completion_transformation.server_tool_search import (
+    provider_tool_results,
+    response_tool_results,
+    tool_search_output_for_call,
+)
 from litellm.responses.litellm_completion_transformation.tool_search import (
     ToolSearchExecution,
     build_tool_search_call,
@@ -228,6 +233,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
+        self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
 
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
@@ -277,6 +283,37 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
         )
 
+    def _queue_tool_search_output(self, call_id: str, litellm_complete_object: ModelResponse) -> None:
+        """Stream the ``tool_search_output`` item that answers a server tool search call."""
+        if call_id in self._tool_search_output_index_by_call_id:
+            return
+        call: Final = build_tool_search_call(call_id, "", "completed", "server")
+        item: Final = tool_search_output_for_call(
+            call,
+            (
+                *response_tool_results(litellm_complete_object),
+                *provider_tool_results(self._accumulated_provider_specific_fields),
+            ),
+            self.responses_api_request.get("tools"),
+        )
+        if item is None:
+            return
+        output_index: Final = self._allocate_output_index()
+        self._tool_search_output_index_by_call_id = MappingProxyType(
+            {**self._tool_search_output_index_by_call_id, call_id: output_index}
+        )
+        self._queue_output_item_added(
+            output_index,
+            BaseLiteLLMOpenAIResponseObject(**{**item.model_dump(), "status": "in_progress", "tools": []}),
+        )
+        self._pending_tool_events.append(
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+            )
+        )
+
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:
@@ -308,6 +345,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 return self._reasoning_output_index
             case "compaction":
                 return self._compaction_output_index
+            case "tool_search_output":
+                return self._tool_search_output_index_by_call_id.get(str(getattr(item, "call_id", "")))
             case _:
                 call_id: Final = getattr(item, "call_id", None) or str(getattr(item, "id", "")).removeprefix("ws_")
                 return self._tool_output_index_by_call_id.get(str(call_id))
@@ -537,6 +576,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 continue
             if (search_execution := self._tool_search_execution(call_id, fn_name)) is not None:
                 self._queue_tool_search_call_done(call_id, output_index, fn_args, search_execution)
+                if search_execution == "server":
+                    self._queue_tool_search_output(call_id, litellm_complete_object)
                 continue
 
             # Track if this is a new tool call that wasn't streamed

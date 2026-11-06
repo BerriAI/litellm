@@ -1696,6 +1696,56 @@ def _chat_response_with_tool_search_call(
     )
 
 
+_SEARCH_RESULT_BLOCK: Final = {
+    "type": "tool_search_tool_result",
+    "tool_use_id": "srvtoolu_01Search",
+    "content": {
+        "type": "tool_search_tool_search_result",
+        "tool_references": [
+            {"type": "tool_reference", "tool_name": "get_weather"},
+            {"type": "tool_reference", "tool_name": "finance__get_stock_price"},
+        ],
+    },
+}
+
+
+def _chat_response_with_tool_search_call_and_result() -> ModelResponse:
+    response: Final = _chat_response_with_tool_search_call('{"pattern": "weather|stock"}')
+    response.choices[0].message.provider_specific_fields = {"tool_results": [_SEARCH_RESULT_BLOCK]}
+    return response
+
+
+def _replayed_server_search_input(tools: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"type": "message", "role": "user", "content": "What is the weather in Paris and the price of ACME?"},
+        {
+            "type": "tool_search_call",
+            "id": "tsc_srvtoolu_01Search",
+            "call_id": "srvtoolu_01Search",
+            "arguments": {"pattern": "weather|stock"},
+            "execution": "server",
+            "status": "completed",
+        },
+        {
+            "type": "tool_search_output",
+            "id": "tso_srvtoolu_01Search",
+            "call_id": "srvtoolu_01Search",
+            "execution": "server",
+            "status": "completed",
+            "tools": [tools[1], tools[2]],
+        },
+        {
+            "type": "function_call",
+            "id": "fc_toolu_01Weather",
+            "call_id": "toolu_01Weather",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "status": "completed",
+        },
+        {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+    ]
+
+
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
 
@@ -2212,43 +2262,168 @@ class TestToolTransformation:
         assert search_call.status == "incomplete"
         assert search_call.arguments == {}
 
-    def test_tool_search_items_are_not_replayed_to_chat_messages(self) -> None:
+    def test_server_tool_search_result_becomes_a_tool_search_output_item(self) -> None:
+        tools: Final = _deferred_tools_with_server_tool_search()
+        response: Final = _chat_response_with_tool_search_call_and_result()
+
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=response, responses_api_request={"tools": tools}
+        )
+        full_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="What is the weather in Paris and the price of ACME?",
+                responses_api_request={"tools": tools},
+                chat_completion_response=response,
+            )
+        )
+
+        expected_output: Final = {
+            "id": "tso_srvtoolu_01Search",
+            "call_id": "srvtoolu_01Search",
+            "execution": "server",
+            "status": "completed",
+            "tools": [tools[1], tools[2]],
+            "type": "tool_search_output",
+        }
+        assert [item.type for item in items] == ["tool_search_call", "tool_search_output", "function_call"]
+        assert items[1].model_dump() == expected_output
+        assert [item.type for item in full_response.output] == [
+            "tool_search_call",
+            "tool_search_output",
+            "function_call",
+        ]
+        assert full_response.output[1].model_dump() == expected_output
+
+    def test_tool_search_output_holds_only_the_tools_the_search_named(self) -> None:
+        tools: Final = _deferred_tools_with_server_tool_search()
+        response: Final = _chat_response_with_tool_search_call_and_result()
+        response.choices[0].message.provider_specific_fields = {
+            "tool_results": [
+                {
+                    **_SEARCH_RESULT_BLOCK,
+                    "content": {
+                        "type": "tool_search_tool_search_result",
+                        "tool_references": [{"type": "tool_reference", "tool_name": "finance__get_stock_price"}],
+                    },
+                }
+            ]
+        }
+
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=response, responses_api_request={"tools": tools}
+        )
+
+        assert items[1].model_dump()["tools"] == [tools[2]]
+
+    def test_tool_search_call_without_a_search_result_gets_no_output_item(self) -> None:
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_call('{"pattern": "weather"}'),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+        )
+
+        assert [item.type for item in items] == ["tool_search_call", "function_call"]
+
+    def test_replayed_server_tool_search_reaches_claude_before_the_tool_use(self) -> None:
+        tools: Final = _deferred_tools_with_server_tool_search()
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="claude-sonnet-5-5",
+            input=_replayed_server_search_input(tools),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        wire: Final = anthropic_messages_pt(
+            messages=request["messages"], model="claude-sonnet-5-5", llm_provider="anthropic"
+        )
+
+        assert wire == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What is the weather in Paris and the price of ACME?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_01Search",
+                        "name": "tool_search_tool_regex",
+                        "input": {"pattern": "weather|stock"},
+                    },
+                    _SEARCH_RESULT_BLOCK,
+                    {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C and sunny"}],
+            },
+        ]
+
+    def test_server_tool_search_is_not_replayed_to_a_provider_that_cannot_run_it(self) -> None:
+        tools: Final = _deferred_tools_with_server_tool_search()
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="gpt-5",
+            input=_replayed_server_search_input(tools),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="openai",
+        )
+
+        assert [message["role"] for message in request["messages"]] == ["user", "assistant", "tool"]
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == ["toolu_01Weather"]
+        assert "tool_search_tool" not in json.dumps(request["messages"])
+
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize(
+        ("model", "keep_search_tool"),
+        [("claude-sonnet-5-5", False), ("claude-3-5-haiku-20241022", True)],
+        ids=["request_without_tool_search", "model_without_tool_search"],
+    )
+    def test_server_tool_search_is_not_replayed_without_a_tool_search_tool(
+        self, model: str, keep_search_tool: bool
+    ) -> None:
+        """History can hold a server search while this request has no tool search tool to send: the caller
+        left it out (a handoff to another agent), or the model cannot run it and the bridge drops it. Without
+        that tool there is no tool-search beta, so the search blocks must not reach the provider."""
+        all_tools: Final = _deferred_tools_with_server_tool_search()
+        tools: Final = all_tools if keep_search_tool else [tool for tool in all_tools if tool["type"] != "tool_search"]
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=_replayed_server_search_input(all_tools),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        wire: Final = anthropic_messages_pt(messages=request["messages"], model=model, llm_provider="anthropic")
+
+        assert "tool_search_tool" not in json.dumps(request.get("tools") or [])
+        assert wire == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What is the weather in Paris and the price of ACME?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C and sunny"}],
+            },
+        ]
+
+    def test_server_tool_search_call_without_its_output_is_not_replayed(self) -> None:
         tools: Final = _deferred_tools_with_server_tool_search()
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=[
-                {"type": "message", "role": "user", "content": "What is the weather in Paris right now?"},
-                {
-                    "type": "tool_search_call",
-                    "id": "tsc_srvtoolu_01Search",
-                    "call_id": "srvtoolu_01Search",
-                    "arguments": {"pattern": "weather|forecast"},
-                    "execution": "server",
-                    "status": "completed",
-                },
-                {
-                    "type": "tool_search_output",
-                    "id": "tso_srvtoolu_01Search",
-                    "call_id": "srvtoolu_01Search",
-                    "execution": "server",
-                    "status": "completed",
-                    "tools": [tools[1]],
-                },
-                {
-                    "type": "function_call",
-                    "id": "fc_toolu_01Weather",
-                    "call_id": "toolu_01Weather",
-                    "name": "get_weather",
-                    "arguments": '{"city": "Paris"}',
-                    "status": "completed",
-                },
-                {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
-            ],
+            input=[item for item in _replayed_server_search_input(tools) if item["type"] != "tool_search_output"],
             responses_api_request={"tools": tools},
         )
 
         assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
         assert [call["id"] for call in messages[1]["tool_calls"]] == ["toolu_01Weather"]
-        assert "tool_search" not in json.dumps(messages)
+        assert "tool_search_tool" not in json.dumps(messages)
 
     def test_transform_local_shell_tools_dropped(self) -> None:
         (

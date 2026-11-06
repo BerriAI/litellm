@@ -1519,6 +1519,103 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+async def test_anthropic_server_tool_search_result_streams_as_tool_search_output_item(sync_mode: bool):
+    deferred_weather: Final = {
+        "type": "function",
+        "name": "get_weather",
+        "parameters": {"type": "object"},
+        "defer_loading": True,
+    }
+    deltas: Final = (
+        Delta(
+            content=None,
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                }
+            ],
+        ),
+        Delta(
+            content=None,
+            provider_specific_fields={
+                "tool_results": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_01Search",
+                        "content": {
+                            "type": "tool_search_tool_search_result",
+                            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                        },
+                    }
+                ]
+            },
+        ),
+        Delta(
+            content=None,
+            tool_calls=[
+                {
+                    "index": 1,
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+        ),
+    )
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            created=1748575031,
+            model="claude-sonnet-5-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=delta, finish_reason="tool_calls" if index == len(deltas) - 1 else None)
+            ],
+        )
+        for index, delta in enumerate(deltas)
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="What is the weather in Paris right now?",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "server"}, deferred_weather]},
+        custom_llm_provider="anthropic",
+    )
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+    output: Final = events[-1]["response"]["output"]
+    output_item: Final = next(item for item in output if item["type"] == "tool_search_output")
+    output_events: Final = [event for event in events if event.get("item", {}).get("id") == "tso_srvtoolu_01Search"]
+
+    assert events[-1]["type"] == "response.completed"
+    assert output_item == {
+        "id": "tso_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "tools": [deferred_weather],
+        "type": "tool_search_output",
+    }
+    assert [(event["type"], event["item"]["status"]) for event in output_events] == [
+        ("response.output_item.added", "in_progress"),
+        ("response.output_item.done", "completed"),
+    ]
+    assert output_events[-1]["item"] == output_item
+    assert [item["type"] for item in output] == ["tool_search_call", "function_call", "tool_search_output"]
+    streamed_indexes: Final = [
+        event["output_index"] for event in events if event["type"] == "response.output_item.added"
+    ]
+    assert streamed_indexes == [0, 1, 2], streamed_indexes
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
 async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_mode: bool):
     deltas: Final = (
         Delta(
