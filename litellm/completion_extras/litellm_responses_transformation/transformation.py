@@ -36,6 +36,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
 )
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    holds_prompt_cache_breakpoint,
     message_carries_prompt_cache_breakpoint,
     routed_model_info,
     supports_openai_prompt_cache_breakpoint,
@@ -259,7 +260,10 @@ def _messages_in_cache_mark_dialect(
     )
     if not reads_breakpoints:
         return messages
-    return tuple(AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages)
+    return tuple(
+        AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message, holds_prompt_cache_breakpoint)
+        for message in messages
+    )
 
 
 def responses_provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -300,8 +304,10 @@ def _get_reasoning_items(
     return []
 
 
-def _is_unmarked_system_message(msg: "AllMessageValues") -> bool:
-    return msg.get("role") == "system" and not message_carries_prompt_cache_breakpoint(msg)
+def _folds_into_instructions(msg: "AllMessageValues", keep_prompt_cache_breakpoints: bool) -> bool:
+    return msg.get("role") == "system" and not (
+        keep_prompt_cache_breakpoints and message_carries_prompt_cache_breakpoint(msg)
+    )
 
 
 def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]:  # mutable-ok: API message payload
@@ -915,6 +921,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             messages,
             drop_params=drop_params,
             target_trims_breakpoints=target_trims_breakpoints,
+            keep_prompt_cache_breakpoints=keep_prompt_cache_breakpoints,
             replay_tool_search=replay_tool_search,
             include_namespace=include_namespace,
             replay_openai_history=replay_openai_history,
@@ -932,6 +939,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         *,
         drop_params: bool = False,
         target_trims_breakpoints: bool = True,
+        keep_prompt_cache_breakpoints: bool = False,
         replay_tool_search: bool = False,
         include_namespace: bool = False,
         replay_openai_history: bool = False,
@@ -955,8 +963,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        leading_unmarked_system_count: Final = next(
-            (index for index, msg in enumerate(messages) if not _is_unmarked_system_message(msg)),
+        leading_folded_system_count: Final = next(
+            (
+                index
+                for index, msg in enumerate(messages)
+                if not _folds_into_instructions(msg, keep_prompt_cache_breakpoints)
+            ),
             len(messages),
         )
 
@@ -970,7 +982,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(replayed_turn.items)
             elif role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str) and index < leading_unmarked_system_count:
+                if isinstance(content, str) and index < leading_folded_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
