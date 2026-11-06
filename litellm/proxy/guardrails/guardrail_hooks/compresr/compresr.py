@@ -22,7 +22,7 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeGuard
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
@@ -507,6 +507,8 @@ class _CompressionResult:
 
 
 class CompresrGuardrail(CustomGuardrail):
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({COMPRESR_RETRIEVE_TOOL_NAME})
+
     def __init__(
         self,
         api_base: str | None = None,

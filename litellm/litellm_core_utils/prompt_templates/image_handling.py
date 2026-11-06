@@ -21,7 +21,9 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, NON_LLM_CONNECTION_TIMEOUT
-from litellm.litellm_core_utils.prompt_templates.common_utils import infer_content_type_from_url_and_content
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    infer_content_type_from_url_and_content,
+)
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
 
