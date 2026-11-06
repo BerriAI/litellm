@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -51,7 +51,11 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    budget_windows_absent_cache_key,
+    project_cache_key,
+)
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     KeyProjectBindingError,
@@ -8911,7 +8915,10 @@ async def test_delete_cache_key_object_broadcasts_invalidation(monkeypatch):
 
     # Real, observable state: the cache object itself no longer holds the entry.
     assert real_user_api_key_cache.get_cache(key="hashed-broadcast-key") is None
-    mock_publish.assert_awaited_once_with(cache_key="hashed-broadcast-key")
+    assert mock_publish.await_args_list == [
+        call(cache_key="hashed-broadcast-key"),
+        call(cache_key=budget_windows_absent_cache_key("key", "hashed-broadcast-key")),
+    ]
 
 
 @pytest.mark.asyncio

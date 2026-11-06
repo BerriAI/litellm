@@ -1,5 +1,7 @@
+import type { TFunction } from "i18next";
 import type { Resolver, ResolverResult } from "react-hook-form";
 
+import i18n from "@/i18n/i18n";
 import { InputSchema, InputSchemaProperty } from "@/components/mcp_tools/types";
 
 export interface ToolArgumentField {
@@ -51,27 +53,31 @@ const isBlank = (value: unknown): boolean => value === undefined || value === nu
 const isUnsetArgument = (prop: InputSchemaProperty, value: unknown): boolean =>
   prop.type === "string" && prop.enum ? value == null : isBlank(typeof value === "string" ? value.trim() : value);
 
-export const validateToolArgument = (field: ToolArgumentField, value: unknown): string | undefined => {
+export const validateToolArgument = (
+  field: ToolArgumentField,
+  value: unknown,
+  t: TFunction = i18n.t.bind(i18n),
+): string | undefined => {
   const prop = resolveSchemaProperty(field.prop);
   if (field.required && isUnsetArgument(prop, value)) {
-    return `Please enter ${field.key}`;
+    return t("mcpServers.toolCallArguments.validation.required", { field: field.key });
   }
   if (prop.type === "string" && prop.enum) {
     if (!isUnsetArgument(prop, value) && !prop.enum.includes(String(value)))
-      return `Please select a valid ${field.key}`;
+      return t("mcpServers.toolCallArguments.validation.invalidOption", { field: field.key });
   }
   if (!isJsonField(prop) || (isBlank(value) && !field.required)) {
     return undefined;
   }
   const parsed = parseJson(value);
   if (parsed.kind === "invalid") {
-    return "Invalid JSON";
+    return t("mcpServers.toolCallArguments.validation.invalidJson");
   }
   if (prop.type === "object" && !isPlainObject(parsed.value)) {
-    return "Please enter a JSON object";
+    return t("mcpServers.toolCallArguments.validation.expectedObject");
   }
   if (prop.type === "array" && !Array.isArray(parsed.value)) {
-    return "Please enter a JSON array";
+    return t("mcpServers.toolCallArguments.validation.expectedArray");
   }
   return undefined;
 };
@@ -115,10 +121,10 @@ export const buildToolCallArguments = (
   );
 
 export const toolArgumentsResolver =
-  (fields: readonly ToolArgumentField[]): Resolver<ToolArgumentsFormValues> =>
+  (fields: readonly ToolArgumentField[], t: TFunction = i18n.t.bind(i18n)): Resolver<ToolArgumentsFormValues> =>
   (values): ResolverResult<ToolArgumentsFormValues> => {
     const issues = fields
-      .map((field, index) => ({ index, message: validateToolArgument(field, values.args[index]) }))
+      .map((field, index) => ({ index, message: validateToolArgument(field, values.args[index], t) }))
       .filter((issue): issue is { index: number; message: string } => issue.message !== undefined);
 
     if (issues.length === 0) {

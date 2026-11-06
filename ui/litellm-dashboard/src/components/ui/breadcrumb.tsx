@@ -1,11 +1,13 @@
 import * as React from "react";
 import { ChevronRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/cva.config";
 
-const Breadcrumb = React.forwardRef<HTMLElement, React.ComponentPropsWithoutRef<"nav">>(({ ...props }, ref) => (
-  <nav ref={ref} aria-label="breadcrumb" data-slot="breadcrumb" {...props} />
-));
+const Breadcrumb = React.forwardRef<HTMLElement, React.ComponentPropsWithoutRef<"nav">>(({ ...props }, ref) => {
+  const { t } = useTranslation();
+  return <nav ref={ref} aria-label={t("ui.breadcrumb.label")} data-slot="breadcrumb" {...props} />;
+});
 Breadcrumb.displayName = "Breadcrumb";
 
 const BreadcrumbList = React.forwardRef<HTMLOListElement, React.ComponentPropsWithoutRef<"ol">>(

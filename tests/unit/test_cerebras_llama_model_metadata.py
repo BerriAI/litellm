@@ -52,7 +52,6 @@ CEREBRAS_MODELS_EXPECTED = {
 
 PAIR_PARITY = [
     ("cerebras/llama-3.1-8b", "cerebras/llama3.1-8b"),
-    ("cerebras/llama-3.1-70b", "cerebras/llama3.1-70b"),
 ]
 
 

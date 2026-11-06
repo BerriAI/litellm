@@ -40,7 +40,11 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Uni
 
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # TypeIs reaches typing only on 3.13
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -104,6 +108,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
     ResponseAPIUsage,
+    ResponseCompactionItem,
     ResponseCompletedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -748,6 +753,15 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
+def _is_responses_input(
+    input_data: object,
+) -> TypeIs["str | ResponseInputParam"]:  # guard-ok: str, or a list of Mapping items
+    if isinstance(input_data, str):
+        return True
+    items: Final = cast(list[object], input_data)  # cast-ok: isinstance narrows to list[Unknown] only
+    return isinstance(input_data, list) and all(isinstance(item, (Mapping, ResponseCompactionItem)) for item in items)
+
+
 class OpenAIResponsesHandler(BaseTranslation):
     """
     Handler for processing OpenAI Responses API with guardrails.
@@ -769,8 +783,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         Transforms `input` (string or ResponseInputParam) and optional
         `instructions` into chat completion messages.
         """
-        input_data: Final = data.get("input")
-        if input_data is None:
+        input_data: Final[object] = data.get("input")
+        if not _is_responses_input(input_data):
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
@@ -2009,7 +2023,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             "annotations": (),
             "logprobs": None,
         }
-        return (
+        events: Final = (
             *_open_item_closing_events(responses_so_far),
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -2053,6 +2067,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=_blocked_response(exc, response_id=response_id, model=model, output_item=item),
             ),
+        )
+        return tuple(
+            event.model_copy(update={"sequence_number": number})
+            for number, event in enumerate(events, start=_next_stream_sequence_number(responses_so_far))
         )
 
 

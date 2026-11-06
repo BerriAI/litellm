@@ -493,10 +493,23 @@ class _CombinedChunkSplitter:
             for position, block in enumerate(blocks)
         )
 
+    @staticmethod
+    def _without_sibling_finish(chunk: "ModelResponseStream") -> "ModelResponseStream":
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if (
+            len(choices) != 1
+            or _optional_attr(choices[0], "index") in (None, 0)
+            or _optional_attr(choices[0], "finish_reason") is None
+        ):
+            return chunk
+        unfinished: Final = copy.deepcopy(chunk)
+        unfinished.choices[0].finish_reason = None
+        return unfinished
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
         split_chunks: Final = tuple(
             split_chunk
-            for combined_chunk in self._split(chunk)
+            for combined_chunk in self._split(self._without_sibling_finish(chunk))
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
         block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
@@ -657,6 +670,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
+        # The provider's error behind this stream's error frame, for a router that accounts for it.
+        self.stream_failure: Exception | None = None
         self._refusal_text: str = ""
         self._paused_turn: bool = False
         self._claude_refusal_stop_details: AnthropicStopDetails | None = None
@@ -1383,6 +1398,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj
             provider_error: Final = _provider_error(e)
+            self.stream_failure = provider_error
             if logging_obj is not None and logging_obj.on_detached_stream_failure is not None:
                 if provider_error is e:
                     raise
@@ -1605,6 +1621,10 @@ class AnthropicSSEStream(AsyncIterator[bytes]):
         self._anthropic_wrapper = anthropic_wrapper
         self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
         self._hidden_params: dict[str, object] = {}
+
+    @property
+    def stream_failure(self) -> Exception | None:
+        return self._anthropic_wrapper.stream_failure
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":

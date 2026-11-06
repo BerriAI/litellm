@@ -9,7 +9,7 @@ from typing import Final
 import anthropic
 import openai
 import pytest
-from integration._support.client import eventually, gateway_from_environment, held
+from integration._support.client import eventually, gateway_from_environment, held, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import owned_redis
 from integration._support.wire import Wire, wire_server
@@ -56,11 +56,12 @@ from integration.routing._prompt_cache_pin_support import (
     vertex_peer,
     wire_carries_one_hour,
 )
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
 pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 300), pytest.mark.shares_worker_state]
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _CLAUDE: Final = "pin-claude"
 _SLOW: Final = "pin-slow"
 _MIXED: Final = "pin-mixed"
@@ -539,7 +540,10 @@ def test_failed_first_turn_reports_the_error_and_writes_no_pin(rig: _Rig) -> Non
         "/v1/chat/completions",
         chat_body(_CLAUDE, _first_turn(new_marker(), f"{new_marker()} {OVERLOAD_TOKEN}", ONE_HOUR_MARK)),
     )
-    assert response.status_code == 500, response.text
+    assert response.status_code == 503, response.text
+    error: Final = object_value(_JSON_OBJECT.validate_json(response.text)["error"])
+    assert error["type"] == "service_unavailable_error", response.text
+    assert error["code"] == "server_is_overloaded", response.text
     assert "overloaded_error" in response.text, response.text
     healthy, _ = post_chat(rig.owned.gateway, chat_body(_CLAUDE, _first_turn(new_marker(), new_marker(), None)))
     spend_row_lands(healthy)

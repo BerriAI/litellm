@@ -14,6 +14,9 @@ import {
   Shuffle,
   Timer,
 } from "lucide-react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 import type { MessageType } from "@/components/chat_ui/types";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -80,130 +83,175 @@ const millis = (value: number | undefined): string | undefined =>
   value === undefined ? undefined : `${Math.round(value)}ms`;
 
 function Routing({ message }: { message: MessageType }) {
+  const { t } = useTranslation();
   const trace = message.trace;
   const served = servedModel(message);
   const fellBack = (trace?.attemptedFallbacks ?? 0) > 0;
   const reported = Boolean(trace?.callId || trace?.modelGroup || trace?.providerModel);
   return (
-    <TraceSection value="routing" title="Routing">
+    <TraceSection value="routing" title={t("playground.chat.inspector.routing.title")}>
       {trace?.requestedModel && (
-        <TraceRow title="Requested">
-          <LongValue value={trace.requestedModel} detail="Requested model" copyLabel="model name" className="text-xs" />
+        <TraceRow title={t("playground.chat.inspector.routing.requested")}>
+          <LongValue
+            value={trace.requestedModel}
+            detail={t("playground.chat.inspector.routing.requestedDetail")}
+            copyLabel={t("playground.chat.inspector.routing.modelNameCopy")}
+            className="text-xs"
+          />
         </TraceRow>
       )}
       {served && (
-        <TraceRow title="Served by">
+        <TraceRow title={t("playground.chat.inspector.routing.servedBy")}>
           {fellBack && <FallbackBadge />}
-          <LongValue value={served} detail="Model group that answered" copyLabel="model name" className="text-xs" />
+          <LongValue
+            value={served}
+            detail={t("playground.chat.inspector.routing.servedByDetail")}
+            copyLabel={t("playground.chat.inspector.routing.modelNameCopy")}
+            className="text-xs"
+          />
         </TraceRow>
       )}
       {trace?.providerModel && (
-        <TraceRow title="Provider model">
+        <TraceRow title={t("playground.chat.inspector.routing.providerModel")}>
           <LongValue
             value={trace.providerModel}
-            detail={trace.deploymentId ? `Deployment ID ${trace.deploymentId}` : "Model sent to the provider"}
-            copyLabel="provider model"
+            detail={
+              trace.deploymentId
+                ? t("playground.chat.inspector.routing.deploymentDetail", { deploymentId: trace.deploymentId })
+                : t("playground.chat.inspector.routing.providerModelDetail")
+            }
+            copyLabel={t("playground.chat.inspector.routing.providerModelCopy")}
             className="text-xs"
             align="end"
           />
         </TraceRow>
       )}
       {trace?.apiBase && (
-        <TraceRow title="API base">
+        <TraceRow title={t("playground.chat.inspector.routing.apiBase")}>
           <LongValue
             value={trace.apiBase}
-            detail="Provider endpoint"
-            copyLabel="API base"
+            detail={t("playground.chat.inspector.routing.apiBaseDetail")}
+            copyLabel={t("playground.chat.inspector.routing.apiBaseCopy")}
             className="text-xs"
             align="end"
           />
         </TraceRow>
       )}
       {trace?.callId && (
-        <TraceRow title="Call ID">
+        <TraceRow title={t("playground.chat.inspector.routing.callId")}>
           <span className="min-w-0 truncate font-mono text-xs">{trace.callId}</span>
-          <CopyIconButton value={trace.callId} label="call ID" />
+          <CopyIconButton value={trace.callId} label={t("playground.chat.inspector.routing.callIdCopy")} />
         </TraceRow>
       )}
       {trace?.responseId && (
-        <TraceRow title="Response ID">
+        <TraceRow title={t("playground.chat.inspector.routing.responseId")}>
           <span className="min-w-0 truncate font-mono text-xs">{trace.responseId}</span>
-          <CopyIconButton value={trace.responseId} label="response ID" />
+          <CopyIconButton value={trace.responseId} label={t("playground.chat.inspector.routing.responseIdCopy")} />
         </TraceRow>
       )}
       <StatGrid
         stats={[
-          { label: "Fallbacks", icon: <Shuffle />, value: count(trace?.attemptedFallbacks) },
-          { label: "Retries", icon: <RotateCw />, value: count(trace?.attemptedRetries) },
-          { label: "Overhead", icon: <Gauge />, value: millis(trace?.overheadMs) },
+          {
+            label: t("playground.chat.inspector.routing.fallbacks"),
+            icon: <Shuffle />,
+            value: count(trace?.attemptedFallbacks),
+          },
+          {
+            label: t("playground.chat.inspector.routing.retries"),
+            icon: <RotateCw />,
+            value: count(trace?.attemptedRetries),
+          },
+          { label: t("playground.chat.inspector.routing.overhead"), icon: <Gauge />, value: millis(trace?.overheadMs) },
         ]}
       />
-      {!reported && (
-        <Muted>
-          The gateway did not share routing details with this page. Open the dashboard from the proxy to see them
-        </Muted>
-      )}
+      {!reported && <Muted>{t("playground.chat.inspector.routing.notReported")}</Muted>}
     </TraceSection>
   );
 }
 
-const noneRan = (policies: readonly string[] | undefined): string | null => {
-  if (policies === undefined) return "No guardrails ran on this request";
-  return policies.length === 0 ? "No guardrails or policies ran on this request" : null;
+const noneRan = (policies: readonly string[] | undefined, t: TFunction = i18n.t.bind(i18n)): string | null => {
+  if (policies === undefined) return t("playground.chat.inspector.guardrails.noGuardrailsRan");
+  return policies.length === 0 ? t("playground.chat.inspector.guardrails.noneRan") : null;
 };
 
 function Guardrails({ message }: { message: MessageType }) {
+  const { t } = useTranslation();
   const guardrails = message.trace?.appliedGuardrails;
   const policies = message.trace?.appliedPolicies;
   if (guardrails === undefined) {
     return (
-      <TraceSection value="guardrails" title="Guardrails and policies">
-        <Muted>This endpoint does not report which guardrails or policies ran</Muted>
+      <TraceSection value="guardrails" title={t("playground.chat.inspector.guardrails.title")}>
+        <Muted>{t("playground.chat.inspector.guardrails.unsupported")}</Muted>
       </TraceSection>
     );
   }
-  const emptyNote = guardrails.length === 0 ? noneRan(policies) : null;
+  const emptyNote = guardrails.length === 0 ? noneRan(policies, t) : null;
   return (
-    <TraceSection value="guardrails" title="Guardrails and policies">
+    <TraceSection value="guardrails" title={t("playground.chat.inspector.guardrails.title")}>
       {guardrails.map((name) => (
-        <TraceRow key={`g-${name}`} title={name} description="Guardrail">
-          <Badge variant="secondary">Ran</Badge>
+        <TraceRow key={`g-${name}`} title={name} description={t("playground.chat.inspector.guardrails.guardrail")}>
+          <Badge variant="secondary">{t("playground.chat.inspector.guardrails.ran")}</Badge>
         </TraceRow>
       ))}
       {policies?.map((name) => (
-        <TraceRow key={`p-${name}`} title={name} description="Policy">
-          <Badge variant="secondary">Ran</Badge>
+        <TraceRow key={`p-${name}`} title={name} description={t("playground.chat.inspector.guardrails.policy")}>
+          <Badge variant="secondary">{t("playground.chat.inspector.guardrails.ran")}</Badge>
         </TraceRow>
       ))}
       {emptyNote && <Muted>{emptyNote}</Muted>}
-      {policies === undefined && <Muted>Policies are only reported when the dashboard is opened from the proxy</Muted>}
+      {policies === undefined && <Muted>{t("playground.chat.inspector.guardrails.policiesUnreported")}</Muted>}
     </TraceSection>
   );
 }
 
 function SpeedAndCost({ message }: { message: MessageType }) {
+  const { t } = useTranslation();
   const usage = message.usage;
   const cost = usage?.cost ?? message.trace?.cost;
   return (
-    <TraceSection value="performance" title="Speed and cost">
+    <TraceSection value="performance" title={t("playground.chat.inspector.performance.title")}>
       <StatGrid
         stats={[
           {
-            label: "First token",
+            label: t("playground.chat.inspector.performance.firstToken"),
             icon: <Timer />,
             value: message.timeToFirstToken === undefined ? undefined : formatSeconds(message.timeToFirstToken),
           },
           {
-            label: "Total",
+            label: t("playground.chat.inspector.performance.total"),
             icon: <Clock />,
             value: message.totalLatency === undefined ? undefined : formatSeconds(message.totalLatency),
           },
-          { label: "Cost", icon: <Coins />, value: cost === undefined ? undefined : formatCost(cost) },
-          { label: "Tokens in", icon: <ArrowDownToLine />, value: count(usage?.promptTokens) },
-          { label: "Tokens out", icon: <ArrowUpFromLine />, value: count(usage?.completionTokens) },
-          { label: "Cached", icon: <DatabaseZap />, value: count(usage?.cacheReadTokens) },
-          { label: "Reasoning", icon: <Brain />, value: count(usage?.reasoningTokens) },
-          { label: "Gateway time", icon: <Server />, value: millis(message.trace?.responseMs) },
+          {
+            label: t("playground.chat.inspector.performance.cost"),
+            icon: <Coins />,
+            value: cost === undefined ? undefined : formatCost(cost),
+          },
+          {
+            label: t("playground.chat.inspector.performance.tokensIn"),
+            icon: <ArrowDownToLine />,
+            value: count(usage?.promptTokens),
+          },
+          {
+            label: t("playground.chat.inspector.performance.tokensOut"),
+            icon: <ArrowUpFromLine />,
+            value: count(usage?.completionTokens),
+          },
+          {
+            label: t("playground.chat.inspector.performance.cached"),
+            icon: <DatabaseZap />,
+            value: count(usage?.cacheReadTokens),
+          },
+          {
+            label: t("playground.chat.inspector.performance.reasoning"),
+            icon: <Brain />,
+            value: count(usage?.reasoningTokens),
+          },
+          {
+            label: t("playground.chat.inspector.performance.gatewayTime"),
+            icon: <Server />,
+            value: millis(message.trace?.responseMs),
+          },
         ]}
       />
     </TraceSection>
@@ -211,13 +259,12 @@ function SpeedAndCost({ message }: { message: MessageType }) {
 }
 
 function NothingYet() {
+  const { t } = useTranslation();
   return (
     <Empty className="flex-1">
       <EmptyHeader>
-        <EmptyTitle className="text-sm">Nothing to inspect yet</EmptyTitle>
-        <EmptyDescription>
-          Each reply shows here with the deployment that served it, fallbacks, guardrails, timing and cost
-        </EmptyDescription>
+        <EmptyTitle className="text-sm">{t("playground.chat.inspector.empty.title")}</EmptyTitle>
+        <EmptyDescription>{t("playground.chat.inspector.empty.description")}</EmptyDescription>
       </EmptyHeader>
     </Empty>
   );
@@ -235,6 +282,7 @@ function Trace({ message }: { message: MessageType | null }) {
 }
 
 function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
+  const { t } = useTranslation();
   const [sdk, setSdk] = useState<CodeSdk>("openai");
   const snippet = code(sdk);
   return (
@@ -246,21 +294,21 @@ function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
           variant="outline"
           size="sm"
           spacing={0}
-          aria-label="SDK"
+          aria-label={t("playground.chat.inspector.code.sdk")}
         >
           <ToggleGroupItem value="openai" className="h-7 px-2 text-xs">
-            OpenAI SDK
+            {t("playground.chat.inspector.code.openai")}
           </ToggleGroupItem>
           <ToggleGroupItem value="azure" className="h-7 px-2 text-xs">
-            Azure SDK
+            {t("playground.chat.inspector.code.azure")}
           </ToggleGroupItem>
         </ToggleGroup>
         <span className="ml-auto">
-          <CopyIconButton value={snippet} label="code" />
+          <CopyIconButton value={snippet} label={t("playground.chat.inspector.code.copyLabel")} />
         </span>
       </div>
       <FieldDescription className="px-4 pt-2 text-xs">
-        Send this request from your own app. Replace YOUR_LITELLM_API_KEY with a virtual key
+        {t("playground.chat.inspector.code.description")}
       </FieldDescription>
       <ScrollArea className="w-full">
         <pre className="px-4 py-3 font-mono text-xs leading-5 whitespace-pre text-foreground">{snippet}</pre>
@@ -271,12 +319,13 @@ function CodeTab({ code }: { code: (sdk: CodeSdk) => string }) {
 }
 
 export function InspectorPanel({ message, code }: { message: MessageType | null; code: (sdk: CodeSdk) => string }) {
+  const { t } = useTranslation();
   return (
     <Tabs defaultValue="trace" className="min-h-0 flex-1 gap-0">
       <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
         <TabsList className="w-full">
-          <TabsTrigger value="trace">Trace</TabsTrigger>
-          <TabsTrigger value="code">Code</TabsTrigger>
+          <TabsTrigger value="trace">{t("playground.chat.inspector.tabs.trace")}</TabsTrigger>
+          <TabsTrigger value="code">{t("playground.chat.inspector.tabs.code")}</TabsTrigger>
         </TabsList>
       </div>
       <ScrollArea className="min-h-0 flex-1">

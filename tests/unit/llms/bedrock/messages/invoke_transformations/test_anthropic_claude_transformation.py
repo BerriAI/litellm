@@ -4016,7 +4016,10 @@ _NATIVE_OUTPUT_REJECTION: Final = {
     "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
 }
 _STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
-_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
+_OPTED_OUT: Final = {
+    "supports_native_structured_output": False,
+    "supports_bedrock_native_structured_output": False,
+}
 _CONSTRAINED_SCHEMA: Final = {
     "type": "object",
     "properties": {
@@ -4158,21 +4161,58 @@ async def test_bedrock_messages_native_output_rejection_and_signature_400_each_g
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("model", "model_info", "error"),
+    ("model", "model_info", "error", "should_retry"),
     [
-        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
-        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
-        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}, False),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION, True),
+        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION, False),
     ],
-    ids=["other_400", "native_model", "deployment_opt_out"],
+    ids=["other_400", "native_rejection", "deployment_opt_out"],
 )
-async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
-    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
+async def test_bedrock_messages_retries_only_native_output_rejections(
+    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object], should_retry: bool
 ) -> None:
     bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
 
-    assert isinstance(raised, litellm.BadRequestError)
-    assert len(bedrock.bodies) == 1
+    assert (raised is None) is should_retry
+    assert len(bedrock.bodies) == (2 if should_retry else 1)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [
+        ("us.anthropic.claude-opus-5-5", None),
+        ("global.anthropic.claude-fable-5-1", None),
+        ("us.anthropic.claude-opus-4-8", None),
+        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}),
+    ],
+    ids=["opus_5_5_inlined", "fable_5_1_inlined", "mapped_opt_in", "deployment_opt_in"],
+)
+def test_bedrock_messages_offers_a_native_output_retry_only_when_it_sends_native_output(
+    model: str, model_info: Mapping[str, object] | None
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    config: Final = AmazonAnthropicClaudeMessagesConfig()
+    litellm_params: Final = GenericLiteLLMParams(model_info=model_info)
+    optional_params: Final = {
+        "max_tokens": 100,
+        "output_config": {"format": {"type": "json_schema", "schema": _CONSTRAINED_SCHEMA}},
+    }
+
+    body: Final = REASONING_BODY_ADAPTER.validate_python(
+        config.transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=litellm_params,
+            headers={},
+        )
+    )
+    retry_params: Final = config.native_output_fallback_litellm_params(model, optional_params, litellm_params)
+
+    assert (retry_params is not None) is ("format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {})))
 
 
 # Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
