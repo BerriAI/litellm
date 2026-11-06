@@ -215,6 +215,18 @@ describe("TagInfoView save payload", () => {
     expect(mockTagUpdateCall).not.toHaveBeenCalled();
   });
 
+  it("shows the current limits when editing from the Edit Tag button rather than the row action", async () => {
+    const user = userEvent.setup();
+    render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit Tag" }));
+    await user.click(screen.getByRole("button", { name: /Budget & Rate Limits/ }));
+
+    expect(await screen.findByLabelText("TPM Limit")).toHaveValue(1000);
+    expect(screen.getByLabelText("RPM Limit")).toHaveValue(60);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(10);
+  });
+
   it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
     const { user } = await renderEditor();
 
