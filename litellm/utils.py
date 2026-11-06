@@ -7588,7 +7588,7 @@ def get_model_info_helper(
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
                 supports_native_streaming=_model_info.get("supports_native_streaming", None),
                 supports_native_structured_output=(
-                    True
+                    _model_info.get("supports_bedrock_native_structured_output") is not False
                     if _model_info.get("supports_bedrock_native_structured_output_by_default")
                     else _model_info.get("supports_native_structured_output", None)
                 ),

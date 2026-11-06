@@ -565,10 +565,14 @@ def _response_format_json_schema(response_format: object) -> Mapping[str, object
     return json_object_or_none((json_schema or {}).get("schema"))
 
 
-def bedrock_batch_record_takes_native_output(model: str, response_format: object) -> bool:
+def bedrock_batch_record_takes_native_output(
+    model: str, response_format: object, model_info: Mapping[str, object] | None = None
+) -> bool:
     schema: Final = _response_format_json_schema(response_format)
-    return bedrock_model_always_takes_native_output(model) and (
-        schema is None or schema_property_count(schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+    return _bedrock_native_output_enabled(model, "bedrock", model_info) and (
+        schema is None
+        or schema_property_count(schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+        or not _bedrock_model_supports(model, "supports_bedrock_native_structured_output_by_default")
     )
 
 

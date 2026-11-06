@@ -11723,9 +11723,9 @@ def test_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from
 
 
 def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(
-    local_model_cost_map, monkeypatch
+    set_native_structured_output,
 ):
-    monkeypatch.setitem(litellm.model_cost["us.anthropic.claude-opus-4-8"], "supports_native_structured_output", False)
+    set_native_structured_output("us.anthropic.claude-opus-4-8", "bedrock")
     profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
     litellm_params: Final = {"base_model": "bedrock/us.anthropic.claude-opus-4-8"}
     optional_params: Final = _converse_params(
