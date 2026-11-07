@@ -925,21 +925,21 @@ class TestPreCallHookDeferredRouting:
 
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_keeps_session_routing_in_memory_without_a_warning(caplog):
+    redis_kwargs = {"host": f"open-breaker-{uuid.uuid4()}.invalid", "port": 1, "socket_timeout": 0.2}
+    breaker = RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
+    opened = NativeRedisBreaker.shared(redis_kwargs, breaker)
+    opened.failed(False)
     client = NativeRedisClient.connect(
-        RedisStoreSettings(
-            redis_kwargs={"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2},
-            namespace=f"open-breaker-{uuid.uuid4()}",
-            default_ttl=60,
-            breaker=NativeRedisBreaker(
-                RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
-            ),
-        )
+        RedisStoreSettings(redis_kwargs=redis_kwargs, namespace=None, default_ttl=60, breaker=breaker)
     )
     handler = PROXY_SensitiveDataRoutingHandler(
         internal_usage_cache=MockInternalUsageCache(),
         route_pins=SensitiveRoutePinStore(RedisStores(client).sensitive_route_pins()),
     )
-    await handler.set_session_routing("opening-session", "safe-model")
+    for _ in range(200):
+        if any("circuit breaker OPENED" in record.getMessage() for record in caplog.records):
+            break
+        await asyncio.sleep(0.01)
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM"):

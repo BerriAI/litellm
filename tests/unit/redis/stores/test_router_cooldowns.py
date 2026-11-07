@@ -19,7 +19,7 @@ from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.redis.stores.connection import RedisStores, connect
 from litellm.redis.stores.router_cooldowns import CooldownCacheValue, RouterCooldownStore
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
-from litellm.rust_bridge._native import NativeRedisBreaker, NativeRedisClient, NativeRouterCooldowns
+from litellm.rust_bridge._native import NativeRedisClient, NativeRouterCooldowns
 from litellm.rust_bridge.host import settings
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from tests.unit.caching.test_redis_batch import (
@@ -238,12 +238,10 @@ def test_the_native_breaker_counts_in_the_redis_breaker_state_gauge() -> None:
     store: Final = NativeRouterCooldowns(
         NativeRedisClient.connect(
             RedisStoreSettings(
-                redis_kwargs={"host": "127.0.0.1", "port": 1},
-                namespace=f"breaker-gauge-test-{uuid.uuid4()}",
+                redis_kwargs={"host": f"breaker-gauge-{uuid.uuid4()}.invalid", "port": 1},
+                namespace=None,
                 default_ttl=60,
-                breaker=NativeRedisBreaker(
-                    RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
-                ),
+                breaker=RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0),
             )
         )
     )

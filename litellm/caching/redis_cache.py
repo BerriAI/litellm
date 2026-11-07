@@ -632,7 +632,7 @@ class RedisCache(BaseCache):
             redis_kwargs=store_kwargs,
             namespace=namespace,
             default_ttl=self.default_ttl,
-            breaker=None if self._health is None else self._health.breaker,
+            breaker=breaker_config,
         )
 
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:

@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Generic, TypeVar
+from typing import Any, Final, Generic, TypeVar
 
 import pytest
 from redis.exceptions import NoScriptError
@@ -99,18 +100,16 @@ class FakeRedisCache(RedisCache):
     ) -> None:  # super().__init__ needs a server
         self.client = client
         self.namespace = namespace
-        self.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2, "db": id(self) % 1_000_000}
+        self.redis_kwargs = {"host": f"batch-{uuid.uuid4().hex}.invalid", "port": 1, "socket_timeout": 0.2}
         self.service_logger_obj = ServiceLogging()
+        breaker: Final = RedisBreakerSettings(
+            failure_threshold=failure_threshold, recovery_timeout=30.0, timeout_min_duration=5.0
+        )
         self._health = RedisHealth(  # pyright: ignore[reportGeneralTypeIssues]  # the fake skips RedisCache.__init__, which sets it
-            NativeRedisBreaker(
-                RedisBreakerSettings(
-                    failure_threshold=failure_threshold, recovery_timeout=30.0, timeout_min_duration=5.0
-                )
-            ),
-            self.service_logger_obj,
+            NativeRedisBreaker.shared(self.redis_kwargs, breaker), self.service_logger_obj
         )
         self.store_settings = RedisStoreSettings(
-            redis_kwargs=self.redis_kwargs, namespace=namespace, default_ttl=60, breaker=self._health.breaker
+            redis_kwargs=self.redis_kwargs, namespace=namespace, default_ttl=60, breaker=breaker
         )
         self.default_ttl = None
         self.alone: list[tuple[str, Any]] = []

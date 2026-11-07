@@ -5,7 +5,7 @@ use std::{
 };
 
 use futures_util::stream::BoxStream;
-use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
+use litellm_circuit_breaker::{Admission, Breaker, Failure};
 use redis::{Cmd, ErrorKind, RedisError, ServerErrorKind, Value};
 
 use crate::{
@@ -74,20 +74,6 @@ impl RedisClient {
 
     pub fn downgrade(&self) -> WeakRedisClient {
         WeakRedisClient(Arc::downgrade(&self.0))
-    }
-
-    /// Whether this client admits its calls through `breaker` itself.
-    pub fn guarded_by(&self, breaker: Option<&Breaker>) -> bool {
-        match (&self.0.breaker, breaker) {
-            (Some(own), Some(other)) => own.same(other),
-            (None, None) => true,
-            _ => false,
-        }
-    }
-
-    /// The breaker's current state, or none when the breaker is disabled.
-    pub fn breaker_state(&self) -> Option<State> {
-        self.0.breaker.as_ref().map(Breaker::state)
     }
 
     pub async fn ping(&self) -> Result<(), Error> {

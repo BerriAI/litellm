@@ -169,11 +169,6 @@ impl Breaker {
         self.0.state()
     }
 
-    /// Whether both handles are the one breaker, not two breakers in the same state.
-    pub fn same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
     pub fn downgrade(&self) -> WeakBreaker {
         WeakBreaker(Arc::downgrade(&self.0))
     }

@@ -6,7 +6,7 @@
 - A disabled breaker is `Option<Breaker>::None` at the consumer, not a flag inside the machine. `Config` comes in already resolved, reading `REDIS_CIRCUIT_BREAKER_*` env is the consumer's job
 
 ## The only Redis breaker
-- Python's `RedisCache` admits through this breaker via `NativeRedisBreaker` (`python-bridge/src/redis/breaker.rs`), sharing one per Redis target with the native client, so the Python `RedisCircuitBreaker` it replaced is gone
+- Python's `RedisCache` admits through this breaker via `NativeRedisBreaker` (`python-bridge/src/redis/breaker.rs`), sharing one per Redis server with the native client through `redis-connect`'s `RedisHosts`, so the Python `RedisCircuitBreaker` it replaced is gone
 - The rstest table `matches_the_python_redis_circuit_breaker` was checked case by case against that Python class and now pins its behavior. A behavior change here changes what every Redis caller in the proxy sees
 - Divergences from the old Python class, each on purpose
   - monotonic `Instant` instead of `time.time()`, so a wall clock jump can't open or close the breaker

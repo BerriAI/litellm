@@ -26,7 +26,7 @@ pub struct HostServices {
 const CLUSTER_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(25);
 
 /// A breaker whose transitions reach `events`, for every client that talks to one Redis.
-pub fn breaker(config: BreakerConfig, events: Option<Arc<dyn RedisEvents>>) -> Breaker {
+pub(crate) fn breaker(config: BreakerConfig, events: Option<Arc<dyn RedisEvents>>) -> Breaker {
     Breaker::new(
         config,
         Box::new(move |transition| {

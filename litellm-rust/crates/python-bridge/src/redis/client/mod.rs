@@ -1,28 +1,23 @@
 mod credentials;
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, LazyLock, Mutex, PoisonError},
-    time::Duration,
-};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use litellm_circuit_breaker::Breaker;
+use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{self, SecondsError};
-use litellm_redis_client::{RedisClient, RedisEvents, WeakRedisClient};
+use litellm_redis_client::{RedisClient, RedisEvents};
 use litellm_redis_connect::{CredentialSource, HostServices, SharedEnvironment};
 use litellm_redis_resolve::{Kwargs, PythonException};
 use litellm_redis_types::{Endpoint, ProviderHandle, Resolution};
 use pyo3::{
     exceptions::{PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
-    sync::MutexExt,
     types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple},
 };
 
 use self::credentials::PythonCredentialSource;
-use crate::redis::{breaker::NativeRedisBreaker, events::ServiceLoggingEvents};
+use crate::redis::{breaker::BreakerSettings, events::ServiceLoggingEvents, hosts};
 
 pyo3::import_exception!(redis.exceptions, RedisClusterException);
 
@@ -73,7 +68,7 @@ pub(crate) struct StoreSettings {
     redis_kwargs: RedisSpec,
     namespace: Option<String>,
     default_ttl: f64,
-    breaker: Option<Py<NativeRedisBreaker>>,
+    breaker: Option<BreakerSettings>,
 }
 
 fn is_plain(value: &Bound<'_, PyAny>) -> bool {
@@ -86,22 +81,6 @@ fn is_plain(value: &Bound<'_, PyAny>) -> bool {
         || value.is_instance_of::<PyDict>()
 }
 
-/// A client the process built, held weakly so a discarded `Router` drops its client and provider.
-struct Shared {
-    resolved: Resolution,
-    client: WeakRedisClient,
-}
-
-static CLIENTS: LazyLock<Mutex<Vec<Shared>>> = LazyLock::new(|| Mutex::new(Vec::new()));
-
-fn live_clients(py: Python<'_>) -> std::sync::MutexGuard<'static, Vec<Shared>> {
-    let mut clients = CLIENTS
-        .lock_py_attached(py)
-        .unwrap_or_else(PoisonError::into_inner);
-    clients.retain(|shared| shared.client.upgrade().is_some());
-    clients
-}
-
 /// The one client for a resolved Redis config and credential provider, so every family in this process shares its pool
 /// and its breaker. A config redis-py refuses building its client raises the same class here. One it only fails on
 /// once a command connects, where `RedisCache` logs every failed call, leaves the family on memory with an error.
@@ -109,7 +88,7 @@ fn shared_client(
     py: Python<'_>,
     spec: RedisSpec,
     namespace: Option<String>,
-    breaker: Option<Breaker>,
+    breaker: Option<BreakerConfig>,
 ) -> PyResult<Option<RedisClient>> {
     let environment: SharedEnvironment = Arc::new(ProcessEnvironment);
     let logger = crate::logger::capture(py);
@@ -148,31 +127,14 @@ fn shared_client(
             })
             .transpose()?,
     };
-    let mut clients = live_clients(py);
-    if let Some(client) = clients
-        .iter()
-        .filter(|shared| shared.resolved == resolved)
-        .filter_map(|shared| shared.client.upgrade())
-        .find(|client| client.guarded_by(breaker.as_ref()))
-    {
-        return Ok(Some(client));
-    }
-    let connected = {
+    let connected = py.detach(|| {
         let _runtime = runtime.enter();
-        litellm_redis_connect::connect(resolved.clone(), host, breaker)
-    };
-    let client = match connected {
-        Ok(client) => client,
-        Err(error) => {
-            drop(clients);
-            return Ok(unconnected(py, &error));
-        }
-    };
-    clients.push(Shared {
-        resolved,
-        client: client.downgrade(),
+        hosts().client(resolved, host, breaker)
     });
-    Ok(Some(client))
+    match connected {
+        Ok(client) => Ok(Some(client)),
+        Err(error) => Ok(unconnected(py, &error)),
+    }
 }
 
 /// The Rust client for one `RedisCache`, built once and handed to every native store, so a store
@@ -196,7 +158,7 @@ impl NativeRedisClient {
             breaker,
         } = settings;
         let default_ttl = number::seconds(default_ttl).map_err(seconds_error)?;
-        let breaker = breaker.map(|breaker| breaker.get().0.clone());
+        let breaker = breaker.as_ref().map(BreakerSettings::config).transpose()?;
         Ok(
             shared_client(py, redis_kwargs, namespace, breaker)?.map(|client| Self {
                 client,
