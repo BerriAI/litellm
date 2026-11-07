@@ -1,5 +1,6 @@
 import copy
 import json
+import sys
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -7908,6 +7909,166 @@ def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arg
     assert message.content == arguments
 
 
+@pytest.mark.parametrize("arguments", ["[1, 2]", '"x"', "5"])
+def test_convert_tool_response_to_message_keeps_a_non_object_answer_as_written(arguments: str) -> None:
+    message: Final = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None,
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+_DEEPLY_NESTED: Final = "[" * 300 + "]" * 300
+
+
+@pytest.mark.parametrize(
+    "arguments, schema, expected",
+    [
+        pytest.param('{"values": ' + _DEEPLY_NESTED + "}", None, _DEEPLY_NESTED, id="values_answer"),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": ' + _DEEPLY_NESTED + ', "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": ' + _DEEPLY_NESTED + ', "summary": "x"}',
+            id="envelope",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_a_deeply_nested_answer(
+    arguments: str, schema: dict[str, object] | None, expected: str
+) -> None:
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    "arguments, schema, expected",
+    [
+        pytest.param('{"values": [1e400, "\u00e9"]}', None, '[1e400, "\\u00e9"]', id="values_number_past_a_float"),
+        pytest.param(
+            '{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",
+            None,
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values_integer_past_the_digit_limit",
+        ),
+        pytest.param('{"count":-1e400}', None, '{"count": -1e400}', id="schemaless_answer_number_past_a_float"),
+        pytest.param(
+            '{"values": [1e400, -1E-400, 0e-400]}',
+            None,
+            "[1e400, -1E-400, 0.0]",
+            id="values_numbers_past_a_float_both_ways",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 2.5e-400, "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": 2.5e-400, "summary": "x"}',
+            id="envelope_number_below_a_float",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "\u00e9"}}',
+            _RISK_SCHEMA,
+            '{"tier": 1e400, "summary": "\\u00e9"}',
+            id="envelope_number_past_a_float",
+        ),
+        pytest.param(
+            '{"tier":' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}',
+            _RISK_SCHEMA,
+            '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            id="answer_integer_past_the_digit_limit",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_keeps_out_of_range_numbers_as_the_model_wrote_them(
+    arguments: str, schema: dict[str, object] | None, expected: str
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+@pytest.mark.parametrize(
+    "blocks, expected",
+    [
+        pytest.param(
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_joins_split_fields_keeping_out_of_range_numbers_as_written(
+    blocks: tuple[str, ...], expected: str
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id=f"toolu_{index}",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=block),
+                index=index,
+            )
+            for index, block in enumerate(blocks)
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
 @pytest.mark.parametrize(
     "document",
     [
@@ -8171,6 +8332,12 @@ def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_o
             id="one_partial_object_per_field",
         ),
         pytest.param(
+            _CONTACT_SCHEMA,
+            ({}, {"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="empty_object_then_one_partial_object_per_field",
+        ),
+        pytest.param(
             _OPTIONAL_CONTACT_SCHEMA,
             ({"name": "Ada", "email": "ada@example.com"}, {"phone": "555-0100"}),
             {"name": "Ada", "email": "ada@example.com", "phone": "555-0100"},
@@ -8188,7 +8355,7 @@ def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
     )
 
     assert replacement is not None
-    assert json.loads(replacement.content) == expected_content
+    assert replacement.content == json.dumps(expected_content)
     assert remaining_tool_calls == []
     assert extra_content is None
 
