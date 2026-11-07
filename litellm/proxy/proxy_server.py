@@ -20647,12 +20647,16 @@ Keep it more precise, to prevent overwrite other values unintentially
 
 _PLUGIN_KEY_REDACTED: Final = "***"
 
+
+def _admin_ui_field_type(field: FieldInfo) -> str | None:
+    return next((marker.field_type for marker in field.metadata if isinstance(marker, AdminUIField)), None)
+
+
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
-        name: marker.field_type
+        name: field_type
         for name, field in ConfigGeneralSettings.model_fields.items()
-        for marker in field.metadata
-        if isinstance(marker, AdminUIField)
+        if (field_type := _admin_ui_field_type(field)) is not None
     }
 )
 
