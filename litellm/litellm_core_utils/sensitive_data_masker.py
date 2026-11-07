@@ -1,3 +1,4 @@
+import re
 from collections.abc import ItemsView, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
@@ -30,6 +31,9 @@ _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
 )
 
 
+_CAMEL_BOUNDARY: Final = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
 def _object_items(data: Mapping[str, object]) -> ItemsView[str, object]:
     return data.items()
 
@@ -44,6 +48,7 @@ class SensitiveDataMasker:
         mask_char: str = "*",
         mask_short_values: bool = True,
         extra_sensitive_patterns: AbstractSet[str] | None = None,
+        split_camel_case: bool = False,
     ):
         self.sensitive_patterns = (sensitive_patterns or _DEFAULT_SENSITIVE_PATTERNS) | (
             extra_sensitive_patterns or frozenset()
@@ -51,12 +56,15 @@ class SensitiveDataMasker:
         # If any key segment matches one of these, the key is not considered sensitive
         # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
         # contains "token" but "cost" overrides that — it's a pricing field, not a secret.
-        self.non_sensitive_overrides = non_sensitive_overrides or frozenset(("cost",))
+        self.non_sensitive_overrides = (
+            non_sensitive_overrides if non_sensitive_overrides is not None else frozenset(("cost",))
+        )
 
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
         self.mask_char = mask_char
         self.mask_short_values = mask_short_values
+        self.split_camel_case = split_camel_case
 
     def mask_value(self, value: str) -> str:
         value_str: Final = str(value)
@@ -82,11 +90,14 @@ class SensitiveDataMasker:
         if excluded_keys and key in excluded_keys:
             return False
 
-        key_lower: Final = str(key).lower()
-        # Split on underscores/hyphens and check if any segment matches the pattern
-        # This avoids false positives like "max_tokens" matching "token"
-        # but still catches "api_key", "access_token", etc.
-        key_segments: Final = key_lower.replace("-", "_").split("_")
+        # Split on underscores and hyphens (and, when opted in, camelCase boundaries too) and check whether any
+        # segment matches the pattern. This avoids false positives like "max_tokens" matching "token"
+        # but still catches "api_key", "access_token" and, with split_camel_case, "apiKey", "APIKey" and "AWSSecret".
+        key_lower: Final = str(key).lower().replace("-", "_")
+        camel_lower: Final = (
+            _CAMEL_BOUNDARY.sub("_", str(key)).lower().replace("-", "_") if self.split_camel_case else key_lower
+        )
+        key_segments: Final = frozenset(key_lower.split("_")) | frozenset(camel_lower.split("_"))
 
         # If any segment matches a non-sensitive override, the key is not sensitive.
         # For example, "input_cost_per_token" contains "token" but also "cost",
@@ -257,10 +268,16 @@ def mask_sensitive_keys(data: Mapping[str, object], sensitive_fields: set[str]) 
     return masked
 
 
-def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, object]:
+def redact_credentials_in_payload(
+    data: Mapping[str, object],
+    masker: SensitiveDataMasker = _default_masker,
+    *,
+    dropped_keys: AbstractSet[str] = frozenset(),
+) -> Mapping[str, object]:
     """Return a copy of ``data`` where every value under a credential-named key is
-    replaced by the shared ``REDACTED`` marker, nested mappings are recursed into,
-    and every other value is preserved by identity.
+    replaced by the shared ``REDACTED`` marker, every entry whose key is in
+    ``dropped_keys`` is removed outright at any depth, nested mappings are recursed
+    into, and every other value is preserved by identity.
 
     Sensitive-key detection is delegated to the shared :class:`SensitiveDataMasker`,
     so the credential names stay in one place. Unlike
@@ -273,28 +290,31 @@ def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, ob
     rather than passed through, so burying a credential deeper than the walk goes
     hides it instead of exposing it.
     """
-    return _redact_mapping(data, 0)
+    return _PayloadRedactor(masker, frozenset(dropped_keys)).mapping(data, 0)
 
 
-def _redact_mapping(data: Mapping[str, object], depth: int) -> Mapping[str, object]:
-    return {key: _redact_entry(key, value, depth) for key, value in data.items()}
+@dataclass(frozen=True, slots=True)
+class _PayloadRedactor:
+    masker: SensitiveDataMasker
+    dropped_keys: frozenset[str]
 
+    def mapping(self, data: Mapping[str, object], depth: int) -> Mapping[str, object]:
+        return {key: self.entry(key, value, depth) for key, value in data.items() if key not in self.dropped_keys}
 
-def _redact_entry(key: str, value: object, depth: int) -> object:
-    if value is not None and _default_masker.is_sensitive_key(key):
-        return REDACTED
-    if not isinstance(value, (Mapping, list, tuple)):
-        return value
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
-        return REDACTED
-    if isinstance(value, Mapping):
-        return _redact_mapping(value, depth + 1)
-    return _redact_sequence(value, depth + 1)
+    def entry(self, key: str, value: object, depth: int) -> object:
+        if value is not None and self.masker.is_sensitive_key(key):
+            return REDACTED
+        if not isinstance(value, (Mapping, list, tuple)):
+            return value
+        if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+            return REDACTED
+        if isinstance(value, Mapping):
+            return self.mapping(value, depth + 1)
+        return self.sequence(value, depth + 1)
 
-
-def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
-    redacted: Final = tuple(_redact_entry("", item, depth) for item in values)
-    return redacted if isinstance(values, tuple) else list(redacted)
+    def sequence(self, values: Sequence[object], depth: int) -> Sequence[object]:
+        redacted: Final = tuple(self.entry("", item, depth) for item in values)
+        return redacted if isinstance(values, tuple) else list(redacted)
 
 
 # Usage example:
