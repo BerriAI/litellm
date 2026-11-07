@@ -2418,6 +2418,31 @@ class TestToolTransformation:
         assert [call["id"] for call in request["messages"][1]["tool_calls"]] == replayed_call_ids
 
     @pytest.mark.parametrize(
+        "tools",
+        [
+            pytest.param(_deferred_tools_with_server_tool_search()[1:], id="only_the_tools_it_found"),
+            pytest.param(
+                [{"type": "tool_search", "execution": "client"}, *_deferred_tools_with_server_tool_search()[1:]],
+                id="a_search_the_client_runs",
+            ),
+            pytest.param([], id="no_tools"),
+        ],
+    )
+    def test_stateless_claude_search_is_dropped_when_the_follow_up_sends_no_search_tool_the_route_runs(
+        self, tools: list[dict[str, object]]
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input("srvtoolu_01Search", "completed"))
+            ),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == ["toolu_01Weather"]
+
+    @pytest.mark.parametrize(
         ("arguments", "search_tool_name"),
         [
             pytest.param({"pattern": "weather"}, "tool_search_tool_regex", id="regex_object"),
