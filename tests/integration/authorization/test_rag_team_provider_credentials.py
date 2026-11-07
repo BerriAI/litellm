@@ -812,8 +812,12 @@ def _ingest_signatures(prefix: str, api_key: str, store_id: str) -> tuple[Signat
     )
 
 
+def _ingested_file_id(response: httpx.Response) -> str:
+    return string_value(JSON_OBJECT.validate_json(response.content)["file_id"])
+
+
 def _provider_file_id(response: httpx.Response) -> str:
-    managed_file_id: Final = string_value(JSON_OBJECT.validate_json(response.content)["file_id"])
+    managed_file_id: Final = _ingested_file_id(response)
     decoded: Final = base64.urlsafe_b64decode(managed_file_id + "=" * (-len(managed_file_id) % 4)).decode()
     provider_file_id: Final = re.search(r";llm_output_file_id,([^;]+)", decoded)
     assert provider_file_id is not None, decoded
@@ -1035,7 +1039,8 @@ def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deploym
 
     ingested: Final = _ingest(rag_rig.gateway, key)
     store_id: Final = _completed_store(rag_rig, ingested)
-    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
     rows: Final = _store_rows(store_id)
     assert [row["team_id"] for row in rows] == [rag_rig.tenants.team_w], rows
     assert WILDCARD_API_KEY not in json.dumps(rows), rows
@@ -1054,7 +1059,8 @@ def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and
 
     ingested: Final = _ingest(rag_rig.gateway, tenants.wildcard_global_key)
     store_id: Final = _completed_store(rag_rig, ingested)
-    assert rag_rig.signatures() == _registered_ingest_signatures("wildcard", WILDCARD_API_KEY, store_id, ingested)
+    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+    assert _ingested_file_id(ingested).startswith("file-wildcard-"), ingested.text
 
     response: Final = _query(
         rag_rig.gateway, tenants.wildcard_global_key, tenants.global_model, {**OPENAI, "vector_store_id": store_id}

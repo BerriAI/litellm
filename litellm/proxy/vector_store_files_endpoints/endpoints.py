@@ -4,11 +4,16 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
+import openai
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
 
 import litellm
-from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
+from litellm.llms.base_llm.managed_resources.utils import (
+    extract_provider_resource_id_from_unified_id,
+    extract_target_model_names_from_unified_id,
+    is_base64_encoded_unified_id,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -40,6 +45,7 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
 )
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.vector_store_files.main import aretrieve as vector_store_file_aretrieve
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -119,24 +125,47 @@ class _ManagedFileCopy:
     provider_file_id: str
 
 
+async def _store_holds_file(
+    provider: LlmProviders, vector_store_id: str, file_id: str, credentials: Mapping[str, object]
+) -> bool:
+    try:
+        await vector_store_file_aretrieve(
+            vector_store_id=extract_provider_resource_id_from_unified_id(vector_store_id) or vector_store_id,
+            file_id=file_id,
+            extra_headers=None,
+            timeout=None,
+            custom_llm_provider=provider.value,
+            **{key: value for key, value in credentials.items() if key != "custom_llm_provider"},
+            **{"no-log": True},
+        )
+    except openai.APIError:
+        return False
+    return True
+
+
 async def _caller_team_copy_of_managed_file(
     provider: LlmProviders | None,
     file_id: str,
+    upload_copy: str | None,
+    vector_store_id: object,
     user_api_key_dict: UserAPIKeyAuth,
     managed_files_obj: object | None,
     llm_router: Optional["Router"],
 ) -> _ManagedFileCopy | None:
-    team_deployment: Final = (
-        None
-        if provider is None
-        else await team_deployment_the_caller_may_use(
-            get_team_provider_deployment(llm_router, user_api_key_dict, provider.value), llm_router, user_api_key_dict
-        )
+    if provider is None:
+        return None
+    team_deployment: Final = await team_deployment_the_caller_may_use(
+        get_team_provider_deployment(llm_router, user_api_key_dict, provider.value), llm_router, user_api_key_dict
     )
     provider_file_id: Final = await managed_file_copy_on_deployment(
         file_id, team_deployment, managed_files_obj, user_api_key_dict.parent_otel_span
     )
     if team_deployment is None or provider_file_id is None:
+        return None
+    if provider_file_id != upload_copy and not (
+        isinstance(vector_store_id, str)
+        and await _store_holds_file(provider, vector_store_id, provider_file_id, team_deployment.credentials)
+    ):
         return None
     return _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
 
@@ -207,7 +236,7 @@ async def _update_request_data_with_managed_file_id(
         parsed_id: Final = parse_unified_id(file_id)
 
         if parsed_id:
-            target_model_names: Final = parsed_id.get("target_model_names", [])
+            target_model_names: Final = extract_target_model_names_from_unified_id(decoded_id)
 
             # Extract the actual provider file ID from llm_output_file_id field
             # Format: litellm_proxy:...;llm_output_file_id,{actual_file_id};...
@@ -238,6 +267,8 @@ async def _update_request_data_with_managed_file_id(
                 else await _caller_team_copy_of_managed_file(
                     await _resolve_provider(data=data, request=request),
                     file_id,
+                    llm_output_file_id,
+                    data.get("vector_store_id"),
                     user_api_key_dict,
                     managed_files_obj,
                     llm_router,
@@ -497,7 +528,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
         if parsed_id:
             model_id: Final = parsed_id.get("model_id")
             provider_resource_id: Final = parsed_id.get("provider_resource_id")
-            target_model_names: Final = parsed_id.get("target_model_names", [])
+            target_model_names: Final = extract_target_model_names_from_unified_id(decoded_id)
 
             verbose_logger.debug(
                 "Decoded vector store - model_id: %s, provider_resource_id: %s, target_model_names: %s",
