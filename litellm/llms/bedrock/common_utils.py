@@ -2836,3 +2836,13 @@ class CommonBatchFilesUtils:
         Get Bedrock-specific error class.
         """
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
+
+def bedrock_model_encrypts_agent_messages(model: str) -> bool:
+    """Only OpenAI's GPT models on Bedrock lock Codex worker messages.
+
+    Open-weight models (gpt-oss, Gemma, Grok) never lock them, so Codex puts plain text in the locked
+    slot, which Bedrock rejects with ``invalid_encrypted_content`` unless it is rewritten to text first.
+    """
+    name: Final = f".{model.rsplit('/', 1)[-1]}"
+    return ".openai.gpt-" in name and ".openai.gpt-oss" not in name
