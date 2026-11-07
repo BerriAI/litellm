@@ -1676,7 +1676,9 @@ class Logging(LiteLLMLoggingBaseClass):
             # log raw request to provider (like LangFuse) -- if opted in.
             if self.log_raw_request_response is True or litellm.log_raw_request_response is True:
                 _litellm_params: Final = self.model_call_details.get("litellm_params", {})
-                _metadata: Final = _litellm_params.get("metadata", {}) or {}
+                if _litellm_params.get("metadata") is None:
+                    _litellm_params["metadata"] = {}
+                _metadata: Final = _litellm_params["metadata"]
                 try:
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
