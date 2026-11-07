@@ -127,6 +127,48 @@ async def test_worker_removes_more_expired_receipts_than_one_cleanup_batch_in_on
         await client.db.disconnect()
 
 
+@pytest.mark.asyncio
+async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    class _Alerts:
+        def __init__(self) -> None:
+            self.messages: list[str] = []
+
+        async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
+            self.messages.append(message.split(".")[0])
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_ALERT_BYTES", "1")
+    monkeypatch.delenv("LITELLM_ACCOUNTING_DELIVERY_CHECK_INTERVAL_SECONDS", raising=False)
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" '
+            "(delivery_id, request_id, accounting_payload, is_batch, attempts, created_at, next_attempt_at) "
+            "VALUES ('stuck', 'stuck', '{}'::jsonb, false, 1, CURRENT_TIMESTAMP - INTERVAL '1 hour', "
+            "CURRENT_TIMESTAMP + INTERVAL '1 hour')"
+        )
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    now = [0.0]
+    writer = DBSpendUpdateWriter(accounting_clock=lambda: now[0])
+    alerts = _Alerts()
+    observed = []
+    await client.db.connect()
+    try:
+        for moment in (0.0, 10.0, 899.0, 900.0):
+            now[0] = moment
+            await flush_accounting_deliveries(writer, client, alerts)
+            observed.append(tuple(alerts.messages))
+            alerts.messages.clear()
+    finally:
+        await client.db.disconnect()
+
+    both = ("Accounting delivery storage requires review", "Accounting deliveries are delayed")
+    assert observed == [both, (), (), both]
+
+
 @pytest.mark.parametrize("ledger", [False, True])
 @pytest.mark.parametrize("exclude_messages", [False, True])
 @pytest.mark.asyncio
