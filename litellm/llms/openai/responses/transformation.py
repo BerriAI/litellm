@@ -374,6 +374,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return model
 
     @staticmethod
+    def _without_unsupported_o_series_temperature(
+        params: Mapping[str, object], model: str, drop_params: bool
+    ) -> Mapping[str, object]:
+        temperature: Final = params.get("temperature")
+        if (
+            litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+            and temperature is not None
+            and temperature != 1
+            and (drop_params or litellm.drop_params)
+        ):
+            return {key: value for key, value in params.items() if key != "temperature"}
+        return params
+
+    @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
         """Return True if the model supports reasoning.effort='none'."""
         from litellm.utils import supports_none_reasoning_effort
@@ -589,8 +603,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         ),
                         status_code=400,
                     )
-
-        return params
+        return self._without_unsupported_o_series_temperature(params, lookup_name, drop_params)
 
     def transform_responses_api_request(
         self,
