@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -4731,9 +4732,10 @@ def test_thinking_with_max_completion_tokens():
         drop_params=False,
     )
 
-    # Should have maxTokens set to budget_tokens + DEFAULT_MAX_TOKENS
     assert "maxTokens" in result
-    assert result["maxTokens"] == 5000 + DEFAULT_MAX_TOKENS
+    assert result["maxTokens"] == max(
+        5000 + DEFAULT_MAX_TOKENS, litellm.model_cost["anthropic.claude-sonnet-4-5-20250929-v1:0"]["max_output_tokens"]
+    )
     # Should have thinking config
     assert "thinking" in result
     assert result["thinking"]["type"] == "enabled"
@@ -12255,9 +12257,21 @@ _OK_CONVERSE_REPLY: Final = {
 }
 
 
-def _routed_converse_inference_config(
-    respx_mock: respx.Router, model: str, model_info: dict, **completion_kwargs: object
-) -> dict:
+class _ConverseInferenceConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    maxTokens: int | None = None
+
+
+class _ConverseRequestBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    inferenceConfig: _ConverseInferenceConfig = _ConverseInferenceConfig()
+
+
+def _routed_converse_max_tokens(
+    respx_mock: respx.Router, model: str, model_info: Mapping[str, str | int], **completion_kwargs: object
+) -> int | None:
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
         return_value=httpx.Response(200, json=_OK_CONVERSE_REPLY)
     )
@@ -12278,7 +12292,7 @@ def _routed_converse_inference_config(
     router.completion(
         model="claude", messages=[{"role": "user", "content": "hi"}], client=HTTPHandler(), **completion_kwargs
     )
-    return json.loads(route.calls[0].request.content).get("inferenceConfig", {})
+    return _ConverseRequestBody.model_validate_json(route.calls[0].request.content).inferenceConfig.maxTokens
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -12287,9 +12301,9 @@ def test_claude_without_max_tokens_sends_its_mapped_output_cap(
 ) -> None:
     monkeypatch.setitem(litellm.model_cost[_SONNET_5_5_BASE_ROW], "max_output_tokens", 54321)
 
-    inference_config: Final = _routed_converse_inference_config(respx_mock, f"bedrock/{_SONNET_5_5}", {})
+    max_tokens: Final = _routed_converse_max_tokens(respx_mock, f"bedrock/{_SONNET_5_5}", {})
 
-    assert inference_config["maxTokens"] == 54321
+    assert max_tokens == 54321
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -12298,11 +12312,9 @@ def test_application_profile_arn_sends_its_base_models_output_cap(
 ) -> None:
     monkeypatch.setitem(litellm.model_cost[_SONNET_5_5_BASE_ROW], "max_output_tokens", 54321)
 
-    inference_config: Final = _routed_converse_inference_config(
-        respx_mock, f"bedrock/{_PROFILE_ARN}", {"base_model": _SONNET_5_5}
-    )
+    max_tokens: Final = _routed_converse_max_tokens(respx_mock, f"bedrock/{_PROFILE_ARN}", {"base_model": _SONNET_5_5})
 
-    assert inference_config["maxTokens"] == 54321
+    assert max_tokens == 54321
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -12311,45 +12323,67 @@ def test_deployment_max_output_tokens_is_the_default_over_the_mapped_cap(
 ) -> None:
     deployment_cap: Final = litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"] // 4
 
-    inference_config: Final = _routed_converse_inference_config(
+    max_tokens: Final = _routed_converse_max_tokens(
         respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": deployment_cap}
     )
 
-    assert inference_config["maxTokens"] == deployment_cap
+    assert max_tokens == deployment_cap
 
 
 @pytest.mark.respx(assert_all_called=True)
 def test_caller_max_tokens_wins_over_the_default_cap(respx_mock: respx.Router, local_model_cost_map: None) -> None:
-    inference_config: Final = _routed_converse_inference_config(
+    max_tokens: Final = _routed_converse_max_tokens(
         respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": 32000}, max_tokens=111
     )
 
-    assert inference_config["maxTokens"] == 111
+    assert max_tokens == 111
 
 
+@pytest.mark.parametrize(
+    ("model_info", "expected_max_tokens"),
+    [
+        ({}, litellm.model_cost["anthropic.claude-sonnet-4-5-20250929-v1:0"]["max_output_tokens"]),
+        ({"max_output_tokens": 3000}, 2048 + litellm.constants.DEFAULT_MAX_TOKENS),
+    ],
+    ids=["cap_above_budget", "budget_above_cap"],
+)
 @pytest.mark.respx(assert_all_called=True)
-def test_thinking_budget_without_max_tokens_keeps_its_budget_based_cap(
-    respx_mock: respx.Router, local_model_cost_map: None
+def test_thinking_budget_without_max_tokens_gets_the_larger_of_the_cap_and_its_budget_based_size(
+    model_info: Mapping[str, int], expected_max_tokens: int, respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
-    inference_config: Final = _routed_converse_inference_config(
+    max_tokens: Final = _routed_converse_max_tokens(
         respx_mock,
         "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        {},
+        model_info,
         thinking={"type": "enabled", "budget_tokens": 2048},
     )
 
-    assert inference_config["maxTokens"] == 2048 + litellm.constants.DEFAULT_MAX_TOKENS
+    assert max_tokens == expected_max_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_unmapped_claude_gets_the_current_claude_output_cap(respx_mock: respx.Router, local_model_cost_map: None) -> None:
+    max_tokens: Final = _routed_converse_max_tokens(
+        respx_mock, "bedrock/converse/us.anthropic.claude-not-in-the-cost-map-v1:0", {}
+    )
+
+    assert max_tokens == litellm.constants.DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 
 
 @pytest.mark.parametrize(
     "model",
-    ["bedrock/converse/us.anthropic.claude-not-in-the-cost-map-v1:0", "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0"],
-    ids=["unmapped_claude", "non_claude"],
+    [
+        "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+    ],
+    ids=["sonnet_4", "opus_4_1", "sonnet_3_7", "non_claude"],
 )
 @pytest.mark.respx(assert_all_called=True)
-def test_unmapped_claude_and_other_models_keep_bedrocks_own_default(
+def test_claude_rejecting_context_overflow_and_other_models_keep_bedrocks_own_default(
     model: str, respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
-    inference_config: Final = _routed_converse_inference_config(respx_mock, model, {})
+    max_tokens: Final = _routed_converse_max_tokens(respx_mock, model, {})
 
-    assert "maxTokens" not in inference_config
+    assert max_tokens is None

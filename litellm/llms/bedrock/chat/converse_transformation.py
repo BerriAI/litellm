@@ -75,7 +75,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
-    bedrock_mapped_max_output_tokens,
+    bedrock_converse_claude_default_max_tokens,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
@@ -1272,12 +1272,18 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         default_max_tokens: Final = (
-            self._default_claude_max_tokens(base_model, model_info)
-            if "maxTokens" not in optional_params and base_model.startswith("anthropic")
-            else None
+            None
+            if "max_tokens" in request_params or "max_completion_tokens" in request_params
+            else bedrock_converse_claude_default_max_tokens(base_model, model_info)
         )
         if default_max_tokens is not None:
-            optional_params["maxTokens"] = default_max_tokens  # rebind-ok: fills the caller's dict by contract
+            match optional_params:
+                case {"maxTokens": int() as thinking_max_tokens}:
+                    optional_params["maxTokens"] = max(  # rebind-ok: fills the caller's dict by contract
+                        default_max_tokens, thinking_max_tokens
+                    )
+                case dict():
+                    optional_params["maxTokens"] = default_max_tokens  # rebind-ok: fills the caller's dict by contract
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         if final_is_thinking_enabled and "tool_choice" in optional_params:
@@ -1472,14 +1478,6 @@ class AmazonConverseConfig(BaseConfig):
             )
             if thinking_token_budget is not None:
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
-
-    @staticmethod
-    def _default_claude_max_tokens(base_model: str, model_info: Mapping[str, object] | None) -> int | None:
-        match (model_info or {}).get("max_output_tokens"):
-            case int() as deployment_max_tokens:
-                return deployment_max_tokens
-            case _:
-                return bedrock_mapped_max_output_tokens(base_model)
 
     @overload
     def get_cache_point_block(

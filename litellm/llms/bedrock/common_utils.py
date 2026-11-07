@@ -33,6 +33,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
@@ -327,6 +328,43 @@ def bedrock_mapped_max_output_tokens(model: str) -> int | None:
             return max_tokens
         case _:
             return None
+
+
+_CLAUDE_MODELS_REJECTING_CONTEXT_OVERFLOW: Final = (
+    "anthropic.claude-v1",
+    "anthropic.claude-v2",
+    "anthropic.claude-instant",
+    "anthropic.claude-3",
+    "anthropic.claude-sonnet-4-20250514",
+    "anthropic.claude-opus-4-20250514",
+    "anthropic.claude-opus-4-1-20250805",
+)
+
+
+def anthropic_config_max_tokens() -> int | None:
+    return litellm.AnthropicConfig.max_tokens
+
+
+def bedrock_converse_claude_default_max_tokens(
+    base_model: str,
+    model_info: Mapping[str, object] | None,
+    read_configured_max_tokens: Callable[[], int | None] = anthropic_config_max_tokens,
+) -> int | None:
+    if not base_model.startswith("anthropic") or base_model.startswith(_CLAUDE_MODELS_REJECTING_CONTEXT_OVERFLOW):
+        return None
+    configured_max_tokens: Final = read_configured_max_tokens()
+    match (model_info or {}).get("max_output_tokens"):
+        case int() as deployment_max_tokens:
+            return (
+                deployment_max_tokens
+                if configured_max_tokens is None
+                else min(deployment_max_tokens, configured_max_tokens)
+            )
+        case _ if configured_max_tokens is not None:
+            return configured_max_tokens
+        case _:
+            mapped_max_tokens: Final = bedrock_mapped_max_output_tokens(base_model)
+            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if mapped_max_tokens is None else mapped_max_tokens
 
 
 def _bedrock_native_output_opt_in(
