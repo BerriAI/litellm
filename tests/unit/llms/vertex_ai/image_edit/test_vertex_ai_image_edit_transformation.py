@@ -231,10 +231,10 @@ class TestVertexAIGeminiImageEditTransformation:
         )
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
+        """Test that missing image raises BadRequestError with 400 status code"""
         optional_params = {}
 
-        with pytest.raises(ValueError, match="requires at least one image"):
+        with pytest.raises(litellm.BadRequestError, match="requires at least one image") as exc_info:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
@@ -243,6 +243,7 @@ class TestVertexAIGeminiImageEditTransformation:
                 litellm_params=MagicMock(),
                 headers={},
             )
+        assert exc_info.value.status_code == 400
 
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""
