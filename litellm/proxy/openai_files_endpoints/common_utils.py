@@ -170,6 +170,19 @@ class ManagedProviderFileRegistrar(Protocol):
     ) -> str | None: ...
 
 
+async def managed_file_copy_on_deployment(
+    file_id: str,
+    deployment: TeamProviderDeployment | None,
+    managed_files_obj: object | None,
+    litellm_parent_otel_span: "Span | None",
+) -> str | None:
+    if deployment is None or not isinstance(managed_files_obj, ManagedFileModelMappingReader):
+        return None
+    mappings: Final = await managed_files_obj.get_model_file_id_mapping((file_id,), litellm_parent_otel_span)
+    model_mappings: Final = mappings.get(file_id)
+    return None if model_mappings is None else model_mappings.get(deployment.deployment_id)
+
+
 def provider_file_id_from_managed_id(managed_file_id: str) -> str:
     decoded_id: Final = is_base64_encoded_unified_id(managed_file_id)
     if not decoded_id:

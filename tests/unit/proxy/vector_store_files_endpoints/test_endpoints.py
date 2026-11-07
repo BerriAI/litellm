@@ -297,20 +297,8 @@ _TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
 _PROXY_OPENAI_BASE: Final = "https://proxy-openai.example/v1"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("caller_team_id", "expected_base", "expected_authorization"),
-    [
-        ("team-b", _TEAM_OPENAI_BASE, "Bearer team-openai-key"),
-        ("team-c", _PROXY_OPENAI_BASE, "Bearer proxy-openai-key"),
-    ],
-)
-async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
-    monkeypatch: pytest.MonkeyPatch, caller_team_id: str, expected_base: str, expected_authorization: str
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id=caller_team_id)
-    router: Final = litellm.Router(
+def _proxy_and_team_b_openai_router() -> litellm.Router:
+    return litellm.Router(
         model_list=[
             {
                 "model_name": "openai/*",
@@ -319,6 +307,7 @@ async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
                     "api_key": "proxy-openai-key",
                     "api_base": _PROXY_OPENAI_BASE,
                 },
+                "model_info": {"id": "proxy-openai"},
             },
             {
                 "model_name": "model_name_team-b_6f0c8a52",
@@ -332,6 +321,38 @@ async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
             },
         ]
     )
+
+
+@dataclass(frozen=True)
+class ManagedFileCopiesStub:
+    copies: Mapping[str, str]
+
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return True
+
+    async def can_user_call_unified_object_id(self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return False
+
+    async def get_model_file_id_mapping(
+        self, file_ids: Sequence[str], litellm_parent_otel_span: object
+    ) -> Mapping[str, Mapping[str, str]]:
+        return {file_id: self.copies for file_id in file_ids}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_team_id", "expected_base", "expected_authorization"),
+    [
+        ("team-b", _TEAM_OPENAI_BASE, "Bearer team-openai-key"),
+        ("team-c", _PROXY_OPENAI_BASE, "Bearer proxy-openai-key"),
+    ],
+)
+async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
+    monkeypatch: pytest.MonkeyPatch, caller_team_id: str, expected_base: str, expected_authorization: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id=caller_team_id)
+    router: Final = _proxy_and_team_b_openai_router()
     managed_file_id: Final = (
         base64.urlsafe_b64encode(
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
@@ -353,6 +374,57 @@ async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
     with respx.mock(assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.get(f"{expected_base}/vector_stores/vs-test/files/{RAW_FILE_ID}").mock(
             return_value=httpx.Response(200, json=dict(_vector_store_file_row(RAW_FILE_ID)))
+        )
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai"},
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+
+    assert upstream.calls.last.request.headers["Authorization"] == expected_authorization
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_team_id", "expected_url", "expected_authorization"),
+    [
+        ("team-b", f"{_TEAM_OPENAI_BASE}/vector_stores/vs-test/files/file-team-copy", "Bearer team-openai-key"),
+        ("team-c", f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy", "Bearer proxy-openai-key"),
+    ],
+)
+async def test_managed_file_id_with_a_copy_on_the_callers_team_deployment_reaches_that_copy(
+    monkeypatch: pytest.MonkeyPatch, caller_team_id: str, expected_url: str, expected_authorization: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id=caller_team_id)
+    router: Final = _proxy_and_team_b_openai_router()
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "two-copy-unified-id", "openai/*", "file-proxy-copy", "proxy-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    data, _ = await _update_request_data_with_managed_file_id(
+        data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+        file_id=managed_file_id,
+        request=MagicMock(headers={}, query_params={}),
+        user_api_key_dict=caller,
+        managed_files_obj=ManagedFileCopiesStub(
+            copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
+        ),
+        llm_router=router,
+    )
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.get(expected_url).mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row(expected_url.rsplit("/", 1)[-1])))
         )
         await (
             await route_request(

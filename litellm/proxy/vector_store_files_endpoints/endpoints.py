@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
@@ -18,11 +19,15 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
+    carries_explicit_credentials,
     get_credentials_for_model,
+    get_team_provider_deployment,
     handle_model_based_routing,
+    managed_file_copy_on_deployment,
     managed_file_ids_for_provider_file_ids,
     prepare_data_with_credentials,
     provider_file_id_from_managed_id,
+    team_deployment_the_caller_may_use,
 )
 from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -108,6 +113,34 @@ async def _with_managed_file_list_ids(
     return _with_managed_file_ids(response, id_map)
 
 
+@dataclass(frozen=True, slots=True)
+class _ManagedFileCopy:
+    deployment_id: str
+    provider_file_id: str
+
+
+async def _caller_team_copy_of_managed_file(
+    provider: LlmProviders | None,
+    file_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files_obj: object | None,
+    llm_router: Optional["Router"],
+) -> _ManagedFileCopy | None:
+    team_deployment: Final = (
+        None
+        if provider is None
+        else await team_deployment_the_caller_may_use(
+            get_team_provider_deployment(llm_router, user_api_key_dict, provider.value), llm_router, user_api_key_dict
+        )
+    )
+    provider_file_id: Final = await managed_file_copy_on_deployment(
+        file_id, team_deployment, managed_files_obj, user_api_key_dict.parent_otel_span
+    )
+    if team_deployment is None or provider_file_id is None:
+        return None
+    return _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
+
+
 async def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
@@ -189,12 +222,25 @@ async def _update_request_data_with_managed_file_id(
                 if stored_deployment_id and llm_router
                 else None
             )
-            routing_model: Final = (
+            team_copy: Final = (
+                None
+                if carries_explicit_credentials(data)
+                else await _caller_team_copy_of_managed_file(
+                    await _resolve_provider(data=data, request=request),
+                    file_id,
+                    user_api_key_dict,
+                    managed_files_obj,
+                    llm_router,
+                )
+            )
+            file_routing_model: Final = (
                 stored_deployment_id
                 if stored_deployment is not None
                 and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
                 else (target_model_names[0] if target_model_names else None)
             )
+            routing_model: Final = team_copy.deployment_id if team_copy is not None else file_routing_model
+            provider_file_id: Final = team_copy.provider_file_id if team_copy is not None else llm_output_file_id
             if routing_model:
                 data["model"] = routing_model
 
@@ -205,13 +251,13 @@ async def _update_request_data_with_managed_file_id(
                         prepare_data_with_credentials(
                             data=data,
                             credentials=credentials,
-                            file_id=llm_output_file_id,  # Use the actual provider file ID
+                            file_id=provider_file_id,
                         )
                         verbose_logger.info(
                             "Routing vector store file operation to model: %s, file_id: %s -> %s",
                             routing_model,
                             file_id,
-                            llm_output_file_id,
+                            provider_file_id,
                         )
                         return data, file_id  # Return original managed file ID
 

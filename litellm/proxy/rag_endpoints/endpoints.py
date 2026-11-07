@@ -42,7 +42,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     EXPLICIT_CREDENTIAL_KEYS,
-    ManagedFileModelMappingReader,
     ManagedProviderFileRegistrar,
     ManagedResourceAccessChecker,
     TeamProviderDeployment,
@@ -51,6 +50,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     explicit_request_credentials,
     get_team_provider_deployment,
     is_base64_encoded_unified_file_id,
+    managed_file_copy_on_deployment,
     provider_file_id_from_managed_id,
     team_deployment_the_caller_may_use,
 )
@@ -299,19 +299,6 @@ def _team_provider_credentials(deployment: TeamProviderDeployment | None) -> Map
     )
 
 
-async def _deployment_copy_of_managed_file(
-    file_id: str,
-    deployment: TeamProviderDeployment | None,
-    managed_files_obj: object | None,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> str | None:
-    if deployment is None or not isinstance(managed_files_obj, ManagedFileModelMappingReader):
-        return None
-    mappings: Final = await managed_files_obj.get_model_file_id_mapping((file_id,), user_api_key_dict.parent_otel_span)
-    model_mappings: Final = mappings.get(file_id)
-    return None if model_mappings is None else model_mappings.get(deployment.deployment_id)
-
-
 async def _provider_file_id_for_ingest(
     file_id: str | None,
     deployment: TeamProviderDeployment | None,
@@ -328,8 +315,8 @@ async def _provider_file_id_for_ingest(
             },
         )
     await authorize_managed_resource_id(file_id, "file", user_api_key_dict, managed_files_obj)
-    deployment_copy: Final = await _deployment_copy_of_managed_file(
-        file_id, deployment, managed_files_obj, user_api_key_dict
+    deployment_copy: Final = await managed_file_copy_on_deployment(
+        file_id, deployment, managed_files_obj, user_api_key_dict.parent_otel_span
     )
     return deployment_copy or provider_file_id_from_managed_id(file_id)
 
