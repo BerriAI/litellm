@@ -143,7 +143,7 @@ class SAPAssistantMessage(LiteLLMBaseModel):
 class SAPToolChatMessage(LiteLLMBaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str | TextContent | list[TextContent]
+    content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
 
 ChatMessage = SAPMessage | SAPUserMessage | SAPAssistantMessage | SAPToolChatMessage
