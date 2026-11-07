@@ -28,6 +28,7 @@ import os
 import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import cache
 from importlib.resources import files
 from typing import Final, Literal, TypeAlias
@@ -472,6 +473,28 @@ def update_headers_with_filtered_beta(
         headers.pop("anthropic-beta", None)
 
     return headers
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentBetaFilter:
+    provider: str
+    api_base: str | None
+    unlisted: UnlistedBetas
+
+    def filtered(self, headers: dict[str, str], keep: frozenset[str]) -> dict[str, str]:
+        return update_headers_with_filtered_beta(
+            headers=headers, provider=self.provider, api_base=self.api_base, unlisted=self.unlisted, keep=keep
+        )
+
+
+def deployment_beta_filter(
+    provider: str, affinity_api_base: str | None, provider_filters_betas: bool
+) -> DeploymentBetaFilter | None:
+    if provider_filters_betas:
+        return DeploymentBetaFilter(provider=provider, api_base=affinity_api_base, unlisted="drop")
+    if resolve_beta_provider(provider, affinity_api_base) != provider:
+        return DeploymentBetaFilter(provider=provider, api_base=affinity_api_base, unlisted="forward")
+    return None
 
 
 def update_request_with_filtered_beta(

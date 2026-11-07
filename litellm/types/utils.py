@@ -4912,6 +4912,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     """
     status_code: int | None = None
     rejected_before_provider_call: bool = Field(default=False, exclude=True)
+    carried_request_options: bool = Field(default=False, exclude=True)
 
 
 class CustomHuggingfaceTokenizer(TypedDict):

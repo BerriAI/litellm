@@ -567,6 +567,7 @@ async def _counted_requests(
     request_options: Mapping[str, JsonValue] = MappingProxyType({}),
     anthropic_beta: str | None = None,
     model: str = "claude-opus-5-5",
+    api_base: str = "https://gateway.example",
 ) -> tuple[TokenCountResponse | None, tuple[httpx.Request, ...]]:
     sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
 
@@ -580,7 +581,7 @@ async def _counted_requests(
             model_to_use=model,
             messages=messages,
             contents=None,
-            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": "https://gateway.example"}},
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": api_base}},
             request_model=model,
             tools=tools,
             messages_format=messages_format,
@@ -972,6 +973,7 @@ async def _messages_inference_request(
     request_options: Mapping[str, JsonValue],
     model: str = "claude-haiku-5-5",
     extra_headers: Mapping[str, str] = MappingProxyType({}),
+    api_base: str = "https://gateway.example",
 ) -> httpx.Request:
     sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
 
@@ -987,7 +989,7 @@ async def _messages_inference_request(
             tools=[_WEATHER_TOOL],
             max_tokens=4096,
             api_key="sk-ant-api03-test-key",
-            api_base="https://gateway.example",
+            api_base=api_base,
             extra_headers=dict(extra_headers),
             **request_options,
         )
@@ -1059,7 +1061,10 @@ async def test_counter_sends_the_options_and_context_edits_messages_inference_se
     assert count_body.get("output_config") == (
         inference_output_config
         if inference_output_format is None
-        else {**(inference_output_config if isinstance(inference_output_config, dict) else {}), "format": inference_output_format}
+        else {
+            **(inference_output_config if isinstance(inference_output_config, dict) else {}),
+            "format": inference_output_format,
+        }
     )
     assert {name: count_body.get(name) for name in ("thinking", "tool_choice", "context_management")} == {
         name: inference_body.get(name) for name in ("thinking", "tool_choice", "context_management")
@@ -1096,6 +1101,44 @@ async def test_counter_sends_the_thinking_display_and_caller_betas_messages_infe
     counted_betas: Final = _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION}
     assert counted_betas == _betas(inference)
     assert {ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER, caller_beta} <= counted_betas
+
+
+_FOUNDRY_BASE: Final = "https://my-resource.services.ai.azure.com/anthropic"
+_UNLISTED_BETA: Final = "unlisted-beta-2099-01-01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("counter_type", "expected_betas"),
+    ((AnthropicTokenCounter, frozenset({_UNLISTED_BETA})), (AzureAIAnthropicTokenCounter, frozenset())),
+    ids=("anthropic-deployment-forwards-unlisted", "azure-ai-deployment-drops-unlisted"),
+)
+async def test_counter_on_a_foundry_host_drops_the_caller_betas_messages_inference_drops_there(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], expected_betas: frozenset[str]
+) -> None:
+    caller_betas: Final = f"mcp-servers-2025-12-04,{_UNLISTED_BETA}"
+    inference: Final = await _messages_inference_request(
+        counter_type,
+        f"{_FOUNDRY_BASE}/v1/messages",
+        {"thinking": _ENABLED_THINKING},
+        extra_headers={"anthropic-beta": caller_betas},
+        api_base=_FOUNDRY_BASE,
+    )
+    _, (count,) = await _counted_requests(
+        counter_type,
+        f"{_FOUNDRY_BASE}/v1/messages/count_tokens",
+        [{"role": "user", "content": "Weather in SF?"}],
+        [_WEATHER_TOOL],
+        "anthropic",
+        request_options={"thinking": _ENABLED_THINKING},
+        anthropic_beta=caller_betas,
+        model="claude-haiku-5-5",
+        api_base=_FOUNDRY_BASE,
+    )
+
+    counted_betas: Final = _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION}
+    assert counted_betas == _betas(inference) == expected_betas
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1194,12 @@ _ADVISOR_TOOL: Final[dict[str, JsonValue]] = {
     "name": "advisor",
     "model": "claude-opus-5-5",
 }
-_ADVISOR_CALL: Final[dict[str, JsonValue]] = {"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}}
+_ADVISOR_CALL: Final[dict[str, JsonValue]] = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_1",
+    "name": "advisor",
+    "input": {},
+}
 _ADVISOR_RESULT: Final[dict[str, JsonValue]] = {
     "type": "advisor_tool_result",
     "tool_use_id": "srvtoolu_1",

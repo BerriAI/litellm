@@ -89,12 +89,12 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
 
 
 def _mantle_retry_outcome(
-    runtime: CountTokensOutcome, mantle: CountTokensOutcome, forwarded: bool
+    runtime: CountTokensOutcome, mantle: CountTokensOutcome, forwarded: bool, carried_options: bool
 ) -> CountTokensOutcome:
     match runtime, mantle:
         case CountTokensFailure(status_code=400), CountTokensFailure(status_code=404) if forwarded:
             return runtime
-        case _, CountTokensFailure(status_code=status_code) if forwarded and not is_request_rejection(status_code):
+        case _, CountTokensFailure(status_code=code) if carried_options and not is_request_rejection(code):
             return runtime
         case _:
             return mantle
@@ -117,7 +117,7 @@ def _sets_effort(options: Mapping[str, JsonValue]) -> bool:
 
 
 def _runtime_count_betas(claude_options: ClaudeCountOptions) -> tuple[str, ...]:
-    if not _sets_effort(claude_options.options) or ANTHROPIC_EFFORT_BETA_HEADER in claude_options.betas:
+    if not _sets_effort(claude_options.options):
         return claude_options.betas
     return (*claude_options.betas, ANTHROPIC_EFFORT_BETA_HEADER)
 
@@ -322,7 +322,14 @@ class BedrockTokenCounter(BaseTokenCounter):
             else None
         )
         outcome: Final = (
-            primary if fallback is None else _mantle_retry_outcome(primary, fallback, forwarded=bool(runtime_fields))
+            primary
+            if fallback is None
+            else _mantle_retry_outcome(
+                primary,
+                fallback,
+                forwarded=bool(runtime_fields),
+                carried_options=claude_options.carries_request_options,
+            )
         )
         match outcome:
             case CountedTokens():
@@ -348,6 +355,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=outcome.message,
                     status_code=outcome.status_code,
+                    carried_request_options=claude_options.carries_request_options,
                 )
             case _:
                 assert_never(outcome)

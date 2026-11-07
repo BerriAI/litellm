@@ -2082,9 +2082,8 @@ async def _vertex_claude_inference_and_count(
 
     def vertex(request: httpx.Request) -> httpx.Response:
         sent.put(request)
-        return httpx.Response(
-            200, json={"input_tokens": 37} if request.url.path.endswith("count-tokens:rawPredict") else _PARTNER_CLAUDE_REPLY
-        )
+        counted: Final = request.url.path.endswith("count-tokens:rawPredict")
+        return httpx.Response(200, json={"input_tokens": 37} if counted else _PARTNER_CLAUDE_REPLY)
 
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(vertex))
     with (

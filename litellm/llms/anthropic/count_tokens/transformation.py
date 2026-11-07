@@ -20,6 +20,7 @@ from typing import (
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.anthropic_beta_headers_manager import DeploymentBetaFilter, deployment_beta_filter
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
@@ -114,6 +115,7 @@ class AnthropicCountFields:
 @dataclass(frozen=True, slots=True)
 class ChatCountTranslationError:
     message: str
+    carried_request_options: bool = False
 
     def response(self, request_model: str, model_used: str, tokenizer_type: str) -> TokenCountResponse:
         return TokenCountResponse(
@@ -125,6 +127,7 @@ class ChatCountTranslationError:
             error_message=self.message,
             status_code=400,
             rejected_before_provider_call=True,
+            carried_request_options=self.carried_request_options,
         )
 
 
@@ -349,6 +352,10 @@ class ClaudeCountOptions:
     messages: tuple[Mapping[str, JsonValue], ...] | None
     tools: tuple[Mapping[str, JsonValue], ...] | None
 
+    @property
+    def carries_request_options(self) -> bool:
+        return bool(self.options) or bool(self.betas)
+
 
 NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=(), messages=None, tools=None)
 _COUNTED_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -379,6 +386,11 @@ def deployment_inference_model(deployment: Mapping[str, object] | None) -> str |
     return inference_model
 
 
+def _deployment_api_base(deployment: Mapping[str, object] | None) -> str | None:
+    api_base: Final = _INFERENCE_PARAMS.validate_python((deployment or {}).get("litellm_params") or {}).get("api_base")
+    return api_base if isinstance(api_base, str) else None
+
+
 def _messages_transform(model: str, provider: LlmProviders) -> tuple[str, BaseAnthropicMessagesConfig] | None:
     from litellm.utils import ProviderConfigManager
 
@@ -403,14 +415,12 @@ def _claude_count_options_for(
     messages_config: BaseAnthropicMessagesConfig,
     model: str,
     litellm_params: "GenericLiteLLMParams",
-    provider: LlmProviders,
+    beta_filter: DeploymentBetaFilter | None,
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]] | None,
     sent: Mapping[str, JsonValue],
     anthropic_beta: str | None,
 ) -> ClaudeCountOptions:
-    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-
     leading_system, conversation = split_leading_system_run(messages)
     sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
     sent_params: Final = {
@@ -421,9 +431,11 @@ def _claude_count_options_for(
         {"anthropic-beta": anthropic_beta} if anthropic_beta else {}, sent_params, sent_conversation
     )
     sent_headers: Final = (
-        update_headers_with_filtered_beta(headers=dict(beta_headers), provider=provider.value)
-        if messages_config.should_filter_anthropic_beta_headers()
-        else dict(beta_headers)
+        dict(beta_headers)
+        if beta_filter is None
+        else beta_filter.filtered(
+            dict(beta_headers), keep=messages_config.model_specific_anthropic_betas(model, litellm_params)
+        )
     )
     request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
         model=model,
@@ -462,16 +474,23 @@ def claude_count_options(
     transform_model, messages_config = transform
     litellm_params: Final = _transform_litellm_params(deployment)
     from litellm.exceptions import BadRequestError
-    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 
+    beta_filter: Final = deployment_beta_filter(
+        provider.value,
+        AnthropicModelInfo.affinity_api_base(provider.value, _deployment_api_base(deployment)),
+        messages_config.should_filter_anthropic_beta_headers(),
+    )
     try:
         return _claude_count_options_for(
-            messages_config, transform_model, litellm_params, provider, messages, tools, sent, anthropic_beta
+            messages_config, transform_model, litellm_params, beta_filter, messages, tools, sent, anthropic_beta
         )
     except (AnthropicError, BadRequestError) as e:
-        return ChatCountTranslationError(message=str(e.message))
+        return ChatCountTranslationError(message=str(e.message), carried_request_options=True)
     except (AttributeError, KeyError, TypeError, ValueError) as e:
-        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
+        return ChatCountTranslationError(
+            message=f"Invalid request for token counting: {e}", carried_request_options=True
+        )
 
 
 async def anthropic_count_fields(

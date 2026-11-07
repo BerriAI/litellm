@@ -168,6 +168,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 error=True,
                 error_message=e.message,
                 status_code=e.status_code,
+                carried_request_options=claude_options.carries_request_options,
             )
         except Exception as e:
             verbose_logger.warning("Error calling Anthropic CountTokens API: %s", e)

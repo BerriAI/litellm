@@ -1581,6 +1581,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=error_message,
                     status_code=status_code,
+                    carried_request_options=claude_options.carries_request_options,
                 )
 
             if result is not None:

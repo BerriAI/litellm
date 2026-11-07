@@ -121,7 +121,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         optional_params: Mapping[str, object],
         messages: Sequence[object],
     ) -> Mapping[str, str]:
-        return headers
+        return BaseAnthropicMessagesConfig.headers_with_anthropic_betas(self, headers, optional_params, messages)
 
     def sent_anthropic_betas(self, headers: Mapping[str, str], request: Mapping[str, object]) -> tuple[str, ...]:
         return _ANTHROPIC_BETAS.validate_python(request.get("anthropic_beta") or ())

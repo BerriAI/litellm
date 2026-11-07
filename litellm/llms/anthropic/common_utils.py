@@ -1677,6 +1677,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo.resolve_anthropic_api_base(api_base)
 
     @staticmethod
+    def affinity_api_base(custom_llm_provider: str, api_base: str | None) -> str | None:
+        return AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
+
+    @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
         """An empty or whitespace-only key counts as unset: it can never authenticate anything, and
         treating it as set would silently outrank workload identity federation."""

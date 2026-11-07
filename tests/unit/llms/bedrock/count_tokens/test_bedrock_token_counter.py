@@ -11,6 +11,7 @@ import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_EFFORT_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
@@ -457,10 +458,15 @@ _CITY_SCHEMA: Final[dict[str, JsonValue]] = {
     "properties": {"city": {"type": "string"}},
     "required": ["city"],
 }
-_CITY_FORMAT: Final[dict[str, JsonValue]] = {"output_config": {"format": {"type": "json_schema", "schema": _CITY_SCHEMA}}}
+_CITY_FORMAT: Final[dict[str, JsonValue]] = {
+    "output_config": {"format": {"type": "json_schema", "schema": _CITY_SCHEMA}}
+}
 
 
-_CONTEXT_EDITING_OPTIONS: Final[dict[str, JsonValue]] = {**_THINKING_AND_TOOL_CHOICE, "context_management": _CONTEXT_EDITS}
+_CONTEXT_EDITING_OPTIONS: Final[dict[str, JsonValue]] = {
+    **_THINKING_AND_TOOL_CHOICE,
+    "context_management": _CONTEXT_EDITS,
+}
 
 
 async def _messages_inference_and_count(
@@ -565,7 +571,11 @@ def _sent_betas(request: httpx.Request) -> tuple[str, ...]:
             {"output_config": {"effort": "low"}},
             ANTHROPIC_EFFORT_BETA_HEADER,
         ),
-        ("bedrock/invoke/us.anthropic.claude-opus-5-5", _DISPLAY_THINKING, ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER),
+        (
+            "bedrock/invoke/us.anthropic.claude-opus-5-5",
+            _DISPLAY_THINKING,
+            ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+        ),
     ),
     ids=("effort", "thinking_display"),
 )
@@ -652,6 +662,53 @@ async def test_runtime_count_of_an_output_format_sends_only_the_betas_invoke_inf
     sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
     assert counted.get("output_config") == sent.get("output_config")
     assert counted.get("anthropic_beta") == sent.get("anthropic_beta")
+
+
+_PER_TURN_CONTROL: Final = ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("caller_beta", "model_info", "kept"),
+    (
+        (_PER_TURN_CONTROL, {"supports_per_turn_control": True}, True),
+        (_PER_TURN_CONTROL, {"supports_per_turn_control": False}, False),
+        ("unlisted-beta-2099-01-01", {}, False),
+    ),
+    ids=("deployment-supports-per-turn-control", "deployment-lacks-per-turn-control", "unlisted-beta"),
+)
+async def test_runtime_count_keeps_and_drops_the_caller_betas_invoke_inference_keeps_and_drops(
+    caller_beta: str, model_info: dict[str, JsonValue], kept: bool
+) -> None:
+    deployment_model: Final = "bedrock/invoke/us.anthropic.claude-opus-5-5"
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.anthropic_messages(
+        model=deployment_model,
+        messages=MESSAGES,
+        max_tokens=4096,
+        extra_headers={"anthropic-beta": caller_beta},
+        model_info=model_info,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **_THINKING,
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}, "model_info": model_info},
+        request_model="claude",
+        request_options=_THINKING,
+        anthropic_beta=caller_beta,
+    )
+
+    assert result is not None and result.error is False
+    counted: Final = _betas_besides_effort(_invoke_body(bedrock.requests[0]))
+    assert counted == _betas_besides_effort(_JSON_BODY.validate_json(inference.requests[0].content))
+    assert (caller_beta in counted) is kept
 
 
 _CONVERSE_REPLY: Final = {
@@ -787,6 +844,51 @@ async def test_runtime_rejecting_the_options_is_answered_unless_mantle_counts_or
     assert (result.error, result.status_code, result.tokenizer_type) == expected
 
 
+_CLEAR_TOOL_USES: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_options", "mantle", "expected"),
+    (
+        ({}, _mantle_answers(403, _MANTLE_FAILURE), (403, "bedrock_mantle_api")),
+        ({}, _mantle_unreachable(httpx.ConnectError), (500, "bedrock_mantle_api")),
+        (
+            {**_DISPLAY_THINKING, "context_management": _CLEAR_TOOL_USES},
+            _mantle_answers(403, _MANTLE_FAILURE),
+            (400, "bedrock_api"),
+        ),
+    ),
+    ids=("edit-only-mantle-denied", "edit-only-mantle-unreachable", "edit-and-thinking-mantle-denied"),
+)
+async def test_runtime_400_on_an_edit_reports_the_mantle_failure_unless_options_were_forwarded(
+    request_options: dict[str, JsonValue],
+    mantle: Callable[[httpx.Request], httpx.Response],
+    expected: tuple[int, str],
+) -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if request.url.host == RUNTIME_HOST:
+            return httpx.Response(400, json=UNSUPPORTED, request=request)
+        return mantle(request)
+
+    result: Final = await BedrockTokenCounter(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))
+    ).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-opus-5-5"}
+        },
+        request_model="claude-opus-5-5",
+        context_management=CountContextManagement(spec=_CLEAR_TOOL_USES, drop_invalid_edits=False),
+        request_options=request_options,
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.tokenizer_type) == (True, *expected)
+
+
 @pytest.mark.asyncio
 async def test_runtime_count_sends_the_tools_invoke_inference_sends() -> None:
     inference, bedrock = await _messages_inference_and_count(
@@ -797,7 +899,8 @@ async def test_runtime_count_sends_the_tools_invoke_inference_sends() -> None:
     )
 
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
-    assert _invoke_body(bedrock.requests[0])["tools"] == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
+    sent_tools: Final = _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
+    assert _invoke_body(bedrock.requests[0])["tools"] == sent_tools
 
 
 def _texts(message: JsonValue) -> tuple[str, ...]:
@@ -866,7 +969,13 @@ _THINKING: Final[dict[str, JsonValue]] = {"thinking": {"type": "enabled", "budge
         ([{"role": "user", "content": 5}], None, _THINKING),
         ([{"role": "user", "content": [{"text": "hi"}]}], None, _THINKING),
     ),
-    ids=("option_refused", "tool_type_not_a_string", "tool_not_a_mapping", "content_not_iterable", "block_without_type"),
+    ids=(
+        "option_refused",
+        "tool_type_not_a_string",
+        "tool_not_a_mapping",
+        "content_not_iterable",
+        "block_without_type",
+    ),
 )
 async def test_claude_count_refuses_options_bedrock_messages_inference_refuses_without_calling_bedrock(
     messages: list[dict[str, JsonValue]], tools: list[JsonValue] | None, request_options: dict[str, JsonValue]

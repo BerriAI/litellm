@@ -153,12 +153,6 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         """
         Handle token counting request for a Vertex AI partner model.
 
-        Args:
-            model: The model name
-            request_data: Request payload (Anthropic Messages API format)
-            litellm_params: LiteLLM parameters containing credentials, project, location
-            betas: anthropic-beta values the counted request needs, sent as the anthropic-beta header
-
         Returns:
             Dict containing token count information
 
