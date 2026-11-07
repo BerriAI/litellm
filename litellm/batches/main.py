@@ -15,13 +15,15 @@ import contextvars
 import os
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -60,8 +62,13 @@ azure_batches_instance: Final = AzureBatchesAPI()
 vertex_ai_batches_instance: Final = VertexAIBatchPrediction(gcs_bucket_name="")
 anthropic_batches_instance: Final = AnthropicBatchesHandler()
 xai_batches_instance: Final = XAIBatchesHandler()
+_EXTRA_BODY: Final = TypeAdapter(object)
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
 
 
 def _resolve_timeout(
@@ -485,9 +492,9 @@ def _handle_retrieve_batch_providers_without_provider_config(
             or get_secret_str("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         if extra_body is not None:
-            extra_body.pop("azure_ad_token", None)
+            require_attributes(extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
         else:
             get_secret_str("AZURE_AD_TOKEN")
 

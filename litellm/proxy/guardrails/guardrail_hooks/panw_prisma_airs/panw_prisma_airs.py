@@ -28,7 +28,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     tool_calls_with_server_tool_calls,
@@ -145,6 +145,7 @@ class _ResponsesInputItem(LiteLLMBaseModel):
 _ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
 _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_DECODED_JSON: Final = TypeAdapter(object)
 _NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -394,7 +395,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         metadata: Mapping[str, object] | None = None,
         call_id: object = None,
         tool_event: _AirsToolEvent | None = None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object]:
         """Call PANW Prisma AIRS API to scan content or a tool_event."""
 
         if tool_event is None and not content.strip():
@@ -506,30 +507,32 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
             response.raise_for_status()
 
-            result: Final[dict[str, object]] = response.json()
+            result: Final = _DECODED_JSON.validate_python(response.json())
 
             # Validate response format
-            if "action" not in result:
+            if not json_contains(result, "action"):
                 verbose_proxy_logger.error("PANW Prisma AIRS: Invalid API response format: %s", result)
                 return {"action": "block", "category": "api_error"}
 
+            body: Final = decoded_json_object(result)
+
             # Check for profile-related errors from PANW API
-            if result.get("action") == "block" and "error" in result:
-                error_msg: Final = str(result.get("error", "")).lower()
+            if body.get("action") == "block" and "error" in body:
+                error_msg: Final = str(body.get("error", "")).lower()
                 if "profile" in error_msg and (
                     "not found" in error_msg or "required" in error_msg or "invalid" in error_msg
                 ):
                     verbose_proxy_logger.error(
                         "PANW Prisma AIRS: Profile configuration error. Ensure your API key has a linked profile in Strata Cloud Manager, or provide 'profile_name' or 'profile_id' in config/metadata. PANW API response: %s",
-                        result,
+                        body,
                     )
 
             verbose_proxy_logger.debug(
                 "PANW Prisma AIRS: Scan result - Action: %s, Category: %s",
-                result.get("action"),
-                result.get("category", "unknown"),
+                body.get("action"),
+                body.get("category", "unknown"),
             )
-            return result
+            return body
 
         except httpx.HTTPStatusError as e:
             status: Final = e.response.status_code
@@ -839,7 +842,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     def _handle_api_error_with_logging(
         self,
-        scan_result: dict[str, object],
+        scan_result: Mapping[str, object],
         data: dict[str, object],
         start_time: datetime,
         event_type: GuardrailEventHooks,
@@ -1363,7 +1366,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         assembled_model_response: ModelResponse,
         request_data: dict,
         start_time: datetime,
-    ) -> tuple[bool, ModelResponse, dict[str, object]]:
+    ) -> tuple[bool, ModelResponse, Mapping[str, object]]:
         """
         Scan assembled streaming response and apply masking if needed.
         Returns (content_was_modified, response, scan_result).

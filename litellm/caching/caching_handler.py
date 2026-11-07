@@ -19,7 +19,7 @@ import datetime
 import inspect
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeVar
 
 from pydantic import ConfigDict, SkipValidation, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
@@ -72,6 +72,8 @@ from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
+    json_contains,
+    require_attributes,
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
@@ -246,6 +248,15 @@ def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
     return converted_stream_requested(kwargs) and not kwargs.get("_agentic_loop_depth")
 
 
+class _CacheControls(Protocol):
+    def get(self, key: str, default: bool, /) -> object: ...
+
+
+def _cache_reads_disabled(kwargs: Mapping[str, object]) -> bool:
+    cache_controls: Final = require_attributes(kwargs.get("cache", {}), _CacheControls, "get")
+    return cache_controls.get("no-cache", False) is True
+
+
 def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> bool:
     """
     When the cache hit is replayed as a stream, do not run success callbacks at cache-hit time.
@@ -403,7 +414,7 @@ class LLMCachingHandler:
         if (
             (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
         ) and (
-            kwargs.get("cache", {}).get("no-cache", False) is not True
+            not _cache_reads_disabled(kwargs)
         ):  # allow users to control returning cached responses from the completion function
             args = args or ()
             final_embedding_cached_response: EmbeddingResponse | None = None
@@ -521,7 +532,7 @@ class LLMCachingHandler:
         kwargs: dict[str, Any],
         args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse:
-        cached_result: Any | None = None
+        cached_result: object | None = None
 
         # Check if caching should be performed BEFORE doing expensive kwargs copy
         if _is_response_cache_excluded(model=model, kwargs=kwargs):
@@ -550,7 +561,7 @@ class LLMCachingHandler:
                 verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
                 return CachingHandlerResponse(cached_result=None)
             if cached_result is not None:
-                if "detail" in cached_result:
+                if json_contains(cached_result, "detail"):
                     # implies an error occurred
                     pass
                 else:
@@ -1460,6 +1471,7 @@ class LLMCachingHandler:
         Returns:
             None
         """
+        request_kwargs: Final = dict[str, object](kwargs)
         litellm_params: Final = {
             "logger_fn": kwargs.get("logger_fn", None),
             "acompletion": is_async,
@@ -1473,7 +1485,7 @@ class LLMCachingHandler:
 
         if litellm.cache is not None:
             litellm_params["preset_cache_key"] = (
-                self.preset_cache_key or litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
+                self.preset_cache_key or litellm.cache.get_preset_cache_key_from_kwargs(**request_kwargs)
             )
         else:
             litellm_params["preset_cache_key"] = None
@@ -1483,11 +1495,11 @@ class LLMCachingHandler:
             user=kwargs.get("user", None),
             optional_params={},
             litellm_params=litellm_params,
-            input=(kwargs.get("messages", "") if not is_embedding else kwargs.get("input", "")),
-            api_key=kwargs.get("api_key", None),
+            input=(request_kwargs.get("messages", "") if not is_embedding else request_kwargs.get("input", "")),
+            api_key=request_kwargs.get("api_key", None),
             original_response=str(cached_result),
             additional_args=None,
-            stream=kwargs.get("stream", False),
+            stream=request_kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
         )
 

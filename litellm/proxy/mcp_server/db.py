@@ -139,6 +139,10 @@ def _blank_to_none(value: object) -> str | None:
     return value.strip() or None
 
 
+def _submitted_or(submitted: Mapping[str, object], field: str, fallback: str | None) -> object:
+    return submitted.get(field, fallback)
+
+
 # Token-exchange settings with dedicated columns that also exist on
 # ``MCPCredentials`` as a legacy shape (rows and REST callers that predate the
 # columns). Every write lifts blob values into the columns and strips them from
@@ -1379,8 +1383,10 @@ async def update_mcp_server(
             "credentials": safe_dumps(
                 _bind_submitted_oauth_client(
                     safe_submitted,
-                    _blank_to_none(cleared_auth_fields.get("issuer", prepared_data.get("issuer", old_issuer))),
-                    _blank_to_none(prepared_data.get("url", existing.url if existing else None)),
+                    _blank_to_none(
+                        cleared_auth_fields.get("issuer", _submitted_or(prepared_data, "issuer", old_issuer))
+                    ),
+                    _blank_to_none(_submitted_or(prepared_data, "url", existing.url if existing else None)),
                 )
             )
         }

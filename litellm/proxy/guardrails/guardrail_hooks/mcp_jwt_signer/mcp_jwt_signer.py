@@ -135,7 +135,7 @@ _mcp_jwt_signer_instance: Optional["MCPJWTSigner"] = None
 _MCP_JWT_CALL_TYPES: Final = frozenset({"call_mcp_tool", "list_mcp_tools"})
 
 # Simple in-memory JWKS cache: keyed by JWKS URI → (keys_list, fetched_at).
-_jwks_cache: Final[dict[str, tuple[Sequence[Mapping[str, object]], float]]] = {}
+_jwks_cache: Final[dict[str, tuple[object, float]]] = {}
 _JWKS_CACHE_TTL: Final = 3600  # 1 hour
 
 
@@ -181,7 +181,7 @@ def _compute_kid(public_key: RSAPublicKey) -> str:
     return hashlib.sha256(der_bytes).hexdigest()[:16]
 
 
-async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = None) -> Sequence[Mapping[str, object]]:
+async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = None) -> object:
     """
     Fetch and cache a JWKS from the given URI.
 
@@ -202,7 +202,7 @@ async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = Non
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     resp: Final = await client.get(jwks_uri, headers={"Accept": "application/json"}, timeout=timeout)
     resp.raise_for_status()
-    jwks_body: Final[Mapping[str, Sequence[Mapping[str, object]]]] = resp.json()
+    jwks_body: Final = decoded_json_object(_DECODED_JSON.validate_python(resp.json()))
     fetched_keys: Final = jwks_body.get("keys", [])
     _jwks_cache[jwks_uri] = (fetched_keys, now)
     return fetched_keys

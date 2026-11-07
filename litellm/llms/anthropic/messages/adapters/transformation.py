@@ -631,7 +631,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: str | None = None
-            assistant_content_list: list[dict[str, Any]] = []  # For content blocks with cache_control
+            assistant_content_list: list[ChatCompletionTextObject] = []  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: list[ChatCompletionAssistantToolCall] = []
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
@@ -644,7 +644,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
                             if content.get("type") == "text":
-                                text_block: dict[str, object] = {
+                                text_block: ChatCompletionTextObject = {
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
@@ -703,7 +703,7 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 # Use list format if any text block has cache_control, otherwise use string
                 if has_cache_control_in_text and len(assistant_content_list) > 0:
-                    assistant_content: Any = assistant_content_list
+                    assistant_content: str | Sequence[ChatCompletionTextObject] | None = assistant_content_list
                 elif len(assistant_content_list) > 0 and not has_cache_control_in_text:
                     # Concatenate text blocks into string when no cache_control
                     assistant_content = "".join(block.get("text", "") for block in assistant_content_list)

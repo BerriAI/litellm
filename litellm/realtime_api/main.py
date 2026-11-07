@@ -488,10 +488,14 @@ def _deployment_base_model(kwargs: Mapping[str, object], custom_llm_provider: st
     return None if base_model is None else base_model.removeprefix(f"{custom_llm_provider}/")
 
 
+class _TranscriptionSessionFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
 @wrapper_client
 async def acreate_realtime_transcription_session(
     model: str | None = None,
-    transcription_session: dict[str, Any] | None = None,
+    transcription_session: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -506,7 +510,7 @@ async def acreate_realtime_transcription_session(
     """
     req: Final = RealtimeTranscriptionSessionRequest(
         model=model,
-        **(transcription_session or {}),
+        **_TranscriptionSessionFields(**(transcription_session or {})),
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")

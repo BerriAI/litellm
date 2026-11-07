@@ -1,6 +1,9 @@
 import json
 from abc import abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, cast
+
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
@@ -27,10 +30,18 @@ def _indexed_thinking_block(
     return {**block, "index": index}
 
 
+class _DeltaFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _message_fields_without_thinking_blocks(message: Message) -> Mapping[str, object]:
+    return message.model_dump(exclude={"thinking_blocks"})
+
+
 def _streaming_delta(message: Message) -> Delta:
     thinking_blocks: Final = message.thinking_blocks if hasattr(message, "thinking_blocks") else None
     return Delta(
-        **message.model_dump(exclude={"thinking_blocks"}),
+        **_DeltaFields(**_message_fields_without_thinking_blocks(message)),
         thinking_blocks=(
             None
             if thinking_blocks is None

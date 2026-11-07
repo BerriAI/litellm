@@ -1,9 +1,13 @@
-from typing import Final
+from typing import Final, Protocol
 
 from litellm.constants import VLLM_CHOICE_FIELDS
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, require_attributes, subscript
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class TextCompletionStreamWrapper:
@@ -43,16 +47,22 @@ class TextCompletionStreamWrapper:
                 raise Exception
 
             if chunk["choices"]:
-                chat_choice: Final = chunk["choices"][0]
+                chat_choice: Final = subscript(subscript(chunk, "choices"), 0)
                 choice_fields: Final = decoded_json_object(
-                    {field: chat_choice[field] for field in VLLM_CHOICE_FIELDS if field in chat_choice}
+                    {
+                        field: subscript(chat_choice, field)
+                        for field in VLLM_CHOICE_FIELDS
+                        if json_contains(chat_choice, field)
+                    }
                 )
                 text_choices: Final = TextChoices(index=0, **choice_fields)
-                delta: Final = chat_choice["delta"]
-                text_choices["text"] = delta["content"]
-                text_choices["reasoning_content"] = delta.get("reasoning_content")
-                text_choices["index"] = chat_choice["index"]
-                text_choices["finish_reason"] = chat_choice["finish_reason"]
+                delta: Final = subscript(chat_choice, "delta")
+                text_choices["text"] = subscript(delta, "content")
+                text_choices["reasoning_content"] = require_attributes(delta, _SupportsGet, "get").get(
+                    "reasoning_content"
+                )
+                text_choices["index"] = subscript(chat_choice, "index")
+                text_choices["finish_reason"] = subscript(chat_choice, "finish_reason")
                 response["choices"] = [text_choices]
             else:
                 response["choices"] = []

@@ -20,7 +20,10 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
@@ -29,6 +32,8 @@ from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):
@@ -217,7 +222,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         ``setup`` closes the connection with a 1007 policy error.
         """
         json_message: Final = json.loads(message)
-        msg_type: Final = json_message.get("type")
+        msg_type: Final = decoded_json_object(_DECODED_JSON.validate_python(json_message)).get("type")
 
         if msg_type == "session.update":
             if session_configuration_request is None:

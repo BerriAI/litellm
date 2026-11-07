@@ -7,7 +7,9 @@ from urllib.parse import quote
 
 import httpx
 from httpx._types import FileContent, FileTypes, RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -37,6 +39,23 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
+
+
+_REQUEST_VALUE: Final = TypeAdapter(object)
+
+
+def _dict_fields(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _decoded_character(character: object) -> object:
+    fields: Final = _dict_fields(character)
+    if fields is None:
+        return character
+    character_id: Final = fields.get("id")
+    if not isinstance(character_id, str):
+        return character
+    return {**fields, "id": extract_original_character_id(character_id)}
 
 
 class OpenAIVideoConfig(BaseVideoConfig):
@@ -157,25 +176,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         `character_<base64-encoded-provider-payload>`, convert it back to the
         original provider id before forwarding upstream.
         """
-        raw_characters: Final = request_dict.get("characters")
-        if not isinstance(raw_characters, list):
+        raw_characters: Final = as_object_list(_REQUEST_VALUE.validate_python(request_dict.get("characters")))
+        if raw_characters is None:
             return request_dict
 
-        decoded_characters: Final[list[Any]] = []
-        for character in raw_characters:
-            if not isinstance(character, dict):
-                decoded_characters.append(character)
-                continue
-
-            character_id = character.get("id")
-            if isinstance(character_id, str):
-                decoded_character = dict(character)
-                decoded_character["id"] = extract_original_character_id(character_id)
-                decoded_characters.append(decoded_character)
-            else:
-                decoded_characters.append(character)
-
-        request_dict["characters"] = decoded_characters
+        request_dict["characters"] = [_decoded_character(character) for character in raw_characters]
         return request_dict
 
     def transform_video_create_response(

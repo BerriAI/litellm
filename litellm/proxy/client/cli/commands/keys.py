@@ -2,7 +2,7 @@ import builtins
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
 import click
 import requests
@@ -31,6 +31,22 @@ class _KeyRowsView(TypedDict):
 
 class _JsonBodyView(TypedDict):
     body: ReadOnly[object]
+
+
+class _KeyImportFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+_KEY_IMPORT_FIELD_NAMES: Final = (
+    "models",
+    "aliases",
+    "spend",
+    "key_alias",
+    "team_id",
+    "user_id",
+    "budget_id",
+    "config",
+)
 
 
 def _cli_context(view: _CliContextView) -> _CliContext:
@@ -302,25 +318,9 @@ def _display_dry_run_table(source_keys: Sequence[Mapping[str, object]]) -> None:
     rich.print(table)
 
 
-def _prepare_key_import_data(key: Mapping[str, object]) -> dict[str, Any]:
+def _prepare_key_import_data(key: Mapping[str, object]) -> _KeyImportFields:
     """Prepare key data for import by extracting relevant fields."""
-    import_data: Final = {}
-
-    # Copy relevant fields if they exist
-    for field in [
-        "models",
-        "aliases",
-        "spend",
-        "key_alias",
-        "team_id",
-        "user_id",
-        "budget_id",
-        "config",
-    ]:
-        if key.get(field):
-            import_data[field] = key[field]
-
-    return import_data
+    return _KeyImportFields(**{field: key[field] for field in _KEY_IMPORT_FIELD_NAMES if key.get(field)})
 
 
 def _import_keys_to_destination(

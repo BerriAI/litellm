@@ -511,7 +511,7 @@ class RealTimeStreaming:
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
         self._held_client_content_deadline: float | None = None
-        self._replay_scope: Final = client_websocket_scope(websocket)
+        self._replay_scope: Final = client_websocket_scope(self.websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -533,7 +533,7 @@ class RealTimeStreaming:
         self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
-        self._client_wants_beta = self.detect_beta_header(websocket)
+        self._client_wants_beta = self.detect_beta_header(self.websocket)
         self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )

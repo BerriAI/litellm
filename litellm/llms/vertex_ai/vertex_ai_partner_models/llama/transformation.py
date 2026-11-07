@@ -131,7 +131,8 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = OpenAIChatCompletionResponse(**raw_response.json())
+            payload: Final[OpenAIChatCompletionResponse] = raw_response.json()
+            completion_response: Final = OpenAIChatCompletionResponse(**payload)
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise VertexAIError(

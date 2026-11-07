@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, json_contains, subscript
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
@@ -1859,26 +1859,32 @@ def _map_together_ai_exception(
     extra_information: str,
 ) -> None:
     try:
-        error_response = json.loads(error_str)
+        error_response = _DECODED_ERROR_BODY.validate_python(json.loads(error_str))
     except Exception:
         error_response = {"error": error_str}
-    if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
+    if json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "`inputs` tokens + `max_new_tokens` must be <="
+    ):
         raise ContextWindowExceededError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
         )
-    elif "error" in error_response and "invalid private key" in error_response["error"]:
+    elif json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "invalid private key"
+    ):
         raise AuthenticationError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             llm_provider="together_ai",
             model=model,
             response=getattr(original_exception, "response", None),
         )
-    elif "error" in error_response and "INVALID_ARGUMENT" in error_response["error"]:
+    elif json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "INVALID_ARGUMENT"
+    ):
         raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
@@ -1890,13 +1896,13 @@ def _map_together_ai_exception(
             llm_provider="together_ai",
         )
     elif (
-        "error" in error_response
-        and "API key doesn't match expected format." in error_response["error"]
-        or "error_type" in error_response
-        and error_response["error_type"] == "validation"
+        json_contains(error_response, "error")
+        and json_contains(subscript(error_response, "error"), "API key doesn't match expected format.")
+        or json_contains(error_response, "error_type")
+        and subscript(error_response, "error_type") == "validation"
     ):
         raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
@@ -1910,7 +1916,7 @@ def _map_together_ai_exception(
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
-                message=f"TogetherAIException - {error_response['error']}",
+                message=f"TogetherAIException - {subscript(error_response, 'error')}",
                 model=model,
                 llm_provider="together_ai",
                 response=getattr(original_exception, "response", None),

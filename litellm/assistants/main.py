@@ -5,14 +5,16 @@ import contextvars
 import os
 from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
@@ -31,6 +33,21 @@ from .utils import get_optional_params_add_message
 ####### ENVIRONMENT VARIABLES ###################
 openai_assistants_api: Final = OpenAIAssistantsAPI()
 azure_assistants_api: Final = AzureAssistantsAPI()
+_EXTRA_BODY: Final = TypeAdapter(object)
+
+
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
+
+
+def _pop_azure_ad_token(extra_body: object) -> object:
+    return require_attributes(extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
+
+
+def _popped_azure_ad_token(extra_body: object) -> str | None:
+    token: Final = _pop_azure_ad_token(extra_body)
+    return token if isinstance(token, str) else None
+
 
 ### ASSISTANTS ###
 
@@ -146,10 +163,10 @@ def get_assistants(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -331,10 +348,10 @@ def create_assistants(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -481,10 +498,10 @@ def delete_assistant(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -657,10 +674,10 @@ def create_thread(
 
         api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -804,10 +821,10 @@ def get_thread(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -982,10 +999,10 @@ def add_message(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -1134,10 +1151,10 @@ def get_messages(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -1333,10 +1350,10 @@ def run_thread(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _pop_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 

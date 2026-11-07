@@ -1,13 +1,15 @@
 import json
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Sized
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -42,6 +44,21 @@ class _TokenEncoding(Protocol):
 
 def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
     return headers.get(key, default)
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _add_logprob(total: float, logprob: object) -> float:
+    if isinstance(logprob, (int, float)):
+        return total + logprob
+    raise TypeError(f"unsupported operand type(s) for +=: '{type(total).__name__}' and '{type(logprob).__name__}'")
 
 
 tgi_models_cache = None
@@ -407,25 +424,27 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                     headers=None,
                 )
 
-            if len(completion_response[0]["generated_text"]) > 0:
+            if _json_len(_DECODED_JSON.validate_python(completion_response[0]["generated_text"])) > 0:
                 model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
             ## GETTING LOGPROBS + FINISH REASON
             if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
                 model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
                 sum_logprob = 0
-                for token in completion_response[0]["details"]["tokens"]:
-                    if token["logprob"] is not None:
-                        sum_logprob += token["logprob"]
+                for token in iter_items(_DECODED_JSON.validate_python(completion_response[0]["details"]["tokens"])):
+                    logprob = subscript(token, "logprob")
+                    if logprob is not None:
+                        sum_logprob = _add_logprob(sum_logprob, logprob)
                 setattr(model_response.choices[0].message, "_logprob", sum_logprob)
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
                     choices_list: Final = []
                     for idx, item in enumerate(completion_response[0]["details"]["best_of_sequences"]):
                         sum_logprob = 0
-                        for token in item["tokens"]:
-                            if token["logprob"] is not None:
-                                sum_logprob += token["logprob"]
-                        if len(item["generated_text"]) > 0:
+                        for token in iter_items(_DECODED_JSON.validate_python(item["tokens"])):
+                            logprob = subscript(token, "logprob")
+                            if logprob is not None:
+                                sum_logprob = _add_logprob(sum_logprob, logprob)
+                        if _json_len(_DECODED_JSON.validate_python(item["generated_text"])) > 0:
                             message_obj = Message(
                                 content=output_parser(item["generated_text"]),
                                 logprobs=sum_logprob,
@@ -442,7 +461,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         elif task == "text-classification":
             model_response.choices[0].message.content = json.dumps(completion_response)
         else:
-            if isinstance(completion_response, list) and len(completion_response[0]["generated_text"]) > 0:
+            if (
+                isinstance(completion_response, list)
+                and _json_len(_DECODED_JSON.validate_python(completion_response[0]["generated_text"])) > 0
+            ):
                 model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
         ## CALCULATING USAGE
         prompt_tokens = 0

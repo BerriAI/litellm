@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse, StreamingResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -71,6 +72,10 @@ router: Final = APIRouter()
 _TEAM_PROVIDER_CREDENTIALS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _EMPTY_TEAM_PROVIDER_CREDENTIALS: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_CREDENTIAL_PROVIDER: Final = "openai"
+
+
+class _ForwardedRequestFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -693,7 +698,7 @@ async def rag_ingest(
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
         }
-        request_data: Final[dict[str, Any]] = await add_litellm_data_to_request(
+        request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
             data={},
             request=request,
             general_settings=general_settings,
@@ -734,7 +739,7 @@ async def rag_ingest(
             file_url=file_url,
             file_id=file_id,
             router=llm_router,
-            **request_data,
+            **_ForwardedRequestFields(**request_data),
         )
         if response.get("status") == "failed":
             raise HTTPException(

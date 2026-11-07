@@ -8,7 +8,7 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_images_from_message,
@@ -44,6 +44,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OllamaChatConfig(BaseConfig):
@@ -368,14 +369,18 @@ class OllamaChatConfig(BaseConfig):
             and litellm_params.get("function_name") is not None
             and response_json_message is not None
         ):
-            function_call: Final = json.loads(response_json_message["content"])
+            function_call: Final = decoded_json_object(
+                _DECODED_JSON.validate_python(json.loads(response_json_message["content"]))
+            )
             message: Final = litellm.Message(
                 content=None,
                 tool_calls=[
                     {
                         "id": f"call_{uuid.uuid4()}",
                         "function": {
-                            "name": function_call.get("name", litellm_params.get("function_name")),
+                            "name": function_call.get(
+                                "name", _DECODED_JSON.validate_python(litellm_params.get("function_name"))
+                            ),
                             "arguments": json.dumps(function_call.get("arguments", function_call)),
                         },
                         "type": "function",

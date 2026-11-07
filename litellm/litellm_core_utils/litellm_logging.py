@@ -25,6 +25,7 @@ from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
 from pydantic import BaseModel, JsonValue, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._internal_context import in_mirrored_call, outside_mirrored_call, post_response_phase
@@ -92,6 +93,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
+    decoded_json_object,
     finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
@@ -667,6 +669,10 @@ class UsageObservation(Enum):
     KNOWN = "known"
     UNKNOWN = "unknown"
     ESTIMATED = "estimated"
+
+
+class _UsageFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _A2AUsageSlot(Protocol):
@@ -7161,7 +7167,11 @@ class StandardLoggingPayloadSetup:
         if isinstance(reported, Usage):
             return reported
         normalized: Final = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
-        return Usage(**normalized) if normalized else Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        return (
+            Usage(**_UsageFields(**decoded_json_object(normalized)))
+            if normalized
+            else Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        )
 
     @staticmethod
     def get_usage_as_dict(

@@ -1,7 +1,7 @@
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, Protocol
 
 from fastapi import HTTPException
 from starlette._utils import get_route_path
@@ -12,6 +12,18 @@ from litellm.proxy.common_utils.anthropic_error_payload import route_error_conte
 
 MaxRequestSizeGetter = Callable[[], int | float | None]
 RequestSizeLimitEnabledGetter = Callable[[], bool]
+
+
+class _RequestHeadersFields(Protocol):
+    def get(self, key: Literal["headers"], /) -> Iterable[tuple[bytes, bytes]] | None: ...
+
+
+class _RequestBodyFields(Protocol):
+    def get(self, key: Literal["body"], default: bytes, /) -> bytes: ...
+
+
+def _request_body_fields(message: _RequestBodyFields) -> _RequestBodyFields:
+    return message
 
 
 class RequestEntityTooLarge(HTTPException):
@@ -100,7 +112,7 @@ class RequestSizeLimitMiddleware:
             if message["type"] != "http.request":
                 return message
 
-            received_body_bytes += len(message.get("body", b""))
+            received_body_bytes += len(_request_body_fields(message).get("body", b""))
             if received_body_bytes > max_request_size_bytes:
                 raise RequestEntityTooLarge(max_request_size_mb)
             return message
@@ -128,7 +140,7 @@ def _mb_to_bytes(max_request_size_mb: float | None) -> int | None:
     return int(max_request_size_mb * 1024 * 1024)
 
 
-def _get_content_length(scope: Scope) -> int | None:
+def _get_content_length(scope: _RequestHeadersFields) -> int | None:
     headers: Final = dict(scope.get("headers") or [])
     raw_content_length: Final = headers.get(b"content-length")
     if raw_content_length is None:
