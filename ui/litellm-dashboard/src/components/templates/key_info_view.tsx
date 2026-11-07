@@ -462,7 +462,7 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: regeneratedAt.toLocaleString(),
+        created_at: regeneratedAt.toISOString(),
       };
       return newData;
     });
@@ -473,7 +473,7 @@ export default function KeyInfoView({
 
     setKeyDataUpdateHeldUntilModalClose({
       ...updatedKeyData,
-      created_at: regeneratedAt.toLocaleString(),
+      created_at: regeneratedAt.toISOString(),
     });
   };
 

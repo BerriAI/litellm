@@ -7744,7 +7744,7 @@ def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandl
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     private_key, jwk = _get_rsa_key_and_jwk(kid="entra-kid")
-    cache = DualCache()
+    cache = UserApiKeyCache()
     cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
     jwt_handler = JWTHandler()
     jwt_handler.update_environment(

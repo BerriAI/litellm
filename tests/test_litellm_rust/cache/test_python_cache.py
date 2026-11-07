@@ -17,6 +17,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
@@ -59,7 +60,7 @@ async def test_legacy_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
         "stream": stream,
     }
     spend_key: Final = model_budget_spend_cache_key(Litellm_EntityType.KEY, key_hash, "cached-model", "1h")
-    token_key: Final = limiter.create_rate_limit_keys("api_key", key_hash, "tokens")
+    token_counter: Final = RateLimitScope("api_key", key_hash).counter("tokens")
     first: Final = await invoke("messages", recording_server, options, native=native)
     if stream:
         await collect(first)
@@ -73,7 +74,7 @@ async def test_legacy_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
     expected_tokens: Final = usage["input_tokens"] + usage["output_tokens"]
     assert expected_cost > 0
     assert counters.get_cache(spend_key) == pytest.approx(expected_cost)
-    assert counters.get_cache(token_key) == first_payload["total_tokens"] == expected_tokens
+    assert limiter.rate_limits.local((token_counter,))[0] == first_payload["total_tokens"] == expected_tokens
 
     second: Final = await invoke("messages", recording_server, options, native=native)
     if stream:
@@ -95,7 +96,7 @@ async def test_legacy_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
     }
     assert cached_payload["total_tokens"] == first_payload["total_tokens"]
     assert counters.get_cache(spend_key) == pytest.approx(expected_cost)
-    assert counters.get_cache(token_key) == 2 * expected_tokens
+    assert limiter.rate_limits.local((token_counter,))[0] == 2 * expected_tokens
 
 
 @pytest.mark.asyncio

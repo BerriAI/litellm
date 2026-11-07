@@ -66,6 +66,7 @@ from integration.providers._tool_search_support import (
     response_id,
     scripted_peer,
     search_result,
+    server_tool_call_ids,
     spend_row,
     target,
     target_path,
@@ -136,7 +137,8 @@ def test_tool_search_result_round_trips_on_every_anthropic_wire_provider(
     assert [target_path(request) for request in received] == [target(provider, stream)] * 2, received
     assert kept_results(assistant) == [SEARCH_RESULT], assistant
     assert "code_interpreter_results" not in provider_fields(assistant), assistant
-    assert tool_call_ids(assistant) == [SEARCH_ID, WEATHER_ID], assistant
+    assert server_tool_call_ids(assistant) == [SEARCH_ID], assistant
+    assert tool_call_ids(assistant) == [WEATHER_ID], assistant
     assert wire_assistant(received[1]) == list(SEARCH_TURN), received[1].body
     assert answered_ids(received[1]) == [WEATHER_ID], received[1].body
     for identity in (response_id(first, stream), response_id(second, stream)):
@@ -157,7 +159,8 @@ def test_snowflake_claude_keeps_the_tool_search_result_on_the_response(gateway: 
     assistant: Final = assistant_from(first, stream)
     assert [target_path(request) for request in received] == [target("snowflake", stream)], received
     assert kept_results(assistant) == [SEARCH_RESULT], assistant
-    assert tool_call_ids(assistant) == [SEARCH_ID, WEATHER_ID], assistant
+    assert server_tool_call_ids(assistant) == [SEARCH_ID], assistant
+    assert tool_call_ids(assistant) == [WEATHER_ID], assistant
     assert spend_row(response_id(first, stream))["model_group"] == model
 
 

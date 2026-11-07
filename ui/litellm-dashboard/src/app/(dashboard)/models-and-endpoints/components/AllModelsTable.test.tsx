@@ -132,6 +132,22 @@ describe("AllModelsTable", () => {
     expect(onModelIdClick).toHaveBeenCalledWith("model-1");
   });
 
+  it("should display the model metadata logo for a gateway-routed model", () => {
+    const logoUrl = "https://cdn.example.com/gateway.svg";
+    render(
+      <AllModelsTable
+        {...baseProps}
+        data={[
+          makeModel({
+            model_info: { ...baseProps.data[0].model_info, logo_url: logoUrl },
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "openai logo" })).toHaveAttribute("src", logoUrl);
+  });
+
   it("opens the team detail from the team ID cell", async () => {
     const user = userEvent.setup();
     const onTeamIdClick = vi.fn();

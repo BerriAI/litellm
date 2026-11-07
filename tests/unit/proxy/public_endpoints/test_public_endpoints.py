@@ -987,6 +987,57 @@ def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_r
     app.dependency_overrides.clear()
 
 
+def test_public_model_hub_lists_each_deployments_prices_without_exposing_the_deployment() -> None:
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "hub-public",
+                "litellm_params": {
+                    "model": "openai/hub-secret-backend-a",
+                    "api_base": "https://secret-a.internal",
+                    "api_key": "sk-secret-a",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+                "model_info": {"id": "hub-secret-id-a"},
+            },
+            {
+                "model_name": "hub-public",
+                "litellm_params": {
+                    "model": "openai/hub-secret-backend-b",
+                    "api_base": "https://secret-b.internal",
+                    "api_key": "sk-secret-b",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 4e-06,
+                },
+                "model_info": {"id": "hub-secret-id-b"},
+            },
+        ]
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.public_model_groups", ["hub-public"]),
+        patch("litellm.proxy.proxy_server.llm_router", llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        response: Final = TestClient(app).get("/public/model_hub")
+
+    assert response.status_code == 200, response.text
+    groups: Final = TypeAdapter(list[ModelGroupInfoProxy]).validate_json(response.text)
+    assert [dict(p.costs) for p in groups[0].deployment_pricing] == [
+        {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+        {"input_cost_per_token": 3e-06, "output_cost_per_token": 4e-06},
+    ]
+    leaked: Final = [
+        secret
+        for secret in ("secret-a.internal", "secret-b.internal", "sk-secret", "hub-secret-backend", "hub-secret-id")
+        if secret in response.text
+    ]
+    assert leaked == [], response.text
+
+
 # ---------------------------------------------------------------------------
 # /public/agent_hub
 # ---------------------------------------------------------------------------

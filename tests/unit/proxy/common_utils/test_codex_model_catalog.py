@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from types import MappingProxyType
@@ -7,6 +8,7 @@ from typing import Final, Literal
 import pytest
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
 from litellm.proxy.common_utils.codex_model_catalog import (
@@ -15,11 +17,14 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     CodexStockUpgrade,
     bundled_codex_models,
+    codex_catalog_etag,
     codex_catalog_rows,
+    codex_entry_names_default_reasoning_level,
     codex_model_list_body,
     codex_models_response_json,
     configured_service_tiers,
     deployment_capabilities,
+    merged_codex_catalog,
 )
 from litellm.proxy.common_utils.codex_model_translation import CodexDeploymentCapabilities, CodexServiceTier
 
@@ -628,6 +633,15 @@ def test_default_service_tier_survives_only_while_still_offered(configured, expe
     assert entry["default_service_tier"] == expected
 
 
+
+@pytest.mark.parametrize(("alias_defaults", "expected"), [("codex", "priority"), ("deployment", None)])
+def test_alias_with_offered_tiers_takes_codexs_default_tier_only_under_codex_defaults(alias_defaults, expected):
+    (entry,) = _models(
+        _row("team-sol", upstream_model="gpt-6-sol", service_tiers=["priority"]), alias_defaults=alias_defaults
+    )
+
+    assert (_tiers(entry), entry["default_service_tier"]) == ([("priority", "Fast", "2x speed, increased usage")], expected)
+
 def test_non_chat_and_wildcard_rows_are_left_out_of_the_catalog():
     body = _body(
         _row("gpt-6-astra"),
@@ -703,6 +717,55 @@ def test_an_entry_too_large_for_the_bytes_left_is_passed_over_and_the_smaller_on
     assert models == [unlimited[0], unlimited[2], unlimited[4]]
     assert [entry["priority"] for entry in models] == [0, 2, 4]
     assert len(body.json.encode()) <= limit
+
+
+def test_merged_catalog_keeps_upstream_whole_and_adds_only_the_entries_that_fit_the_byte_limit():
+    upstream = {"models": [{"slug": "upstream-model", "priority": 4, "base_instructions": "u" * 500}]}
+    upstream_only = len(json.dumps(upstream, separators=(",", ":")))
+    rows = tuple(_row(f"model-{index}") for index in range(4))
+
+    def merged(*merged_rows, byte_limit):
+        return merged_codex_catalog(
+            json.dumps(upstream).encode(), merged_rows, stock=_STOCK, instructions=_PROMPT, byte_limit=byte_limit
+        )
+
+    unlimited = json.loads(merged(*rows, byte_limit=upstream_only * 100))["models"]
+    limit = len(merged(*rows[:2], byte_limit=upstream_only * 100).encode())
+
+    body = merged(*rows, byte_limit=limit)
+
+    assert len(body.encode()) <= limit
+    assert json.loads(body)["models"] == unlimited[:3]
+    assert merged(*rows, byte_limit=upstream_only) is None
+
+
+def test_merged_catalog_gives_an_alias_no_service_tier_or_upgrade_of_codexs_own():
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = (_row("team-sol", upstream_model="openai/gpt-6-sol"), _row("team-55", upstream_model="openai/gpt-5.5"))
+
+    added = json.loads(merged_codex_catalog(upstream, rows, stock=_STOCK, instructions=_PROMPT))["models"][1:]
+
+    assert [
+        (entry["slug"], entry["service_tiers"], entry["default_service_tier"], entry["upgrade"]) for entry in added
+    ] == [
+        ("team-sol", [], None, None),
+        ("team-55", [], None, None),
+    ]
+
+
+def test_merged_catalog_warns_once_with_how_many_models_the_byte_limit_left_out(caplog, monkeypatch):
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = tuple(_row(f"model-{index}") for index in range(4))
+    limit = len(merged_codex_catalog(upstream, rows[:1], stock=_STOCK, instructions=_PROMPT, byte_limit=10**6).encode())
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        merged_codex_catalog(upstream, rows, stock=_STOCK, instructions=_PROMPT, byte_limit=limit)
+        merged_codex_catalog(upstream, rows[:1], stock=_STOCK, instructions=_PROMPT, byte_limit=limit)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        f"Codex native model catalog left out 3 of 4 LiteLLM models to stay within Codex's {limit} byte limit"
+    ]
 
 
 def test_unlimited_body_keeps_every_entry():
@@ -947,6 +1010,38 @@ def test_catalog_rows_without_a_router_carry_only_the_listing():
     assert codex_catalog_rows(listing, (("plain", "plain"),), None) == (CodexCatalogRow(id="plain", mode="chat"),)
 
 
+@pytest.mark.parametrize("client_version", [None, "0.165.0"])
+def test_entry_names_a_default_reasoning_level_exactly_when_the_native_entry_carries_one(client_version):
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "open-weights", "litellm_params": {"model": "fireworks_ai/open-weights"}},
+            {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+            {"model_name": "pinned-model", "litellm_params": {"model": "openai/gpt-5.5", "reasoning_effort": "high"}},
+            {"model_name": "split-pin", "litellm_params": {"model": "openai/gpt-5.5", "reasoning_effort": "high"}},
+            {"model_name": "split-pin", "litellm_params": {"model": "openai/gpt-5.5", "reasoning_effort": "low"}},
+            {
+                "model_name": "max-only",
+                "litellm_params": {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"},
+                "model_info": {"supports_reasoning": True, "reasoning_effort_levels": ["max"]},
+            },
+        ]
+    )
+    names = ("open-weights", "coding-model", "pinned-model", "split-pin", "max-only")
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
+    )
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+    rows = codex_catalog_rows(listing, tuple((name, name) for name in names), router)
+    served = json.loads(merged_codex_catalog(upstream, rows, client_version=client_version))["models"][1:]
+    served_names_one = [entry.get("default_reasoning_level") is not None for entry in served]
+
+    assert [
+        codex_entry_names_default_reasoning_level(entry["slug"], router, None, client_version) for entry in served
+    ] == served_names_one
+    assert served_names_one == [False, False, True, False, client_version is not None]
+    assert served[2]["default_reasoning_level"] == "high"
+
+
 def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when_every_deployment_answers_it():
     claude = "anthropic/claude-sonnet-5-5"
     converse = "bedrock/us.anthropic.claude-sonnet-5-5"
@@ -993,6 +1088,34 @@ def test_codex_tool_search_is_offered_off_the_route_and_model_info_and_only_when
         "mixed": False,
     }
     assert models[0]["context_window"] == 1000000
+
+
+def test_native_merged_catalog_offers_codex_tool_search_as_the_proxy_listing_does():
+    claude = "anthropic/claude-sonnet-5-5"
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": claude}},
+            {
+                "model_name": "claude-off",
+                "litellm_params": {"model": claude},
+                "model_info": {"supports_search_tool": False},
+            },
+            {"model_name": "coding-model", "litellm_params": {"model": "openai/gpt-5.5"}},
+        ]
+    )
+    names = ("claude", "claude-off", "coding-model")
+    listing = tuple({"id": name, "object": "model", "created": 0, "owned_by": "x", "mode": "chat"} for name in names)
+    entries = tuple((name, name) for name in names)
+    upstream = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+
+    listed = json.loads(codex_model_list_body(listing, entries, router))["models"]
+    merged = json.loads(merged_codex_catalog(upstream, codex_catalog_rows(listing, entries, router)))["models"][1:]
+
+    assert [entry["slug"] for entry in merged] == list(names)
+    assert [entry.get("supports_search_tool") for entry in merged] == [
+        entry.get("supports_search_tool") for entry in listed
+    ]
+    assert [entry["supports_search_tool"] for entry in merged[:2]] == [True, False]
 
 
 _SOL_SLUG: Final = next(
@@ -1282,3 +1405,48 @@ def test_model_info_that_does_not_validate_declares_no_capability_but_keeps_its_
     )
 
     assert capabilities == CodexDeploymentCapabilities(priced_service_tier_keys=frozenset({priced}))
+
+
+def test_model_list_body_takes_the_asking_releases_catalog_and_prompt() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-release-only", "litellm_params": {"model": "openai/gpt-release-only"}},
+            {"model_name": "in-house", "litellm_params": {"model": "openai/in-house-coder"}},
+        ]
+    )
+    release_entry: Final = bundled_codex_models()["gpt-5.5"].model_copy(
+        update={"slug": "gpt-release-only", "display_name": "Release Only"}
+    )
+    names: Final = ("gpt-release-only", "in-house")
+
+    body: Final = codex_model_list_body(
+        _listing(*names),
+        tuple((name, name) for name in names),
+        router,
+        client_version="0.170.0",
+        stock={"gpt-release-only": release_entry},
+        instructions="release prompt",
+    )
+
+    served: Final = {entry["slug"]: entry for entry in json.loads(body)["models"]}
+    assert (served["gpt-release-only"]["display_name"], served["in-house"]["base_instructions"]) == (
+        "Release Only",
+        "release prompt",
+    ), served
+
+
+class _CollidingName(str):
+    def __hash__(self) -> int:
+        return 1
+
+
+def test_catalog_etag_ignores_the_order_a_process_iterates_priced_service_tiers_in() -> None:
+    def row_with_tiers(*tiers: str) -> CodexCatalogRow:
+        capabilities: Final = CodexDeploymentCapabilities.model_construct(
+            priced_service_tier_keys=frozenset(_CollidingName(tier) for tier in tiers)
+        )
+        return replace(_row("gpt-6-astra"), deployment_capabilities=(capabilities,))
+
+    assert codex_catalog_etag("upstream", [row_with_tiers("flex", "priority")]) == codex_catalog_etag(
+        "upstream", [row_with_tiers("priority", "flex")]
+    )
