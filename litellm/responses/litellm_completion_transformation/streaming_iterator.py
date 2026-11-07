@@ -1230,7 +1230,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "id": self._cached_reasoning_item_id,
                             "type": "reasoning",
                             "status": "in_progress",
-                            "summary": None,
+                            "summary": [],
                         }
                     ),
                 )

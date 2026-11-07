@@ -506,6 +506,39 @@ class TestLiteLLMCompletionResponsesConfig:
         assert reasoning_items[0].content[0].text == "counting the primes"
         assert "sig" in reasoning_items[0].encrypted_content
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            pytest.param(
+                Message(content="No, 1001 = 7 x 11 x 13", role="assistant", reasoning_content="Trying small primes"),
+                id="gemini-thought-text",
+            ),
+            pytest.param(
+                Message(
+                    content="No",
+                    role="assistant",
+                    reasoning_content="",
+                    thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "sig"}],
+                ),
+                id="signature-only-thinking",
+            ),
+        ],
+    )
+    def test_reasoning_item_always_carries_a_summary_list(self, message: Message):
+        """`summary` is required on a Responses reasoning item, and clients that read it
+        (e.g. OpenAI Agents SDK tracing) fail on the missing field"""
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Is 1001 prime?",
+            responses_api_request={},
+            chat_completion_response=ModelResponse(
+                model="gemini-3.8-flash", choices=[Choices(index=0, finish_reason="stop", message=message)]
+            ),
+        )
+
+        reasoning_items: Final = [item for item in response.output if item.type == "reasoning"]
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].summary == []
+
     def test_transform_chat_completion_response_status_with_stop(self):
         """
         Test that transforming a chat completion response with 'stop' finish_reason
