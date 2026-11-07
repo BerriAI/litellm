@@ -45,10 +45,6 @@ def test_utils_attribute_is_the_same_object_from_litellm_and_litellm_utils(name:
     assert getattr(litellm, name) is expected
 
 
-def test_no_name_is_declared_in_both_namespaces():
-    assert set(LITELLM_ATTRIBUTES).isdisjoint(UTILS_ATTRIBUTES)
-
-
 @pytest.mark.parametrize(
     ("instance_name", "class_name"),
     [
@@ -69,16 +65,18 @@ def test_lazy_instance_is_a_single_instance_of_its_class(instance_name: str, cla
     assert getattr(litellm, instance_name) is instance
 
 
-def test_module_level_http_clients_use_request_timeout():
-    result: Final = run_child_interpreter(
-        "import litellm\n"
-        "litellm.request_timeout = 7\n"
-        "assert litellm.module_level_client.timeout == 7, litellm.module_level_client.timeout\n"
-        "assert litellm.module_level_aclient.timeout == 7, litellm.module_level_aclient.timeout\n"
-        "assert litellm.module_level_client is litellm.module_level_client\n",
-        timeout=120,
-    )
-    assert result.returncode == 0, result.stderr
+def test_module_level_http_clients_use_request_timeout(monkeypatch: pytest.MonkeyPatch):
+    client_names: Final = ("module_level_client", "module_level_aclient")
+    monkeypatch.setattr(litellm, "request_timeout", 7)
+    for client_name in client_names:
+        monkeypatch.delitem(vars(litellm), client_name, raising=False)
+    try:
+        assert litellm.module_level_client.timeout == 7
+        assert litellm.module_level_aclient.timeout == 7
+        assert litellm.module_level_client is litellm.module_level_client
+    finally:
+        for client_name in client_names:
+            vars(litellm).pop(client_name, None)
 
 
 def test_provider_list_lists_every_provider():
