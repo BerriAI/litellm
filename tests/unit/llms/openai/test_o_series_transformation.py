@@ -6,6 +6,7 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
+from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
 import os
 
@@ -219,3 +220,24 @@ def test_o_series_request_turns_system_into_user_without_touching_the_callers_me
 
     assert [message["role"] for message in body["messages"]] == ["user", "user"]
     assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    "config",
+    [OpenAIOSeriesConfig(), AzureOpenAIO1Config()],
+    ids=["openai", "azure"],
+)
+@pytest.mark.parametrize("model", ["o3", "o3-2025-04-16", "o4-mini", "o4-mini-2025-04-16", "o3-mini"])
+def test_o_series_keeps_system_role_for_models_that_support_it(config: OpenAIOSeriesConfig, model: str):
+    """o1-2024-12-17 and later reasoning models accept system messages, which the API treats as developer messages
+    (https://platform.openai.com/docs/guides/reasoning, checked 2026-10-28). Rewriting them as user messages drops
+    them to user-level authority"""
+    system_message: Final = {"role": "system", "content": "Be a good bot!"}
+    request: Final = config.transform_request(
+        model=model,
+        messages=[dict(system_message), {"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert request["messages"][0] == system_message

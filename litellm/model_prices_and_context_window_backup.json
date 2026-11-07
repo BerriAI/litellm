@@ -5661,6 +5661,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -5680,6 +5681,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -11780,6 +11782,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -11818,6 +11821,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -11877,6 +11881,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -11896,6 +11901,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12009,6 +12015,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12036,6 +12043,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12752,6 +12760,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12790,6 +12799,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12809,6 +12819,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12828,6 +12839,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -12855,6 +12867,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -12882,6 +12895,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -45888,6 +45902,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -46012,6 +46027,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -46036,6 +46052,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -46059,6 +46076,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -46188,6 +46206,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -46292,6 +46311,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -70692,6 +70712,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -72199,7 +72220,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_system_messages": true
     },
     "azure/eu/o3-2025-04-16": {
         "deprecation_date": "2026-11-19",
@@ -72218,7 +72240,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_system_messages": true
     },
     "azure/eu/o3-deep-research": {
         "deprecation_date": "2026-11-19",
@@ -72249,7 +72272,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_system_messages": true
     },
     "azure/eu/o4-mini-2025-04-16": {
         "deprecation_date": "2026-11-19",
@@ -72269,7 +72293,8 @@
             "search_context_size_low": 0.014,
             "search_context_size_medium": 0.014
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supports_system_messages": true
     },
     "azure/eu/text-embedding-3-large": {
         "deprecation_date": "2028-02-09",
