@@ -1,32 +1,34 @@
-"""Tests for `BedrockConverseLLM.completion`.
+"""The Converse route end to end through `litellm.completion`, with the upstream scripted in process.
 
-AWS credential resolution is stubbed so nothing reaches STS.
+AWS credentials are static fakes or come from a stubbed STS or boto3 session, so nothing reaches AWS.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import boto3
 import httpx
 import openai
 import pytest
 import respx
-from botocore.credentials import Credentials
+from botocore.credentials import RefreshableCredentials
 from botocore.exceptions import ClientError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
 from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
@@ -35,12 +37,6 @@ from tests.unit.llms.bedrock.slow_upstream import (
     slow_upstream_answer,
     slow_upstream_async_client,
     slow_upstream_sync_client,
-)
-
-RESOLVED_CREDENTIALS = Credentials(
-    access_key="AKIARESOLVED",
-    secret_key="resolved-secret",
-    token="resolved-token",
 )
 
 
@@ -52,30 +48,13 @@ def reset_rust_configuration(monkeypatch):
     configuration.reset_rust_configuration()
 
 
-def _completion_kwargs(**overrides):
-    kwargs = {
-        "model": "bedrock/us-east-1/anthropic.claude-sonnet-4-5-v1:0",
-        "messages": [{"role": "user", "content": "hi"}],
-        "api_base": None,
-        "custom_prompt_dict": {},
-        "model_response": ModelResponse(),
-        "encoding": None,
-        "logging_obj": MagicMock(),
-        "optional_params": {"maxTokens": 16},
-        "acompletion": False,
-        "timeout": 30.0,
-        "litellm_params": {},
-        "extra_headers": None,
-        "client": None,
-        "api_key": None,
-    }
-    kwargs.update(overrides)
-    return kwargs
-
-
-def _run(*, credentials: Credentials | None = RESOLVED_CREDENTIALS, **overrides):
-    with patch.object(BedrockConverseLLM, "get_credentials", return_value=credentials):
-        return BedrockConverseLLM().completion(**_completion_kwargs(**overrides))
+@pytest.fixture(autouse=True)
+def isolate_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_PROFILE_NAME"):
+        monkeypatch.delenv(env_var, raising=False)
+    BaseAWSLLM._shared_iam_cache.flush_cache()
+    yield
+    BaseAWSLLM._shared_iam_cache.flush_cache()
 
 
 CONVERSE_RESPONSE = {
@@ -84,210 +63,384 @@ CONVERSE_RESPONSE = {
     "usage": {"inputTokens": 5, "outputTokens": 2, "totalTokens": 7},
 }
 
+STATIC_AWS_CREDENTIALS: Final = MappingProxyType(
+    {"aws_access_key_id": "AKIACONVERSETEST", "aws_secret_access_key": "converse-test-secret"}
+)
+HAIKU: Final = "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0"
+HI: Final = ({"role": "user", "content": "hi"},)
 
-async def _drive_async_completion(
-    *,
-    skip_pre_call_logging: bool,
-    logging_obj,
-    credentials: Credentials = RESOLVED_CREDENTIALS,
-    outer_dispatch: bool = False,
-):
-    """Run the real `async_completion` with a stubbed transport."""
-    import httpx as _httpx
 
-    client = MagicMock()
+class RecordingUpstream:
+    """Answers every request with one canned response and keeps each request it was sent."""
 
-    async def post(**_kwargs):
-        return _httpx.Response(
-            200,
-            json=CONVERSE_RESPONSE,
-            request=_httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
-        )
+    def __init__(
+        self,
+        status_code: int = 200,
+        body: bytes = CONVERSE_ANSWER,
+        headers: Mapping[str, str] = MappingProxyType({"content-type": "application/json"}),
+    ) -> None:
+        self.status_code: Final = status_code
+        self.body: Final = body
+        self.headers: Final = headers
+        self.requests: tuple[httpx.Request, ...] = ()
 
-    client.post = post
-    client.__class__ = AsyncHTTPHandler
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
+        return httpx.Response(self.status_code, content=self.body, headers=dict(self.headers), request=request)
 
-    if outer_dispatch:
-        return await _run(credentials=credentials, acompletion=True, client=client, logging_obj=logging_obj)
+    def sync_client(self) -> HTTPHandler:
+        return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(self)))
 
-    return await BedrockConverseLLM().async_completion(
-        model="anthropic.claude-sonnet-4-5-v1:0",
-        messages=[{"role": "user", "content": "hi"}],
-        api_base="https://bedrock-runtime.us-west-2.amazonaws.com/model/m/converse",
-        model_response=ModelResponse(),
-        timeout=30.0,
-        encoding=None,
-        logging_obj=logging_obj,
-        stream=None,
-        optional_params={"maxTokens": 16},
-        litellm_params={"aws_region_name": "us-west-2"},
-        credentials=credentials,
-        headers={},
-        client=client,
-        skip_pre_call_logging=skip_pre_call_logging,
+    def async_client(self) -> AsyncHTTPHandler:
+        return AsyncHTTPHandler(transport=httpx.MockTransport(self))
+
+    @property
+    def only_request(self) -> httpx.Request:
+        assert len(self.requests) == 1, self.requests
+        return self.requests[0]
+
+
+async def complete(upstream: RecordingUpstream, *, sync: bool, **request: object) -> object:
+    if sync:
+        return litellm.completion(client=upstream.sync_client(), **request)
+    return await litellm.acompletion(client=upstream.async_client(), **request)
+
+
+SYNC_AND_ASYNC: Final = pytest.mark.parametrize("sync", [True, False], ids=["sync", "async"])
+
+
+class PreCallCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pre_calls = 0
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        self.pre_calls += 1
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+async def test_each_request_is_logged_pre_call_exactly_once(monkeypatch: pytest.MonkeyPatch, sync: bool) -> None:
+    counter: Final = PreCallCounter()
+    monkeypatch.setattr(litellm, "input_callback", [counter])
+    upstream: Final = RecordingUpstream()
+
+    response: Final = await complete(
+        upstream, sync=sync, model=HAIKU, messages=list(HI), aws_region_name="us-east-1", **STATIC_AWS_CREDENTIALS
     )
-
-
-@pytest.mark.asyncio
-async def test_async_completion_honors_the_pre_call_suppression():
-    logging_obj = MagicMock()
-    await _drive_async_completion(skip_pre_call_logging=True, logging_obj=logging_obj)
-    assert logging_obj.pre_call.call_count == 0
-
-
-@pytest.mark.asyncio
-async def test_async_completion_logs_pre_call_by_default():
-    """The suppression must be opt-in, so every existing caller keeps its log."""
-    logging_obj = MagicMock()
-    await _drive_async_completion(skip_pre_call_logging=False, logging_obj=logging_obj)
-    assert logging_obj.pre_call.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_async_completion_signs_off_the_event_loop(monkeypatch):
-    """Regression for issue #40165: botocore refreshes expiring credentials inside SigV4 signing with a
-    blocking HTTP call, so `async_completion` must sign on a worker thread to keep the loop serving."""
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    probe = EventLoopProbe()
-    release = asyncio.create_task(probe.release_refresh_from_the_loop())
-
-    response = await _drive_async_completion(
-        skip_pre_call_logging=False, logging_obj=MagicMock(), credentials=probe.credentials()
-    )
-    await release
 
     assert response.choices[0].message.content == "hi"
-    assert probe.served_during_refresh is True
+    assert counter.pre_calls == 1
+
+
+class _ProfileSession:
+    """boto3.Session for a profile whose credentials are the probe's refreshable ones."""
+
+    def __init__(self, credentials: RefreshableCredentials) -> None:
+        self.credentials: Final = credentials
+
+    def __call__(self, **_kwargs: object) -> "_ProfileSession":
+        return self
+
+    def get_credentials(self) -> RefreshableCredentials:
+        return self.credentials
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rust_enabled", (False, True))
-async def test_python_only_async_dispatch_refreshes_credentials_off_the_event_loop(
+async def test_async_completion_refreshes_credentials_off_the_event_loop(
     monkeypatch: pytest.MonkeyPatch, rust_enabled: bool
 ) -> None:
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    """Regression for issue #40165: botocore refreshes expiring credentials inside SigV4 signing with a
+    blocking HTTP call, so the async route must sign on a worker thread to keep the loop serving."""
     monkeypatch.setenv("LITELLM_RUST", "1" if rust_enabled else "0")
     configuration.rust(rust_enabled)
     probe: Final = EventLoopProbe()
+    upstream: Final = RecordingUpstream()
     release: Final = asyncio.create_task(probe.release_refresh_from_the_loop())
 
-    response: Final = await _drive_async_completion(
-        skip_pre_call_logging=False, logging_obj=MagicMock(), credentials=probe.credentials(), outer_dispatch=True
-    )
+    with patch.object(boto3, "Session", _ProfileSession(probe.credentials())):
+        response: Final = await litellm.acompletion(
+            model=HAIKU,
+            messages=list(HI),
+            aws_profile_name="litellm-event-loop-probe",
+            aws_region_name="us-west-2",
+            client=upstream.async_client(),
+        )
     await release
 
     assert response.choices[0].message.content == "hi"
+    assert "Credential=AKIAREFRESHED/" in upstream.only_request.headers["Authorization"]
     assert probe.served_during_refresh is True
 
 
-def _sync_client_returning_converse_response():
-    client = MagicMock()
-    client.post.side_effect = lambda **_kwargs: httpx.Response(
-        200,
-        json=CONVERSE_RESPONSE,
-        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
-    )
-    client.__class__ = HTTPHandler
-    return client
-
-
-def test_the_sync_python_path_logs_pre_call_once():
-    logging_obj = MagicMock()
-    response = _run(
-        logging_obj=logging_obj,
-        client=_sync_client_returning_converse_response(),
-    )
-
-    assert response.choices[0].message.content == "hi"
-    assert logging_obj.pre_call.call_count == 1
-
-
-def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monkeypatch):
-    """With only `AWS_BEARER_TOKEN_BEDROCK` configured boto3 resolves no
-    credentials at all. The handler must not dereference that None: the bearer
-    token signs the request on its own."""
-    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
-    client = _sync_client_returning_converse_response()
-
-    response = _run(credentials=None, litellm_params={}, client=client)
-
-    assert response.choices[0].message.content == "hi"
-    sent_headers = client.post.call_args.kwargs["headers"]
-    assert sent_headers["Authorization"] == "Bearer bedrock-bearer-token"
-
-
 @pytest.mark.parametrize("configured_through", ["env_var", "api_key"])
-def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, configured_through):
-    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
-    raises; a bearer-token deployment must still serve the request, since the
-    bearer token alone signs it."""
+def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(
+    monkeypatch: pytest.MonkeyPatch, configured_through: str
+) -> None:
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials raises. A bearer-token
+    deployment must still serve the request, since the bearer token alone signs it."""
     if configured_through == "env_var":
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
-    else:
-        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    client = _sync_client_returning_converse_response()
+    upstream: Final = RecordingUpstream()
 
-    response = BedrockConverseLLM().completion(
-        **_completion_kwargs(
-            optional_params={"maxTokens": 16, "aws_profile_name": "litellm-no-such-aws-profile"},
-            litellm_params={},
-            client=client,
-            api_key="bedrock-bearer-token" if configured_through == "api_key" else None,
-        )
+    response: Final = litellm.completion(
+        model=HAIKU,
+        messages=list(HI),
+        aws_profile_name="litellm-no-such-aws-profile",
+        aws_region_name="us-east-1",
+        api_key="bedrock-bearer-token" if configured_through == "api_key" else None,
+        client=upstream.sync_client(),
     )
 
     assert response.choices[0].message.content == "hi"
-    assert client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer bedrock-bearer-token"
+    assert upstream.only_request.headers["Authorization"] == "Bearer bedrock-bearer-token"
 
 
-def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
-    """The tagged STS session signs the Converse call and the tags never reach the request body (#34069)."""
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
-    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
-    tags = [{"Key": "team", "Value": "genai"}]
+class _TrustPolicySTS:
+    """STS whose role trust policy admits only an AssumeRole carrying exactly the expected extra params."""
 
-    class FakeSTSClient:
-        def get_caller_identity(self):
-            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+    def __init__(self, expected: Mapping[str, object], access_key: str) -> None:
+        self.expected: Final = expected
+        self.access_key: Final = access_key
 
-        def assume_role(self, **params):
-            if list(params.get("Tags", ())) != tags:
-                raise ClientError(
-                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
-                    "AssumeRole",
-                )
-            return {
-                "Credentials": {
-                    "AccessKeyId": "ASIACONVERSETAGGED",
-                    "SecretAccessKey": "assumed-secret",
-                    "SessionToken": "assumed-session-token",
-                    "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
-                }
-            }
+    def get_caller_identity(self) -> Mapping[str, str]:
+        return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
 
-    client = _sync_client_returning_converse_response()
-    with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        response = BedrockConverseLLM().completion(
-            **_completion_kwargs(
-                optional_params={
-                    "maxTokens": 16,
-                    "aws_region_name": "us-east-1",
-                    "aws_access_key_id": "AKIACONVERSECALLER",
-                    "aws_secret_access_key": "pod-caller-secret",
-                    "aws_role_name": "arn:aws:iam::999999999999:role/litellm-converse-role",
-                    "aws_session_name": "litellm-converse-session",
-                    "aws_session_tags": tags,
-                },
-                litellm_params={},
-                client=client,
+    def assume_role(self, **params: object) -> Mapping[str, object]:
+        extra: Final = {key: value for key, value in params.items() if key not in ("RoleArn", "RoleSessionName")}
+        if json.dumps(extra, sort_keys=True) != json.dumps(self.expected, sort_keys=True):
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": f"trust policy rejected {extra}"}}, "AssumeRole"
             )
+        return {
+            "Credentials": {
+                "AccessKeyId": self.access_key,
+                "SecretAccessKey": "assumed-secret",
+                "SessionToken": "assumed-session-token",
+                "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
+            }
+        }
+
+
+_SESSION_TAGS: Final = [{"Key": "team", "Value": "genai"}]
+
+
+@pytest.mark.parametrize(
+    ("role_params", "sts_expects"),
+    [
+        ({"aws_session_tags": _SESSION_TAGS}, {"Tags": _SESSION_TAGS}),
+        ({"aws_external_id": "converse-external-id"}, {"ExternalId": "converse-external-id"}),
+    ],
+    ids=["session_tags", "external_id"],
+)
+def test_assumed_role_session_signs_the_request_and_its_params_stay_out_of_the_body(
+    role_params: Mapping[str, object], sts_expects: Mapping[str, object]
+) -> None:
+    """The role session STS admits signs the Converse call, and the role params never reach the body (#34069)."""
+    upstream: Final = RecordingUpstream()
+    sts: Final = _TrustPolicySTS(sts_expects, access_key="ASIACONVERSEROLE")
+
+    with patch.object(boto3, "client", return_value=sts):
+        response: Final = litellm.completion(
+            model=HAIKU,
+            messages=list(HI),
+            aws_region_name="us-east-1",
+            aws_access_key_id="AKIACONVERSECALLER",
+            aws_secret_access_key="pod-caller-secret",
+            aws_role_name="arn:aws:iam::999999999999:role/litellm-converse-role",
+            aws_session_name="litellm-converse-session",
+            client=upstream.sync_client(),
+            **role_params,
         )
 
     assert response.choices[0].message.content == "hi"
-    sent = client.post.call_args.kwargs
-    assert "Credential=ASIACONVERSETAGGED/" in sent["headers"]["Authorization"]
-    assert "aws_session_tags" not in sent["data"]
+    assert "Credential=ASIACONVERSEROLE/" in upstream.only_request.headers["Authorization"]
+    assert keys_at_every_depth(json.loads(upstream.only_request.content)).isdisjoint(role_params)
+
+
+_OUT_OF_BODY_PARAMS: Final = MappingProxyType(
+    {
+        "aws_access_key_id": "AKIAOUTOFBODY",
+        "aws_secret_access_key": "out-of-body-secret",
+        "aws_session_token": "out-of-body-session-token",
+        "aws_sts_endpoint": "https://sts.out-of-body.example",
+        "aws_external_id": "out-of-body-external-id",
+        "aws_region_name": "eu-central-1",
+        "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.out-of-body.example",
+        "model_id": "anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
+)
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    "stream_params",
+    [{}, {"stream": True}, {"stream": True, "fake_stream": True}],
+    ids=["non_stream", "live_stream", "fake_stream"],
+)
+async def test_transport_params_reach_the_url_and_signature_but_never_the_body(
+    sync: bool, stream_params: Mapping[str, object]
+) -> None:
+    live_stream: Final = stream_params == {"stream": True}
+    upstream: Final = RecordingUpstream(body=b"" if live_stream else CONVERSE_ANSWER)
+
+    await complete(upstream, sync=sync, model=HAIKU, messages=list(HI), **_OUT_OF_BODY_PARAMS, **stream_params)
+
+    sent: Final = upstream.only_request
+    body: Final = json.loads(sent.content)
+    assert body["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+    assert keys_at_every_depth(body).isdisjoint({*_OUT_OF_BODY_PARAMS, *stream_params}), body
+    assert not any(str(value) in sent.content.decode() for value in _OUT_OF_BODY_PARAMS.values()), body
+    assert sent.url.host == "bedrock-runtime.out-of-body.example"
+    assert "Credential=AKIAOUTOFBODY/" in sent.headers["Authorization"]
+    assert "/eu-central-1/bedrock/aws4_request" in sent.headers["Authorization"]
+
+
+_INFERENCE_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:12345678910:application-inference-profile/ujdtmcirjhevpi"
+_ENCODED_INFERENCE_PROFILE_ARN: Final = (
+    "arn%3Aaws%3Abedrock%3Aus-east-1%3A12345678910%3Aapplication-inference-profile%2Fujdtmcirjhevpi"
+)
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    ("model", "request_params", "expected_region", "expected_path"),
+    [
+        (
+            HAIKU,
+            {"aws_region_name": "us-east-1"},
+            "us-east-1",
+            "/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
+        ),
+        (
+            HAIKU,
+            {"aws_region_name": "us-east-1", "stream": True},
+            "us-east-1",
+            "/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse-stream",
+        ),
+        ("bedrock/ap-northeast-1/moonshotai.kimi-k2.5", {}, "ap-northeast-1", "/model/moonshotai.kimi-k2.5/converse"),
+        (
+            "bedrock/us-west-2/anthropic.claude-haiku-4-5-20251001-v1:0",
+            {},
+            "us-west-2",
+            "/model/anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
+        ),
+        (
+            "bedrock/ap-northeast-1/moonshotai.kimi-k2.5",
+            {"aws_region_name": "eu-west-1"},
+            "eu-west-1",
+            "/model/moonshotai.kimi-k2.5/converse",
+        ),
+        (
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            {"aws_region_name": "us-east-1"},
+            "us-east-1",
+            "/model/us.anthropic.claude-haiku-4-5-20251001-v1%3A0/converse",
+        ),
+        (
+            HAIKU,
+            {"aws_region_name": "us-east-1", "model_id": _INFERENCE_PROFILE_ARN},
+            "us-east-1",
+            f"/model/{_ENCODED_INFERENCE_PROFILE_ARN}/converse",
+        ),
+        (
+            "bedrock/converse/nova-2/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123",
+            {"aws_region_name": "us-east-1"},
+            "us-east-1",
+            "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aimported-model%2Fabc123/converse",
+        ),
+    ],
+    ids=[
+        "converse",
+        "converse_stream",
+        "region_in_model_path",
+        "region_in_model_path_with_colon_model_id",
+        "explicit_region_beats_model_path",
+        "cross_region_inference_prefix_is_not_a_region",
+        "model_id_param",
+        "nova_spec_prefix",
+    ],
+)
+async def test_request_goes_to_the_regional_runtime_path_for_the_model_and_is_signed_for_that_region(
+    sync: bool, model: str, request_params: Mapping[str, object], expected_region: str, expected_path: str
+) -> None:
+    upstream: Final = RecordingUpstream(body=b"" if request_params.get("stream") else CONVERSE_ANSWER)
+
+    await complete(upstream, sync=sync, model=model, messages=list(HI), **STATIC_AWS_CREDENTIALS, **request_params)
+
+    sent: Final = upstream.only_request
+    assert sent.url.host == f"bedrock-runtime.{expected_region}.amazonaws.com"
+    assert sent.url.raw_path.decode() == expected_path
+    assert f"/{expected_region}/bedrock/aws4_request" in sent.headers["Authorization"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@SYNC_AND_ASYNC
+async def test_unsupported_anthropic_beta_is_dropped_from_the_header_and_the_body(sync: bool) -> None:
+    upstream: Final = RecordingUpstream()
+
+    await complete(
+        upstream,
+        sync=sync,
+        model="bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=list(HI),
+        extra_headers={"anthropic-beta": "context-1m-2025-08-07,files-api-2025-04-14"},
+        aws_region_name="us-east-1",
+        **STATIC_AWS_CREDENTIALS,
+    )
+
+    sent: Final = upstream.only_request
+    assert sent.headers["anthropic-beta"] == "context-1m-2025-08-07"
+    body: Final = json.loads(sent.content)
+    assert body["additionalModelRequestFields"]["anthropic_beta"] == ["context-1m-2025-08-07"]
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+async def test_caller_cannot_forge_the_request_metadata_header_when_forwarding_is_on(
+    monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_alias"])
+    upstream: Final = RecordingUpstream()
+
+    await complete(
+        upstream,
+        sync=sync,
+        model=HAIKU,
+        messages=list(HI),
+        metadata={"user_api_key_alias": "real-alias"},
+        extra_headers={"X-Amzn-Bedrock-Request-Metadata": json.dumps({"user_api_key_alias": "forged"})},
+        aws_region_name="us-east-1",
+        **STATIC_AWS_CREDENTIALS,
+    )
+
+    sent: Final = upstream.only_request
+    assert sent.headers.get_list("x-amzn-bedrock-request-metadata") == ['{"user_api_key_alias":"real-alias"}']
+    assert json.loads(sent.content)["requestMetadata"] == {"user_api_key_alias": "real-alias"}
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+async def test_converse_like_endpoint_gets_the_request_as_is_and_unsigned(sync: bool) -> None:
+    upstream: Final = RecordingUpstream()
+
+    response: Final = await complete(
+        upstream,
+        sync=sync,
+        model="bedrock/converse_like/my-gateway-model",
+        messages=list(HI),
+        api_base="https://converse-gateway.example/v1/converse",
+    )
+
+    assert response.choices[0].message.content == "hi"
+    sent: Final = upstream.only_request
+    assert str(sent.url) == "https://converse-gateway.example/v1/converse"
+    assert "authorization" not in sent.headers
+    assert json.loads(sent.content)["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
 
 
 def _converse_streaming_kwargs() -> dict[str, object]:
@@ -327,7 +480,6 @@ async def test_live_stream_with_a_text_stream_timeout_reports_the_stream_timeout
     assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
-
 _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
     ("model", "request_params"),
     [
@@ -338,7 +490,12 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
         ),
         (
             "bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
-            {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}}},
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                }
+            },
         ),
         ("bedrock/invoke/ai21.j2-ultra-v1", {}),
     ],
@@ -491,7 +648,9 @@ async def test_fake_stream_through_a_router_adapter_is_bounded_by_the_request_ti
 
     assert isinstance(response, AsyncIterator)
     contents: Final = [
-        chunk.choices[0].delta.content or "" async for chunk in response if isinstance(chunk, litellm.ModelResponseStream)
+        chunk.choices[0].delta.content or ""
+        async for chunk in response
+        if isinstance(chunk, litellm.ModelResponseStream)
     ]
     assert "".join(contents) == "hi"
 
@@ -517,7 +676,10 @@ def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> No
     )
     with pytest.raises(litellm.Timeout):
         router.completion(
-            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_sync_client()
+            model="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=slow_upstream_sync_client(),
         )
 
 
@@ -528,7 +690,10 @@ async def test_async_live_stream_through_the_router_fails_at_the_stream_timeout(
     )
     with pytest.raises(litellm.Timeout) as excinfo:
         await router.acompletion(
-            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_async_client()
+            model="bedrock",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=slow_upstream_async_client(),
         )
     assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
@@ -713,7 +878,9 @@ async def test_a_rejected_schema_after_a_denied_invoke_stream_falls_back_to_the_
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_invoke_streaming_and_rejects_native_output)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=_denies_invoke_streaming_and_rejects_native_output
+    )
     router: Final = _bedrock_router(
         "bedrock/invoke/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
     )
@@ -749,7 +916,6 @@ async def test_failed_native_output_retry_reports_the_request_timeout_it_was_bou
     assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "stream_text",
@@ -774,11 +940,14 @@ async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_b
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
-    router: Final = _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
+    router: Final = _bedrock_router(
+        model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
 
     with pytest.raises(openai.APIError) as excinfo:
         await stream_text(router)
     assert getattr(excinfo.value, "timeout", None) == bounding_timeout
+
 
 RECORDED_REASONING: Final = "Tokyo proper has about 14 million people."
 RECORDED_THINKING_TOKENS: Final = 309
@@ -1092,3 +1261,187 @@ def test_converse_profile_override_records_cost_without_changing_response_model(
         CONVERSE_RESPONSE["usage"]["inputTokens"] * prices["input_cost_per_token"]
         + CONVERSE_RESPONSE["usage"]["outputTokens"] * prices["output_cost_per_token"]
     )
+
+
+_REQUEST_ID_HEADERS: Final = MappingProxyType({"content-type": "application/json", "x-amzn-requestid": "req-123"})
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+async def test_bedrock_response_headers_are_forwarded_as_llm_provider_headers(sync: bool, stream: bool) -> None:
+    upstream: Final = RecordingUpstream(body=b"" if stream else CONVERSE_ANSWER, headers=_REQUEST_ID_HEADERS)
+
+    response: Final = await complete(
+        upstream,
+        sync=sync,
+        model=HAIKU,
+        messages=list(HI),
+        stream=stream,
+        aws_region_name="us-east-1",
+        **STATIC_AWS_CREDENTIALS,
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-123"
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+async def test_bedrock_error_keeps_the_bedrock_response_headers(sync: bool) -> None:
+    upstream: Final = RecordingUpstream(
+        status_code=500,
+        body=json.dumps({"message": "Amazon Bedrock is unable to process your request."}).encode(),
+        headers={"x-amzn-RequestId": "req-err-123", "x-amzn-ErrorType": "InternalServerException"},
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await complete(
+            upstream, sync=sync, model=HAIKU, messages=list(HI), aws_region_name="us-east-1", **STATIC_AWS_CREDENTIALS
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-err-123"
+
+
+def _stream_converse_completion_with_spied_client(model: str = HAIKU, **request: object) -> tuple[MagicMock, MagicMock]:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **request,
+    )
+    return mock_response.iter_bytes, client.post
+
+
+def test_completion_plumbs_stream_chunk_size_through_converse() -> None:
+    iter_bytes_spy, _ = _stream_converse_completion_with_spied_client(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", stream_chunk_size=2048
+    )
+    iter_bytes_spy.assert_called_once_with(chunk_size=2048)
+
+
+def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body() -> None:
+    iter_bytes_spy, post_spy = _stream_converse_completion_with_spied_client(stream_chunk_size=64)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    iter_bytes_spy, _ = _stream_converse_completion_with_spied_client(**request_kwargs)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+async def _astream_converse_completion_with_spied_client(**request: object) -> tuple[MagicMock, AsyncMock]:
+    async def _no_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
+        return
+        yield b""
+
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
+    aiter_bytes_spy: Final = mock_response.aiter_bytes
+    client: Final = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    await litellm.acompletion(
+        model=HAIKU,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **request,
+    )
+    return aiter_bytes_spy, client.post
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body() -> None:
+    aiter_bytes_spy, post_spy = await _astream_converse_completion_with_spied_client(stream_chunk_size=64)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+async def test_acompletion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    aiter_bytes_spy, _ = await _astream_converse_completion_with_spied_client(**request_kwargs)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+CONVERSE_DEPLOYMENT: Final = MappingProxyType(
+    {
+        "model": HAIKU,
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+)
+
+
+@pytest.mark.parametrize("deployment_extras,expected_chunk_size", ROUTER_CHUNK_SIZE_CASES)
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
+    deployment_extras: Mapping[str, object], expected_chunk_size: int | None
+) -> None:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "converse-chunked", "litellm_params": {**CONVERSE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
+    )
+
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="converse-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
+
+    mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
+    data: Final = client.post.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "non_stream"])
+def test_converse_rejects_non_int_stream_chunk_size_before_calling_bedrock(stream: bool) -> None:
+    upstream: Final = RecordingUpstream()
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model=HAIKU,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            client=upstream.sync_client(),
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            stream_chunk_size="sixty-four",
+        )
+
+    assert upstream.requests == ()
