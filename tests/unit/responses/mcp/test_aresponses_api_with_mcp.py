@@ -1782,25 +1782,30 @@ async def test_a_malformed_choice_under_drop_params_runs_an_mcp_call_as_if_never
 
 
 @pytest.mark.asyncio
-async def test_a_malformed_choice_without_drop_params_answers_400_before_listing_or_calling_a_model(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_a_malformed_choice_reaches_the_provider_as_sent_and_runs_the_mcp_call(
+    drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    listing: Final = AsyncMock()
-    _served_by_a_recording_mcp_server(monkeypatch, AsyncMock())
-    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", listing)
+    route: Final = _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+    malformed: Final = {"type": "allowed_tools", "mode": "auto", "tools": []}
 
-    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
-        await litellm.aresponses(
+    with _echo_tool_listed():
+        response: Final = await litellm.aresponses(
             model="openai/gpt-5.6",
             input="Call echo with PING",
             tools=[dict(_ECHO_MCP_TOOL)],
-            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": []},
+            tool_choice=malformed,
+            drop_params=drop_params,
             api_key="sk-mcp-rounds",
             api_base="https://mcp-rounds.example.com/v1",
         )
 
-    listing.assert_not_awaited()
-    assert not respx_mock.calls
+    assert json.loads(route.calls[0].request.content)["tool_choice"] == malformed
+    assert call_tool.await_count == 1
+    assert isinstance(response, ResponsesAPIResponse)
+    assert "message" in _output_types(response.output)
 
 
 _DEMO_LABELED_ECHO_TOOL: Final = MappingProxyType({**_ECHO_MCP_TOOL, "server_label": "demo"})

@@ -29,9 +29,11 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_in_effect,
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
+    is_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -209,9 +211,10 @@ async def aresponses_api_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    tool_choice_in_effect: Final = allowed_tools_tool_choice_in_effect(
-        tool_choice, model, drops_unsupported_params(kwargs.get("drop_params"))
+    sends_a_malformed_choice_as_given: Final = (
+        is_allowed_tools_tool_choice(tool_choice) and parse_allowed_tools_tool_choice(tool_choice) is None
     )
+    tool_choice_in_effect: Final = allowed_tools_tool_choice_in_effect(tool_choice, model, drop_params=True)
 
     # Parse MCP tools and separate from other tools
     (
@@ -266,7 +269,9 @@ async def aresponses_api_with_mcp(
         "stream": stream,
         "temperature": temperature,
         "text": text,
-        "tool_choice": allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice_in_effect, gateway),
+        "tool_choice": tool_choice
+        if sends_a_malformed_choice_as_given
+        else allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice_in_effect, gateway),
         "top_p": top_p,
         "truncation": truncation,
         "user": user,
