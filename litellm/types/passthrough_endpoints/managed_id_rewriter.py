@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 SortOrder: TypeAlias = Literal["asc", "desc"]
 ResourceKind: TypeAlias = Literal["files", "batches"]
+ResponseIdIssuance: TypeAlias = Literal["issued", "unissued", "unverified"]
 
 PrismaWhereValue: TypeAlias = (
     "str | int | bool | datetime | None | Mapping[str, PrismaWhereValue] | Sequence[PrismaWhereValue]"
@@ -79,6 +80,8 @@ class ManagedObjectTable(ManagedTable[ManagedObjectRow], Protocol):
     async def update(self, *, where: PrismaWhere, data: ManagedRowData) -> ManagedObjectRow | None: ...
 
     async def upsert(self, *, where: PrismaWhere, data: Mapping[str, ManagedRowData]) -> ManagedObjectRow: ...
+
+    async def count(self, *, where: Mapping[str, object]) -> int: ...
 
 
 @runtime_checkable
