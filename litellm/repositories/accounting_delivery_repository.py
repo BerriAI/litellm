@@ -117,12 +117,15 @@ class AccountingDeliveryRepository:
     async def metrics(self) -> DeliveryMetrics:
         async with self._database.tx(timeout=_TIMEOUT) as transaction:
             rows: Final = await transaction.query_raw(
-                "SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count, "
-                "COUNT(*) FILTER (WHERE state = 'parked') AS parked_count, "
-                "COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at) FILTER (WHERE state = 'pending')), 0) "
-                "AS oldest_pending_seconds, COUNT(*) FILTER (WHERE is_batch) AS batch_count, "
-                "pg_total_relation_size('\"LiteLLM_SpendLogDelivery\"') AS table_bytes "
-                'FROM "LiteLLM_SpendLogDelivery"'
+                "SELECT "
+                "(SELECT COUNT(*) FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'pending') AS pending_count, "
+                "(SELECT COUNT(*) FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'parked') AS parked_count, "
+                "COALESCE("
+                "(SELECT EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at)) "
+                "FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'pending'), 0"
+                ") AS oldest_pending_seconds, "
+                '(SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE is_batch) AS batch_count, '
+                "pg_total_relation_size('\"LiteLLM_SpendLogDelivery\"') AS table_bytes"
             )
             return DeliveryMetrics.model_validate(rows[0])
 
