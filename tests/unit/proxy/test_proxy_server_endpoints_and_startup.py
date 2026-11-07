@@ -1955,10 +1955,10 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
+
 @pytest.mark.asyncio
 async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
     from fastapi import FastAPI
-
 
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
@@ -5696,15 +5696,27 @@ def _content_policy_router(**router_kwargs: object) -> litellm.Router:
         model_list=[
             {
                 "model_name": "primary",
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "mock_response": "primary answered",
+                },
             },
             {
                 "model_name": "secondary",
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "secondary answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "mock_response": "secondary answered",
+                },
             },
             {
                 "model_name": "backup",
-                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-nano",
+                    "api_key": "fake",
+                    "mock_response": "backup answered",
+                },
             },
         ],
         num_retries=0,
@@ -5784,7 +5796,9 @@ async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules
     "invalid_rule",
     [{"secondary": "backup"}, ["backup"], dict[str, list[str]](), {"secondary": ["backup"], "primary": ["secondary"]}],
 )
-async def test_an_invalid_db_content_policy_rule_skips_only_itself(monkeypatch: pytest.MonkeyPatch, invalid_rule: object):
+async def test_an_invalid_db_content_policy_rule_skips_only_itself(
+    monkeypatch: pytest.MonkeyPatch, invalid_rule: object
+):
     monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
     router: Final = _content_policy_router()
 
@@ -11495,73 +11509,18 @@ class TestDeleteDeploymentSync:
         writer_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
 
 
-def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
-    """Follow-up to #30223: the flag must be discoverable via /config/list,
-    which requires both the ConfigGeneralSettings field and the allowed_args
-    entry in get_config_list; missing either silently hides it from the UI."""
-    import types
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi.testclient import TestClient
-
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.proxy_server import app
-
-    mock_prisma = MagicMock()
-    mock_config_table = MagicMock()
-    mock_config_table.find_first = AsyncMock(return_value=None)
-    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
-    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
-    try:
-        client = TestClient(app)
-        resp = client.get("/config/list", params={"config_type": "general_settings"})
-        assert resp.status_code == 200, resp.text
-        fields = {item["field_name"]: item for item in resp.json()}
-        assert "cancel_on_disconnect" in fields
-        assert fields["cancel_on_disconnect"]["field_type"] == "Boolean"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
-    """Related to #12905: the opt-in must be discoverable via /config/list so it
-    renders as a Boolean toggle on the Admin UI General Settings table. This needs
-    both the ConfigGeneralSettings field and the allowed_args entry."""
-    import types
-    from unittest.mock import AsyncMock, MagicMock
-
-    from fastapi.testclient import TestClient
-
-    import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.proxy_server import app
-
-    mock_prisma = MagicMock()
-    mock_config_table = MagicMock()
-    mock_config_table.find_first = AsyncMock(return_value=None)
-    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
-    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
-    try:
-        client = TestClient(app)
-        resp = client.get("/config/list", params={"config_type": "general_settings"})
-        assert resp.status_code == 200, resp.text
-        fields = {item["field_name"]: item for item in resp.json()}
-        assert "apply_user_budget_to_team_keys" in fields
-        assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
+@pytest.mark.parametrize(
+    "field_name, field_type",
+    [
+        ("cancel_on_disconnect", "Boolean"),
+        ("apply_user_budget_to_team_keys", "Boolean"),
+        ("user_api_key_cache_max_size", "Integer"),
+        ("always_include_stream_usage", "Boolean"),
+    ],
+)
+def test_get_config_list_exposes_admin_ui_general_setting(monkeypatch, field_name, field_type):
     """The Admin UI General Settings table renders whatever /config/list returns,
-    so the cache capacity has to be exposed there as an Integer to be editable."""
+    so each editable setting must be listed with the type its input widget uses."""
     mock_prisma = MagicMock()
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
@@ -11575,7 +11534,7 @@ def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
         resp = client.get("/config/list", params={"config_type": "general_settings"})
         assert resp.status_code == 200, resp.text
         fields = {item["field_name"]: item for item in resp.json()}
-        assert fields["user_api_key_cache_max_size"]["field_type"] == "Integer"
+        assert fields[field_name]["field_type"] == field_type
     finally:
         app.dependency_overrides.clear()
 
@@ -12633,6 +12592,31 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     assert "sk-stored-secret" not in written["before_value"]
     assert "sk-stored-secret" not in written["updated_values"]
     assert before["some_api_key"] != "sk-stored-secret"
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_persists_always_include_stream_usage(monkeypatch):
+    """/config/list offers always_include_stream_usage as a Boolean toggle, so
+    /config/field/update has to accept and store it instead of rejecting the name."""
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="always_include_stream_usage",
+            field_value=False,
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    stored = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert stored["always_include_stream_usage"] is False
 
 
 @pytest.mark.asyncio
