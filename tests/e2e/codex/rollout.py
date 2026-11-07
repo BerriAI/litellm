@@ -1,19 +1,22 @@
-"""The compactions Codex recorded in a thread's rollout file, `CODEX_HOME/sessions/**/rollout-*-<thread id>.jsonl`.
+"""What Codex recorded in a thread's rollout file, `CODEX_HOME/sessions/**/rollout-*-<thread id>.jsonl`.
 
-`codex exec --json` prints no event for a compaction, so the rollout is the only place it shows. Each line is
-`{"timestamp", "type", "payload"}` (`codex-rs/history/src/rollout_payload.rs`) and only `compacted` lines are read.
+`codex exec --json` prints no event for a compaction or for a sub-agent's own turn, so the rollout is the only place
+they show. Each line is `{"timestamp", "type", "payload"}` (`codex-rs/history/src/rollout_payload.rs`).
 A remote compaction is one whose replacement history carries the provider's `compaction` item, while a local one
-replaces the history with a summary Codex wrote itself.
+replaces the history with a summary Codex wrote itself. A sub-agent gets a rollout of its own whose `session_meta`
+names the thread that spawned it, and each turn it finishes ends in a `task_complete` event with its last message.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 _COMPACTED: Final = "compacted"
+_SESSION_META: Final = "session_meta"
+_EVENT: Final = "event_msg"
 _PROVIDER_COMPACTION_ITEM: Final = "compaction"
 
 
@@ -34,14 +37,43 @@ class _CompactedPayload(_Frozen):
     replacement_history: tuple[_HistoryItem, ...] | None = None
 
 
+class _SessionMeta(_Frozen):
+    parent_thread_id: str | None = None
+
+
+class _Event(_Frozen):
+    type: str
+
+
+class _TaskComplete(_Frozen):
+    type: Literal["task_complete"]
+    last_agent_message: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class Compaction:
     remote: bool
 
 
 def rollout_compactions(rollout: str) -> tuple[Compaction, ...]:
-    lines: Final = tuple(_Line.model_validate_json(line) for line in rollout.splitlines() if line.strip())
-    return tuple(_compaction(line.payload) for line in lines if line.type == _COMPACTED)
+    return tuple(_compaction(line.payload) for line in _lines(rollout) if line.type == _COMPACTED)
+
+
+def rollout_parent_thread(rollout: str) -> str | None:
+    meta: Final = next((line.payload for line in _lines(rollout) if line.type == _SESSION_META), None)
+    return _SessionMeta.model_validate(meta).parent_thread_id if meta is not None else None
+
+
+def rollout_final_messages(rollout: str) -> tuple[str, ...]:
+    events: Final = (line.payload for line in _lines(rollout) if line.type == _EVENT)
+    completions: Final = (
+        _TaskComplete.model_validate(event) for event in events if _Event.model_validate(event).type == "task_complete"
+    )
+    return tuple(done.last_agent_message for done in completions if done.last_agent_message is not None)
+
+
+def _lines(rollout: str) -> tuple[_Line, ...]:
+    return tuple(_Line.model_validate_json(line) for line in rollout.splitlines() if line.strip())
 
 
 def _compaction(payload: object) -> Compaction:

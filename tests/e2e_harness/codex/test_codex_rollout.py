@@ -8,7 +8,7 @@ from typing import Final
 
 from cli_harness.rate_limiter import RateBucket, RateLimiter
 from codex.harness import CodexHarness
-from codex.rollout import Compaction, rollout_compactions
+from codex.rollout import Compaction, rollout_compactions, rollout_final_messages, rollout_parent_thread
 
 THREAD_ID: Final = "01a18fea-b2e8-7ed2-a29b-1ce4d2b138c3"
 USER_PROMPT: Final = {
@@ -60,13 +60,64 @@ class TestRolloutCompactions:
         assert rollout_compactions(_rollout()) == ()
 
 
-def test_the_harness_reads_only_the_rollout_of_the_thread_it_is_asked_about(tmp_path: Path) -> None:
-    codex: Final = CodexHarness(
-        home=tmp_path,
+def _harness(home: Path) -> CodexHarness:
+    return CodexHarness(
+        home=home,
         api_key="unused",
         rate_bucket=RateBucket.OPENAI,
-        limiter=RateLimiter({}, tmp_path, time.monotonic, time.sleep),
+        limiter=RateLimiter({}, home, time.monotonic, time.sleep),
     )
+
+
+def _subagent_rollout(*, thread_id: str, parent: str | None, final_messages: tuple[str | None, ...]) -> str:
+    meta: Final = {"id": thread_id, "cli_version": "0.165.0"} | ({"parent_thread_id": parent} if parent else {})
+    return "\n".join(
+        (
+            _line("session_meta", meta),
+            _line("event_msg", {"type": "task_started", "turn_id": "t1"}),
+            _line(
+                "response_item",
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "thinking"}]},
+            ),
+            *(
+                _line("event_msg", {"type": "task_complete", "turn_id": "t1", "last_agent_message": message})
+                for message in final_messages
+            ),
+        )
+    )
+
+
+class TestRolloutSubagents:
+    def test_a_subagent_rollout_names_the_thread_that_spawned_it(self) -> None:
+        rollout: Final = _subagent_rollout(thread_id="child", parent=THREAD_ID, final_messages=())
+        assert rollout_parent_thread(rollout) == THREAD_ID
+
+    def test_a_top_level_rollout_has_no_parent(self) -> None:
+        assert rollout_parent_thread(_rollout()) is None
+
+    def test_the_final_messages_are_the_last_message_of_each_finished_turn(self) -> None:
+        rollout: Final = _subagent_rollout(thread_id="child", parent=THREAD_ID, final_messages=("first", None, "last"))
+        assert rollout_final_messages(rollout) == ("first", "last")
+
+
+def test_the_harness_reads_the_replies_of_only_the_subagents_of_the_thread_it_is_asked_about(tmp_path: Path) -> None:
+    codex: Final = _harness(tmp_path)
+    sessions: Final = codex.codex_home / "sessions" / "2026" / "11" / "06"
+    sessions.mkdir(parents=True)
+    rollouts: Final = {
+        THREAD_ID: _subagent_rollout(thread_id=THREAD_ID, parent=None, final_messages=("the parent's answer",)),
+        "child-a": _subagent_rollout(thread_id="child-a", parent=THREAD_ID, final_messages=("reply a",)),
+        "child-b": _subagent_rollout(thread_id="child-b", parent=THREAD_ID, final_messages=("reply b",)),
+        "stranger": _subagent_rollout(thread_id="stranger", parent="other-thread", final_messages=("not ours",)),
+    }
+    for thread_id, rollout in rollouts.items():
+        _ = (sessions / f"rollout-2026-11-06T17-01-05-{thread_id}.jsonl").write_text(rollout)
+
+    assert codex.subagent_replies(THREAD_ID) == ("reply a", "reply b")
+
+
+def test_the_harness_reads_only_the_rollout_of_the_thread_it_is_asked_about(tmp_path: Path) -> None:
+    codex: Final = _harness(tmp_path)
     sessions: Final = codex.codex_home / "sessions" / "2026" / "10" / "30"
     sessions.mkdir(parents=True)
     _ = (sessions / f"rollout-2026-10-30T20-03-32-{THREAD_ID}.jsonl").write_text(_rollout(REMOTE))
