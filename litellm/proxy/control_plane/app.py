@@ -1,8 +1,8 @@
 """App factory for the LiteLLM global control plane. Enterprise only: refuses to build without a valid license."""
 
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
+from types import TracebackType
 from typing import Final, Protocol
 
 from fastapi import FastAPI
@@ -81,23 +81,35 @@ class ControlPlaneRequestSizeLimitMiddleware:
         await self._middleware(scope, receive, send_problem)
 
 
+@dataclass(frozen=True, slots=True)
+class _Lifespan:
+    container: Container
+
+    def __call__(self, app: FastAPI) -> "_Lifespan":
+        return self
+
+    async def __aenter__(self) -> None:
+        self.container.audit_log.pipeline.start()
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        try:
+            await self.container.audit_log.pipeline.close()
+        finally:
+            self.container.telemetry.shutdown()
+
+
 def create_app(container: Container, license_check: License) -> FastAPI:
     if not license_check.is_premium():
         raise LicenseRequired()
 
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-        try:
-            yield
-        finally:
-            container.telemetry.shutdown()
-
     app: Final = FastAPI(
         title=TITLE,
         version="1",
+        lifespan=_Lifespan(container),
         docs_url=f"{container.settings.api_prefix}/docs",
         openapi_url=f"{container.settings.api_prefix}/openapi.json",
-        lifespan=lifespan,
     )
     app.add_middleware(ControlPlaneRequestSizeLimitMiddleware)
     container.telemetry.instrument(app)
