@@ -97,6 +97,35 @@ async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_t
     assert counted == {"current_requests": 1, "current_tpm": 0, "current_rpm": 1}, counted
 
 
+@pytest.mark.asyncio
+async def test_user_max_parallel_requests_is_enforced():
+    """
+    A user's own `max_parallel_requests` must be enforced on the legacy
+    (LEGACY_MULTI_INSTANCE_RATE_LIMITING) limiter too, the same as it already
+    is for an API key: a second request from the same user, under a
+    different API key, in the same minute bucket, is refused.
+    """
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
+    user_id: Final = "pia"
+    first_key: Final = UserAPIKeyAuth(
+        api_key="sk-pia-key-one", user_id=user_id, user_max_parallel_requests=1
+    )
+    second_key: Final = UserAPIKeyAuth(
+        api_key="sk-pia-key-two", user_id=user_id, user_max_parallel_requests=1
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=first_key, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+    )
+
+    with pytest.raises(ProxyRateLimitError):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=second_key, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+        )
+
+
 @pytest.mark.parametrize(
     "response_obj",
     [
