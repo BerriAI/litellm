@@ -9,8 +9,11 @@ import litellm
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
+from litellm.types.utils import Usage
+from tests.unit.test_router.core.construction_precall_helpers import windowed
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
+    agentic_followup_failure,
     bad_request,
     content_policy,
     context_window,
@@ -19,6 +22,7 @@ from tests.unit.test_router.core.scripted_host import (
     server_error,
     timeout,
 )
+from tests.unit.test_router.core.streaming_helpers import request_logging
 
 MakeCore = Callable[..., RouterCore]
 
@@ -474,6 +478,179 @@ async def test_a_context_window_error_skips_the_order_tiers_for_its_own_chain(
     await complete(core)
 
     assert host.deployments_called("acompletion") == ["a1", "b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("window_key", "tiered", "client_side", "expected"),
+    [
+        (None, True, False, "a2"),
+        ("other", True, False, "a2"),
+        ("other", False, False, "b"),
+        ("other", False, True, "b"),
+        ("a", True, False, "c"),
+        ("*", True, False, "c"),
+        ("a", True, True, "c"),
+        ("a", False, True, "c"),
+    ],
+    ids=[
+        "no-list-takes-the-order-tier",
+        "unmatched-list-takes-the-order-tier",
+        "unmatched-list-falls-through-to-the-general-chain",
+        "unmatched-list-leaves-the-client-side-list",
+        "matched-list-beats-the-order-tier",
+        "matched-star-beats-the-order-tier",
+        "matched-list-beats-the-order-tier-and-the-client-side-list",
+        "matched-list-beats-the-client-side-list",
+    ],
+)
+async def test_a_context_window_error_takes_its_own_chain_only_when_the_group_matches(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    window_key: str | None,
+    tiered: bool,
+    client_side: bool,
+    expected: str,
+) -> None:
+    core: Final = build(
+        make_core,
+        model_list=[
+            deployment("a", "a1", order=1),
+            deployment("a" if tiered else "unused", "a2", order=2),
+            deployment("b", "b"),
+            deployment("c", "c"),
+        ],
+        fallbacks=[{"a": ["b"]}],
+        context_window_fallbacks=None if window_key is None else [{window_key: ["c"]}],
+    )
+    host.answer("openai/a1", context_window())
+
+    await complete(core, **({"fallbacks": ["b"]} if client_side else {}))
+
+    assert host.deployments_called("acompletion") == ["a1", expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first", "raised"),
+    [(context_window, litellm.ContextWindowExceededError), (server_error, litellm.Timeout)],
+    ids=["context-window-keeps-the-original-error", "any-other-error-raises-the-last-hop"],
+)
+async def test_a_failed_order_chain_raises_by_the_error_that_started_it(
+    make_core: MakeCore, host: ScriptedHost, first: Callable[[], Exception], raised: type[Exception]
+) -> None:
+    core: Final = build(
+        make_core, model_list=TIERED_A, fallbacks=[{"a": ["b"]}], context_window_fallbacks=[{"other": ["c"]}]
+    )
+    host.answer("openai/a1", first())
+    host.answer("openai/a2", rate_limit())
+    host.answer("openai/b", timeout())
+
+    with pytest.raises(raised):
+        await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a1", "a2", "b"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_order_chain_appends_no_outcome_message(make_core: MakeCore, host: ScriptedHost) -> None:
+    show_router_debug(host)
+    core: Final = build(make_core, model_list=TIERED_A)
+    host.answer("openai/a1", context_window())
+    host.answer("openai/a2", rate_limit())
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        await complete(core)
+
+    assert "LiteLLM: model group" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_an_unmatched_context_window_list_reports_the_general_chain_it_fell_through_to(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    show_router_debug(host)
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], context_window_fallbacks=[{"other": ["c"]}])
+    host.answer("openai/a", context_window())
+    host.answer("openai/b", rate_limit())
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        await complete(core)
+
+    assert "No fallback was attempted" not in str(raised.value)
+    assert "context_window_fallbacks=None" not in str(raised.value)
+    assert host.deployments_called("acompletion") == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_context_window_error_is_kept_when_its_order_chain_fails(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(
+        make_core,
+        model_list=[windowed("a", "a1", 1, order=1), windowed("a", "a2", 1, order=2), deployment("b", "b")],
+        enable_pre_call_checks=True,
+        fallbacks=[{"a": ["b"]}],
+        context_window_fallbacks=[{"other": ["c"]}],
+    )
+    host.answer("openai/b", rate_limit())
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await complete(core)
+
+    assert host.deployments_called("acompletion") == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_weighted_failover_skips_a_context_window_error_with_an_unmatched_list(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(
+        make_core,
+        model_list=[deployment("a", "a1"), deployment("a", "a2"), deployment("b", "b")],
+        enable_weighted_failover=True,
+        fallbacks=[{"a": ["b"]}],
+        context_window_fallbacks=[{"other": ["c"]}],
+    )
+    host.answer("openai/a1", context_window())
+    host.answer("openai/a2", context_window())
+
+    await complete(core)
+
+    called: Final = host.deployments_called("acompletion")
+    assert len(called) == 2
+    assert called[-1] == "b"
+
+
+# --- a failed agentic follow-up ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_failed_agentic_followup_still_falls_back(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], num_retries=3)
+    host.answer("openai/a", lambda **_: agentic_followup_failure(server_error()))
+
+    response: Final = await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a", "b"]
+    assert headers(response)["x-litellm-model-group"] == "b"
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_hop_carries_the_superseded_attempt_usage(make_core: MakeCore, host: ScriptedHost) -> None:
+    logging_obj: Final = request_logging()
+    usage: Final = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+
+    def failed_after_usage(**_: object) -> Exception:
+        logging_obj.model_call_details["combined_usage_object"] = usage
+        return server_error()
+
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
+    host.answer("openai/a", failed_after_usage)
+
+    await complete(core, litellm_logging_obj=logging_obj)
+
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((usage, 0.0),)
 
 
 # --- when no fallback runs -----------------------------------------------------------------------

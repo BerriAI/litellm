@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
     NewUserResponse,
+    SSOUserDefinedValues,
     ProxyException,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -50,6 +51,62 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 from tests._master_key import MASTER_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("billable_users", "premium", "admitted"),
+    [(4, False, True), (5, False, False), (26, False, False), (26, True, True)],
+)
+async def test_sso_auto_creation_enforces_free_user_cap_through_new_user(
+    monkeypatch: pytest.MonkeyPatch, billable_users: int, premium: bool, admitted: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    row: Final = LiteLLM_UserTable(user_id="new-sso-user", user_email="new-sso-user@example.test")
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        find_unique=AsyncMock(return_value=None),
+        count=AsyncMock(side_effect=lambda where=None: billable_users if where is None else 0),
+        create=AsyncMock(return_value=row),
+        upsert=AsyncMock(return_value=row),
+    )
+    transaction: Final = MagicMock()
+    transaction.__aenter__ = AsyncMock(
+        return_value=SimpleNamespace(litellm_usertable=table, execute_raw=AsyncMock(), query_raw=AsyncMock())
+    )
+    transaction.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "prisma.Prisma",
+        lambda **kwargs: SimpleNamespace(litellm_usertable=table, tx=MagicMock(return_value=transaction)),
+    )
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "premium_user", premium)
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    values: Final[SSOUserDefinedValues] = {
+        "models": [],
+        "user_id": row.user_id,
+        "user_email": row.user_email,
+        "user_role": "internal_user_viewer",
+        "max_budget": None,
+        "budget_duration": None,
+    }
+    if admitted:
+        response: Final = await insert_sso_user(CustomOpenID(id=row.user_id, team_ids=[]), values)
+        assert response.user_id == row.user_id
+        assert table.create.await_count + table.upsert.await_count == 1
+    else:
+        with pytest.raises(ProxyException) as error:
+            await insert_sso_user(CustomOpenID(id=row.user_id, team_ids=[]), values)
+        assert str(error.value.code) == "403"
+        assert "SSO for more than 5 users" in error.value.message
+        table.create.assert_not_awaited()
+        table.upsert.assert_not_awaited()
 
 
 def _sso_http_handler(route: Callable[[httpx.Request], httpx.Response] | None = None) -> AsyncHTTPHandler:
@@ -727,10 +784,15 @@ def test_get_group_ids_from_graph_api_response():
     [
         # Test case 1: Using DefaultTeamSSOParams
         DefaultTeamSSOParams(
-            max_budget=10, budget_duration="1d", models=["special-gpt-5"]
+            max_budget=10, budget_duration="1d", models=["special-gpt-5"], access_group_ids=["central-models"]
         ),
         # Test case 2: Using Dict
-        {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
+        {
+            "max_budget": 10,
+            "budget_duration": "1d",
+            "models": ["special-gpt-5"],
+            "access_group_ids": ["central-models"],
+        },
     ],
 )
 async def test_default_team_params(team_params):
@@ -775,6 +837,7 @@ async def test_default_team_params(team_params):
         assert create_call_args["max_budget"] == 10
         assert create_call_args["budget_duration"] == "1d"
         assert create_call_args["models"] == ["special-gpt-5"]
+        assert create_call_args["access_group_ids"] == ["central-models"]
 
 
 @pytest.mark.asyncio
@@ -1281,7 +1344,8 @@ async def test_upsert_sso_user_fills_user_alias_for_existing_user():
 
 
 @pytest.mark.asyncio
-async def test_insert_sso_user_sets_user_alias_from_display_name():
+@pytest.mark.parametrize("user_id", ["S-1-5-21-adfs-user", " employee-42 "])
+async def test_insert_sso_user_sets_user_alias_from_display_name(user_id: str):
     """
     A newly created SSO user is inserted with the IdP display name as user_alias.
     """
@@ -1290,7 +1354,7 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
 
     sso_result = CustomOpenID(
-        id="S-1-5-21-adfs-user",
+        id=user_id,
         email="jane.doe@example.com",
         first_name="Jane",
         last_name="Doe",
@@ -1300,7 +1364,7 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     )
     user_defined_values: SSOUserDefinedValues = {
         "models": [],
-        "user_id": "S-1-5-21-adfs-user",
+        "user_id": user_id,
         "user_email": "jane.doe@example.com",
         "max_budget": None,
         "user_role": "internal_user",
@@ -1309,12 +1373,14 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
 
     with patch(
         "litellm.proxy.management_endpoints.ui_sso.new_user",
-        return_value=NewUserResponse(user_id="S-1-5-21-adfs-user", key="sk-xxxxx", teams=None),
+        return_value=NewUserResponse(user_id=user_id, key="sk-xxxxx", teams=None),
     ) as mock_new_user:
         await insert_sso_user(result_openid=sso_result, user_defined_values=user_defined_values)
 
     new_user_request = mock_new_user.call_args.kwargs["data"]
-    assert new_user_request.user_id == "S-1-5-21-adfs-user"
+    assert new_user_request.user_id == user_id
+    assert new_user_request.sso_user_id == user_id
+    assert new_user_request.metadata == {"auth_provider": "generic"}
     assert new_user_request.user_email == "jane.doe@example.com"
     assert new_user_request.user_alias == "Doe, Jane"
 

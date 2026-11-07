@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Save } from "lucide-react";
 
 import { toast } from "@/lib/toast";
@@ -70,6 +71,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
 };
 
 function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalProps, "isOpen">) {
+  const { t } = useTranslation();
   const form = useZodForm(projectFormSchema, { defaultValues: toFormValues(project) });
   const updateMutation = useUpdateProject();
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -94,12 +96,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       { projectId: project.project_id, params },
       {
         onSuccess: () => {
-          toast.success("Project updated successfully");
+          toast.success(t("projects.editModal.toast.updated"));
           onSuccess?.();
           onClose();
         },
         onError: (error) => {
-          toast.error(error.message || "Failed to update project");
+          toast.error(error.message || t("projects.editModal.toast.failed"));
         },
       },
     );
@@ -111,11 +113,11 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 
       <div className="mt-6 flex justify-end gap-2 border-t border-border pt-4">
         <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
+          {t("projects.editModal.cancel")}
         </Button>
         <Button type="button" onClick={() => void handleSubmit()} disabled={updateMutation.isPending}>
           {updateMutation.isPending ? <UiLoadingSpinner /> : <Save />}
-          Save Changes
+          {t("projects.editModal.submit")}
         </Button>
       </div>
     </form>
@@ -123,11 +125,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 }
 
 export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditProjectModalProps) {
+  const { t } = useTranslation();
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
         <DialogHeader>
-          <DialogTitle className="text-lg">Edit Project</DialogTitle>
+          <DialogTitle className="text-lg">{t("projects.editModal.title")}</DialogTitle>
         </DialogHeader>
         <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
       </DialogContent>

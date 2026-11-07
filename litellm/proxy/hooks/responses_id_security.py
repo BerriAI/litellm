@@ -5,9 +5,9 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -460,8 +460,8 @@ class ResponsesIDSecurity(CustomLogger):
         return response
 
     async def async_post_call_streaming_iterator_hook(
-        self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict[str, object]
-    ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
+        self, user_api_key_dict: "UserAPIKeyAuth", response: AsyncIterable[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
         advertise: Final = self._streamed_response_id_advertiser(user_api_key_dict, request_data)
         async for chunk in response:
             yield (

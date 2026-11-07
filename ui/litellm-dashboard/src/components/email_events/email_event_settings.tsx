@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
@@ -39,7 +39,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
     }
   };
 
-  const handleCheckboxChange = (event: EmailEvent, checked: boolean) => {
+  const handleEnabledChange = (event: EmailEvent, checked: boolean) => {
     const updatedSettings = eventSettings.map((setting) =>
       setting.event === event ? { ...setting, enabled: checked } : setting,
     );
@@ -74,6 +74,9 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
   // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
+    if (event === "Model Deprecations") {
+      return t("loggingAndAlerts.emailEvents.descriptions.modelDeprecations");
+    }
     // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {
       return t("loggingAndAlerts.emailEvents.descriptions.virtualKeyCreated");
@@ -108,9 +111,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
           <div className="space-y-4">
             {eventSettings.map((setting) => (
               <div key={setting.event} className="flex items-start">
-                <Checkbox
+                <Switch
                   checked={setting.enabled}
-                  onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked === true)}
+                  onCheckedChange={(checked) => handleEnabledChange(setting.event, checked)}
+                  aria-label={setting.event}
                   className="mt-1"
                 />
                 <div className="ml-3">

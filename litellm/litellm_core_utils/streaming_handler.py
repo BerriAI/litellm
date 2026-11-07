@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
@@ -17,7 +17,7 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -27,7 +27,9 @@ from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_F
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     UPSTREAM_USAGE_COST,
+    attribute_or_none,
     chunk_usage,
+    decoded_json_object,
     provider_reported_usage_cost,
     stamp_litellm_bill_on_usage,
 )
@@ -127,6 +129,13 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
+
+
+def _entry_len(entries: Mapping[str, object], key: str) -> int:
+    value: Final = entries[key]
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def _prepend_upstream_choice_extras(
@@ -346,6 +355,9 @@ class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     upstream_provider: str | None = None
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _provider_response_model(chunk: object) -> str | None:
     model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
     return model if isinstance(model, str) and model else None
@@ -432,9 +444,8 @@ class CustomStreamWrapper:
         self._closed = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(
-            dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
-        )
+        raw_litellm_params: Final = dict[str, object](**self.logging_obj.model_call_details.get("litellm_params", {}))
+        litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(raw_litellm_params)
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -465,7 +476,7 @@ class CustomStreamWrapper:
 
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=raw_litellm_params,
         )
 
         self._hidden_params: dict[str, object] = {
@@ -953,7 +964,7 @@ class CustomStreamWrapper:
                 if "text_output" in chunk:
                     response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
-                    parsed_response = json.loads(response)
+                    parsed_response = decoded_json_object(_DECODED_JSON.validate_python(json.loads(response)))
                 else:
                     return {
                         "text": "",
@@ -1087,7 +1098,7 @@ class CustomStreamWrapper:
 
     def is_chunk_non_empty(
         self,
-        completion_obj: dict[str, Any],
+        completion_obj: Mapping[str, object],
         model_response: ModelResponseStream,
         response_obj: Mapping[str, object],
     ) -> bool:
@@ -1097,7 +1108,7 @@ class CustomStreamWrapper:
             or (
                 "tool_calls" in completion_obj
                 and completion_obj["tool_calls"] is not None
-                and len(completion_obj["tool_calls"]) > 0
+                and _entry_len(completion_obj, "tool_calls") > 0
             )
             or ("function_call" in completion_obj and completion_obj["function_call"] is not None)
             or (
@@ -1129,6 +1140,7 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.role is not None
             )
             or (getattr(model_response.choices[0].delta, "reasoning_items", None) is not None)
+            or getattr(model_response.choices[0].delta, "thinking_blocks", None)
         ):
             return True
         else:
@@ -1850,7 +1862,9 @@ class CustomStreamWrapper:
                             elif delta.tool_calls is not None:
                                 if isinstance(delta.tool_calls, list):
                                     for t in delta.tool_calls:
-                                        if hasattr(t, "functions") and hasattr(getattr(t, "functions"), "arguments"):
+                                        if hasattr(t, "functions") and hasattr(
+                                            attribute_or_none(t, "functions"), "arguments"
+                                        ):
                                             if t.function.arguments is None:
                                                 t.function.arguments = ""
                             _json_delta: Final[_DeltaDumpDict] = delta.model_dump()
@@ -1888,7 +1902,7 @@ class CustomStreamWrapper:
                     return
             ## CHECK FOR TOOL USE
 
-            if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+            if "tool_calls" in completion_obj and _entry_len(completion_obj, "tool_calls") > 0:
                 if self.is_function_call is True:  # user passed in 'functions' param
                     completion_obj["function_call"] = completion_obj["tool_calls"][0]["function"]
                     completion_obj["tool_calls"] = None
@@ -2817,8 +2831,9 @@ class CustomStreamWrapper:
 
     def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
         self.chunks.append(chunk.model_copy())
+        dumped_chunk: Final = MappingProxyType[str, object](chunk.model_dump())
         usage_free_chunk: Final = self.model_response_creator(
-            chunk={key: value for key, value in chunk.model_dump().items() if key != "usage"},
+            chunk={key: value for key, value in dumped_chunk.items() if key != "usage"},
             hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
                 Mapping[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
             ),
@@ -2826,8 +2841,6 @@ class CustomStreamWrapper:
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
-        # Shared by the sync, async, and non-aiohttp iteration sites so answer
-        # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
         self.response_uptil_now += content if isinstance(content, str) else ""

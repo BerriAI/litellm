@@ -12,6 +12,7 @@ import httpx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
@@ -33,6 +34,13 @@ def present(request: NativeCall, name: str) -> bool:
 def mock_response(request: NativeCall) -> bool:
     """Python returns a supplied mock instead of calling the provider."""
     return present(request, "mock_response")
+
+
+def latest_alias(request: NativeCall) -> bool:
+    return is_model_latest_alias(
+        optional_str(request.resolved.get("model")) or "",
+        optional_str(request.resolved.get("custom_llm_provider")),
+    )
 
 
 def caller_client(request: NativeCall) -> bool:
@@ -179,5 +187,6 @@ COMMON: Final[Detectors] = MappingProxyType(
         Feature.TIMEOUT_VARIANTS: timeout_variants,
         Feature.AGENTIC_LOOP_HOOK: agentic_loop_hook,
         Feature.TLS_POLICY: tls_policy,
+        Feature.LATEST_ALIAS: latest_alias,
     }
 )

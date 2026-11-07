@@ -81,7 +81,6 @@ from litellm.constants import (
 import httpx
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 
-# register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 
@@ -98,7 +97,6 @@ failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
 batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
-# logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -507,8 +505,6 @@ skill_search_embedding_model: Optional[str] = None
 public_model_groups_links: dict[str, str | dict[str, object]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
-# priority_reservation_settings is lazy-loaded via __getattr__
-# Only declare for type checking - at runtime __getattr__ handles it
 if TYPE_CHECKING:
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
@@ -543,8 +539,6 @@ _google_kms_resource_name: Optional[str] = None
 _key_management_system: Optional["KeyManagementSystem"] = None
 # Note: KeyManagementSettings must be eagerly imported because _key_management_settings
 # is accessed during import time in secret_managers/main.py
-# We'll import it after the lazy import system is set up
-# We can't define it here because KeyManagementSettings is lazy-loaded
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -688,6 +682,7 @@ darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
+wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
 morph_models: Set = set()
@@ -984,6 +979,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             kyma_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
+        elif value.get("litellm_provider") == "wally":
+            wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1071,7 +1068,6 @@ _populate_provider_model_sets(model_cost)
 # Azure returns gpt-35-turbo in their responses, we need to map this to azure/gpt-3.5-turbo for token counting
 azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
-    "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
     "azure/gpt-41": "gpt-4.1",
     "azure/gpt-41-mini": "gpt-4.1-mini",
@@ -1166,6 +1162,7 @@ model_list = list(
     | openinfer_models
     | kyma_models
     | streamlake_models
+    | wally_models
     | zerogpu_models
     | v0_models
     | morph_models
@@ -1192,8 +1189,6 @@ model_list = list(
 )
 
 model_list_set = set(model_list)
-
-# provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
 def _build_models_by_provider() -> dict:
@@ -1299,6 +1294,7 @@ def _build_models_by_provider() -> dict:
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
+        "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "morph": morph_models,
@@ -1374,10 +1370,6 @@ all_embedding_models = (
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
 
-# timeout is lazy-loaded via __getattr__
-# get_llm_provider is lazy-loaded via __getattr__
-# remove_index_from_tool_calls is lazy-loaded via __getattr__
-
 # Import KeyManagementSettings here (before utils import) because _key_management_settings
 # is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
 from litellm.types.secret_managers.main import KeyManagementSettings
@@ -1387,8 +1379,6 @@ _key_management_settings: KeyManagementSettings = KeyManagementSettings()
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 
-# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
-# (which imports tiktoken) at import time
 
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
@@ -1412,12 +1402,9 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
 )
 from .llms.topaz.common_utils import TopazModelInfo
 
-# OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
-# OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
 from .llms.xai.common_utils import XAIModelInfo
 
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
-# All remaining configs are now lazy loaded - see _lazy_imports_registry.py
 
 # Import LlmProviders here (before main import) because it's imported during import time
 # in multiple places including openai.py (via main import)
@@ -1646,8 +1633,6 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
     global_gitlab_config = config
 
 
-# Lazy loading system for heavy modules to reduce initial import time and memory usage
-
 if TYPE_CHECKING:
     from . import guardrails as guardrails
     from litellm.types.utils import ModelInfo as _ModelInfoType
@@ -1655,7 +1640,6 @@ if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
 
-    # Type stubs for lazy-loaded configs to help mypy
     from .llms.bedrock.chat.converse_transformation import (
         AmazonConverseConfig as AmazonConverseConfig,
     )
@@ -1791,6 +1775,9 @@ if TYPE_CHECKING:
     )
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
+    )
+    from .llms.empiriolabs.decisions.transformation import (
+        EmpirioLabsDecisionsConfig as EmpirioLabsDecisionsConfig,
     )
     from .llms.eu_jev.decisions.transformation import (
         EuJevDecisionsConfig as EuJevDecisionsConfig,
@@ -2081,7 +2068,6 @@ if TYPE_CHECKING:
     )
     from .llms.gdc.chat.transformation import GDCGeminiConfig as GDCGeminiConfig
 
-    # Type stubs for lazy-loaded config instances
     openaiOSeriesConfig: OpenAIOSeriesConfig
     openAIGPTConfig: OpenAIGPTConfig
     openAIGPTAudioConfig: OpenAIGPTAudioConfig
@@ -2139,7 +2125,6 @@ if TYPE_CHECKING:
         VertexGeminiConfig as _VertexGeminiConfig,
     )
 
-    # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
     TencentChatConfig: Type[_TencentChatConfig]
@@ -2416,62 +2401,33 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
-    # Bedrock tool name mappings instance (lazy-loaded)
     from litellm.caching.caching import InMemoryCache
 
     bedrock_tool_name_mappings: InMemoryCache
 
-    # Azure exception class (lazy-loaded)
     from litellm.llms.azure.common_utils import AzureOpenAIError
 
-    # Secret manager types (lazy-loaded)
     from litellm.types.secret_managers.main import (
         KeyManagementSystem,
         KeyManagementSettings,  # Not lazy-loaded - needed for _key_management_settings initialization
     )
 
-    # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
 
-    # Datadog LLM observability params (lazy-loaded)
     from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 
-    # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import (
         LoggingCallbackManager,
     )
 
     logging_callback_manager: LoggingCallbackManager
 
-    # provider_list is lazy-loaded
     from litellm.types.utils import LlmProviders
 
     provider_list: List[Union[LlmProviders, str]]
 
-    # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
 
-
-# Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
-
-_AGENT_EXPORTS: Final = frozenset(
-    {
-        "agent",
-        "aagent",
-        "agent_session",
-        "aagent_session",
-        "agent_resume",
-        "aagent_resume",
-        "agent_capabilities",
-        "Harness",
-        "ClaudeCodeOptions",
-        "CodexOptions",
-        "OpenCodeOptions",
-        "PiOptions",
-        "DeepAgentsOptions",
-        "ToolLoopOptions",
-    }
-)
 
 # Eager loading for backwards compatibility with VCR and other HTTP recording tools
 # When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
@@ -2485,9 +2441,7 @@ if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes",
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler with cached registry for improved performance."""
     global _async_client_cleanup_registered
-    # Register async client cleanup on first access (only once)
     if not _async_client_cleanup_registered:
         from litellm.llms.custom_httpx.async_client_cleanup import (
             register_async_client_cleanup,
@@ -2496,205 +2450,9 @@ def __getattr__(name: str) -> Any:
         register_async_client_cleanup()
         _async_client_cleanup_registered = True
 
-    # Use cached registry from _lazy_imports instead of importing tuples every time
-    from ._lazy_imports import get_lazy_import_registry
+    from ._lazy_imports import resolve_lazy_attribute
 
-    registry: Final = get_lazy_import_registry()
+    return resolve_lazy_attribute(__name__, name)
 
-    # Check if name is in registry and call the cached handler function
-    if name in registry:
-        handler_func: Final = registry[name]
-        return handler_func(name)
-
-    if name in ("proxy", "guardrails"):
-        import importlib
-
-        return importlib.import_module(f"litellm.{name}")
-
-    if name == "harness" or name in _AGENT_EXPORTS:
-        import importlib
-
-        harness_module = importlib.import_module("litellm.harness")
-        return harness_module if name == "harness" else getattr(harness_module, name)
-
-    # Lazy load encoding from main.py to avoid heavy tiktoken import
-    if name == "encoding":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "encoding" not in _globals:
-            from .main import encoding as _encoding
-
-            _globals["encoding"] = _encoding
-        return _globals["encoding"]
-
-    # Lazy load bedrock_tool_name_mappings instance
-    if name == "bedrock_tool_name_mappings":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "bedrock_tool_name_mappings" not in _globals:
-            from .llms.bedrock.chat.invoke_handler import (
-                bedrock_tool_name_mappings as _bedrock_tool_name_mappings,
-            )
-
-            _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
-        return _globals["bedrock_tool_name_mappings"]
-
-    # Lazy load AzureOpenAIError exception class
-    if name == "AzureOpenAIError":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "AzureOpenAIError" not in _globals:
-            from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
-
-            _globals["AzureOpenAIError"] = _AzureOpenAIError
-        return _globals["AzureOpenAIError"]
-
-    # Lazy load openaiOSeriesConfig instance
-    if name == "openaiOSeriesConfig":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        if "openaiOSeriesConfig" not in _globals:
-            # Import the config class and instantiate it
-            config_class = __getattr__("OpenAIOSeriesConfig")
-            _globals["openaiOSeriesConfig"] = config_class()
-        return _globals["openaiOSeriesConfig"]
-
-    # Lazy load other config instances
-    _config_instances: Final = {
-        "openAIGPTConfig": "OpenAIGPTConfig",
-        "openAIGPTAudioConfig": "OpenAIGPTAudioConfig",
-        "openAIGPT5Config": "OpenAIGPT5Config",
-        "nvidiaNimConfig": "NvidiaNimConfig",
-        "nvidiaNimEmbeddingConfig": "NvidiaNimEmbeddingConfig",
-    }
-    if name in _config_instances:
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        if name not in _globals:
-            # Import the config class and instantiate it
-            config_class = __getattr__(_config_instances[name])
-            _globals[name] = config_class()
-        return _globals[name]
-
-    # Handle OpenAIO1Config alias
-    if name == "OpenAIO1Config":
-        return __getattr__("OpenAIOSeriesConfig")
-
-    # Lazy load provider_list
-    if name == "provider_list":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "provider_list" not in _globals:
-            # LlmProviders is eagerly imported above, so we can import it directly
-            from litellm.types.utils import LlmProviders
-
-            _globals["provider_list"] = list(LlmProviders)
-        return _globals["provider_list"]
-
-    # Lazy load priority_reservation_settings instance
-    if name == "priority_reservation_settings":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "priority_reservation_settings" not in _globals:
-            # Import the class and instantiate it
-            PriorityReservationSettings: Final = __getattr__("PriorityReservationSettings")
-            _globals["priority_reservation_settings"] = PriorityReservationSettings()
-        return _globals["priority_reservation_settings"]
-
-    # Lazy load logging_callback_manager instance
-    if name == "logging_callback_manager":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "logging_callback_manager" not in _globals:
-            # Import the class and instantiate it
-            LoggingCallbackManager: Final = __getattr__("LoggingCallbackManager")
-            _globals["logging_callback_manager"] = LoggingCallbackManager()
-        return _globals["logging_callback_manager"]
-
-    # Lazy load _service_logger module
-    if name == "_service_logger":
-        from ._lazy_imports import get_litellm_globals
-
-        _globals = get_litellm_globals()
-        # Check if already cached
-        if "_service_logger" not in _globals:
-            # Import the module lazily
-            import litellm._service_logger
-
-            _globals["_service_logger"] = litellm._service_logger
-        return _globals["_service_logger"]
-
-    # Lazy load evals module functions
-    if name in [
-        "acreate_eval",
-        "alist_evals",
-        "aget_eval",
-        "aupdate_eval",
-        "adelete_eval",
-        "acancel_eval",
-        "create_eval",
-        "list_evals",
-        "get_eval",
-        "update_eval",
-        "delete_eval",
-        "cancel_eval",
-        "acreate_run",
-        "alist_runs",
-        "aget_run",
-        "acancel_run",
-        "adelete_run",
-        "create_run",
-        "list_runs",
-        "get_run",
-        "cancel_run",
-        "delete_run",
-    ]:
-        from litellm.evals.main import (
-            acreate_eval,
-            alist_evals,
-            aget_eval,
-            aupdate_eval,
-            adelete_eval,
-            acancel_eval,
-            create_eval,
-            list_evals,
-            get_eval,
-            update_eval,
-            delete_eval,
-            cancel_eval,
-            acreate_run,
-            alist_runs,
-            aget_run,
-            acancel_run,
-            adelete_run,
-            create_run,
-            list_runs,
-            get_run,
-            cancel_run,
-            delete_run,
-        )
-        from types import MappingProxyType
-
-        evals_exports: Final[Mapping[str, object]] = MappingProxyType(locals())
-        return evals_exports[name]
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-# ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
 
 mark_litellm_import_complete()

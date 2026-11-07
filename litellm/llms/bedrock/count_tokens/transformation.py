@@ -247,9 +247,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         )
         return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
-    def transform_bedrock_response_to_anthropic(
-        self, bedrock_response: Mapping[str, JsonValue]
-    ) -> dict[str, JsonValue]:
+    def transform_bedrock_response_to_anthropic(self, bedrock_response: Mapping[str, object]) -> dict[str, object]:
         """
         Transform Bedrock CountTokens response to Anthropic format.
 
