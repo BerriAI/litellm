@@ -297,16 +297,6 @@ class UsageAlertsRepository:
             default_summary=count[0].default_summary,
         )
 
-    async def list_enabled_rules(self, limit: int = 100, offset: int = 0) -> tuple[UsageAlertRule, ...]:
-        rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
-            await self.database.query_raw(
-                'SELECT record FROM "LiteLLM_UsageAlertRule" WHERE enabled AND NOT deleted ORDER BY id LIMIT $1 OFFSET $2',
-                limit,
-                offset,
-            )
-        )
-        return tuple(UsageAlertRule.model_validate(row.record) for row in rows)
-
     async def get_alert(self, alert_id: str) -> UsageAlert | None:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw('SELECT record FROM "LiteLLM_UsageAlertIncident" WHERE id=$1', alert_id)
@@ -557,21 +547,6 @@ class UsageAlertsRepository:
     def _checkpoint(rule: UsageAlertRule, day: date) -> str:
         return f"{rule.id}:{rule.updated_at.isoformat()}:{day.isoformat()}"
 
-    async def is_day_complete(self, rule: UsageAlertRule, day: date) -> bool:
-        rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
-            await self.database.query_raw(
-                'SELECT 1 AS count FROM "LiteLLM_UsageAlertCheckpoint" WHERE id=$1 AND completed',
-                self._checkpoint(rule, day),
-            )
-        )
-        return bool(rows)
-
-    async def finish_day(self, rule: UsageAlertRule, day: date) -> None:
-        await self.database.query_raw(
-            'INSERT INTO "LiteLLM_UsageAlertCheckpoint" (id,completed) VALUES ($1,true) ON CONFLICT(id) DO NOTHING RETURNING id',
-            self._checkpoint(rule, day),
-        )
-
     async def ensure_default_rules(self, rules: tuple[UsageAlertRuleInput, ...]) -> None:
         for rule in rules:
             await self._ensure_default_rule(rule)
@@ -593,17 +568,6 @@ class UsageAlertsRepository:
             record.model_dump_json(),
         )
 
-    async def list_breached_entity_ids(self, rule_id: str, limit: int = 500, offset: int = 0) -> tuple[str | None, ...]:
-        rows: Final = TypeAdapter(tuple[Mapping[str, str | None], ...]).validate_python(
-            await self.database.query_raw(
-                """SELECT DISTINCT i.scope_id FROM "LiteLLM_UsageAlertIncident" i JOIN "LiteLLM_UsageAlertRule" r ON r.id=i.rule_id WHERE i.rule_id=$1 AND i.breached AND i.scope_type=r.scope_type AND i.metric=r.record->>'metric' AND i.record->>'direction'=r.record->>'direction' AND (r.scope_id IS NULL OR i.scope_id=r.scope_id) ORDER BY i.scope_id NULLS FIRST LIMIT $2 OFFSET $3""",
-                rule_id,
-                limit,
-                offset,
-            )
-        )
-        return tuple(row["scope_id"] for row in rows)
-
     async def record_evaluation_status(
         self, rule: UsageAlertRule, day: date, status: UsageAlertEvaluationStatus
     ) -> None:
@@ -614,34 +578,6 @@ class UsageAlertsRepository:
             status,
             rule.updated_at.isoformat(),
         )
-
-    async def record_observation(
-        self,
-        rule: UsageAlertRule,
-        entity_id: str | None,
-        day: date,
-        observed: float,
-        baseline: float,
-        threshold: float,
-        breached: bool,
-    ) -> UsageAlert | None:
-        observation: Final = UsageAlertObservation(
-            entity_id=entity_id, day=day, observed=observed, baseline=baseline, threshold=threshold, breached=breached
-        )
-        changed: Final = await self.record_observations(rule, (observation,))
-        if changed:
-            return changed[0]
-        rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
-            await self.database.query_raw(
-                """SELECT record FROM "LiteLLM_UsageAlertIncident" WHERE rule_id=$1 AND scope_key=$2 AND scope_type=$3 AND metric=$4 AND record->>'direction'=$5 ORDER BY evaluation_day DESC,id DESC LIMIT 1""",
-                rule.id,
-                entity_id or "",
-                rule.scope_type,
-                rule.metric,
-                rule.direction,
-            )
-        )
-        return UsageAlert.model_validate(rows[0].record) if rows else None
 
     async def record_observations(
         self, rule: UsageAlertRule, observations: tuple[UsageAlertObservation, ...]

@@ -7,7 +7,6 @@ from litellm.types.proxy.issues import (
     IssueActivityResponse,
     IssueCohort,
     IssueDeliveryBinding,
-    IssueDeliveryInput,
     IssueFamily,
     IssueFamilyList,
     IssueFamilySetting,
@@ -20,7 +19,6 @@ from litellm.types.proxy.issues import (
     IssueProjectionSignal,
     IssueScope,
     IssueSignal,
-    IssueSignalInput,
     IssueSignalList,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -58,13 +56,6 @@ class IssueStore(Protocol):
 
     async def status_scopes(self, issue_id: str) -> tuple[IssueCohort, ...]: ...
 
-    async def upsert_issue(
-        self,
-        data: IssueInput,
-        reopen: bool = False,
-        status: UsageAlertStatus | None = None,
-    ) -> Issue: ...
-
     async def upsert_issues(
         self,
         inputs: tuple[IssueInput, ...],
@@ -72,11 +63,7 @@ class IssueStore(Protocol):
         status: UsageAlertStatus | None = None,
     ) -> tuple[Issue, ...]: ...
 
-    async def find_active_issue(self, cohort_key: str) -> Issue | None: ...
-
     async def find_active_issues(self, cohort_keys: tuple[str, ...]) -> tuple[Issue, ...]: ...
-
-    async def add_signals(self, issue_id: str, signals: tuple[IssueSignalInput, ...]) -> None: ...
 
     async def add_signal_batch(self, signals: tuple[IssueSignal, ...]) -> None: ...
 
@@ -111,14 +98,6 @@ class IssueStore(Protocol):
     async def update_family(
         self, family: PerformanceIssueFamily, data: IssueFamilyUpdate
     ) -> IssueFamilySetting | None: ...
-
-    async def queue_delivery(
-        self,
-        data: IssueDeliveryInput,
-        rule_id: str,
-        rule_revision: str,
-        source_id: str,
-    ) -> None: ...
 
     async def queue_deliveries(self, bindings: tuple[IssueDeliveryBinding, ...]) -> None: ...
 
