@@ -131,7 +131,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.proxy._types import (
     UI_TEAM_ID,
-    AdminUIField,
+    AdminUIFieldType,
     AwsErrorTypeProxyException,
     CallbackDelete,
     CallInfo,
@@ -20649,7 +20649,7 @@ _PLUGIN_KEY_REDACTED: Final = "***"
 
 
 def _admin_ui_field_type(field: FieldInfo) -> str | None:
-    return next((marker.field_type for marker in field.metadata if isinstance(marker, AdminUIField)), None)
+    return next((marker.value for marker in field.metadata if isinstance(marker, AdminUIFieldType)), None)
 
 
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
