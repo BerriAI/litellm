@@ -32,7 +32,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
-from ..adapters.handler import messages_without_rejected_reasoning, request_safeguards_evaluator
+from ..adapters.handler import (
+    messages_without_rejected_reasoning,
+    request_safeguards_evaluator,
+    resent_without_rejected_reasoning,
+)
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
@@ -280,11 +284,12 @@ def _messages_without_rejected_reasoning(
     messages: AnthropicRequestMessages,
     error: litellm.BadRequestError,
     responses_kwargs: Mapping[str, object],
+    sent_encrypted_reasoning: bool,
 ) -> AnthropicRequestMessages | None:
     return messages_without_rejected_reasoning(
         messages,
         error,
-        sent_encrypted_reasoning=_sends_encrypted_reasoning(responses_kwargs),
+        sent_encrypted_reasoning=sent_encrypted_reasoning,
         provider=_kwarg_text(responses_kwargs, "custom_llm_provider"),
         model=_kwarg_text(responses_kwargs, "model"),
     )
@@ -294,10 +299,14 @@ async def _aresponses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _ResponsesResult]:
     responses_kwargs: Final = responses_kwargs_for(messages)
+    sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
-        return responses_kwargs, await litellm.aresponses(**responses_kwargs)
+        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+            return responses_kwargs, await litellm.aresponses(**responses_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error, responses_kwargs)
+        replayed_messages: Final = _messages_without_rejected_reasoning(
+            messages, error, responses_kwargs, sent_encrypted_reasoning
+        )
         if replayed_messages is None:
             raise
         replay_kwargs: Final = responses_kwargs_for(replayed_messages)
@@ -308,10 +317,14 @@ def _responses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _SyncResponsesResult]:
     responses_kwargs: Final = responses_kwargs_for(messages)
+    sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
-        return responses_kwargs, litellm.responses(**responses_kwargs)
+        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+            return responses_kwargs, litellm.responses(**responses_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error, responses_kwargs)
+        replayed_messages: Final = _messages_without_rejected_reasoning(
+            messages, error, responses_kwargs, sent_encrypted_reasoning
+        )
         if replayed_messages is None:
             raise
         replay_kwargs: Final = responses_kwargs_for(replayed_messages)

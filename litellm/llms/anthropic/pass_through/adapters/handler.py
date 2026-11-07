@@ -1,5 +1,6 @@
 import re
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from functools import partial
 from typing import (
@@ -13,6 +14,7 @@ from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
+from litellm._internal_context import resent_on
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
@@ -135,6 +137,14 @@ def _rejects_encrypted_reasoning(error: litellm.BadRequestError) -> bool:
     )
 
 
+def _is_rejected_reasoning(error: Exception) -> bool:
+    return isinstance(error, litellm.BadRequestError) and _rejects_encrypted_reasoning(error)
+
+
+def resent_without_rejected_reasoning(sent_encrypted_reasoning: bool) -> AbstractContextManager[None]:
+    return resent_on(_is_rejected_reasoning) if sent_encrypted_reasoning else nullcontext()
+
+
 def messages_without_rejected_reasoning(
     messages: Sequence[Mapping[str, object]],
     error: litellm.BadRequestError,
@@ -163,11 +173,12 @@ def _messages_without_rejected_reasoning(
     messages: _AnthropicMessages,
     error: litellm.BadRequestError,
     completion_kwargs: _CompletionKwargs,
+    sent_encrypted_reasoning: bool,
 ) -> "_AnthropicMessages | None":
     return messages_without_rejected_reasoning(
         messages,
         error,
-        sent_encrypted_reasoning=_sends_encrypted_reasoning(completion_kwargs),
+        sent_encrypted_reasoning=sent_encrypted_reasoning,
         provider=_completion_text(completion_kwargs, "custom_llm_provider"),
         model=_completion_text(completion_kwargs, "model"),
     )
@@ -178,10 +189,14 @@ async def _acompletion_without_rejected_reasoning(
     messages: _AnthropicMessages,
     prepare_replay: _PrepareReplay,
 ) -> "ChatResult":
+    sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(completion_kwargs)
     try:
-        return await litellm.acompletion(**completion_kwargs)
+        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+            return await litellm.acompletion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error, completion_kwargs)
+        replayed_messages: Final = _messages_without_rejected_reasoning(
+            messages, error, completion_kwargs, sent_encrypted_reasoning
+        )
         if replayed_messages is None:
             raise
         return await litellm.acompletion(**prepare_replay(replayed_messages))
@@ -192,10 +207,14 @@ def _completion_without_rejected_reasoning(
     messages: _AnthropicMessages,
     prepare_replay: _PrepareReplay,
 ) -> "ChatResult | Coroutine[object, object, ChatResult]":
+    sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(completion_kwargs)
     try:
-        return litellm.completion(**completion_kwargs)
+        with resent_without_rejected_reasoning(sent_encrypted_reasoning):
+            return litellm.completion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error, completion_kwargs)
+        replayed_messages: Final = _messages_without_rejected_reasoning(
+            messages, error, completion_kwargs, sent_encrypted_reasoning
+        )
         if replayed_messages is None:
             raise
         return litellm.completion(**prepare_replay(replayed_messages))

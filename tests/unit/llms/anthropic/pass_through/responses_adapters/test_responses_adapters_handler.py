@@ -1,8 +1,10 @@
+import asyncio
 import datetime
 import json
 import os
 import sys
 from collections.abc import AsyncIterator, Mapping
+from contextlib import nullcontext
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +15,8 @@ import respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -795,6 +799,85 @@ def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_back
     assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
 
 
+class _FailureLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rejections: tuple[str, ...] = ()
+
+    def _record(self, kwargs) -> None:
+        error: Final = str(kwargs.get("exception"))
+        self.rejections = (
+            *self.rejections,
+            next((phrase for phrase in ("encrypted content", "organization") if phrase in error), error),
+        )
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+
+_OUTCOMES_OF_THE_TURN_SENT_AGAIN: Final = (
+    pytest.param(httpx.Response(200, json=TEXT_RESPONSE), (), id="served"),
+    pytest.param(httpx.Response(400, json=UNVERIFIED_ORGANIZATION), ("organization",), id="rejected"),
+)
+
+
+def _rejected_then(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sent_again: httpx.Response) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(400, json=REJECTED_REPLAYED_REASONING), sent_again]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+async def test_openai_turn_logs_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, sent_again)
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+        )
+
+    assert failure_log.rejections == logged_rejections
+
+
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+def test_sync_openai_turn_logs_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, sent_again)
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        litellm.anthropic.messages.create(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+        )
+
+    assert failure_log.rejections == logged_rejections
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "replayed_reasoning, rejection",
@@ -821,3 +904,59 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
         )
 
     assert upstream.call_count == 1
+
+
+class _SuccessLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_reasoning_item_ids: tuple[tuple[object, ...], ...] = ()
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        logged: Final = kwargs["standard_logging_object"]["response"]
+        items: Final = logged["choices"][0]["message"].get("reasoning_items") or ()
+        self.logged_reasoning_item_ids = (*self.logged_reasoning_item_ids, tuple(item["id"] for item in items))
+        self.logged.set()
+
+
+def _reasoning_before_call(index: int) -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        {"type": "reasoning", "id": f"rs_{index}", "summary": [], "encrypted_content": f"gAAA_rs_{index}"},
+        {
+            "type": "function_call",
+            "id": f"fc_{index}",
+            "status": "completed",
+            "arguments": "{}",
+            "call_id": f"call_{index}",
+            "name": "Bash",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_turn_logs_every_reasoning_item_the_messages_client_was_served(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    success_log: Final = _SuccessLog()
+    monkeypatch.setattr(litellm, "callbacks", [success_log])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={**TEXT_RESPONSE, "output": [*_reasoning_before_call(1), *_reasoning_before_call(2)]},
+        )
+    )
+
+    reply: Final = await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=[{"role": "user", "content": "List the logs twice."}],
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+    )
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(success_log.logged.wait(), timeout=30.0)
+
+    assert [block["type"] for block in reply["content"]].count("redacted_thinking") == 2
+    assert success_log.logged_reasoning_item_ids == (("rs_1", "rs_2"),)
