@@ -1,10 +1,11 @@
-from collections.abc import AsyncIterator, Coroutine, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
 from typing import Final, cast
 
 from openai.types.chat import ChatCompletionStreamOptionsParam
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.rules import Rules
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
@@ -25,6 +26,10 @@ _FORWARDED_REQUEST_KEYS: Final = (
     "litellm_session_id",
     "no-log",
 )
+
+
+def _message_text(messages: Iterable[Mapping[str, object]]) -> str:
+    return "".join(content for message in messages if isinstance(content := message.get("content"), str))
 
 
 def _adapter_stream_options(requested: object) -> ChatCompletionStreamOptionsParam | None:
@@ -65,14 +70,21 @@ class GenerateContentToCompletionHandler:
             logging_obj.update_messages(completion_request["messages"])
         if stream and isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.stream_options = stream_options
-        completion_kwargs: Final = dict(
-            completion_request,
-            **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
-            **({"stream": True} if stream else {}),
-            **({"stream_options": stream_options} if stream_options is not None else {}),
+        completion_kwargs: Final = GenerateContentCompletionKwargs(
+            **dict(
+                completion_request,
+                **{key: request_kwargs[key] for key in _FORWARDED_REQUEST_KEYS if key in request_kwargs},
+                **({"stream": True} if stream else {}),
+                **({"stream_options": stream_options} if stream_options is not None else {}),
+            )
         )
+        if isinstance(logging_obj, LiteLLMLoggingObj) and Rules.has_pre_call_rules():
+            Rules().pre_call_rules(
+                input=_message_text(completion_kwargs.get("messages", [])),
+                model=model,
+            )
 
-        return GenerateContentCompletionKwargs(**completion_kwargs)
+        return completion_kwargs
 
     @staticmethod
     async def async_generate_content_handler(

@@ -884,6 +884,26 @@ async def test_generate_content_adapter_keeps_the_request_no_log_and_session_id(
 
 @pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])
 @pytest.mark.asyncio
+async def test_generate_content_adapter_pre_call_rules_reject_the_request_before_the_upstream_call(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+):
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=_upstream_reply(stream=entrypoint == "agenerate_content_stream")
+        )
+        with pytest.raises(litellm.APIResponseValidationError):
+            await getattr(_adapter_router(), entrypoint)(
+                model="grok-group",
+                contents=[{"role": "user", "parts": [{"text": "a forbidden question"}]}],
+            )
+
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])
+@pytest.mark.asyncio
 async def test_generate_content_adapter_failure_is_logged_once(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str
 ):
