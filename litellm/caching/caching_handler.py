@@ -49,7 +49,6 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
-    StreamingChoices,
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -190,8 +189,6 @@ def _chat_message_fields(choice: object) -> Mapping[str, object] | None:
     match choice:
         case Choices():
             return choice.message.model_dump(exclude_none=True)
-        case StreamingChoices():
-            return choice.delta.model_dump(exclude_none=True)
         case TextChoices():
             return None
         case _:
