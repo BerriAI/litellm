@@ -26,6 +26,7 @@ vi.mock("@/app/(dashboard)/hooks/onboarding/useOnboarding", () => ({
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => ""),
   getUiPageUrl: (url: string) => url,
+  setGlobalLitellmHeaderName: vi.fn(),
 }));
 
 vi.mock("./OnboardingLoadingView", () => ({
