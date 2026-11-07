@@ -2643,8 +2643,12 @@ if MCP_AVAILABLE:
                     send,
                     get_request_base_url(StarletteRequest(scope)),
                     get_route_relative_request_path(scope),
+                    is_scoped_endpoint=scoped_server_endpoint,
                 )
-                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                if scoped_server_endpoint
+                or (mcp_servers is not None and len(mcp_servers) == 1)
+                or is_tool_call_request(body)
+                or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
                 else None
             )
             if scope_response is not None:
