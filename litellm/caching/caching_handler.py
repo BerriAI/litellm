@@ -257,14 +257,16 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.messages.native.response_cache import (
-        CachedAnthropicMessagesStreamIterator,
-    )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
-    return isinstance(
-        cached_result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, CachedAnthropicMessagesStreamIterator)
-    )
+    streaming_types: Final[tuple[type, ...]] = (CustomStreamWrapper, BaseResponsesAPIStreamingIterator)
+    try:
+        from litellm.llms.anthropic.messages.native.response_cache import (
+            CachedAnthropicMessagesStreamIterator,
+        )
+    except ImportError:
+        return isinstance(cached_result, streaming_types)
+    return isinstance(cached_result, (*streaming_types, CachedAnthropicMessagesStreamIterator))
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
