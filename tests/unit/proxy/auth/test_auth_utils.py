@@ -368,7 +368,11 @@ _SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes
 
 
 def _user_config_with(litellm_params: dict[str, str]) -> dict[str, object]:
-    return {"model_list": [{"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}]}
+    return {
+        "model_list": [
+            {"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}
+        ]
+    }
 
 
 def _user_config_defaulting_to(litellm_params: dict[str, str]) -> dict[str, object]:
@@ -388,7 +392,11 @@ def _user_config_search_tool_with(litellm_params: dict[str, str]) -> dict[str, o
         "search_tools": [
             {
                 "search_tool_name": "web",
-                "litellm_params": {"search_provider": "tavily", "api_base": "https://attacker.example", **litellm_params},
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_base": "https://attacker.example",
+                    **litellm_params,
+                },
             }
         ]
     }
@@ -509,7 +517,9 @@ def test_a_call_cannot_carry_an_oidc_api_key_in_litellm_params(route: str | None
         )
 
 
-@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"])
+@pytest.mark.parametrize(
+    "route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"]
+)
 def test_a_deployment_write_may_carry_an_oidc_api_key_in_litellm_params(route: str):
     """A proxy admin configures an oidc/ api_key on a deployment through these routes, and the model management role
     gate refuses anyone else with a 403."""
@@ -3672,6 +3682,7 @@ def test_request_cannot_select_chatgpt_auth_file(allow_client_side_credentials: 
             model="chatgpt-account-a",
         )
 
+
 class TestIsRequestBodySafeBlocksBedrockProjectOverride:
     """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
     that project's data-retention policy applies to its requests. A
@@ -4979,6 +4990,171 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
 
 @pytest.mark.parametrize(
+    "request_body",
+    [
+        {
+            "model": "claude-sonnet-4-6",
+            "model_id": "us.amazon.nova-micro-v1:0",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        {"model": "claude-sonnet-4-6", "extra_body": {"model_id": "us.amazon.nova-micro-v1:0"}},
+    ],
+    ids=["root", "extra_body"],
+)
+@pytest.mark.parametrize("route", [None, "/v1/chat/completions", "/v1/messages"])
+def test_client_model_id_cannot_swap_the_bedrock_model_behind_an_allowed_model(
+    request_body: dict[str, object], route: str | None
+) -> None:
+    with pytest.raises(ValueError, match="model_id"):
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-4-6",
+            route=route,
+        )
+
+
+def test_client_model_id_is_allowed_under_proxy_wide_opt_in() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet-4-6",
+        )
+        is True
+    )
+
+
+def test_client_model_id_is_allowed_when_the_deployment_opts_in() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-6",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-6"},
+                "model_info": {"configurable_clientside_auth_params": ["model_id"]},
+            }
+        ]
+    )
+    assert (
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={},
+            llm_router=router,
+            model="claude-sonnet-4-6",
+        )
+        is True
+    )
+
+
+def test_the_queue_route_rejects_a_client_model_id_like_every_other_llm_route() -> None:
+    with pytest.raises(ValueError, match="model_id"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-4-6", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-4-6",
+            route="/queue/chat/completions",
+        )
+
+
+def _router_with(*deployments: tuple[str, str]) -> Router:
+    return Router(
+        model_list=[{"model_name": model_name, "litellm_params": {"model": model}} for model_name, model in deployments]
+    )
+
+
+@pytest.mark.parametrize(
+    "router, model, model_id",
+    [
+        (_router_with(("sm", "sagemaker_chat/my-endpoint")), "sm", "my-inference-component"),
+        (_router_with(("vx", "vertex_ai/private")), "vx", "1234567890"),
+    ],
+    ids=["sagemaker-inference-component", "vertex-private-endpoint"],
+)
+def test_model_id_stays_allowed_where_it_does_not_pick_the_bedrock_model(
+    router: Router, model: str, model_id: str
+) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": model, "model_id": model_id, "messages": [{"role": "user", "content": "hi"}]},
+            general_settings={},
+            llm_router=router,
+            model=model,
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "fallback_model, model_id, accepted",
+    [("claude", "us.amazon.nova-micro-v1:0", False), ("sm-2", "my-inference-component", True)],
+    ids=["bedrock fallback rejected", "sagemaker fallback allowed"],
+)
+def test_fallback_target_model_id_is_judged_by_the_fallback_model(
+    fallback_model: str, model_id: str, accepted: bool
+) -> None:
+    router: Final = _router_with(
+        ("sm", "sagemaker_chat/my-endpoint"),
+        ("sm-2", "sagemaker_chat/other-endpoint"),
+        ("claude", "bedrock/us.anthropic.claude-sonnet-4-6"),
+    )
+    request_body: Final = {
+        "model": "sm",
+        "messages": [{"role": "user", "content": "hi"}],
+        "fallbacks": [{"model": fallback_model, "model_id": model_id}],
+    }
+    if accepted:
+        assert (
+            is_request_body_safe(
+                request_body=request_body,
+                general_settings={},
+                llm_router=router,
+                model="sm",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+        return
+    with pytest.raises(ValueError, match="model_id"):
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={},
+            llm_router=router,
+            model="sm",
+            route="/v1/chat/completions",
+        )
+
+
+def test_model_id_is_rejected_when_the_model_group_mixes_in_a_bedrock_deployment() -> None:
+    router: Final = _router_with(("sm", "sagemaker_chat/my-endpoint"), ("sm", "bedrock/us.anthropic.claude-sonnet-4-6"))
+    with pytest.raises(ValueError, match="model_id"):
+        is_request_body_safe(
+            request_body={"model": "sm", "model_id": "us.amazon.nova-micro-v1:0"},
+            general_settings={},
+            llm_router=router,
+            model="sm",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("route", ["/health", "/spend/logs/ui", "/model/block", "/model/unblock"])
+def test_admin_routes_keep_model_id_as_a_deployment_id(route: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model_id": "6a5a6b1e-deployment-id"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
     "allowed_param, input_value, should_return_true",
     [
         ("api_base", {"api_base": "http://dummy.com"}, True),
@@ -5475,7 +5651,9 @@ async def test_a_non_numeric_max_request_size_mb_is_ignored_without_premium():
 def test_chatgpt_model_configuration_reaches_role_authorization(
     allow_client_side_credentials: bool, route: str
 ) -> None:
-    body: Final = {"litellm_params": {"model": "chatgpt/gpt-6-luna", "chatgpt_auth_file": "/tokens/account-a/auth.json"}}
+    body: Final = {
+        "litellm_params": {"model": "chatgpt/gpt-6-luna", "chatgpt_auth_file": "/tokens/account-a/auth.json"}
+    }
     assert is_request_body_safe(
         request_body=body,
         general_settings={"allow_client_side_credentials": allow_client_side_credentials},

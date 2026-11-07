@@ -41,6 +41,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
+    ModelGroupInfo,
     reject_server_owned_wif_fields,
     server_owned_wif_fields_present,
 )
@@ -211,6 +212,18 @@ def _is_param_allowed(
     return False
 
 
+def _model_group_info(model: str, llm_router: Router | None) -> ModelGroupInfo | None:
+    """The router's group for ``model``, or for its provider when ``model`` only matches a wildcard deployment."""
+    if llm_router is None:
+        return None
+    registry: Final = llm_router.registry()
+    model_info: Final = registry.group(model)
+    if model_info is not None:
+        return model_info
+    provider: Final = model.split("/", 1)[0]
+    return registry.group(provider) if provider in provider_list else None
+
+
 def _allow_model_level_clientside_configurable_parameters(
     model: str, param: str, request_body_value: object, llm_router: Router | None
 ) -> bool:
@@ -220,19 +233,7 @@ def _allow_model_level_clientside_configurable_parameters(
     - check if 'clientside_configurable_parameters' is set for model
     -
     """
-    if llm_router is None:
-        return False
-    # check if model is set
-    registry: Final = llm_router.registry()
-    model_info = registry.group(model)
-    if model_info is None:
-        # check if wildcard model is set
-        if model.split("/", 1)[0] in provider_list:
-            model_info = registry.group(model.split("/", 1)[0])
-
-    if model_info is None:
-        return False
-
+    model_info: Final = _model_group_info(model, llm_router)
     if model_info is None or model_info.configurable_clientside_auth_params is None:
         return False
 
@@ -316,6 +317,30 @@ def route_manages_deployments(route: str | None) -> bool:
 
 def route_manages_mcp_servers(route: str | None) -> bool:
     return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
+
+
+_LLM_CALL_ONLY_BANNED_PARAMS: Final[frozenset[str]] = frozenset(("model_id",))
+# Hands its body to the router like /chat/completions but belongs to no route group.
+_UNLISTED_LLM_ROUTES: Final[frozenset[str]] = frozenset(("/queue/chat/completions",))
+_MODEL_ID_STEERING_PROVIDERS: Final[frozenset[str]] = frozenset(("bedrock",))
+
+
+def route_calls_an_llm(route: str | None) -> bool:
+    """Whether a body on ``route`` becomes a provider call, where ``model_id`` steers Bedrock.
+
+    Admin routes such as ``/health?model_id=`` and ``/spend/logs/ui?model_id=`` take it as a deployment
+    id instead. ``None`` is a body checked with no route, which callers only do before a provider call.
+    """
+    return route is None or route in _UNLISTED_LLM_ROUTES or RouteChecks.is_llm_api_route(route)
+
+
+def model_id_steers_the_upstream_model(model: str, llm_router: Router | None) -> bool:
+    """Bedrock runs the body's ``model_id`` in place of the deployment's model. SageMaker reads it as an
+    inference component on the deployment's own endpoint and Vertex as a private endpoint in its own
+    project, so neither leaves what the deployment already reaches. A model the router cannot resolve
+    fails closed."""
+    group: Final = _model_group_info(model, llm_router)
+    return group is None or any(provider in _MODEL_ID_STEERING_PROVIDERS for provider in group.providers)
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -434,6 +459,11 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "anthropic_workspace_id",
     "anthropic-workspace-id",
     "bedrock_tags",
+    # Bedrock deployment-pinned inference profile or model ARN. The handlers
+    # take it over the configured model, so a caller-supplied value swaps the
+    # upstream model while the proxy authorizes, logs and bills the ``model``
+    # the key may use. Only enforced on LLM routes, see ``route_calls_an_llm``.
+    "model_id",
     # Deployment-pinned AgentCore session: every new caller-chosen value provisions another microVM.
     "agentcore_runtime_session_id",
     # Provider-specific endpoint overrides that flow into the outbound
@@ -532,6 +562,7 @@ def _check_banned_params(
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
+    calls_an_llm: bool = True,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
@@ -548,6 +579,10 @@ def _check_banned_params(
         reject_federated_credential_reference(body)
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
+            continue
+        if param in _LLM_CALL_ONLY_BANNED_PARAMS and not (
+            calls_an_llm and model_id_steers_the_upstream_model(model, llm_router)
+        ):
             continue
         if general_settings.get("allow_client_side_credentials") is True:
             # Proxy-wide opt-in: every banned param is permitted, exit
@@ -733,6 +768,7 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
+    calls_an_llm: Final = route_calls_an_llm(route)
     _check_banned_params(
         request_body,
         general_settings,
@@ -740,15 +776,30 @@ def is_request_body_safe(
         model,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
+        calls_an_llm=calls_an_llm,
     )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                nested,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                calls_an_llm=calls_an_llm,
+            )
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                metadata,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                calls_an_llm=calls_an_llm,
+            )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
@@ -756,11 +807,19 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
+                calls_an_llm=calls_an_llm,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
-            _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
             target_model = target.get("model")
+            _check_banned_params(
+                target,
+                general_settings,
+                llm_router,
+                target_model if isinstance(target_model, str) else model,
+                manages_deployments=manages_deployments,
+                calls_an_llm=calls_an_llm,
+            )
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
         elif isinstance(target, str):
@@ -773,7 +832,12 @@ def is_request_body_safe(
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
-                litellm_params_metadata, general_settings, llm_router, model, manages_deployments=manages_deployments
+                litellm_params_metadata,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                calls_an_llm=calls_an_llm,
             )
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)
