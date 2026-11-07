@@ -23,6 +23,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_assistant_message_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     scoped_structured_message_indices,
@@ -238,6 +239,7 @@ def _extract_converse_texts(
     skip_system: bool,
     skip_tool: bool,
     scan_only_tool_results: bool = False,
+    skip_assistant: bool = False,
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
@@ -279,6 +281,8 @@ def _extract_converse_texts(
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
             continue
+        if skip_assistant and "role" in message and message["role"] == "assistant":
+            continue
         for block in message.get("content") or []:
             if not isinstance(block, dict):
                 continue
@@ -307,11 +311,18 @@ class _Scope:
     skip_system: bool
     skip_tool: bool
     scan_only_tool_results: bool
+    skip_assistant: bool = False
 
 
 def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
     rewritten: Final = _BODY_BY_REFERENCE.validate_python(json.loads(json.dumps(body)))
-    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
+    _, holders = _extract_converse_texts(
+        rewritten,
+        scope.skip_system,
+        scope.skip_tool,
+        scope.scan_only_tool_results,
+        skip_assistant=scope.skip_assistant,
+    )
     _write_back_texts(texts, holders)
     request: Final = parse_converse_request(rewritten)
     return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
@@ -540,7 +551,13 @@ def _edits_drop_a_text_change(
     if len(guardrailed_texts) != len(texts):
         return True
     rewritten: Final = _BODY_BY_REFERENCE.validate_python(json.loads(json.dumps(body)))
-    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
+    _, holders = _extract_converse_texts(
+        rewritten,
+        scope.skip_system,
+        scope.skip_tool,
+        scope.scan_only_tool_results,
+        skip_assistant=scope.skip_assistant,
+    )
     writes: Final = _holder_edits(rewritten, edits, frozenset())
     if writes is None:
         return True
@@ -1392,12 +1409,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
             scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+            skip_assistant=effective_skip_assistant_message_for_guardrail(guardrail_to_apply),
         )
         texts, holders = _extract_converse_texts(
             request_body,
             scope.skip_system,
             scope.skip_tool,
             scope.scan_only_tool_results,
+            skip_assistant=scope.skip_assistant,
         )
         request: Final = parse_converse_request(request_body) if reads_rows else None
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
@@ -1406,6 +1425,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             scan_only_tool_results=scope.scan_only_tool_results,
             skip_system=scope.skip_system,
             skip_tool=scope.skip_tool,
+            skip_assistant=scope.skip_assistant,
         )
 
         if not texts and not scoped_indices:
