@@ -233,15 +233,27 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
 
 
 def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
-        from litellm.llms.base_llm.guardrail_translation.base_translation import (
-            BaseTranslation,
-        )
+    """Make the key's ``user_api_key_*`` metadata available to the guardrail.
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
+    A request that already has its ``metadata`` bucket (chat completions) gets the
+    fields there, without overwriting existing keys: creating ``litellm_metadata``
+    on it would flip the bucket for every later metadata write, and the spend log
+    (built from the resolved bucket) would lose the caller's ``session_id`` and
+    ``spend_logs_metadata``. Any other request gets ``litellm_metadata`` if absent,
+    so nothing is added to a body that is forwarded as is (pass-through).
+    """
+    if "litellm_metadata" in data:
+        return
+    from litellm.llms.base_llm.guardrail_translation.base_translation import (
+        BaseTranslation,
+    )
+
+    if isinstance(data.get("metadata"), dict):
+        BaseTranslation.merge_user_api_key_metadata_into_request(data, user_api_key_dict)
+        return
+    user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    if user_metadata:
+        data["litellm_metadata"] = user_metadata
 
 
 class UnifiedLLMGuardrails(CustomLogger):
