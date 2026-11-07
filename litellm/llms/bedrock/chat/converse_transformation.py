@@ -75,6 +75,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_converse_claude_default_max_tokens,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
@@ -1269,6 +1270,14 @@ class AmazonConverseConfig(BaseConfig):
             self.update_optional_params_with_thinking_tokens(
                 non_default_params=request_params, optional_params=optional_params
             )
+
+        default_max_tokens: Final = (
+            None
+            if "maxTokens" in optional_params
+            else bedrock_converse_claude_default_max_tokens(base_model, model_info)
+        )
+        if default_max_tokens is not None:
+            optional_params["maxTokens"] = default_max_tokens  # rebind-ok: fills the caller's dict by contract
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         if final_is_thinking_enabled and "tool_choice" in optional_params:
