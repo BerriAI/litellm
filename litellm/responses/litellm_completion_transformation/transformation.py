@@ -1474,10 +1474,12 @@ class LiteLLMCompletionResponsesConfig:
         return messages
 
     @staticmethod
-    def _without_tool_search_uses_off_anthropic(
-        messages: Sequence[SessionMessage], route: CompletionRoute
+    def _without_tool_search_uses_the_request_cannot_run(
+        messages: Sequence[SessionMessage], route: CompletionRoute, tools: Sequence[object]
     ) -> tuple[SessionMessage, ...]:
-        if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools) and provider_builds_anthropic_request(
+            route.model, route.custom_llm_provider
+        ):
             return tuple(messages)
         search_call_ids: Final = tool_search_call_ids(messages)
         return tuple(
@@ -1543,7 +1545,9 @@ class LiteLLMCompletionResponsesConfig:
             request_fields.get("context_management"),
         )
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(stored_messages, route)
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_request_cannot_run(
+                stored_messages, route, _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or [])
+            )
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
         )

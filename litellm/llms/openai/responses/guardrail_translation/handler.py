@@ -119,6 +119,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputText,
+    OutputToolSearchOutput,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -274,7 +275,6 @@ _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _WEB_SEARCH_CALL_TYPE: Final = "web_search_call"
 _ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_SEARCH_CALL_TYPE})
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
-_TOOL_SEARCH_ITEM_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, "tool_search_output"})
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _RAW_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
@@ -346,7 +346,11 @@ def _is_tool_call_item(item: object) -> bool:
 
 
 def _is_tool_search_item(item: object) -> bool:
-    return isinstance(item, Mapping) and item.get("type") in _TOOL_SEARCH_ITEM_TYPES
+    match item:
+        case {"type": "tool_search_call" | "tool_search_output"}:
+            return True
+        case _:
+            return False
 
 
 def _joins_assistant_turn(item: object) -> bool:
@@ -2005,7 +2009,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if isinstance(output_item, GenericResponseOutputItem):
                 if output_item.content and content_idx < len(output_item.content):
                     self._write_content_part_text(output_item.content[content_idx], guardrail_response)
-            elif isinstance(output_item, BaseModel):
+            elif isinstance(output_item, BaseModel) and not isinstance(output_item, OutputToolSearchOutput):
                 # Handle other Pydantic models by converting to GenericResponseOutputItem
                 try:
                     generic_item = GenericResponseOutputItem.model_validate(output_item.model_dump())
