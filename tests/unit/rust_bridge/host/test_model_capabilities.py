@@ -73,3 +73,16 @@ def test_capability_source_observes_runtime_registration_changes(monkeypatch: py
     assert before["supports_output_config"] is True
     assert after["supports_reasoning"] is False
     assert after["supports_output_config"] is False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("claude-sonnet-5", True),
+        ("claude-haiku-4-5", False),
+        ("claude-sonnet-5-5", True),
+    ],
+)
+def test_default_thinking_capability_is_projected(model: str, expected: bool) -> None:
+    capabilities: Final = anthropic_model_capabilities(model, "anthropic")
+    assert capabilities["thinking_on_by_default"] is expected

@@ -1718,7 +1718,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         llm_provider: str = "anthropic",
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
-        if reasoning_effort is None or reasoning_effort == "none":
+        if reasoning_effort is None:
+            return None
+        if reasoning_effort == "none":
+            if AnthropicModelInfo.thinks_by_default(
+                model, custom_llm_provider
+            ) and not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+                return AnthropicThinkingParam(type="disabled")
             return None
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             # without display, Anthropic defaults adaptive thinking to
@@ -2126,12 +2132,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
                 )
-                if mapped_thinking is None:
+                if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                     optional_params.pop("thinking", None)
                     optional_params.pop("output_config", None)
-                else:
+                if mapped_thinking is not None:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
+                    if mapped_thinking.get("type") != "disabled" and AnthropicConfig._is_adaptive_thinking_model(
+                        model, self._resolved_provider
+                    ):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
