@@ -482,7 +482,7 @@ def test_denied_completion_bridge_agent_logs_one_failure_and_never_reaches_the_b
         pytest.param("/a2a/{}", "message/stream", None, id="regression-stream-0.3"),
     ],
 )
-def test_unknown_agent_keeps_its_jsonrpc_404_and_logs_one_zero_spend_failure_for_the_caller(
+def test_unknown_agent_answers_its_jsonrpc_error_with_http_200_and_logs_one_zero_spend_404_failure_for_the_caller(
     rig: _Rig, route: str, method: str, version: str | None
 ) -> None:
     unknown: Final = "no-such-" + uuid.uuid4().hex
@@ -499,7 +499,7 @@ def test_unknown_agent_keeps_its_jsonrpc_404_and_logs_one_zero_spend_failure_for
             request_id=request_id,
             message_id=message,
         )
-        assert (response.status_code, response.content) == (404, _not_found(request_id, unknown))
+        assert (response.status_code, response.content) == (200, _not_found(request_id, unknown))
         assert response.headers["content-type"] == "application/json"
         _assert_never_dispatched(rig, scenario, message)
         _assert_one_failure(rig, caller, status=404, agent_id=unknown, model=f"a2a_agent/{unknown}")
@@ -513,7 +513,7 @@ def test_unknown_agent_echoes_the_jsonrpc_id_with_its_type_and_logs_one_failure(
     with rig.proxy.scenario() as scenario:
         caller: Final = _caller(rig, scenario)
         response: Final = _send(rig, caller.key, f"/a2a/{unknown}", request_id=request_id)
-        assert (response.status_code, response.content) == (404, _not_found(request_id, unknown))
+        assert (response.status_code, response.content) == (200, _not_found(request_id, unknown))
         assert type(JSON_OBJECT.validate_json(response.content)["id"]) is type(request_id)
         _assert_one_failure(rig, caller, status=404, agent_id=unknown, model=f"a2a_agent/{unknown}")
 
@@ -554,9 +554,10 @@ def test_client_supplied_attribution_cannot_rewrite_a_denial_failure_row(rig: _R
             f"/a2a/{target}", headers={"Authorization": f"Bearer {caller.key}", "A2A-Version": "1.0"}, json=body
         )
         expected: Final = _refusal(target, response) if outcome == "denied" else _not_found(request_id, unknown)
-        assert (response.status_code, response.content) == (403 if outcome == "denied" else 404, expected)
+        assert (response.status_code, response.content) == (403 if outcome == "denied" else 200, expected)
         model: Final = f"a2a_agent/{rig.denied.name}" if outcome == "denied" else f"a2a_agent/{unknown}"
-        row: Final = _assert_one_failure(rig, caller, status=response.status_code, agent_id=target, model=model)
+        logged_status: Final = 403 if outcome == "denied" else 404
+        row: Final = _assert_one_failure(rig, caller, status=logged_status, agent_id=target, model=model)
         assert row["request_id"] not in {success_request, "spoof2", request_id}, row
         metadata: Final = _metadata(row)
         assert (metadata["user_api_key_alias"], metadata["user_api_key_team_id"]) == (caller.alias, caller.team_id)
@@ -591,7 +592,7 @@ def test_failing_or_transforming_failure_callbacks_never_change_the_denial_respo
     with hostile.proxy.scenario() as scenario:
         caller: Final = _caller(hostile, scenario)
         response: Final = _send(hostile, caller.key, f"/a2a/{target}", request_id=request_id)
-        expected: Final = (403, _refusal(target, response)) if outcome == "denied" else (404, _not_found(request_id, unknown))
+        expected: Final = (403, _refusal(target, response)) if outcome == "denied" else (200, _not_found(request_id, unknown))
         assert (response.status_code, response.content) == expected
 
 
@@ -604,9 +605,10 @@ def test_failing_or_transforming_failure_callbacks_do_not_stop_the_denial_from_b
     with hostile.proxy.scenario() as scenario:
         caller: Final = _caller(hostile, scenario)
         response: Final = _send(hostile, caller.key, f"/a2a/{target}")
-        assert response.status_code == (403 if outcome == "denied" else 404), response.text
+        assert response.status_code == (403 if outcome == "denied" else 200), response.text
         model: Final = f"a2a_agent/{hostile.denied.name}" if outcome == "denied" else f"a2a_agent/{unknown}"
-        _assert_one_failure(hostile, caller, status=response.status_code, agent_id=target, model=model)
+        logged_status: Final = 403 if outcome == "denied" else 404
+        _assert_one_failure(hostile, caller, status=logged_status, agent_id=target, model=model)
 
 
 def test_denials_follow_the_model_denied_chat_logging_under_error_log_flags(flagged: _Rig) -> None:
@@ -630,7 +632,7 @@ def test_denials_follow_the_model_denied_chat_logging_under_error_log_flags(flag
         denied: Final = _send(flagged, denied_caller.key, f"/a2a/{flagged.denied.agent_id}")
         assert (denied.status_code, denied.content) == (403, _refusal(flagged.denied.agent_id, denied))
         missing: Final = _send(flagged, unknown_caller.key, f"/a2a/{unknown}", request_id=request_id)
-        assert (missing.status_code, missing.content) == (404, _not_found(request_id, unknown))
+        assert (missing.status_code, missing.content) == (200, _not_found(request_id, unknown))
         _assert_never_dispatched(flagged, scenario, "never-sent")
         chat_hooks: Final = held(
             lambda: _hooks(flagged.events.of(chat_alias)),
@@ -662,7 +664,7 @@ def test_client_error_denials_never_raise_an_llm_exceptions_alert(alerting: tupl
     with rig.proxy.scenario() as scenario, wire_server(failing) as broken:
         caller: Final = _caller(rig, scenario)
         assert _send(rig, caller.key, f"/a2a/{rig.denied.agent_id}").status_code == 403
-        assert _send(rig, caller.key, f"/a2a/{unknown}").status_code == 404
+        assert JSON_OBJECT.validate_json(_send(rig, caller.key, f"/a2a/{unknown}").content)["error"]["code"] == -32000
         model: Final = scenario.model(api_base=broken.url + "/v1", num_retries=0)
         failed: Final = rig.proxy.request(
             "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "x"}]}
@@ -798,7 +800,7 @@ def test_guard_jsonrpc_1_0_envelope_keeps_its_invalid_request_body(rig: _Rig) ->
             extra={"jsonrpc": "1.0"},
         )
         assert (response.status_code, response.content) == (
-            400,
+            200,
             _compact(
                 {
                     "jsonrpc": "2.0",
