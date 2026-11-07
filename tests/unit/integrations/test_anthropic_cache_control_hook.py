@@ -4522,14 +4522,15 @@ class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
 
         *earlier, last = self._items(marked_calls)
         items = [*earlier, *other_items, last]
+        provisional_messages = ResponsesAPIRequestUtils.responses_input_to_chat_messages(items)
         kwargs: dict = {
-            "cache_control_injection_points": [{"location": "message", "index": -1}],
+            "cache_control_injection_points": [{"location": "message", "index": len(provisional_messages) - 1}],
             CARRY_UNMATCHED_MESSAGE_POINTS: True,
         }
         _stamp_injection_points_for_the_hook(kwargs, self.MODEL, "anthropic", items, self._tools(marked_tools))
         _, messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=self.MODEL,
-            messages=ResponsesAPIRequestUtils.responses_input_to_chat_messages(items),
+            messages=provisional_messages,
             non_default_params=kwargs,
             prompt_id=None,
             prompt_variables=None,
