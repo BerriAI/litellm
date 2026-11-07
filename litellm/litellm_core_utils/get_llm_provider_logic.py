@@ -12,6 +12,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
+from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.secret_managers.main import get_secret, get_secret_str
@@ -184,6 +185,19 @@ def inferred_provider(model: str | None) -> str | None:
 
 
 def get_llm_provider(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> tuple[str, str, str | None, str | None]:
+    resolved_model, provider, dynamic_api_key, resolved_api_base = _get_llm_provider(
+        model, custom_llm_provider, api_base, api_key, litellm_params
+    )
+    return resolve_model_latest_alias(resolved_model, provider), provider, dynamic_api_key, resolved_api_base
+
+
+def _get_llm_provider(
     model: str,
     custom_llm_provider: str | None = None,
     api_base: str | None = None,

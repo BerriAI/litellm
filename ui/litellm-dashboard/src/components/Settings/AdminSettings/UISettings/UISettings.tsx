@@ -332,7 +332,7 @@ export default function UISettings() {
               <Select
                 value={usageRange}
                 disabled={isUpdating || usageRangeConfigOwned}
-                items={relativeTimeOptions.map((option) => ({ value: option.settingValue, label: option.label }))}
+                items={relativeTimeOptions.map((option) => ({ value: option.settingValue, label: t(option.label) }))}
                 onValueChange={(value) => {
                   if (value === null) return;
                   updateSettings(
@@ -354,7 +354,7 @@ export default function UISettings() {
                 <SelectContent>
                   {relativeTimeOptions.map((option) => (
                     <SelectItem key={option.settingValue} value={option.settingValue}>
-                      {option.label}
+                      {t(option.label)}
                     </SelectItem>
                   ))}
                 </SelectContent>

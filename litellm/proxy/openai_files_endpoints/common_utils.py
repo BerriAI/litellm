@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -597,7 +598,7 @@ def get_team_provider_credentials(
         return isinstance(public_model_name, str) and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
     def _provider_credentials(model_id: str) -> dict[str, object] | None:
-        credentials: Final = registry.credentials(model_id, form="with_provider", team_id=team_id)
+        credentials: Final = as_str_mapping(registry.credentials(model_id, form="with_provider", team_id=team_id))
         if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
@@ -741,31 +742,6 @@ def apply_team_provider_credentials(
     prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
 
 
-def add_internal_model_credentials(
-    data: dict,
-    llm_router: "Router",
-    model_id: str | None,
-) -> None:
-    """
-    Attach the deployment's immutable server-side credential snapshot to a router-routed
-    batch call (in-place).
-
-    Cost accounting for a completed batch reads the batch's output file, and the Bedrock
-    file config resolves its bucket only from this snapshot, never from a request param,
-    because the bucket is what managed file ids are validated against. Without it that
-    read fails and the batch's cost is never recorded.
-    """
-    if model_id is None:
-        return
-    try:
-        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
-    except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
-        return
-    if credentials is None:
-        return
-    data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
-
-
 def add_deployment_model_info(
     data: dict,
     llm_router: Optional["Router"],
@@ -791,7 +767,6 @@ def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
     file_id: str | None = None,
-    include_internal_credentials: bool = False,
 ) -> None:
     """
     Update data dictionary with model credentials (in-place).
@@ -800,12 +775,8 @@ def prepare_data_with_credentials(
         data: Data dictionary to update
         credentials: Credentials from router
         file_id: Optional original file_id to set (for decoded file IDs)
-        include_internal_credentials: Preserve an immutable server-side snapshot
-            for code paths that must distinguish proxy config from request params.
     """
     data.update(credentials)
-    if include_internal_credentials:
-        data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:
@@ -1575,6 +1546,10 @@ async def get_batch_from_database(
         return None, None
 
 
+class _BatchCostJobScheduler(Protocol):
+    def get_job(self, job_id: str, /) -> object: ...
+
+
 def batch_cost_poller_is_active() -> bool:
     """
     Whether the CheckBatchCost poller will account for a managed batch's cost itself.
@@ -1595,10 +1570,10 @@ def batch_cost_poller_is_active() -> bool:
     try:
         import litellm.proxy.proxy_server as proxy_server_module
 
-        scheduler = getattr(proxy_server_module, "scheduler", None)
+        scheduler: Final[_BatchCostJobScheduler | None] = getattr(proxy_server_module, "scheduler", None)
         if scheduler is None:
             return False
-        job = scheduler.get_job("check_batch_cost_job")
+        job: Final = scheduler.get_job("check_batch_cost_job")
         if job is None:
             return False
         poller = getattr(getattr(job, "func", None), "__self__", None)

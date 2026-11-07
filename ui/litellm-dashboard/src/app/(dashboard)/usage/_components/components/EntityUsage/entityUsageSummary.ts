@@ -20,6 +20,18 @@ interface SpendSummaryMetadata {
   total_tokens: number;
 }
 
+export const SUMMARY_TILE_LABELS: Readonly<Record<string, ParseKeys>> = {
+  "PTU Hours": "usage.entitySummary.titles.ptuHours",
+  "Total Cost": "usage.entitySummary.titles.totalCost",
+  "Total Spend": "usage.entitySummary.titles.totalSpend",
+  "Total Requests": "usage.entitySummary.titles.totalRequests",
+  "Successful Requests": "usage.entitySummary.titles.successfulRequests",
+  "Failed Requests": "usage.entitySummary.titles.failedRequests",
+  "Total Tokens": "usage.entitySummary.titles.totalTokens",
+  "Request Cost": "usage.entitySummary.titles.requestCost",
+  "Flat Cost": "usage.entitySummary.titles.flatCost",
+};
+
 export const TOTAL_COST_TOOLTIP: ParseKeys = "usage.entitySummary.tooltips.totalCost";
 
 export const REQUEST_COST_TOOLTIP: ParseKeys = "usage.entitySummary.tooltips.requestCost";

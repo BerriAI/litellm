@@ -12,6 +12,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
 
@@ -30,7 +31,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -85,7 +86,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
             verbose_router_logger.debug(traceback.format_exc())
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -150,7 +151,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
             verbose_router_logger.debug(traceback.format_exc())
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(
         self,
         model_group: str,

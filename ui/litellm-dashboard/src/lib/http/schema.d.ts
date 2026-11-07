@@ -1864,13 +1864,15 @@ export interface paths {
         };
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
         put?: never;
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
         delete?: never;
@@ -17159,6 +17161,7 @@ export interface paths {
          *
          *     Parameters:
          *     - name: str - The name of the tag to update
+         *     - spend: Optional[float] - Updated spend for the tag
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
@@ -28057,6 +28060,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
              */
@@ -28073,7 +28081,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -28104,7 +28112,7 @@ export interface components {
             patterns?: components["schemas"]["ContentFilterPattern"][] | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -29442,7 +29450,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "compact_responses" | "acompact_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -29994,6 +30002,8 @@ export interface components {
         ChatCompletionToolMessage: {
             /** Content */
             content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionFileObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
+            /** Is Error */
+            is_error?: boolean;
             /**
              * Role
              * @constant
@@ -30792,6 +30802,16 @@ export interface components {
              */
             allow_unmanaged_response_ids?: boolean | null;
             /**
+             * Allowed Client Side S3 Buckets
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_buckets?: string[] | null;
+            /**
+             * Allowed Client Side S3 Endpoint Urls
+             * @description Exact `s3_endpoint_url` values a client may send in a request body. Any other value is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_endpoint_urls?: string[] | null;
+            /**
              * Allowed File Extensions
              * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
              */
@@ -31305,6 +31325,11 @@ export interface components {
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
             spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
             /**
+             * Spend Logs Prompt Storage
+             * @description With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.
+             */
+            spend_logs_prompt_storage?: "latest_turn" | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */
@@ -31347,8 +31372,8 @@ export interface components {
             use_google_kms?: boolean | null;
             /**
              * Use Spend Logs Ledger
-             * @description Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.
-             * @default false
+             * @description Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.
+             * @default true
              */
             use_spend_logs_ledger: boolean;
             /**
@@ -32643,6 +32668,11 @@ export interface components {
          */
         DefaultTeamSSOParams: {
             /**
+             * Access Group Ids
+             * @description Default access groups attached to new teams created without explicit access_group_ids
+             */
+            access_group_ids?: string[] | null;
+            /**
              * Budget Duration
              * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */
@@ -32817,6 +32847,20 @@ export interface components {
             model_name: string;
         } & {
             [key: string]: unknown;
+        };
+        /** DeploymentPricing */
+        DeploymentPricing: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Provider */
+            provider: string;
+            /**
+             * Tiered Pricing
+             * @default []
+             */
+            tiered_pricing: components["schemas"]["PriceTier"][];
         };
         /** DeploymentWarning */
         DeploymentWarning: {
@@ -36378,6 +36422,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -36779,6 +36825,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
@@ -36902,6 +36952,10 @@ export interface components {
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
@@ -38206,6 +38260,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Metadata
              * @description Additional metadata to include in the request
              */
@@ -38265,7 +38324,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -38423,7 +38482,7 @@ export interface components {
             prompt_injections?: boolean | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -39756,6 +39815,11 @@ export interface components {
             } | null;
             /** Custom Tags */
             custom_tags?: string[] | null;
+            /**
+             * Deployment Pricing
+             * @default []
+             */
+            deployment_pricing: components["schemas"]["DeploymentPricing"][];
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -42206,15 +42270,21 @@ export interface components {
          * @description Plugin item in list responses.
          */
         PluginListItem: {
+            /** Approved By */
+            approved_by?: string | null;
             author?: components["schemas"]["PluginAuthor"] | null;
             /** Category */
             category?: string | null;
             /** Created At */
             created_at: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Download Count */
+            download_count?: number | null;
             /** Enabled */
             enabled: boolean;
             /** Homepage */
@@ -42229,6 +42299,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -42946,6 +43023,18 @@ export interface components {
              * @description New status: 'published' or 'production'.
              */
             version_status: string;
+        };
+        /** PriceTier */
+        PriceTier: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Range */
+            range: [
+                number,
+                number
+            ];
         };
         /** Prompt */
         Prompt: {
@@ -47012,6 +47101,11 @@ export interface components {
             next_offset: number | null;
             /** Skills */
             skills: components["schemas"]["SkillHubSkill"][];
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
         };
         /** SkillHubMetadata */
         SkillHubMetadata: {
@@ -47097,15 +47191,21 @@ export interface components {
         };
         /** SkillHubSkill */
         SkillHubSkill: {
+            /** Approved By */
+            approved_by?: string | null;
             /** Content Url */
             content_url?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             /** Domain */
             domain?: string | null;
             /**
              * Download Count
-             * @description Gateway ZIP downloads, included in proxy-admin catalog listings
+             * @description Gateway ZIP downloads, including repeat downloads
              */
             download_count?: number | null;
             /** Download Url */
@@ -47118,6 +47218,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -47669,7 +47776,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -47678,6 +47785,12 @@ export interface components {
             score?: number;
             /** Signals */
             signals?: string[];
+            /** Switchyard Algorithm */
+            switchyard_algorithm?: string;
+            /** Switchyard Evidence */
+            switchyard_evidence?: unknown;
+            /** Switchyard Fallback Reason */
+            switchyard_fallback_reason?: string;
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
@@ -48021,6 +48134,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -52442,6 +52557,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -52843,6 +52960,10 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
@@ -52966,6 +53087,10 @@ export interface components {
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
@@ -55973,7 +56098,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unmodified Codex response or server-sent events */
+            /** @description Codex response, the model catalog with the key's LiteLLM models, or server-sent events */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -74483,6 +74608,10 @@ export interface operations {
                 query?: string;
                 offset?: number;
                 limit?: number;
+                tag?: string;
+                security_scan_passed?: boolean | null;
+                sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
+                sort_order?: "asc" | "desc";
             };
             header?: never;
             path?: never;

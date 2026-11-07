@@ -1,4 +1,5 @@
 import React, { useId } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Controller } from "react-hook-form";
 import { z } from "zod";
@@ -21,7 +22,7 @@ import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
 const budgetShape = {
-  budget_id: z.string().min(1, "Enter a budget ID"),
+  budget_id: z.string().min(1, { error: () => i18n.t("budgets.form.errors.budgetIdRequired") }),
   tpm_limit: z.number().nullish(),
   rpm_limit: z.number().nullish(),
   tpd_limit: z.number().nullish(),
@@ -41,11 +42,11 @@ type NumberFieldName = "tpm_limit" | "rpm_limit" | "tpd_limit" | "max_budget";
 
 const NO_RESET = "never";
 
-const RESET_OPTIONS = [
-  { value: NO_RESET, label: "in total" },
-  { value: "24h", label: "per day" },
-  { value: "7d", label: "per week" },
-  { value: "30d", label: "per month" },
+const RESET_OPTIONS: readonly { value: string; labelKey: ParseKeys }[] = [
+  { value: NO_RESET, labelKey: "budgets.form.resetOptions.inTotal" },
+  { value: "24h", labelKey: "budgets.form.resetOptions.perDay" },
+  { value: "7d", labelKey: "budgets.form.resetOptions.perWeek" },
+  { value: "30d", labelKey: "budgets.form.resetOptions.perMonth" },
 ];
 
 const numberProps = <T extends { value?: number | null; onChange: (value: number | null) => void }>({
@@ -69,6 +70,7 @@ const OptionalBadge = () => {
 function SpendLimitField({ form }: { form: BudgetForm }) {
   const { t } = useTranslation();
   const amountId = useId();
+  const resetItems = RESET_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
   return (
     <Field className="gap-2">
       <FieldLabel htmlFor={amountId}>
@@ -93,7 +95,7 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
           name="budget_duration"
           render={({ field }) => (
             <Select
-              items={RESET_OPTIONS}
+              items={resetItems}
               value={field.value ?? NO_RESET}
               onValueChange={(next) => field.onChange(next === NO_RESET ? null : next)}
             >
@@ -101,7 +103,7 @@ function SpendLimitField({ form }: { form: BudgetForm }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {RESET_OPTIONS.map((option) => (
+                {resetItems.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
                   </SelectItem>

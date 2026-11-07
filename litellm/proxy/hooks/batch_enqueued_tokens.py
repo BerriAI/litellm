@@ -24,6 +24,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -224,7 +225,7 @@ class BatchEnqueuedTokenStore:
     def _record_key(batch_id: str) -> str:
         return f"batch_enqueued_token_reservation:{batch_id}"
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def reserve(
         self,
         tokens: int,
@@ -329,7 +330,7 @@ class BatchEnqueuedTokenStore:
             tokens=tokens, scopes=scopes, backend="memory", owner=self._owner_token, reserved_at_monotonic=started
         )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def refund(
         self,
         reservation: BatchEnqueuedTokenReservation,
@@ -368,7 +369,7 @@ class BatchEnqueuedTokenStore:
                 "Redis enqueued-token refund failed; leaked increments expire with the TTL: %s", str(e)
             )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def save_reservation(
         self,
         batch_id: str,
@@ -401,7 +402,7 @@ class BatchEnqueuedTokenStore:
             local_only=True,
         )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def pop_reservation(
         self,
         batch_id: str,

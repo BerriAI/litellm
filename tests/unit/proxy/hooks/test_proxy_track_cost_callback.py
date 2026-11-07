@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
+
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from fastapi import HTTPException
 
 import litellm
@@ -493,6 +496,50 @@ async def test_async_post_call_failure_hook_honors_the_redaction_header_on_a_lit
     assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
     assert stored_request["metadata"].get("headers") == caller_metadata.get("headers")
     assert stored_request["litellm_metadata"]["headers"] == request_headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "team_metadata", "code_word_is_stored"),
+    [
+        ({"store_prompts_in_spend_logs": False}, {}, False),
+        ({}, {"store_prompts_in_spend_logs": False}, False),
+        ({"store_prompts_in_spend_logs": True}, {"store_prompts_in_spend_logs": False}, False),
+        ({}, {}, True),
+    ],
+)
+async def test_async_post_call_failure_hook_honors_key_and_team_prompt_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, object],
+    team_metadata: dict[str, object],
+    code_word_is_stored: bool,
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    request_input: Final = "The code word is VERMILION-42. Reply OK."
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6",
+            "input": request_input,
+            "litellm_metadata": {},
+            "proxy_server_request": {
+                "url": "http://localhost/v1/responses",
+                "body": {"model": "gpt-5.6", "input": request_input},
+            },
+        },
+        original_exception=Exception("temperature must be at most 2"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", metadata=key_metadata, team_metadata=team_metadata),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
 
 
 @pytest.mark.asyncio
@@ -1939,6 +1986,7 @@ async def test_callback_handles_every_status_the_interactions_api_can_return():
     assert released == {
         "completed",
         "requires_action",
+        "requires_continuation",
         "failed",
         "cancelled",
         "incomplete",
@@ -2694,9 +2742,9 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
 
 @pytest.fixture()
-def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> DualCache:
-    counters: Final = DualCache()
-    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", counters)
+def live_spend_counters(monkeypatch: pytest.MonkeyPatch) -> SpendCounterStore:
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", counters)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
@@ -2749,8 +2797,8 @@ async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) ->
     )
 
 
-async def _counter_values(counters: DualCache) -> dict[str, float]:
-    return {key: await counters.async_get_cache(key) for key in _LIVE_COUNTERS}
+async def _counter_values(counters: SpendCounterStore) -> dict[str, float | None]:
+    return {key: counters.get_local(key) for key in _LIVE_COUNTERS}
 
 
 @pytest.mark.asyncio
@@ -2769,12 +2817,12 @@ async def _counter_values(counters: DualCache) -> dict[str, float]:
     ],
 )
 async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
-    live_spend_counters: DualCache, failure: Mapping[str, object], charged: float
+    live_spend_counters: SpendCounterStore, failure: Mapping[str, object], charged: float
 ):
     """#35568: budget checks read the live counters, so a failure row's cost has to land there as well as in the
     spend log, or an over-budget key keeps passing until the counter is next repaired from the database."""
     for key, spend in _LIVE_COUNTERS.items():
-        await live_spend_counters.async_set_cache(key, spend)
+        live_spend_counters.set_local(key, spend)
 
     await _fail_request(ProxyDBLogger(), failure)
 
@@ -2784,11 +2832,11 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
 
 @pytest.mark.asyncio
-async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live_spend_counters: DualCache):
+async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live_spend_counters: SpendCounterStore):
     """A failure whose cost was already finalized settles through the success path's write, which raises the
     counters itself."""
     for key, spend in _LIVE_COUNTERS.items():
-        await live_spend_counters.async_set_cache(key, spend)
+        live_spend_counters.set_local(key, spend)
 
     await _fail_request(
         ProxyDBLogger(), {"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}
@@ -2801,11 +2849,11 @@ async def test_a_completed_cost_failure_raises_the_live_spend_counters_once(live
 
 @pytest.mark.asyncio
 async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+    live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True})
     for key, spend in _LIVE_COUNTERS.items():
-        await live_spend_counters.async_set_cache(key, spend)
+        live_spend_counters.set_local(key, spend)
 
     await _fail_request(ProxyDBLogger(), _failure_with_billed_attempts())
 
@@ -2848,11 +2896,14 @@ async def test_a_slow_spend_counter_store_lets_the_failure_out_and_raises_the_co
 
 @pytest.mark.asyncio
 async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_request_start(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+    live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
     """The window row's one-time seed from the spend log stops at the request start, which keeps the failure row
-    it already logged from being counted twice."""
+    it already logged from being counted twice. Only the legacy writers queue this row, so the ledger is off."""
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import proxy_logging_obj
+
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
 
     window_queue: Final = proxy_logging_obj.db_spend_update_writer.window_spend_update_queue
     await window_queue.flush_and_get_aggregated_window_spend_transactions()
@@ -2885,7 +2936,7 @@ async def test_a_failure_spend_row_lands_in_the_key_budget_window_as_of_the_requ
 
 @pytest.mark.asyncio
 async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_attributed_access_group(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+    live_spend_counters: SpendCounterStore, monkeypatch: pytest.MonkeyPatch
 ):
     """Its spend row names the dropped deployment, which narrows nothing, so the counters must not narrow it to the
     final attempt's groups either."""
@@ -2911,7 +2962,7 @@ async def test_a_billed_attempt_on_a_deployment_the_router_dropped_debits_every_
     )
 
     assert {
-        group: await live_spend_counters.async_get_cache(f"spend:model_access_group:{group}")
+        group: live_spend_counters.get_local(f"spend:model_access_group:{group}")
         for group in ("premium", "pool")
     } == pytest.approx({"premium": 0.25, "pool": 1.25})
 
@@ -3389,6 +3440,43 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert not isinstance(event, SpendEventDecodeError)
     assert event.litellm_params["metadata"]["user_api_key_team_id"] == "team-1"
     assert event.response_cost == 0.0125
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tenant_metadata", "stored"),
+    [
+        ({"user_api_key_metadata": {"store_prompts_in_spend_logs": False}}, False),
+        ({"user_api_key_team_metadata": {"store_prompts_in_spend_logs": False}}, False),
+        ({"user_api_key_team_metadata": {"store_prompts_in_spend_logs": "false"}}, False),
+        ({"user_api_key_metadata": {}, "user_api_key_team_metadata": {}}, True),
+    ],
+)
+async def test_spend_event_leaves_out_bodies_for_tenants_that_turned_off_prompt_storage(
+    socket_path: Path, monkeypatch: pytest.MonkeyPatch, tenant_metadata: dict[str, object], stored: bool
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    handler: Final = _RecordingHandler()
+    consumer: Final = SpendEventConsumer(handler)
+    address: Final = UnixAddress(path=str(socket_path))
+    server: Final = await consumer.serve(address)
+    producer: Final = SpendEventProducer(
+        address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
+    )
+    kwargs: Final[dict[str, object]] = _offload_kwargs()
+    kwargs["litellm_params"]["metadata"].update(tenant_metadata)
+
+    await ProxyDBLogger(producer).async_log_success_event(kwargs, _offload_response(), datetime.now(), datetime.now())
+    await producer.close(drain_timeout=5.0)
+    server.close()
+    assert await consumer.drain(timeout=5.0) == 0
+
+    event: Final = decode_spend_event(handler.lines[0])
+    assert not isinstance(event, SpendEventDecodeError)
+    assert (event.litellm_params["proxy_server_request"] is not None) is stored
+    assert ("messages" in event.standard_logging_object) is stored
 
 
 def _completed_batch() -> LiteLLMBatch:

@@ -2513,8 +2513,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
 
     use_spend_logs_ledger: bool = Field(
-        False,
-        description="Apply request accounting from stored SpendLogs deliveries. Enable only after all accounting writers are upgraded and ledger activation gates pass.",
+        True,
+        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
@@ -2819,6 +2819,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300",
     )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = Field(
+        None,
+        description="S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed",
+    )
+    allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = Field(
+        None,
+        description="Exact `s3_endpoint_url` values a client may send in a request body. Any other value is rejected unless client-side credentials are allowed",
+    )
     reject_clientside_metadata_tags: bool | None = Field(
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
@@ -2885,6 +2893,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
+        None,
+        description="With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.",
     )
     claude_code_marketplace_auth_required: bool = Field(
         False,

@@ -12,7 +12,7 @@ from typing import Any, Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, filter_and_transform_beta_headers
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
@@ -34,6 +34,7 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 
 _REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
 _CONTEXT_MANAGEMENT: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def count_tokens_request_body(
@@ -226,7 +227,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             raise ValueError(f"Token counting request failed with status {response.status_code}: {error_text}")
 
         # Parse response
-        result: Final = response.json()
+        result: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
 
         # Return token count
         # Vertex AI Anthropic returns: {"input_tokens": 123}

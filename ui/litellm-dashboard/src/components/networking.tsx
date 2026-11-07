@@ -2029,7 +2029,9 @@ export const testConnectionRequest = async (
       } else {
         return {
           status: "error",
-          message: data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`,
+          message:
+            data.error?.message ||
+            i18n.t("networking.connectionTestFailed", { status: response.status, statusText: response.statusText }),
         };
       }
     }
@@ -2585,36 +2587,7 @@ export const modelPatchUpdateCall = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object
   modelId: string,
-) => {
-  try {
-    // Intentionally not logging the payload: it can contain freshly-entered
-    // provider secrets (api_key, vertex_credentials, AWS creds).
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...formValues, // Include formValues in the request body
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error update from the server:", errorData);
-      throw new Error("Network response was not ok");
-    }
-    const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to update model:", error);
-    throw error;
-  }
-};
+) => apiClient.patch(`/model/${encodeURIComponent(modelId)}/update`, { accessToken, body: formValues });
 
 export interface Member {
   role: string;
@@ -4875,7 +4848,7 @@ export const listMCPTools = async (
     return {
       tools: [],
       error: "network_error",
-      message: error instanceof Error ? error.message : "Failed to fetch MCP tools",
+      message: error instanceof Error ? error.message : i18n.t("networking.mcpToolsFetchFailed"),
       stack_trace: null,
     };
   }
@@ -4888,7 +4861,7 @@ export const listMCPTools = async (
     return {
       tools: [],
       error: "parse_error",
-      message: "Failed to parse MCP tools response",
+      message: i18n.t("networking.mcpToolsParseFailed"),
       status: response.status,
       statusText: response.statusText,
       stack_trace: null,
@@ -4901,7 +4874,7 @@ export const listMCPTools = async (
     // to inspect `result.error` / `result.message`. Attach `status` so
     // callers that need to react to auth failures (e.g. the useQuery in
     // mcp_tools.tsx) can still detect 401s from the returned object.
-    const errorMessage = (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    const errorMessage = (data && (data.message || data.error)) || i18n.t("networking.mcpToolsFetchFailed");
     return {
       tools: [],
       error: (data && data.error) || `http_${response.status}`,
@@ -6338,7 +6311,7 @@ export const testMCPToolsListRequest = async (
           tools: [],
           error: true,
           status: 403,
-          message: MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE,
+          message: i18n.t(MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE),
         };
       }
       // Return the error response instead of throwing an error
@@ -6350,7 +6323,9 @@ export const testMCPToolsListRequest = async (
         tools: [],
         error: "request_failed",
         status: response.status,
-        message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
+        message:
+          data.message ||
+          i18n.t("networking.mcpToolsListFailed", { status: response.status, statusText: response.statusText }),
       };
     }
 

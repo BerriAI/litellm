@@ -1294,7 +1294,7 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
         if litellm.default_internal_user_params:
             default_role = litellm.default_internal_user_params.get("user_role")
 
-        new_user_request: Final = NewUserRequest(
+        new_user_request: Final = SCIMNewUserRequest(
             user_id=user_id,
             user_email=user_id,  # We don't have email from group membership
             user_alias=None,
@@ -1873,7 +1873,7 @@ async def create_user(
         admin_group: Final = await _get_scim_admin_group()
         resolved_role: Final = _resolve_scim_user_role(user.groups or [], admin_group, default_role)
 
-        new_user_request: Final = NewUserRequest(
+        new_user_request: Final = SCIMNewUserRequest(
             user_id=user_id,
             user_email=user_data["user_email"],
             user_alias=user_data["user_alias"],
