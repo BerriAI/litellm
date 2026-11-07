@@ -5111,9 +5111,7 @@ async def info_key_fn(
                 param="key",
                 code=status.HTTP_400_BAD_REQUEST,
             )
-        hashed_key: str | None = key
-        if key is not None:
-            hashed_key = hash_token_if_needed(token=key)  # rebind-ok: pre-existing rebinding on a rename-only line
+        hashed_key: str | None = hash_token_if_needed(token=key)
         live_key_info: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
             where={"token": hashed_key},
             include={"litellm_budget_table": True},
