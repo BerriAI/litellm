@@ -58,6 +58,11 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.litellm_core_utils.cloud_storage_security import (
+    is_managed_s3_uri,
+    names_an_unlisted_s3_bucket,
+    s3_media_uris,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
@@ -87,14 +92,14 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
-from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     is_model_cost_zero,
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.auth_utils import ClientSideStorageAllowlist, check_response_size_is_safe, get_request_route
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -853,6 +858,33 @@ def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
         return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
     except ValidationError:
         return None
+
+
+def _refuse_s3_media_the_key_may_not_read(
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> None:
+    s3_uris: Final = s3_media_uris(data)
+    if not s3_uris or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    managed_uris: Final = tuple(filter(is_managed_s3_uri, s3_uris))
+    if managed_uris:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Raw s3:// URIs under LiteLLM-managed storage can only be sent by a proxy admin key "
+            f"({', '.join(managed_uris)}). Use the LiteLLM managed file id returned when the file was created.",
+        )
+    if general_settings.get("allow_client_side_credentials") is True:
+        return
+    is_listed: Final = ClientSideStorageAllowlist.model_validate(general_settings).admits_s3_bucket
+    unlisted_uris: Final = tuple(uri for uri in s3_uris if names_an_unlisted_s3_bucket(uri, is_listed))
+    if unlisted_uris:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Raw s3:// URIs can only name a bucket listed in `general_settings.allowed_client_side_s3_buckets` "
+            f"({', '.join(unlisted_uris)}). Ask the proxy admin to list the bucket there.",
+        )
 
 
 async def _enforce_guardrail_added_tag_budgets(
@@ -2277,6 +2309,7 @@ class ProxyBaseLLMRequestProcessing:
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
             )
+        _refuse_s3_media_the_key_may_not_read(self.data, user_api_key_dict, general_settings)
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
