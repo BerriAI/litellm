@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from collections.abc import AsyncIterator, Mapping
+from contextlib import nullcontext
 from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
@@ -14,6 +15,7 @@ import respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -1224,6 +1226,85 @@ def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_back
 
     assert _replayed_reasoning_counts(upstream) == [1, 0]
     assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
+
+
+class _FailureLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rejections: tuple[str, ...] = ()
+
+    def _record(self, kwargs) -> None:
+        error: Final = str(kwargs.get("exception"))
+        self.rejections = (
+            *self.rejections,
+            next((phrase for phrase in ("encrypted content", "organization") if phrase in error), error),
+        )
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+
+_OUTCOMES_OF_THE_TURN_SENT_AGAIN: Final = (
+    pytest.param(httpx.Response(200, json=TEXT_RESPONSE), (), id="served"),
+    pytest.param(httpx.Response(400, json=UNVERIFIED_ORGANIZATION), ("organization",), id="rejected"),
+)
+
+
+def _rejected_then(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sent_again: httpx.Response) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(400, json=REJECTED_REPLAYED_REASONING), sent_again]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+async def test_openai_turn_logs_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, sent_again)
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+        )
+
+    assert failure_log.rejections == logged_rejections
+
+
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+def test_sync_openai_turn_logs_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, sent_again)
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        litellm.anthropic.messages.create(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+        )
+
+    assert failure_log.rejections == logged_rejections
 
 
 @pytest.mark.asyncio

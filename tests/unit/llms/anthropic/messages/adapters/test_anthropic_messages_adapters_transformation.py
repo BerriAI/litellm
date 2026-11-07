@@ -3,6 +3,7 @@ import functools
 import json
 import logging
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -11,6 +12,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
 )
@@ -5916,6 +5918,85 @@ def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
     assert route.call_count == 2
     assert _sent_reasoning_items(route.calls[1].request) == []
     assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
+
+
+class _FailureLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rejections: tuple[str, ...] = ()
+
+    def _record(self, kwargs) -> None:
+        error: Final = str(kwargs.get("exception"))
+        self.rejections = (
+            *self.rejections,
+            next((phrase for phrase in _UPSTREAM_REJECTION_PHRASES if phrase in error), error),
+        )
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._record(kwargs)
+
+
+_UPSTREAM_REJECTION_PHRASES: Final = ("could not be verified", "max_output_tokens is too small")
+_OUTCOMES_OF_THE_TURN_SENT_AGAIN: Final = (
+    pytest.param(httpx.Response(200, json=_RETRY_REPLY), (), id="served"),
+    pytest.param(_UNRELATED_REJECTION, ("max_output_tokens is too small",), id="rejected"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+async def test_async_messages_log_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    respx_mock.post(url__regex=_RETRY_URL).mock(side_effect=[_RETRY_REJECTION, sent_again])
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        await litellm.anthropic.messages.acreate(
+            model="azure/gpt-5.4-nano",
+            api_base=_RETRY_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            max_tokens=64,
+            tools=_RETRY_TOOLS,
+            messages=_history_with_foreign_reasoning(),
+        )
+
+    assert failure_log.rejections == logged_rejections
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+def test_sync_messages_log_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    respx_mock.post(url__regex=_RETRY_URL).mock(side_effect=[_RETRY_REJECTION, sent_again])
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        litellm.anthropic.messages.create(
+            model="azure/gpt-5.4-nano",
+            api_base=_RETRY_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            max_tokens=64,
+            tools=_RETRY_TOOLS,
+            messages=_history_with_foreign_reasoning(),
+        )
+
+    assert failure_log.rejections == logged_rejections
 
 
 @pytest.mark.asyncio
