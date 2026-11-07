@@ -56,7 +56,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def _make_iterator() -> BaseResponsesAPIStreamingIterator:
+def _make_iterator(litellm_metadata: Mapping[str, object] | None = None) -> BaseResponsesAPIStreamingIterator:
     mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {"litellm_params": {}}
     mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -68,6 +68,7 @@ def _make_iterator() -> BaseResponsesAPIStreamingIterator:
         responses_api_provider_config=mock_config,
         logging_obj=mock_logging_obj,
         custom_llm_provider="openai",
+        litellm_metadata=litellm_metadata,
     )
 
 
@@ -959,3 +960,34 @@ async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_se
 
     assert failure is not None
     _assert_names_the_azure_deployment(failure, reported_api_base)
+
+
+def test_context_window_error_reaches_fallback_only_under_the_router() -> None:
+    """The exemption is the Router's, not the exception's.
+
+    The case above pins the direct-SDK contract (#15785): no deployment means the 400 is
+    the answer. When the Router resolved a deployment, the same event must be wrapped so
+    `context_window_fallbacks` can route it to a larger window (#48887).
+    """
+    iterator: Final = _make_iterator(litellm_metadata={"model_info": {"id": "deployment-1"}})
+    chunk: Final = _make_error_chunk(
+        "invalid_request_error",
+        "context_length_exceeded",
+        "Your input exceeds the context window of this model.",
+    )
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert isinstance(exc_info.value.original_exception, litellm.ContextWindowExceededError)
+
+
+def test_empty_model_info_does_not_count_as_a_router_deployment() -> None:
+    """`model_info` present but empty is what a caller can pass by hand; it selects nothing."""
+    iterator: Final = _make_iterator(litellm_metadata={"model_info": {}})
+    chunk: Final = _make_error_chunk(
+        "invalid_request_error",
+        "context_length_exceeded",
+        "Your input exceeds the context window of this model.",
+    )
+    with pytest.raises(litellm.ContextWindowExceededError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
