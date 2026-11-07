@@ -9984,6 +9984,7 @@ _GROUP_READS: Final = (
     pytest.param("POST", "/azure_ai/indexes/{index}/docs/suggest", {"search": "hi"}, id="azure-suggest"),
     pytest.param("GET", "/azure_ai/indexes/{index}", None, id="azure-get"),
     pytest.param("GET", "/azure_ai/indexes/{index}/docs/$count", None, id="azure-count"),
+    pytest.param("GET", "/azure_ai/indexes/{index}/docs/indexes", None, id="azure-document-key-named-indexes"),
     pytest.param(
         "POST", _GROUP_DISCOVERY + "/{store}/servingConfigs/default_config:search", {"query": "hi"}, id="vertex-search"
     ),
@@ -9994,6 +9995,18 @@ _GROUP_WRITES: Final = (
     pytest.param("POST", "/milvus/v2/vectordb/entities/insert", {"collectionName": "{index}"}, id="milvus-insert"),
     pytest.param("POST", "/azure_ai/indexes/{index}/docs/index", {"value": []}, id="azure-index"),
     pytest.param("POST", _GROUP_DISCOVERY + "/{store}/branches/0/documents:import", {}, id="vertex-import"),
+    pytest.param(
+        "POST", _GROUP_DISCOVERY + "/{store}/dataStores/store-b/servingConfigs/c:search", {}, id="vertex-second-store"
+    ),
+    pytest.param("POST", "/azure_ai/indexes/{index}/indexes/idx-b/docs/search", {}, id="azure-second-index"),
+    pytest.param(
+        "POST",
+        "/vertex_ai/discovery/v1/projects/p/locations/global/collections/c"
+        "/xdataStores/{store}/dataStores/store-b/c:search",
+        {},
+        id="vertex-store-hidden-in-a-longer-segment",
+    ),
+    pytest.param("GET", "/azure_ai/indexes/{index}/indexes/idx-b", None, id="azure-second-index-get"),
     pytest.param("DELETE", _GROUP_DISCOVERY + "/{store}", None, id="vertex-delete"),
     pytest.param("POST", _GROUP_DISCOVERY + "/{store}/x:search/%2e%2e/%2e%2e/documents:purge", {}, id="vertex-traversal"),
     pytest.param("POST", _GROUP_DISCOVERY + "/{store}/documents:purge%3Fx:search", {}, id="vertex-encoded-query"),
@@ -10107,6 +10120,38 @@ class TestVectorStorePassthroughGroupReads:
 
         assert await group_routes.send_as(key, method, path, body, "idx-a", "store-a") == 403
         assert group_routes.upstream.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            pytest.param("/azure_ai/indexes/indexes/docs/search", {"search": "hi"}, id="azure-index-named-indexes"),
+            pytest.param(
+                _GROUP_DISCOVERY + "/dataStores/servingConfigs/c:search",
+                {"query": "hi"},
+                id="vertex-store-named-datastores",
+            ),
+        ],
+    )
+    async def test_a_store_named_like_the_path_marker_is_still_one_store(
+        self, group_routes: _GroupRoutes, monkeypatch: pytest.MonkeyPatch, path: str, body: Mapping[str, object]
+    ) -> None:
+        await group_routes.proxy.add_group("g1", ("store-a", "dataStores"))
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(
+                vector_stores=[_group_test_store("store-a", "milvus"), _group_test_store("dataStores", "vertex_ai")]
+            ),
+        )
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_index_registry",
+            VectorStoreIndexRegistry(vector_store_indexes=[_group_test_index("indexes", "store-a")]),
+        )
+
+        assert await group_routes.send_as(_group_test_key(indexes=("indexes",)), "POST", path, body, "", "") == 200
+        assert group_routes.upstream.call_count == 1
 
     @pytest.mark.asyncio
     async def test_group_grant_does_not_replace_the_index_permission(self, group_routes: _GroupRoutes) -> None:
