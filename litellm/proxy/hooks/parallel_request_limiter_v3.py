@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -74,6 +75,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_rate_limit_from_metadata,
 )
 from litellm.proxy.auth.budget_throttle import throttled_limit
+from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
@@ -346,6 +348,44 @@ class RateLimitDescriptor(TypedDict):
     key: str
     value: str
     rate_limit: RateLimitDescriptorRateLimitObject | None
+
+
+def _minimum_descriptor_limit(
+    descriptors: Sequence[RateLimitDescriptor],
+    metric: Literal["requests_per_unit", "tokens_per_unit", "max_parallel_requests"],
+) -> int | None:
+    return min(
+        (limit for descriptor in descriptors if (limit := (descriptor["rate_limit"] or {}).get(metric)) is not None),
+        default=None,
+    )
+
+
+def _merge_rate_limit_descriptors(descriptors: Sequence[RateLimitDescriptor]) -> RateLimitDescriptor:
+    first: Final = descriptors[0]
+    if len(descriptors) == 1:
+        return first
+    return RateLimitDescriptor(
+        key=first["key"],
+        value=first["value"],
+        rate_limit=RateLimitDescriptorRateLimitObject(
+            requests_per_unit=_minimum_descriptor_limit(descriptors, "requests_per_unit"),
+            tokens_per_unit=_minimum_descriptor_limit(descriptors, "tokens_per_unit"),
+            max_parallel_requests=_minimum_descriptor_limit(descriptors, "max_parallel_requests"),
+            window_size=(first["rate_limit"] or {}).get("window_size"),
+        ),
+    )
+
+
+def _coalesce_rate_limit_descriptors(descriptors: Sequence[RateLimitDescriptor]) -> Sequence[RateLimitDescriptor]:
+    identities: Final = tuple(dict.fromkeys((descriptor["key"], descriptor["value"]) for descriptor in descriptors))
+    if len(identities) == len(descriptors):
+        return descriptors
+    return tuple(
+        _merge_rate_limit_descriptors(
+            tuple(descriptor for descriptor in descriptors if (descriptor["key"], descriptor["value"]) == identity)
+        )
+        for identity in identities
+    )
 
 
 class ParallelRequestGauge(TypedDict):
@@ -2405,6 +2445,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             group=self._model_group_resolver(requested_model) or requested_model,
         )
 
+    def _rate_limited_models(self, model: RateLimitedModel | None) -> tuple[RateLimitedModel, ...]:
+        if model is None:
+            return ()
+        return (
+            model,
+            *(
+                target
+                for candidate in expand_model_latest_alias(model.requested)[1:]
+                if (target := self._rate_limited_model(candidate)) is not None
+            ),
+        )
+
     def create_organization_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None = None
     ) -> list[RateLimitDescriptor]:
@@ -2426,9 +2478,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        model: Final = self._rate_limited_model(requested_model)
-        if model is None:
-            return descriptors
+        model_descriptors: Final = tuple(
+            descriptor
+            for model in self._rate_limited_models(self._rate_limited_model(requested_model))
+            if (descriptor := self._organization_model_rate_limit_descriptor(user_api_key_dict, model)) is not None
+        )
+        return [*descriptors, *_coalesce_rate_limit_descriptors(model_descriptors)]
+
+    def _organization_model_rate_limit_descriptor(
+        self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel
+    ) -> RateLimitDescriptor | None:
         model_specific_tpm_limit: Final = model.limit_in(
             get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_tpm_limit")
         )
@@ -2436,19 +2495,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_rpm_limit")
         )
         if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
-            return descriptors
-        descriptors.append(
-            RateLimitDescriptor(
-                key="model_per_organization",
-                value=f"{user_api_key_dict.org_id}:{model.group}",
-                rate_limit={
-                    "requests_per_unit": model_specific_rpm_limit,
-                    "tokens_per_unit": model_specific_tpm_limit,
-                    "window_size": self.window_size,
-                },
-            )
+            return None
+        return RateLimitDescriptor(
+            key="model_per_organization",
+            value=f"{user_api_key_dict.org_id}:{model.group}",
+            rate_limit={
+                "requests_per_unit": model_specific_rpm_limit,
+                "tokens_per_unit": model_specific_tpm_limit,
+                "window_size": self.window_size,
+            },
         )
-        return descriptors
 
     def _add_model_per_key_rate_limit_descriptor(
         self,
@@ -2935,11 +2991,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Model rate limits
         requested_model: Final = data.get("model", None)
-        self._add_model_per_key_rate_limit_descriptor(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model,
-            descriptors=descriptors,
-        )
+        model_candidates: Final = expand_model_latest_alias(requested_model if isinstance(requested_model, str) else "")
+        for candidate in model_candidates:
+            self._add_model_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                requested_model=candidate,
+                descriptors=descriptors,
+            )
 
         # Per-request-tag rate limits scoped to this key
         self._add_tag_per_key_rate_limit_descriptor(
@@ -2948,11 +3006,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        self._add_team_model_rate_limit_descriptor_from_metadata(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model if isinstance(requested_model, str) else None,
-            descriptors=descriptors,
-        )
+        for candidate in model_candidates:
+            self._add_team_model_rate_limit_descriptor_from_metadata(
+                user_api_key_dict=user_api_key_dict,
+                requested_model=candidate,
+                descriptors=descriptors,
+            )
         self._add_team_ptu_rate_limit_descriptor(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model if isinstance(requested_model, str) else None,
@@ -2975,7 +3034,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        return descriptors
+        return descriptors if len(model_candidates) == 1 else list(_coalesce_rate_limit_descriptors(descriptors))
 
     _create_rate_limit_descriptors = create_rate_limit_descriptors
 
@@ -3126,12 +3185,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         requested_model: str | None,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: _RateLimitDescriptorSink,
     ) -> None:
+        candidates: Final = expand_model_latest_alias(requested_model) if requested_model else (None,)
+        model_descriptors: Final = tuple(
+            descriptor
+            for candidate in candidates
+            if (descriptor := self._project_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None
+        )
+        for descriptor in _coalesce_rate_limit_descriptors(model_descriptors):
+            descriptors.append(descriptor)
+
+    def _project_model_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+    ) -> RateLimitDescriptor | None:
         """Add project model rate limit descriptor from project_metadata if applicable."""
         model: Final = self._rate_limited_model(requested_model)
         if model is None:
-            return
+            return None
         model_specific_tpm_limit: Final = model.limit_in(
             get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_tpm_limit")
         )
@@ -3139,17 +3212,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_rpm_limit")
         )
         if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
-            return
-        descriptors.append(
-            RateLimitDescriptor(
-                key="model_per_project",
-                value=f"{user_api_key_dict.project_id}:{model.group}",
-                rate_limit={
-                    "requests_per_unit": model_specific_rpm_limit,
-                    "tokens_per_unit": model_specific_tpm_limit,
-                    "window_size": self.window_size,
-                },
-            )
+            return None
+        return RateLimitDescriptor(
+            key="model_per_project",
+            value=f"{user_api_key_dict.project_id}:{model.group}",
+            rate_limit={
+                "requests_per_unit": model_specific_rpm_limit,
+                "tokens_per_unit": model_specific_tpm_limit,
+                "window_size": self.window_size,
+            },
         )
 
     def add_project_io_token_rate_limit_descriptors_from_metadata(
@@ -3158,6 +3229,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         requested_model: str | None,
         descriptors: _RateLimitDescriptorSink,
     ) -> None:
+        candidates: Final = expand_model_latest_alias(requested_model) if requested_model else (None,)
+        model_descriptors: Final = tuple(
+            itertools.chain.from_iterable(
+                self._project_io_token_rate_limit_descriptors(user_api_key_dict, candidate) for candidate in candidates
+            )
+        )
+        for descriptor in _coalesce_rate_limit_descriptors(model_descriptors):
+            descriptors.append(descriptor)
+
+    def _project_io_token_rate_limit_descriptors(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+    ) -> tuple[RateLimitDescriptor, ...]:
         """Add project-scoped ITPM/OTPM descriptors from project_metadata.
 
         Enforced independently of, and alongside, the combined ``model_per_project``
@@ -3166,7 +3251,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         model: Final = self._rate_limited_model(requested_model)
         if model is None or user_api_key_dict.project_id is None:
-            return
+            return ()
 
         model_itpm_limit: Final = model.limit_in(
             get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit")
@@ -3175,34 +3260,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit")
         )
 
-        if model_itpm_limit is None and model_otpm_limit is None:
-            return
-
         descriptor_value: Final = f"{user_api_key_dict.project_id}:{model.group}"
-        if model_itpm_limit is not None:
-            descriptors.append(
-                RateLimitDescriptor(
-                    key=PROJECT_ITPM_DESCRIPTOR_KEY,
-                    value=descriptor_value,
-                    rate_limit={
-                        "requests_per_unit": None,
-                        "tokens_per_unit": model_itpm_limit,
-                        "window_size": self.window_size,
-                    },
-                )
+        return tuple(
+            RateLimitDescriptor(
+                key=key,
+                value=descriptor_value,
+                rate_limit={
+                    "requests_per_unit": None,
+                    "tokens_per_unit": limit,
+                    "window_size": self.window_size,
+                },
             )
-        if model_otpm_limit is not None:
-            descriptors.append(
-                RateLimitDescriptor(
-                    key=PROJECT_OTPM_DESCRIPTOR_KEY,
-                    value=descriptor_value,
-                    rate_limit={
-                        "requests_per_unit": None,
-                        "tokens_per_unit": model_otpm_limit,
-                        "window_size": self.window_size,
-                    },
-                )
+            for key, limit in (
+                (PROJECT_ITPM_DESCRIPTOR_KEY, model_itpm_limit),
+                (PROJECT_OTPM_DESCRIPTOR_KEY, model_otpm_limit),
             )
+            if limit is not None
+        )
 
     def _handle_rate_limit_error(
         self,
@@ -4416,6 +4490,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         kwargs: object,
         model_group: str | None,
         tpm_limited_tags: Set[str] = frozenset(),
+        model_groups: tuple[str, ...] = (),
     ) -> list[tuple[str, str]]:
         """
         Enumerate every (scope_key, scope_value) pair that *might* carry a
@@ -4449,24 +4524,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if user_api_key_organization_id:
             targets.append(("organization", user_api_key_organization_id))
         if model_group:
-            if user_api_key:
-                targets.append(("model_per_key", f"{user_api_key}:{model_group}"))
-            if user_api_key_team_id:
-                targets.append(("model_per_team", f"{user_api_key_team_id}:{model_group}"))
-            if user_api_key_organization_id:
-                targets.append(
-                    (
-                        "model_per_organization",
-                        f"{user_api_key_organization_id}:{model_group}",
+            for group in dict.fromkeys(model_groups or (model_group,)):
+                if user_api_key:
+                    targets.append(("model_per_key", f"{user_api_key}:{group}"))
+                if user_api_key_team_id:
+                    targets.append(("model_per_team", f"{user_api_key_team_id}:{group}"))
+                if user_api_key_organization_id:
+                    targets.append(
+                        (
+                            "model_per_organization",
+                            f"{user_api_key_organization_id}:{group}",
+                        )
                     )
-                )
-            if user_api_key_project_id:
-                targets.append(
-                    (
-                        "model_per_project",
-                        f"{user_api_key_project_id}:{model_group}",
+                if user_api_key_project_id:
+                    targets.append(
+                        (
+                            "model_per_project",
+                            f"{user_api_key_project_id}:{group}",
+                        )
                     )
-                )
         if agent_id:
             targets.append(("agent", agent_id))
             if session_id:
@@ -4565,9 +4641,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> list[ReservationOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
         from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
-        from litellm.proxy.common_utils.callback_utils import (
-            get_model_group_from_litellm_kwargs,
-        )
 
         # Get metadata from standard_logging_object - this correctly handles both
         # 'metadata' and 'litellm_metadata' fields from litellm_params
@@ -4617,6 +4690,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # mid-flight cannot move the charge) is authoritative; otherwise fall
         # back to the router's ``model_group`` (the no-reservation charge path).
         reconcile_model: Final = reserved_model if reserved_model is not None else self._rate_limited_model(model_group)
+        reconcile_models: Final = self._rate_limited_models(reconcile_model)
 
         pipeline_operations: Final[list[ReservationOperation]] = []
 
@@ -4636,17 +4710,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             kwargs=kwargs,
             tpm_limited_tags=_tpm_limited_tags(stash, kwargs),
             model_group=reconcile_model.group if reconcile_model is not None else None,
+            model_groups=tuple(model.group for model in reconcile_models),
         )
         targets.extend(
             scope
             for scope in sorted(reserved_scopes)
             if scope[0] in ("agent", "agent_session") and scope not in targets
         )
-        charged_targets: Final = (
-            [target for target in targets if target[0] != "model_per_team"]
-            if self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, reconcile_model)
-            else targets
+        logging_metadata: Final = _callback_kwargs_mapping(standard_logging_metadata)
+        key_owned_team_scopes: Final = frozenset(
+            ("model_per_team", f"{logging_metadata.get('user_api_key_team_id')}:{model.group}")
+            for model in reconcile_models
+            if all(
+                self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, candidate)
+                for candidate in reconcile_models
+                if candidate.group == model.group
+            )
         )
+        charged_targets: Final = [target for target in targets if target not in key_owned_team_scopes]
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
                 "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
@@ -4662,7 +4743,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
-        ptu_skips_socket_usage: Final = kwargs.get("call_type") == CallTypes.aresponses_websocket.value
+        call_type: Final[object] = kwargs.get("call_type")
+        ptu_skips_socket_usage: Final = call_type == CallTypes.aresponses_websocket.value
         pipeline_operations.extend(
             self._build_team_ptu_tpm_ops(
                 standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata

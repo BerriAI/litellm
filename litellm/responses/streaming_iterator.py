@@ -250,6 +250,8 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "server_error": 500,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
+        "resource_unavailable": 429,
+        "flex_unavailable": 429,
         "vector_store_timeout": 504,
         "invalid_prompt": 400,
         "invalid_image": 400,
@@ -1175,7 +1177,8 @@ class BaseResponsesAPIStreamingIterator:
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
-        if event.type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
+        event_type: Final[object] = getattr(event, "type", None)
+        if event_type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
             self._output_started = True
 
     def _fallback_error(self, original: Exception) -> MidStreamFallbackError:

@@ -273,6 +273,27 @@ def test_max_input_tokens_leave_out_blocked_deployments_and_other_teams(make_cor
     assert core.registry().group("mt", field="max_input_tokens", team_id="TA") == (2, 3)
 
 
+def test_pinned_reasoning_efforts_are_each_routable_deployments_own_value_in_order(make_core: MakeCore) -> None:
+    core = make_core(
+        model_list=[
+            deployment("pe", "p1", reasoning_effort="high"),
+            deployment("pe", "p2"),
+            deployment("pe", "p3", reasoning_effort="low"),
+            deployment("pe", "p4", reasoning_effort="minimal", model_info={"blocked": True}),
+            deployment("pe", "p5", reasoning_effort="medium", model_info={"team_id": "TA"}),
+        ]
+    )
+
+    assert core.registry().group("pe", field="pinned_reasoning_efforts") == ("high", None, "low")
+    assert core.registry().group("pe", field="pinned_reasoning_efforts", team_id="TA") == (
+        "high",
+        None,
+        "low",
+        "medium",
+    )
+    assert core.registry().group("not-configured", field="pinned_reasoning_efforts") == ()
+
+
 def test_max_input_tokens_skip_a_value_a_saved_model_info_copied_from_the_cost_map(make_core: MakeCore) -> None:
     catalog_limit = GetModelCostMap.loaded_model_cost_map()["gpt-4o"]["max_input_tokens"]
     core = make_core(
