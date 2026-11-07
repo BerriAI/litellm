@@ -154,13 +154,9 @@ def _content_block_payload(event: Mapping[str, object]) -> object:
             return None
 
 
-def _is_blank(value: object) -> bool:
-    return value in ("", [], {}, None) or (isinstance(value, str) and not value.strip())
-
-
 def _content_block_carries_output(block: object) -> bool:
     fields: Final = as_str_mapping(block)
-    return fields is not None and any(key != "type" and not _is_blank(value) for key, value in fields.items())
+    return fields is not None and any(key != "type" and value not in ("", [], None) for key, value in fields.items())
 
 
 def _sse_line_carries_output(line: str) -> bool:
@@ -182,26 +178,29 @@ def _message_field_carries_output(key: str, value: object) -> bool:
             return False
         case "provider_specific_fields":
             fields: Final = as_str_mapping(value) or {}
-            return any(name not in _REPLAY_METADATA_FIELDS and not _is_blank(field) for name, field in fields.items())
+            return any(
+                name not in _REPLAY_METADATA_FIELDS and field not in ("", [], {}, None)
+                for name, field in fields.items()
+            )
         case _:
-            return not _is_blank(value)
+            return value not in ("", [], {}, None)
 
 
-def _choice_output_fields(choice: object) -> Mapping[str, object]:
+def _chat_message_fields(choice: object) -> Mapping[str, object] | None:
     match choice:
         case Choices():
             return choice.message.model_dump(exclude_none=True)
         case StreamingChoices():
             return choice.delta.model_dump(exclude_none=True)
         case TextChoices():
-            return {"text": choice.text}
+            return None
         case _:
-            cached: Final = as_str_mapping(choice) or {}
-            return as_str_mapping(cached.get("message")) or {"text": cached.get("text")}
+            return as_str_mapping((as_str_mapping(choice) or {}).get("message"))
 
 
 def _choice_carries_output(choice: object) -> bool:
-    return any(_message_field_carries_output(key, value) for key, value in _choice_output_fields(choice).items())
+    message: Final = _chat_message_fields(choice)
+    return message is None or any(_message_field_carries_output(key, value) for key, value in message.items())
 
 
 def _choices_carry_output(choices: object) -> bool:
@@ -226,6 +225,17 @@ def is_response_without_output(result: object) -> bool:
     if cached.get("type") == "message":
         return not any(_content_block_carries_output(block) for block in as_object_list(cached.get("content")) or ())
     return False
+
+
+def _text_choice_carries_output(choice: TextChoices) -> bool:
+    text: Final[object] = choice.text
+    return text != ""
+
+
+def _assembled_stream_without_output(response: ModelResponse | TextCompletionResponse) -> bool:
+    if isinstance(response, TextCompletionResponse):
+        return not any(_text_choice_carries_output(choice) for choice in response.choices)
+    return is_response_without_output(response)
 
 
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
@@ -1391,7 +1401,7 @@ class LLMCachingHandler:
                 is_async=True,
             )
         )
-        if complete_streaming_response is None or is_response_without_output(complete_streaming_response):
+        if complete_streaming_response is None or _assembled_stream_without_output(complete_streaming_response):
             return
         await self.async_set_cache(
             result=complete_streaming_response,
@@ -1421,7 +1431,7 @@ class LLMCachingHandler:
             )
         )
 
-        if complete_streaming_response is None or is_response_without_output(complete_streaming_response):
+        if complete_streaming_response is None or _assembled_stream_without_output(complete_streaming_response):
             return
         self.sync_set_cache(
             result=complete_streaming_response,

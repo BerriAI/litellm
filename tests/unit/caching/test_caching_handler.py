@@ -2851,18 +2851,6 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
             {"messages": _unique_messages(), "max_tokens": 16},
         ),
         (
-            _anthropic_message_with_only_a_whitespace_text_block(),
-            aanthropic_messages,
-            CallTypes.aanthropic_messages.value,
-            {"messages": _unique_messages(), "max_tokens": 16},
-        ),
-        (
-            litellm.ModelResponse(choices=[litellm.Choices(message=litellm.Message(content="\n\n"))]),
-            litellm.acompletion,
-            CallTypes.acompletion.value,
-            {"messages": _unique_messages()},
-        ),
-        (
             _empty_reply_with_provider_metadata({"thought_signatures": ["c2lnbmF0dXJl"]}),
             litellm.acompletion,
             CallTypes.acompletion.value,
@@ -2908,15 +2896,6 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
                     "index": 0,
                     "content_block": {"type": "text", "text": "", "citations": []},
                 },
-            ),
-            aanthropic_messages,
-            CallTypes.aanthropic_messages.value,
-            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
-        ),
-        (
-            _anthropic_stream_with_only_empty_blocks(
-                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "\n\n"}},
             ),
             aanthropic_messages,
             CallTypes.aanthropic_messages.value,
@@ -2976,26 +2955,72 @@ async def test_async_get_cache_treats_stored_response_without_output_as_miss(
     assert lookup.cached_result is None
 
 
-@pytest.mark.asyncio
-async def test_async_set_cache_keeps_reply_whose_text_is_padded_with_whitespace():
-    setup_cache()
-    handler: Final = LLMCachingHandler(original_function=litellm.acompletion, request_kwargs={}, start_time=_FIXED_START)
-    kwargs: Final = {"messages": _unique_messages()}
-    reply: Final = litellm.ModelResponse(choices=[litellm.Choices(message=litellm.Message(content="\n\nParis\n"))])
+def _chat_reply(content: str) -> ModelResponse:
+    return litellm.ModelResponse(choices=[litellm.Choices(message=litellm.Message(content=content))])
 
-    await handler.async_set_cache(result=reply, original_function=litellm.acompletion, kwargs=kwargs)
+
+def _text_completion_fill(text: str) -> TextCompletionResponse:
+    return litellm.TextCompletionResponse(choices=[litellm.utils.TextChoices(text=text)])
+
+
+def _replies_that_look_empty_but_carry_output() -> list[EmptyResponseCase]:
+    return [
+        (_chat_reply("\n\nParis\n"), litellm.acompletion, CallTypes.acompletion.value, {"messages": _unique_messages()}),
+        (_chat_reply("\n\n"), litellm.acompletion, CallTypes.acompletion.value, {"messages": _unique_messages()}),
+        (
+            _anthropic_message_with_only_a_whitespace_text_block(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "\n\n"}},
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (_text_completion_fill("    "), litellm.atext_completion, CallTypes.atext_completion.value, {"prompt": str(uuid.uuid4())}),
+        (_text_completion_fill(""), litellm.atext_completion, CallTypes.atext_completion.value, {"prompt": str(uuid.uuid4())}),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result, original_function, call_type, kwargs",
+    _replies_that_look_empty_but_carry_output(),
+    ids=[
+        "chat-padded",
+        "chat-whitespace",
+        "messages-whitespace",
+        "messages-stream-whitespace",
+        "text-completion-indent",
+        "text-completion-empty-fill",
+    ],
+)
+async def test_async_set_cache_keeps_whitespace_replies_and_text_completion_fills(
+    result: EmptyResult,
+    original_function: Callable[..., Awaitable[object]],
+    call_type: str,
+    kwargs: dict[str, object],
+):
+    setup_cache()
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+
+    await handler.async_set_cache(result=result, original_function=original_function, kwargs=kwargs)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
     lookup: Final = await handler.async_get_cache(
         model="gpt-3.5-turbo",
-        original_function=litellm.acompletion,
-        logging_obj=_completion_logging_obj(CallTypes.acompletion.value),
+        original_function=original_function,
+        logging_obj=_completion_logging_obj(call_type),
         start_time=_FIXED_START,
-        call_type=CallTypes.acompletion.value,
+        call_type=call_type,
         kwargs=kwargs,
     )
 
-    assert isinstance(lookup.cached_result, ModelResponse)
-    assert lookup.cached_result.choices[0].message.content == "\n\nParis\n"
+    assert lookup.cached_result is not None
 
 
 @pytest.mark.asyncio
@@ -3194,6 +3219,23 @@ async def test_async_streamed_answer_with_content_is_cached():
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert _cached_content(litellm.cache.get_cache(**kwargs)) == "hi"
+
+
+def _streamed_text_completion_closing_chunk(text: str) -> TextCompletionResponse:
+    return litellm.TextCompletionResponse(choices=[litellm.utils.TextChoices(text=text, finish_reason="stop")])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text, cached", [("", False), ("    ", True)], ids=["empty", "indent"])
+async def test_async_streamed_text_completion_is_cached_only_with_text(text: str, cached: bool):
+    setup_cache()
+    kwargs = {"model": "gpt-3.5-turbo-instruct", "prompt": str(uuid.uuid4())}
+    handler = LLMCachingHandler(original_function=litellm.atext_completion, request_kwargs=kwargs, start_time=_FIXED_START)
+
+    await handler.add_streaming_response_to_cache(_streamed_text_completion_closing_chunk(text))
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert (litellm.cache.get_cache(**kwargs) is not None) is cached
 
 
 def test_sync_streamed_answer_without_output_is_never_cached():
