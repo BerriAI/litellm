@@ -2348,9 +2348,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         )
         completion_tokens: Final = counted_or_zero(
-            lambda: token_counter(
-                model=model, text=get_content_from_model_response(result), count_response_tokens=True
-            )
+            lambda: token_counter(model=model, text=get_content_from_model_response(result), count_response_tokens=True)
         ) + counted_or_zero(
             lambda: sum(token_counter(model=model, text=text, count_response_tokens=True) for text in reasoning_texts())
         )
