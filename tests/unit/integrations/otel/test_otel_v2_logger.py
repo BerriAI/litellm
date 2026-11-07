@@ -1793,6 +1793,54 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
     )
 
 
+@pytest.mark.parametrize("guardrails_only", [False, True])
+def test_proxy_pre_call_hook_seeds_request_metadata_without_a_listed_otel_callback(monkeypatch, guardrails_only):
+    """A V2 logger that is registered but not in ``litellm.callbacks`` (a team-only destination) still gets the
+    caller's allowlisted ``requester_metadata`` from the proxy pre-call hook, keeps the model auth seeded, and a
+    ``guardrails_only`` scan seeds nothing."""
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["requester_metadata.trace_id"])
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    data: Final = {
+        "model": "resolved-deployment",
+        "metadata": {"requester_metadata": {"trace_id": "abc", "other": "x"}},
+    }
+
+    async def _flow():
+        logger.seed_request_identity(_Auth(), model="client-alias")
+        await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=_Auth(), data=data, call_type="completion", guardrails_only=guardrails_only
+        )
+        await logger.async_service_success_hook(payload=_ServicePayload("redis", "set"), parent_otel_span=server)
+
+    with trace.use_span(server, end_on_exit=False):
+        asyncio.run(_flow())
+    server.end()
+
+    spans: Final = {s.name: s for s in exporter.get_finished_spans()}
+    seeded: Final = None if guardrails_only else "abc"
+    observed: Final = {
+        name: (
+            spans[name].attributes.get(f"{LiteLLM.METADATA_PREFIX}trace_id"),
+            spans[name].attributes.get("gen_ai.request.model"),
+        )
+        for name in (LITELLM_PROXY_REQUEST_SPAN_NAME, "redis set")
+    }
+    assert observed == {
+        LITELLM_PROXY_REQUEST_SPAN_NAME: (seeded, "client-alias"),
+        "redis set": (seeded, "client-alias"),
+    }, observed
+    assert not any(any(k.endswith("other") for k in s.attributes) for s in spans.values()), sorted(spans)
+
+
 def test_pre_call_hook_promotes_nested_request_metadata_key():
     """``baggage_metadata_keys: [requester_metadata.trace_id]`` reads the caller's
     ``metadata.trace_id`` (snapshotted by the proxy under ``requester_metadata``)
