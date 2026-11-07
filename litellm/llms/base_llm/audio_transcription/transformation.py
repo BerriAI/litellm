@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import (
@@ -154,6 +155,9 @@ class AudioTranscriptionRequestData:
 
 
 class BaseAudioTranscriptionConfig(BaseConfig, ABC):
+    def audio_file_context(self, audio_file: FileTypes) -> AbstractContextManager[FileTypes]:
+        return nullcontext(audio_file)
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         pass

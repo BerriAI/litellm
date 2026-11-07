@@ -870,6 +870,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "hosted_vllm",
     "llamafile",
     "lm_studio",
+    "foundry_local",
     "galadriel",
     "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
@@ -1130,6 +1131,7 @@ openai_compatible_providers: Final[list[str]] = [
     "hosted_vllm",
     "llamafile",
     "lm_studio",
+    "foundry_local",
     "galadriel",
     "zerogpu",
     "github_copilot",  # GitHub Copilot Chat API

@@ -21,6 +21,18 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("should resolve Foundry Local for the model form and provider display", () => {
+    expect(resolveLitellmProviderSlug("FOUNDRY_LOCAL")).toBe("foundry_local");
+    expect(getProviderLogoAndName("foundry_local")).toEqual({
+      displayName: "Foundry Local",
+      logo: providerLogoMap[Providers.FOUNDRY_LOCAL],
+    });
+    expect(getProviderLogoAndName("foundry_local").logo).toContain("foundry_local");
+    expect(PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "FOUNDRY_LOCAL")?.litellm_provider).toBe(
+      "foundry_local",
+    );
+  });
+
   it("should identify the upstream LiteLLM Gateway consistently with provider metadata", () => {
     const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "LITELLM_PROXY");
     expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe(metadata?.litellm_provider);
