@@ -15409,6 +15409,8 @@ async def _provider_token_count(
 
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
     estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
+    if not settings.use_token_counting_api and local_estimate_allowed:
+        return None
     count_model: Final = settings.count_model
     counting_model: Final = (
         model_to_use

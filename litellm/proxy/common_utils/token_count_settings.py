@@ -59,6 +59,7 @@ class TokenCountSettings:
     tool_framing: int | None = None
     responses_framing: int | None = None
     responses_tool_framing: int | None = None
+    use_token_counting_api: bool = True
 
     @property
     def frames_counts(self) -> bool:
@@ -197,6 +198,16 @@ def _tokenizer(value: object) -> TokenCountTokenizer | None:
             return None
 
 
+def _use_token_counting_api(value: object) -> bool:
+    match value:
+        case bool():
+            return value
+        case str():
+            return value.strip().lower() != "false"
+        case _:
+            return True
+
+
 def resolve_token_count_settings(
     configured: Mapping[str, object], default: Mapping[str, object], deployment_region: Callable[[], str]
 ) -> TokenCountSettings:
@@ -215,6 +226,7 @@ def resolve_token_count_settings(
             "token_count_responses_framing",
             "token_count_tool_framing",
         ),
+        use_token_counting_api=_use_token_counting_api(configured.get("use_token_counting_api")),
     )
 
 

@@ -255,6 +255,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     token_count_responses_tool_framing: ReadOnly[int | None]
     token_count_model: ReadOnly[TokenCountModelInfo | None]
     token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
+    use_token_counting_api: ReadOnly[bool | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -4333,6 +4334,7 @@ DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
         "token_count_responses_framing",
         "token_count_responses_tool_framing",
         "token_count_model",
+        "use_token_counting_api",
     }
 )
 
