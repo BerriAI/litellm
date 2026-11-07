@@ -2393,6 +2393,31 @@ class TestPromptCacheOptionsOnResponsesPath:
         }
 
 
+@pytest.mark.parametrize("model", ["o1", "o3", "o3-mini", "o4-mini"])
+@pytest.mark.parametrize("temperature", [0, 0.5, 1])
+def test_o_series_temperature_is_dropped_like_chat_completions(model, temperature):
+    chat = litellm.get_optional_params(
+        model=model, custom_llm_provider="openai", temperature=temperature, drop_params=True
+    )
+    mapped = OpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params={"temperature": temperature},
+        model=model,
+        drop_params=True,
+    )
+    assert mapped.get("temperature") == chat.get("temperature")
+
+
+def test_o_series_temperature_raises_like_chat_completions_without_drop_params():
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(model="o3-mini", custom_llm_provider="openai", temperature=0.5)
+    with pytest.raises(litellm.UnsupportedParamsError):
+        OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model="o3-mini",
+            drop_params=False,
+        )
+
+
 class TestResponsesSurfaceSharesTheEffortRule:
     """The Responses API reaches the same gpt-5 models over a different wire, and the default
     /v1/messages bridge for openai models routes through it. It carried its own copy of the
