@@ -1,6 +1,7 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import copy
+import io
 import itertools
 import json
 import traceback
@@ -24,6 +25,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
@@ -39,6 +41,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
+from litellm.types.llms.openai import ChatCompletionThinkingBlock
 from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
@@ -149,6 +152,44 @@ class _ToolCallPart:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _ThinkingPiece:
+    text: str
+    signature: str
+    index: int | None
+
+    @staticmethod
+    def of(chunk: "ModelResponseStream") -> "_ThinkingPiece | None":
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1 or _optional_attr(choices[0], "finish_reason") is not None:
+            return None
+        delta: Final = _optional_attr(choices[0], "delta")
+        if _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+            return None
+        blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+        if not blocks:
+            reasoning: Final = _optional_str_attr(delta, "reasoning_content")
+            return _ThinkingPiece(text=reasoning, signature="", index=None) if reasoning else None
+        block: Final = as_str_mapping(blocks[0]) if len(blocks) == 1 else None
+        if block is None or block.get("type") != "thinking":
+            return None
+        text: Final = block.get("thinking")
+        signature: Final = block.get("signature")
+        index: Final = block.get("index")
+        return _ThinkingPiece(
+            text=text if isinstance(text, str) else "",
+            signature=signature if isinstance(signature, str) else "",
+            index=index if isinstance(index, int) else None,
+        )
+
+    def block(self, *, text: str, signature: str) -> ChatCompletionThinkingBlock:
+        if self.index is None:
+            return ChatCompletionThinkingBlock(type="thinking", thinking=text, signature=signature or None)
+        return ChatCompletionThinkingBlock(
+            type="thinking", thinking=text, signature=signature or None, index=self.index
+        )
+
+
 class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
@@ -177,6 +218,10 @@ class _CombinedChunkSplitter:
         self._buffer: deque[ModelResponseStream] = deque()
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
         self._live_call_index: int | None = None
+        self._held_signature: ModelResponseStream | None = None
+        self._unsigned_thinking = io.StringIO()
+        self._unsigned_thinking_length = 0
+        self._thinking_index: int | None = None
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -373,13 +418,71 @@ class _CombinedChunkSplitter:
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
 
+    @staticmethod
+    def _with_thinking_block(
+        chunk: "ModelResponseStream",
+        block: ChatCompletionThinkingBlock,
+        *,
+        keep_role: bool,
+    ) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
+        thinking: Final = block.get("thinking")
+        piece.choices[0].delta = Delta(role=role, reasoning_content=thinking or None, thinking_blocks=[block])
+        return piece
+
+    @staticmethod
+    def _with_reasoning_text(chunk: "ModelResponseStream", text: str) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None)
+        piece.choices[0].delta = Delta(role=role, reasoning_content=text)
+        return piece
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
         split_chunks: Final = tuple(
             split_chunk
             for combined_chunk in self._split(chunk)
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
-        return tuple(itertools.chain.from_iterable(self._route_tool_calls(split_chunk) for split_chunk in split_chunks))
+        signed_chunks: Final = tuple(itertools.chain.from_iterable(map(self._defer_signature, split_chunks)))
+        return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, signed_chunks)))
+
+    def _end_thinking_run(self) -> "tuple[ModelResponseStream, ...]":
+        held: Final = self._held_signature
+        self._held_signature = None
+        self._unsigned_thinking = io.StringIO()
+        self._unsigned_thinking_length = 0
+        self._thinking_index = None
+        return (held,) if held is not None else ()
+
+    def _defer_signature(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Stream a signed thinking chunk's new text as thinking and send its signature once, when the block ends.
+
+        Anthropic-shaped producers stream unsigned text and then sign it, either with no text or
+        restating the unsigned text, which passes through untouched. Mistral signs every chunk while
+        each one still carries new text, which would otherwise collapse into ``signature_delta``
+        events and lose the text.
+        """
+        piece: Final = _ThinkingPiece.of(chunk)
+        released: Final = self._end_thinking_run() if piece is None or piece.index != self._thinking_index else ()
+        if piece is None:
+            return (*released, chunk)
+        self._thinking_index = piece.index
+        if not piece.signature:
+            self._unsigned_thinking_length += self._unsigned_thinking.write(piece.text)
+            return (*released, chunk)
+        self._held_signature = None
+        if not piece.text or self._restates_unsigned_thinking(piece.text):
+            return (*released, chunk)
+        signature_chunk: Final = self._with_thinking_block(
+            chunk, piece.block(text="", signature=piece.signature), keep_role=False
+        )
+        self._clear_usage(signature_chunk)
+        self._held_signature = signature_chunk
+        return (*released, self._with_reasoning_text(chunk, piece.text))
+
+    def _restates_unsigned_thinking(self, text: str) -> bool:
+        return len(text) == self._unsigned_thinking_length and text == self._unsigned_thinking.getvalue()
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
@@ -414,7 +517,7 @@ class _CombinedChunkSplitter:
             try:
                 chunk = next(self._sync_iter)
             except StopIteration:
-                self._buffer.extend(self._release_held_calls())
+                self._buffer.extend((*self._end_thinking_run(), *self._release_held_calls()))
                 if not self._buffer:
                     raise
                 break
@@ -433,7 +536,7 @@ class _CombinedChunkSplitter:
             try:
                 chunk = await self._async_iter.__anext__()
             except StopAsyncIteration:
-                self._buffer.extend(self._release_held_calls())
+                self._buffer.extend((*self._end_thinking_run(), *self._release_held_calls()))
                 if not self._buffer:
                     raise
                 break
