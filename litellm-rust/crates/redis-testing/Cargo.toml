@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+pkcs8 = { version = "0.10.2", features = ["encryption", "pem", "std"] }
+rcgen = "0.14.10"
+tempfile.workspace = true
 testcontainers-modules = { workspace = true, features = ["redis"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "sync", "time"] }

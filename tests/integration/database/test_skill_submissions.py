@@ -134,6 +134,8 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     assert current is not None
     published_manifest: Final = {
         **case.proposal.manifest,
+        "_litellm_review": {"approved_by": "integration-reviewer", "security_scan_passed": False},
+        "_litellm_published_by": "integration-reviewer",
         "source": {
             **TypeAdapter(dict[str, str]).validate_python(case.submission.proposal.manifest["source"]),
             "url": f"https://skills.example.test/claude-code/plugins/{case.original.name}/archive/"
@@ -148,17 +150,22 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     )
     metadata: Final = await case.publications.get_metadata(case.original.name)
     assert metadata is not None
+    assert metadata.created_by == before.created_by == case.original.created_by
+    assert metadata.created_at == before.created_at
+    assert metadata.updated_at is not None and before.updated_at is not None
+    assert metadata.updated_at > before.updated_at
     assert await case.publications.get_content(metadata) == case.proposal.content
     history: Final = await case.publications.versions(metadata, 10, 0)
     assert tuple((version.version, version.description, version.archive_available) for version in history) == (
         ("1.0.1", case.proposal.description, True),
         ("1.0.0", case.original.description, True),
     )
+    assert history[0].published_by == "integration-reviewer"
+    assert history[1].published_by == case.original.created_by
     for version, publication, manifest in zip(
-        history, (case.proposal, case.original), (published_manifest, case.original.manifest), strict=True
+        history, (case.proposal, case.original), (published_manifest, {**case.original.manifest, "_litellm_published_by": case.original.created_by}), strict=True
     ):
         assert version.manifest == {**manifest, "version": version.version}
-        assert version.published_by == publication.created_by
         assert await case.publications.version_content(metadata, version.id) == publication.content
 
 

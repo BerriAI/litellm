@@ -7,12 +7,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma's generated delegates are dynamic
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginReview,
     PublishedPlugin,
     uploaded_plugin_source,
 )
@@ -312,7 +313,9 @@ class SkillSubmissionRepository:
                     if approve and content is not None and publication_base_url
                     else _SOURCE.validate_python(submission.proposal.manifest.get("source"))
                 )
-                publication: Final = await _publish_submission(transaction, row, source, content) if approve else None
+                publication: Final = (
+                    await _publish_submission(transaction, row, source, content, reviewer) if approve else None
+                )
                 if isinstance(publication, PluginPublicationError):
                     return publication
                 reviewed_at: Final = datetime.now(timezone.utc)
@@ -346,6 +349,7 @@ async def _publish_submission(
     row: "prisma_models.LiteLLM_SkillSubmission",
     source: Mapping[str, str],
     content: bytes | None,
+    reviewer: str,
 ) -> PublishedPlugin | PluginPublicationError:
     stored: Final = _StoredProposal.model_validate_json(row.proposal_json)
     proposal: Final = stored.proposal(row.plugin_name)
@@ -363,6 +367,24 @@ async def _publish_submission(
             manifest={**stored.manifest, "source": dict(source)},
             content=content,
             created_by=row.submitted_by,
+            review=PluginReview(reviewer, scan_passed_for_archive(row.scan_json, source.get("sha256"))),
         ),
         base,
+    )
+
+
+def scan_passed_for_archive(scan_json: str | None, digest: str | None) -> bool:
+    if not scan_json or not digest:
+        return False
+    try:
+        scan: Final = SkillScan.model_validate_json(scan_json)
+    except ValidationError:
+        return False
+    return (
+        scan.status == "completed"
+        and scan.archive_sha256 == digest
+        and scan.report is not None
+        and scan.report.complete
+        and scan.report.risk_score == 0
+        and not scan.report.findings
     )

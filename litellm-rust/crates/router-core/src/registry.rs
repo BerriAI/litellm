@@ -234,6 +234,23 @@ impl Deployment {
 
     /// `_deployment_supports_web_search`: `model_info.supports_web_search` when it is set, read
     /// for truthiness, else true.
+    /// `is_batch_capable`: declared `model_info.mode: batch`.
+    pub(crate) fn is_batch_capable(&self) -> bool {
+        self.model_info.raw.get("mode").and_then(Value::as_str) == Some("batch")
+    }
+
+    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
+    /// its `custom_llm_provider`, else its model's provider prefix.
+    pub(crate) fn cannot_run_batches(&self) -> bool {
+        let provider = self.params.custom_llm_provider.as_deref().or_else(|| {
+            self.params
+                .model
+                .split_once('/')
+                .map(|(provider, _)| provider)
+        });
+        matches!(provider, Some("azure" | "azure_ai")) && !self.is_batch_capable()
+    }
+
     pub(crate) fn supports_web_search(&self) -> bool {
         self.model_info
             .raw
