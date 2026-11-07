@@ -290,6 +290,23 @@ async fn a_resumed_fetch_with_no_attempts_left_returns_the_failure_it_resumed() 
 }
 
 #[rstest]
+#[tokio::test]
+async fn a_failure_reason_drops_url_credentials() {
+    let upstream = Upstream::serve(vec![Answer::Raw(NOT_FOUND)]);
+    let address = upstream.base.trim_start_matches("http://");
+    let target = target(&format!(
+        "http://user:hunter2@{address}/cost.json?X-Amz-Signature=sig-secret#frag"
+    ));
+    let failed = fetched(&target, POLICY, Start::Fresh).await.unwrap_err();
+    assert_eq!(failed.reason, format!("HTTP 404 from {}", upstream.url()));
+    let debug = format!("{target:?}");
+    for secret in ["user", "hunter2", "sig-secret", "frag"] {
+        assert!(!debug.contains(secret), "{debug}");
+    }
+    assert!(debug.contains(&upstream.url()), "{debug}");
+}
+
+#[rstest]
 #[case::unsupported_scheme("ftp://example.com/cost.json")]
 #[case::not_a_url("not a url")]
 #[case::s3_without_a_key("s3://prices")]

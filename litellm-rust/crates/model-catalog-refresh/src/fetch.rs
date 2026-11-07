@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::fmt;
 use std::time::Duration;
 
 use litellm_error::Report;
@@ -12,11 +14,21 @@ use litellm_s3::S3Uri;
 
 use crate::{Attempts, Cause, Error, Failure, Fetched, Reply, RetryPolicy, Source, Step};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Target {
     pub url: String,
     pub aws_region: String,
     pub aws_endpoint_url: Option<String>,
+}
+
+impl fmt::Debug for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Target")
+            .field("url", &redacted(&self.url))
+            .field("aws_region", &self.aws_region)
+            .field("aws_endpoint_url", &self.aws_endpoint_url)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,7 +100,7 @@ async fn retry(
                 s3_attempt(client, credentials, target, object, attempts.timeout()).await
             }
         };
-        let reason = describe(&reply, &target.url);
+        let reason = describe(&reply, &redacted(&target.url));
         let attempt = attempts.made() + 1;
         match attempts.next(reply, rand::random()) {
             Step::Sleep(wait) => {
@@ -203,7 +215,7 @@ fn describe(reply: &Reply, url: &str) -> String {
 
 impl Failed {
     fn of(target: &Target, s3: bool, failure: &Failure) -> Self {
-        let url = &target.url;
+        let url = redacted(&target.url);
         let cause = match &failure.cause {
             Cause::Status(status) => format!("HTTP {status} from {url}"),
             Cause::Transport(error) if s3 => {
@@ -222,4 +234,24 @@ impl Failed {
             retry_after: failure.retry_after,
         }
     }
+}
+
+/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials. Any other URL is shown as
+/// written, as main showed it
+fn redacted(url: &str) -> Cow<'_, str> {
+    let Ok(mut parsed) = Url::parse(url) else {
+        return Cow::Borrowed(url);
+    };
+    if parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+    {
+        return Cow::Borrowed(url);
+    }
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    Cow::Owned(parsed.into())
 }
