@@ -27,17 +27,19 @@ def test_bare_alias_expands_to_its_cost_map_owner() -> None:
     assert expand_model_latest_alias(alias) == (alias, target)
 
 
-def test_latest_aliases_come_from_cost_map_alias_rows() -> None:
+def test_latest_aliases_price_and_route_like_their_targets() -> None:
     aliases: Final = get_model_latest_aliases()
     assert aliases
     for provider, provider_aliases in aliases.items():
         for alias, target in provider_aliases.items():
             prefixed: Final = f"{provider}/{alias}"
             alias_key: Final = prefixed if prefixed in litellm.model_cost else alias
+            target_key: Final = f"{provider}/{target}" if f"{provider}/{target}" in litellm.model_cost else target
             entry: Final = litellm.model_cost[alias_key]
-            assert entry.names[0].removeprefix(f"{provider}/") == target
-            assert entry is litellm.model_cost[entry.names[0]]
             assert (entry["litellm_provider"], entry["mode"]) == (provider, "chat")
+            assert entry == litellm.model_cost[target_key]
+            alias_info: Final = {**litellm.get_model_info(prefixed), "key": target}
+            assert alias_info == {**litellm.get_model_info(f"{provider}/{target}"), "key": target}
             assert litellm.get_llm_provider(prefixed)[:2] == (target, provider)
             assert litellm.get_llm_provider(alias, custom_llm_provider=provider)[:2] == (target, provider)
 
