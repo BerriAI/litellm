@@ -8809,7 +8809,7 @@ def test_validate_tool_choice_cursor_format():
         {"type": "invalid"},
         {"type": "function"},
         {"name": "lookup_fruit"},
-        {"type": "file_search"},
+        {"type": "web_search_tool"},
     ],
 )
 def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
@@ -8821,6 +8821,23 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "web_search"},
+        {"type": "web_search_preview"},
+        {"type": "file_search"},
+        {"type": "code_interpreter"},
+        {"type": "mcp", "server_label": "docs", "name": "search"},
+    ],
+    ids=lambda choice: str(choice["type"]),
+)
+def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: dict[str, object]):
+    """Forcing an OpenAI hosted tool is a Responses API choice the bridge sends as is, so validation leaves it alone."""
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
