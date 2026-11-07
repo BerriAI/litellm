@@ -358,16 +358,17 @@ def _burst(
     *,
     rejected_model: str = CRAFTED_MODEL,
 ) -> tuple[_BurstResult, ...]:
+    nonce: Final = uuid.uuid4().hex
     crafted: Final = tuple(
         (f"crafted-{path}-{index}", path, _body(path, rejected_model, uuid.uuid4().hex, stream=index % 2 == 1), open_key)
         for path in (CHAT, MESSAGES, RESPONSES)
         for index in range(4)
     )
     happy: Final = tuple(
-        (f"happy-{index}", CHAT, _body(CHAT, happy_model, f"happy-{index}"), happy_key) for index in range(8)
+        (f"happy-{index}", CHAT, _body(CHAT, happy_model, f"happy-{index}-{nonce}"), happy_key) for index in range(8)
     )
     late: Final = tuple(
-        (f"late-{index}", CHAT, _body(CHAT, happy_model, f"late-{index}"), happy_key) for index in range(8)
+        (f"late-{index}", CHAT, _body(CHAT, happy_model, f"late-{index}-{nonce}"), happy_key) for index in range(8)
     )
     with (
         ThreadPoolExecutor(max_workers=28) as pool,
@@ -427,6 +428,7 @@ def test_killing_one_worker_mid_burst_leaves_the_other_serving_crafted_and_happy
         open_key: Final = scenario.key()
         control: Final = _burst(client, model, key, open_key, lambda: None, rejected_model=BENIGN_288KB_MODEL)
         assert all(result.status == (400 if result.label.startswith("crafted") else 200) for result in control), control
+        wire.drain()
         workers: Final = owned.worker_pids()
         assert len(workers) == 2, workers
         victim: Final = min(workers)
@@ -438,6 +440,8 @@ def test_killing_one_worker_mid_burst_leaves_the_other_serving_crafted_and_happy
             _assert_burst_rejections_fast(results, control)
             late: Final = tuple(result for result in results if result.label.startswith("late"))
             assert all(result.status == 200 for result in late), late
+            seen: Final = tuple(request.body.decode() for request in wire.drain())
+            assert all(any(f"normalized error audit {result.label}-" in body for body in seen) for result in late), seen
             _assert_rows_land_exactly_once(results, "late")
             survivor: Final = tuple(pid for pid in owned.worker_pids() if pid != victim)
             assert survivor, "no worker left serving"
