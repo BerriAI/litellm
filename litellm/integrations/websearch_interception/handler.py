@@ -1315,6 +1315,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _resolve_max_tokens(
         optional_params: dict,
         kwargs: dict,
+        client_max_tokens: int | None = None,
     ) -> int:
         """Extract max_tokens and validate against thinking.budget_tokens.
 
@@ -1323,7 +1324,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         max_tokens: int = optional_params.get(
             "max_tokens",
-            kwargs.get("max_tokens", 1024),
+            kwargs.get("max_tokens", 1024 if client_max_tokens is None else client_max_tokens),
         )
         thinking_param: Final = optional_params.get("thinking")
         if thinking_param and isinstance(thinking_param, dict):
@@ -1466,9 +1467,16 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Correlation context for structured logging
         _call_id: Final = getattr(logging_obj, "litellm_call_id", None) or kwargs.get("litellm_call_id", "unknown")
 
-        full_model_name = model  # safe default before try block
+        agentic_view: Final[_AgenticLoopParamsView] = {
+            "agentic_loop_params": {}
+            if logging_obj is None
+            else logging_obj.model_call_details.get("agentic_loop_params", {})
+        }
+        full_model_name: Final = agentic_view["agentic_loop_params"].get("model", model)
 
-        max_tokens: Final = self._resolve_max_tokens(anthropic_messages_optional_request_params, kwargs)
+        max_tokens: Final = self._resolve_max_tokens(
+            anthropic_messages_optional_request_params, kwargs, agentic_view["agentic_loop_params"].get("max_tokens")
+        )
 
         verbose_logger.debug("WebSearchInterception: Using max_tokens=%s for follow-up request", max_tokens)
 
@@ -1477,11 +1485,6 @@ class WebSearchInterceptionLogger(CustomLogger):
         }
         kwargs_for_followup: Final = self._prepare_followup_kwargs(kwargs)
 
-        if logging_obj is not None:
-            agentic_view: Final[_AgenticLoopParamsView] = {
-                "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params", {})
-            }
-            full_model_name = agentic_view["agentic_loop_params"].get("model", model)
         verbose_logger.debug(
             "WebSearchInterception: Built anthropic request patch [call_id=%s model=%s messages=%d searches=%d]",
             _call_id,

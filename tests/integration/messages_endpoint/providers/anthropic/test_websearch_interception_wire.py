@@ -510,3 +510,105 @@ def test_empty_exa_search_reaches_the_model_without_the_exa_response_envelope(ga
         assert envelope["requestId"] not in response.text, response.text
         targets: Final = tuple((request.method, urlsplit(request.target).path) for request in wire.drain())
         assert targets[-3:] == (("POST", "/v1/messages"), ("POST", "/exa/search"), ("POST", "/v1/messages")), targets
+
+
+@pytest.mark.parametrize(
+    ("stream", "bedrock_model", "thinking"),
+    [
+        pytest.param(False, BEDROCK_MODEL, None, id="non-streaming"),
+        pytest.param(True, BEDROCK_MODEL, None, id="streaming"),
+        pytest.param(
+            False,
+            "us.anthropic.claude-opus-5-5",
+            {"type": "enabled", "budget_tokens": 8000},
+            id="adaptive-model-with-a-thinking-budget-above-max-tokens",
+        ),
+    ],
+)
+def test_web_search_follow_up_call_keeps_the_client_max_tokens(
+    gateway: Gateway, tmp_path: Path, stream: bool, bedrock_model: str, thinking: dict[str, object] | None
+) -> None:
+    invoke_target: Final = f"/model/{bedrock_model}/invoke"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST", request.target
+        body: Final = json.loads(request.body)
+        if request.target == SEARCH_TARGET:
+            return Reply(body=json.dumps({"query": body["query"], "results": [SEARCH_RESULT]}).encode())
+        assert request.target == invoke_target, request.target
+        searched: Final = any(
+            isinstance(message["content"], list)
+            and any(block["type"] == "tool_result" for block in message["content"])
+            for message in body["messages"]
+        )
+        content: Final = (
+            [{"type": "text", "text": "the long answer"}]
+            if searched
+            else [{"type": "tool_use", "id": "toolu_0", "name": "litellm_web_search", "input": {"query": "q"}}]
+        )
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "msg_max_tokens",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": bedrock_model,
+                    "content": content,
+                    "stop_reason": "end_turn" if searched else "tool_use",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 4},
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["search_tools"] = [
+            {
+                "search_tool_name": "integration-search",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "synthetic-tavily-key",
+                    "api_base": wire.url + "/tavily",
+                },
+            }
+        ]
+        config["litellm_settings"].update(
+            {
+                "callbacks": ["websearch_interception"],
+                "websearch_interception_params": {
+                    "enabled_providers": ["bedrock"],
+                    "search_tool_name": "integration-search",
+                },
+            }
+        )
+        path: Final = tmp_path / "websearch-max-tokens.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model=f"bedrock/{bedrock_model}",
+                api_key="synthetic-bedrock-token",
+                api_base=wire.url,
+                aws_region_name="us-east-1",
+                aws_bedrock_runtime_endpoint=wire.url,
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 4000,
+                    "stream": stream,
+                    "messages": [{"role": "user", "content": "search and answer at length"}],
+                    "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+                    **({"thinking": thinking} if thinking else {}),
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert "the long answer" in response.text, response.text
+        upstream: Final = wire.drain()
+        assert [request.target for request in upstream] == [invoke_target, SEARCH_TARGET, invoke_target]
+        assert [json.loads(request.body)["max_tokens"] for request in upstream if request.target == invoke_target] == [
+            4000,
+            4000,
+        ]

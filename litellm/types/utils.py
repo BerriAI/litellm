@@ -283,6 +283,9 @@ class AgenticLoopParams(TypedDict, total=False):
     custom_llm_provider: str
     """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
+    max_tokens: ReadOnly[int]
+    """The max_tokens of the /v1/messages request this round came from, removed from the params the hooks receive"""
+
 
 class OffPeakWindow(TypedDict, total=False):
     """One off-peak rule: UTC time-of-day windows, optionally restricted to weekdays.

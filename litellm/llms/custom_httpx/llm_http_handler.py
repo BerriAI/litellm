@@ -2,6 +2,7 @@ import asyncio
 import copy
 import inspect
 import json
+import re
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -30,7 +31,7 @@ from h2.events import ConnectionTerminated
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
@@ -45,6 +46,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import BadRequestError
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import (
@@ -424,6 +426,51 @@ def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Respons
             raise
         verbose_logger.warning(_GOAWAY_RETRY_MESSAGE)
         return send()
+
+
+_CONTEXT_LIMIT_OVERFLOW: Final = re.compile(r"exceed context limit: (\d+) \+ \d+ > (\d+)")
+
+
+def _first_max_tokens(*candidates: object) -> int:
+    return next((candidate for candidate in candidates if isinstance(candidate, int)), 1024)
+
+
+class _ThinkingBudget(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget_tokens: int = 0
+
+
+def _thinking_budget_tokens(thinking: object) -> int:
+    try:
+        return _ThinkingBudget.model_validate(thinking).budget_tokens
+    except ValidationError:
+        return 0
+
+
+def _max_tokens_that_fit(error: BadRequestError, thinking_budget_tokens: int) -> int | None:
+    overflow: Final = _CONTEXT_LIMIT_OVERFLOW.search(str(error))
+    if overflow is None:
+        return None
+    room: Final = int(overflow.group(2)) - int(overflow.group(1))
+    return room if room > max(thinking_budget_tokens, 0) else None
+
+
+async def _acreate_within_context_window(
+    create: Callable[[Mapping[str, int]], Awaitable[_ResponseT]],
+    thinking_budget_tokens: int,
+) -> _ResponseT:
+    try:
+        return await create({})
+    except BadRequestError as error:
+        fitting_max_tokens: Final = _max_tokens_that_fit(error, thinking_budget_tokens)
+        if fitting_max_tokens is None:
+            raise
+        verbose_logger.warning(
+            "Agentic follow-up does not fit the context window, retrying once with max_tokens=%d",
+            fitting_max_tokens,
+        )
+        return await create({"max_tokens": fitting_max_tokens})
 
 
 def _is_sized_json_body(response: httpx.Response) -> bool:
@@ -6143,25 +6190,25 @@ class BaseLLMHTTPHandler:
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
 
-        full_model_name = model
-        if logging_obj is not None:
-            agentic_view: Final[_AgenticLoopParamsView] = {
-                "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params", {})
-            }
-            full_model_name = agentic_view["agentic_loop_params"].get("model", model)
+        agentic_view: Final[_AgenticLoopParamsView] = {
+            "agentic_loop_params": {}
+            if logging_obj is None
+            else logging_obj.model_call_details.get("agentic_loop_params", {})
+        }
+        full_model_name: Final = agentic_view["agentic_loop_params"].get("model", model)
 
-        optional_params: Final = dict(anthropic_messages_optional_request_params)
+        optional_params: Final = _JSON_OBJECT.validate_python(anthropic_messages_optional_request_params)
         optional_params.update(patch.optional_params)
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
 
-        max_tokens = patch.max_tokens
-        if max_tokens is None:
-            max_tokens = cast(int | None, optional_params.pop("max_tokens", None))
-        else:
-            optional_params.pop("max_tokens", None)
-        if max_tokens is None:
-            max_tokens = cast(int, kwargs.get("max_tokens", 1024))
+        optional_max_tokens: Final = optional_params.pop("max_tokens", None)
+        max_tokens: Final = _first_max_tokens(
+            patch.max_tokens,
+            optional_max_tokens,
+            _OPTIONAL_PARAMS.validate_python(kwargs).get("max_tokens"),
+            agentic_view["agentic_loop_params"].get("max_tokens"),
+        )
 
         internal_keys: Final = {"litellm_logging_obj"}
         kwargs_for_followup: Final = {
@@ -6177,15 +6224,22 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = [*fingerprints, fingerprint]
 
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
-            **{
-                "max_tokens": max_tokens,
-                "messages": patch.messages,
-                "model": patch.model or full_model_name,
-                "stream": stream,
-                **optional_params,
-                **kwargs_for_followup,
-            }
+        async def send_follow_up(overrides: Mapping[str, int]) -> AnthropicMessagesResponse | AsyncIterator[object]:
+            return await anthropic_messages.acreate(
+                **{
+                    "max_tokens": max_tokens,
+                    "messages": patch.messages,
+                    "model": patch.model or full_model_name,
+                    "stream": stream,
+                    **optional_params,
+                    **kwargs_for_followup,
+                    **overrides,
+                }
+            )
+
+        follow_up_params: Final = _OPTIONAL_PARAMS.validate_python({**optional_params, **kwargs_for_followup})
+        response: AnthropicMessagesResponse | AsyncIterator[object] = await _acreate_within_context_window(
+            send_follow_up, _thinking_budget_tokens(follow_up_params.get("thinking"))
         )
 
         if callback is not None:

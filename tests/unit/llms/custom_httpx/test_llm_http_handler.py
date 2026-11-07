@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpcore
@@ -69,6 +69,7 @@ from litellm.responses.streaming_iterator import (
     MockResponsesAPIStreamingIterator,
 )
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -2669,6 +2670,266 @@ class _FakeWebsocketsModule:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+_LOOKUP_CALL: Final = {"type": "tool_use", "id": "toolu_lookup", "name": "lookup", "input": {"q": "answer"}}
+_LOOKUP_TOOL: Final = {
+    "name": "lookup",
+    "description": "look a fact up",
+    "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+}
+
+
+def _answer_after_the_lookup(request: httpx.Request) -> httpx.Response:
+    looked_up: Final = b'"tool_result"' in request.content
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_lookup",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "the answer"}] if looked_up else [_LOOKUP_CALL],
+            "stop_reason": "end_turn" if looked_up else "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 5, "output_tokens": 3},
+        },
+    )
+
+
+def _messages_with_the_lookup_result(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        *messages,
+        {"role": "assistant", "content": [_LOOKUP_CALL]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_lookup", "content": "42"}]},
+    ]
+
+
+def _without_the_logging_obj(kwargs: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in kwargs.items() if key != "litellm_logging_obj"}
+
+
+class _LookupLoop(CustomLogger):
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return isinstance(response, dict) and response.get("stop_reason") == "tool_use", {}
+
+
+class _OwnMaxTokensLoop(_LookupLoop):
+    def __init__(self, spreads: Literal["params", "kwargs"]) -> None:
+        super().__init__()
+        self.spreads: Final = spreads
+
+    async def async_run_agentic_loop(
+        self,
+        tools: dict[str, object],
+        model: str,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict[str, object],
+    ) -> object:
+        spread: Final = (
+            {"api_key": "sk-ant-test", **anthropic_messages_optional_request_params}
+            if self.spreads == "params"
+            else _without_the_logging_obj(kwargs)
+        )
+        return await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-haiku-5-5",
+            messages=_messages_with_the_lookup_result(messages),
+            max_tokens=300,
+            **spread,  # pyright: ignore[reportArgumentType]  # a hook forwards the request's params as they arrive
+        )
+
+
+class _PlannedLoop(_LookupLoop):
+    def __init__(
+        self, max_tokens: int | None, kwargs_max_tokens: int | None = None, model: str = "anthropic/claude-haiku-5-5"
+    ) -> None:
+        super().__init__()
+        self.max_tokens: Final = max_tokens
+        self.kwargs_max_tokens: Final = kwargs_max_tokens
+        self.model: Final = model
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: dict[str, object],
+        model: str,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict[str, object],
+    ) -> AgenticLoopPlan:
+        own_kwargs: Final = {} if self.kwargs_max_tokens is None else {"max_tokens": self.kwargs_max_tokens}
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model=self.model,
+                messages=_messages_with_the_lookup_result(messages),
+                max_tokens=self.max_tokens,
+                kwargs={**_without_the_logging_obj(kwargs), **own_kwargs},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hook", "follow_up_max_tokens"),
+    [
+        pytest.param(_OwnMaxTokensLoop(spreads="params"), 300, id="hook-spreads-the-params-with-its-own-max-tokens"),
+        pytest.param(_OwnMaxTokensLoop(spreads="kwargs"), 300, id="hook-spreads-the-kwargs-with-its-own-max-tokens"),
+        pytest.param(_PlannedLoop(max_tokens=None), 4000, id="plan-leaves-max-tokens-to-the-client"),
+        pytest.param(_PlannedLoop(max_tokens=300), 300, id="plan-sets-its-own-max-tokens"),
+        pytest.param(_PlannedLoop(max_tokens=None, kwargs_max_tokens=300), 300, id="plan-sets-max-tokens-in-kwargs"),
+    ],
+)
+async def test_agentic_follow_up_uses_the_client_max_tokens_unless_the_hook_sets_its_own(
+    hook: CustomLogger,
+    follow_up_max_tokens: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_answer_after_the_lookup
+    )
+
+    result: Final = await litellm.anthropic.messages.acreate(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "look the answer up"}],
+        max_tokens=4000,
+        api_key="sk-ant-test",
+        tools=[_LOOKUP_TOOL],
+    )
+
+    assert isinstance(result, dict)
+    assert result["content"] == [{"type": "text", "text": "the answer"}]
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, follow_up_max_tokens]
+
+
+def _follow_up_rejected_above(max_tokens_that_fit: int, message: str) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        requested: Final = json.loads(request.content)["max_tokens"]
+        if b'"tool_result"' not in request.content or requested <= max_tokens_that_fit:
+            return _answer_after_the_lookup(request)
+        return httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": message.format(requested=requested)},
+            },
+        )
+
+    return answer
+
+
+_LEGACY_THINKING_MODEL: Final = "anthropic/claude-sonnet-4-5"
+_ROOM_LEFT_IS_1500: Final = (
+    "input length and `max_tokens` exceed context limit: 198500 + {requested} > 200000, "
+    "decrease input length or `max_tokens` and try again"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "thinking",
+    [
+        pytest.param(None, id="without-thinking"),
+        pytest.param({"type": "enabled", "budget_tokens": 1499}, id="thinking-budget-below-the-room-left"),
+    ],
+)
+async def test_agentic_follow_up_over_the_context_window_retries_with_the_room_left(
+    thinking: AnthropicThinkingParam | None, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_PlannedLoop(max_tokens=None, model=_LEGACY_THINKING_MODEL)])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_follow_up_rejected_above(1500, _ROOM_LEFT_IS_1500)
+    )
+
+    result: Final = await litellm.anthropic.messages.acreate(
+        model=_LEGACY_THINKING_MODEL,
+        messages=[{"role": "user", "content": "look the answer up"}],
+        max_tokens=4000,
+        api_key="sk-ant-test",
+        tools=[_LOOKUP_TOOL],
+        thinking=thinking,
+    )
+
+    assert isinstance(result, dict)
+    assert result["content"] == [{"type": "text", "text": "the answer"}]
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, 4000, 1500]
+
+
+@pytest.mark.asyncio
+async def test_agentic_follow_up_over_the_context_window_keeps_the_error_when_the_thinking_budget_fills_the_room(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_PlannedLoop(max_tokens=None, model=_LEGACY_THINKING_MODEL)])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_follow_up_rejected_above(1500, _ROOM_LEFT_IS_1500)
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="exceed context limit: 198500 \\+ 4000 > 200000"):
+        await litellm.anthropic.messages.acreate(
+            model=_LEGACY_THINKING_MODEL,
+            messages=[{"role": "user", "content": "look the answer up"}],
+            max_tokens=4000,
+            api_key="sk-ant-test",
+            tools=[_LOOKUP_TOOL],
+            thinking={"type": "enabled", "budget_tokens": 1500},
+        )
+
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, 4000]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("prompt is too long: 201000 tokens > 200000 maximum", id="input-alone-over-the-window"),
+        pytest.param(
+            "input length and `max_tokens` exceed context limit: 200500 + {requested} > 200000, "
+            "decrease input length or `max_tokens` and try again",
+            id="no-room-left-for-any-output",
+        ),
+    ],
+)
+async def test_agentic_follow_up_over_the_context_window_fails_when_no_output_fits(
+    message: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_PlannedLoop(max_tokens=None)])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_follow_up_rejected_above(0, message)
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "look the answer up"}],
+            max_tokens=4000,
+            api_key="sk-ant-test",
+            tools=[_LOOKUP_TOOL],
+        )
+
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, 4000]
 
 
 @pytest.mark.asyncio
