@@ -68030,7 +68030,9 @@
         "input_cost_per_image": 0.06,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "supported_endpoints": [
             "/v1/images/generations"
         ],
