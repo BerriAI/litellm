@@ -86,12 +86,12 @@ defect, no AI-slop comments.
 
 ### `tests/unit/`
 
-- [ ] 5.1 Per-deployment keying, unit (heap separation): a
+- [x] 5.1 Per-deployment keying, unit (heap separation): a
       `Scheduler` with a `deployment_id`-keyed `FlowItem` places the
       entry in a separate heap from another deployment in the same
       group. A release on deployment A wakes only deployment A's
       poller. Assert heap separation and targeted wakeup.
-- [ ] 5.2 Per-deployment keying, unit (slot-aware poll): `poll` for
+- [x] 5.2 Per-deployment keying, unit (slot-aware poll): `poll` for
       the per-deployment path is called while the target deployment's
       `in_flight` is at its `max_parallel_requests`, it returns False.
       The moment `in_flight` drops below `max_parallel_requests` it
