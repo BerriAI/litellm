@@ -1,6 +1,6 @@
 """litellm.sandbox: code-interpreter providers (see main.py) plus harness sandboxes.
 
-`sandbox.local(path)` and `sandbox.docker(image, ...)` re-export litellm.harness.sandbox.
+`sandbox.local(path)`, `sandbox.docker(image, ...)` and `sandbox.prized(...)` re-export litellm.harness.sandbox.
 They resolve lazily so `import litellm` does not pull in litellm.harness.
 """
 
@@ -15,8 +15,10 @@ _HARNESS_EXPORTS: Final = frozenset(
     {
         "local",
         "docker",
+        "prized",
         "LocalSandbox",
         "DockerSandbox",
+        "PrizedSandbox",
         "Sandbox",
         "Process",
         "CompletedRun",
