@@ -353,9 +353,13 @@ def _message_point_ordinal(point: CacheControlMessageInjectionPoint) -> int | No
         return None
 
 
-def _placed_on_the_final_message_list(point: CacheControlMessageInjectionPoint) -> bool:
+def _counts_back_from_the_end(point: CacheControlMessageInjectionPoint) -> bool:
     ordinal: Final = _message_point_ordinal(point)
-    return point.get("index") is None or (ordinal is not None and ordinal < 0)
+    return ordinal is not None and ordinal < 0
+
+
+def _placed_on_the_final_message_list(point: CacheControlMessageInjectionPoint) -> bool:
+    return point.get("index") is None or _counts_back_from_the_end(point)
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -444,17 +448,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
         # of them in one pass is what lets config order decide the shared breakpoint
-        # budget. A negative ordinal is deferred too, since the final list only grows at
-        # the front and its tail holds the tool calls and results missing here. A
-        # non-negative ordinal names a different message once a later layer prepends one,
-        # so it is placed here or not at all.
+        # budget. A negative ordinal is deferred too, since the final list's tail holds the
+        # tool calls and results missing here, and it keeps its slot in this pass so an
+        # ordinal after it in config order cannot take it. A non-negative ordinal names a
+        # different message once a later layer prepends one, so it is placed here or not at all.
         carried_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
             tuple(point for point in message_points if _placed_on_the_final_message_list(point))
             if carry_unmatched
             else ()
         )
-        applied_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
-            tuple(point for point in message_points if not _placed_on_the_final_message_list(point))
+        first_pass_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
+            tuple(point for point in message_points if point.get("index") is not None)
             if carry_unmatched
             else tuple(message_points)
         )
@@ -470,11 +474,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             processed_messages, answered_tool_ids=answered_tool_ids
         )
         processed_messages = self._apply_message_injections(
-            points=applied_message_points,
+            points=first_pass_message_points,
             messages=processed_messages,
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
+            placed_by_a_later_pass=_counts_back_from_the_end if carry_unmatched else None,
         )
         if (
             openai_dialect
@@ -621,6 +626,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         max_blocks: int,
         openai_dialect: bool = False,
         answered_tool_ids: frozenset[str] | None = None,
+        placed_by_a_later_pass: Callable[[CacheControlMessageInjectionPoint], bool] | None = None,
     ) -> list[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -629,7 +635,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         limit, so we never inject onto a message that already carries
         cache_control (preserving the client's TTL) and we stop injecting once
         ``max_blocks`` is reached. Injection points are honored in config order,
-        so earlier points win when slots are scarce.
+        so earlier points win when slots are scarce. A point
+        ``placed_by_a_later_pass`` marks nothing here but keeps its slot.
         """
         client_answers: Final = (
             _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages)
@@ -645,6 +652,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             if used_blocks >= max_blocks:
                 limit_reached = True
                 break
+
+            if placed_by_a_later_pass is not None and placed_by_a_later_pass(point):
+                used_blocks += 1
+                continue
 
             control: ChatCompletionCachedContent = point.get("control", None) or ChatCompletionCachedContent(
                 type="ephemeral"

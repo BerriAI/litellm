@@ -5,6 +5,7 @@ in expected_responses_api_request/.
 """
 
 import copy
+import itertools
 import json
 from pathlib import Path
 from importlib import import_module
@@ -883,7 +884,7 @@ async def test_injection_points_reach_a_foundry_deployment_of_an_openai_model(mo
     assert "cache_control_injection_points" not in body
 
 
-async def _bridged_body(mock_post, *, points, input, instructions="You are a documentation assistant."):
+async def _bridged_body(mock_post, *, points, input, instructions="You are a documentation assistant.", tools=None):
     injected_client = AsyncHTTPHandler()
     injected_client.post = mock_post
 
@@ -893,6 +894,7 @@ async def _bridged_body(mock_post, *, points, input, instructions="You are a doc
         instructions=instructions,
         input=copy.deepcopy(input),
         cache_control_injection_points=copy.deepcopy(points),
+        tools=tools,
         client=injected_client,
     )
     return _sent_body(mock_post)
@@ -948,7 +950,7 @@ async def test_positional_points_address_the_input_item_the_caller_indexed(instr
 
 @pytest.mark.asyncio
 async def test_out_of_bounds_positional_points_are_not_revived_by_a_longer_list():
-    """An ordinal addresses the list in front of the pass that reads it.
+    """A non-negative ordinal counts the caller's `input` messages.
 
     Carrying one forward would re-resolve it against the bridge's longer list, where an
     index that named nothing in the caller's `input` can land on a real message -- the
@@ -989,6 +991,44 @@ async def test_end_relative_points_mark_the_tool_results_that_follow_the_last_me
         if "cache_control" in json.dumps(block)
     ]
     assert marked_blocks == ["call_b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("indices", "expected"),
+    [
+        pytest.param((-1, 0), ["call_a"], id="end-relative-point-first"),
+        pytest.param((0, -1), ["u0"], id="positional-point-first"),
+    ],
+)
+async def test_the_ordinal_point_listed_first_takes_the_last_breakpoint_slot(indices, expected):
+    mock_post: Final = AsyncMock(return_value=MockResponse(_ANTHROPIC_MESSAGES_PAYLOAD, 200))
+    body: Final = await _bridged_body(
+        mock_post,
+        points=[{"location": "message", "index": index} for index in indices],
+        input=[
+            {"role": "user", "content": [{"type": "input_text", "text": "u0"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "u1"}]},
+            {"type": "function_call", "call_id": "call_a", "name": "t0", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_a", "output": "out a"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "name": name,
+                "parameters": {"type": "object", "properties": {}},
+                "cache_control": {"type": "ephemeral"},
+            }
+            for name in ("t0", "t1", "t2")
+        ],
+    )
+
+    marked_blocks: Final = [
+        block.get("tool_use_id") or block.get("text")
+        for block in itertools.chain.from_iterable(message["content"] for message in body["messages"])
+        if "cache_control" in block
+    ]
+    assert marked_blocks == expected
 
 
 @pytest.mark.asyncio

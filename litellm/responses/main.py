@@ -66,6 +66,7 @@ from litellm.types.responses.streaming_websocket import ResponsesWebSocketReques
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import all_litellm_params
 from litellm.utils import (
+    LITELLM_ONLY_PARAMS,
     ProviderConfigManager,
     client,
 )
@@ -457,6 +458,7 @@ def _bridge_kwargs(
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
+            *LITELLM_ONLY_PARAMS,
             *(allowed_openai_params or ()),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
