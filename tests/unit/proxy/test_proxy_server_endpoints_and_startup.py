@@ -1656,6 +1656,8 @@ class MockPrisma:
         self.database_url = database_url
         self.proxy_logging_obj = proxy_logging_obj
         self.http_client = http_client
+        self.writer_db = MagicMock()
+        self.writer_db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     async def connect(self):
         pass
