@@ -168,6 +168,7 @@ def test_anthropic_completion_adds_extra_body_fields_top_level_without_overridin
                 "model": "claude-opus-5-5",
                 "messages": [{"role": "user", "content": "unchecked"}],
                 "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
                 "max_tokens": 4096,
             },
         )

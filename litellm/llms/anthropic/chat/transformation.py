@@ -181,7 +181,7 @@ _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system"})
+_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
