@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterable, Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -85,7 +85,7 @@ def _coerce_int(value: object, default: int) -> int:
     return int(value) if isinstance(value, (int, str)) else default
 
 
-def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[str]]:
+def _agentic_loop_settings(kwargs: Mapping[str, object]) -> tuple[int, int, list[str]]:
     depth: Final = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
     configured: Final = validated_max_agentic_loops(
         kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
@@ -334,7 +334,10 @@ async def maybe_run_chat_completion_agentic_loop(
     import litellm
 
     callbacks: Final = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
-    request_kwargs: Final = with_caller_tool_choice(kwargs, optional_params)
+    requested_optional_params: Final = cast(  # cast-ok: optional_params is a str-keyed dict
+        "Mapping[str, object]", optional_params
+    )
+    request_kwargs: Final = with_caller_tool_choice(kwargs, requested_optional_params)
     depth, max_loops, fingerprints = _agentic_loop_settings(request_kwargs)
     tools: Final = optional_params.get("tools", [])
 

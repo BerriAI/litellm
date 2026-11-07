@@ -5965,8 +5965,6 @@ class BaseLLMHTTPHandler:
             else False
         )
         if websearch_converted_stream and isinstance(response, dict):
-            from typing import cast
-
             from litellm._logging import verbose_logger
             from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
                 FakeAnthropicMessagesStreamIterator,
@@ -6209,6 +6207,7 @@ class BaseLLMHTTPHandler:
         callbacks: Final = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
         tools: Final = optional_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
+        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is a str-keyed dict
 
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
@@ -6243,7 +6242,7 @@ class BaseLLMHTTPHandler:
 
             # Safety guards must run OUTSIDE the callback try/except — they are
             # bounded-loop / cycle-break rails that must propagate to the caller.
-            refuse_a_call_the_choice_excludes(response, kwargs, callbacks, model)
+            refuse_a_call_the_choice_excludes(response, request_kwargs, callbacks, model)
             fingerprint = self._check_agentic_loop_safety(
                 tool_calls=tool_calls,
                 fingerprints=fingerprints,
