@@ -228,6 +228,25 @@ class SpanEmitter:
 
     # -- the engine ---------------------------------------------------------- #
 
+    def _map_data(self, data: SpanData) -> tuple[Mapping[str, AttrValue], Mapping[str, AttrValue]]:
+        configured: Final = {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
+        for_langfuse: Final = (
+            dict(
+                sorted(
+                    self._langfuse.map(data).items(),
+                    key=lambda item: item[0] not in LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
+                )
+            )
+            if self._langfuse is not None and ExporterOwner.LANGFUSE_OTEL in destination_backends()
+            else _NO_ATTRIBUTES
+        )
+        return {**configured, **for_langfuse}, for_langfuse
+
+    def map_attributes(self, data: SpanData) -> Mapping[str, AttrValue]:
+        """Run the configured mapper chain on ``data`` without creating a span."""
+        mapped, _ = self._map_data(data)
+        return mapped
+
     def emit(
         self,
         role: SpanRole,
@@ -299,18 +318,8 @@ class SpanEmitter:
             )
             else None
         )
-        configured: Final = {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
-        for_langfuse: Final = (
-            dict(
-                sorted(
-                    self._langfuse.map(data).items(),
-                    key=lambda item: item[0] not in LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
-                )
-            )
-            if self._langfuse is not None and ExporterOwner.LANGFUSE_OTEL in destination_backends()
-            else _NO_ATTRIBUTES
-        )
-        mapped: Final = MappingProxyType({**configured, **for_langfuse})
+        raw_mapped, for_langfuse = self._map_data(data)
+        mapped: Final = MappingProxyType(raw_mapped)
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
         overwrites: Final = carried_keys(span) & mapped.keys()

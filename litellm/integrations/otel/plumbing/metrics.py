@@ -380,6 +380,11 @@ class GenAIMetricRecorder:
             return {k: v for k, v in attrs.items() if k not in self._exclude}
         return attrs
 
+    def bounded_attributes_for_context(self, kwargs: Mapping[str, object]) -> Mapping[str, str]:
+        """Return bounded, filtered metric attributes suitable for publishing to an outer GenAI context data object."""
+        filtered: Final = self._filter_attributes(self._bounded_attributes(kwargs))
+        return {k: v for k, v in filtered.items() if isinstance(v, str) and v}
+
     # ------------------------------------------------------------------ #
     #  Per-metric recording
     # ------------------------------------------------------------------ #
