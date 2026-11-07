@@ -1,6 +1,9 @@
 use axum::{
     extract::{FromRequestParts, MatchedPath, Request, State},
-    http::{header::AUTHORIZATION, request::Parts},
+    http::{
+        header::{AUTHORIZATION, AsHeaderName},
+        request::Parts,
+    },
     middleware::Next,
     response::Response,
 };
@@ -20,20 +23,40 @@ impl CredentialExtractor for Bearer {
     }
 }
 
+pub struct BearerOrXApiKey;
+
+impl CredentialExtractor for BearerOrXApiKey {
+    fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
+        if parts.headers.contains_key(AUTHORIZATION) {
+            return Bearer.extract(parts);
+        }
+        single(parts, "x-api-key")
+            .and_then(token)
+            .map(Credential::Token)
+    }
+}
+
 fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
-    let mut values = parts.headers.get_all(AUTHORIZATION).iter();
+    single(parts, AUTHORIZATION)?
+        .strip_prefix("Bearer ")
+        .ok_or(Error::InvalidToken)
+        .and_then(token)
+}
+
+fn single(parts: &Parts, name: impl AsHeaderName) -> Result<&str, Error> {
+    let mut values = parts.headers.get_all(name).iter();
     let value = values.next().ok_or(Error::InvalidToken)?;
     if values.next().is_some() {
         return Err(Error::InvalidToken);
     }
-    let token = value
-        .to_str()
-        .ok()
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
+    value.to_str().map_err(|_| Error::InvalidToken)
+}
+
+fn token(value: &str) -> Result<SecretValue, Error> {
+    Some(value.trim())
         .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace()))
-        .ok_or(Error::InvalidToken)?;
-    Ok(SecretValue::new(token))
+        .map(SecretValue::new)
+        .ok_or(Error::InvalidToken)
 }
 
 pub async fn authenticate(
@@ -86,5 +109,41 @@ impl FromRequestParts<Auth> for RequireMasterKey {
         }
         parts.extensions.insert(identity);
         Ok(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Request;
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::x_api_key(&[("x-api-key", "key")], Some("key"))]
+    #[case::bearer(&[("authorization", "Bearer key")], Some("key"))]
+    #[case::bearer_wins(&[("authorization", "Bearer bearer"), ("x-api-key", "x")], Some("bearer"))]
+    #[case::invalid_bearer_does_not_fall_back(&[("authorization", "Basic key"), ("x-api-key", "x")], None)]
+    #[case::empty(&[("x-api-key", "")], None)]
+    #[case::inner_whitespace(&[("x-api-key", "a b")], None)]
+    #[case::duplicate(&[("x-api-key", "key"), ("x-api-key", "key")], None)]
+    #[case::missing(&[], None)]
+    fn bearer_or_x_api_key_reads_x_api_key_only_without_authorization(
+        #[case] headers: &[(&str, &str)],
+        #[case] expected: Option<&str>,
+    ) {
+        let (parts, ()) = headers
+            .iter()
+            .fold(Request::builder(), |request, (name, value)| {
+                request.header(*name, *value)
+            })
+            .body(())
+            .unwrap()
+            .into_parts();
+        let token = match BearerOrXApiKey.extract(&parts) {
+            Ok(Credential::Token(token)) => Some(token.expose().to_owned()),
+            _ => None,
+        };
+        assert_eq!(token.as_deref(), expected);
     }
 }

@@ -34,27 +34,29 @@ fn inference() -> Arc<Gateway> {
 }
 
 #[rstest]
-#[case::authorized("/v1/messages", Some("Bearer gateway-key"), Some("gateway-key"), 400)]
-#[case::missing_token("/v1/messages", None, Some("gateway-key"), 401)]
-#[case::wrong_token("/v1/messages", Some("Bearer wrong"), Some("gateway-key"), 401)]
-#[case::ocr("/ocr", None, Some("gateway-key"), 401)]
-#[case::chat("/v1/chat/completions", None, Some("gateway-key"), 401)]
+#[case::authorized("/v1/messages", &[("authorization", "Bearer gateway-key")], Some("gateway-key"), 400)]
+#[case::x_api_key("/v1/messages", &[("x-api-key", "gateway-key")], Some("gateway-key"), 400)]
+#[case::wrong_x_api_key("/v1/messages", &[("x-api-key", "wrong")], Some("gateway-key"), 401)]
+#[case::missing_token("/v1/messages", &[], Some("gateway-key"), 401)]
+#[case::wrong_token("/v1/messages", &[("authorization", "Bearer wrong")], Some("gateway-key"), 401)]
+#[case::ocr("/ocr", &[], Some("gateway-key"), 401)]
+#[case::chat("/v1/chat/completions", &[], Some("gateway-key"), 401)]
 #[case::deployment(
     "/openai/deployments/model/chat/completions",
-    None,
+    &[],
     Some("gateway-key"),
     401
 )]
-#[case::transcription("/audio/transcriptions", None, Some("gateway-key"), 401)]
-#[case::unsupported_route("/responses", None, Some("gateway-key"), 401)]
-#[case::unknown_path("/unknown", None, Some("gateway-key"), 404)]
-#[case::unknown_path_unconfigured("/unknown", None, None, 404)]
-#[case::unconfigured("/v1/messages", Some("Bearer gateway-key"), None, 500)]
+#[case::transcription("/audio/transcriptions", &[], Some("gateway-key"), 401)]
+#[case::unsupported_route("/responses", &[], Some("gateway-key"), 401)]
+#[case::unknown_path("/unknown", &[], Some("gateway-key"), 404)]
+#[case::unknown_path_unconfigured("/unknown", &[], None, 404)]
+#[case::unconfigured("/v1/messages", &[("authorization", "Bearer gateway-key")], None, 500)]
 #[tokio::test]
 async fn authenticates_before_serving_mounted_inference_routes(
     inference: Arc<Gateway>,
     #[case] path: &str,
-    #[case] authorization: Option<&str>,
+    #[case] headers: &[(&str, &str)],
     #[case] master_key: Option<&str>,
     #[case] status: u16,
 ) {
@@ -87,10 +89,9 @@ async fn authenticates_before_serving_mounted_inference_routes(
         .timeout(Duration::from_secs(5))
         .header("x-request-id", "gateway-test")
         .json(&json!({"model": "unconfigured-model"}));
-    let request = match authorization {
-        Some(value) => request.header("authorization", value),
-        None => request,
-    };
+    let request = headers.iter().fold(request, |request, (name, value)| {
+        request.header(*name, *value)
+    });
     let response = request.send().await.unwrap();
     assert_eq!(response.status().as_u16(), status);
     if status == 400 {

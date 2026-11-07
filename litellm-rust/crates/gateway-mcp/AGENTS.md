@@ -2,7 +2,7 @@
 
 Native MCP routing using the official [Rust SDK](https://github.com/modelcontextprotocol/rust-sdk), pinned to `rmcp 3.4.1`. The crate exposes a mountable Axum router and an SDK `ServerHandler`
 
-The HTTP router serves `/mcp`, `/{server}/mcp`, `/mcp/{server}`, `/mcp/{server}/mcp`, legacy `/mcp/sse` and `/mcp/sse/messages`, `/mcp/enabled`, and `/mcp-rest/tools/list` and `/mcp-rest/tools/call`. Streamable HTTP supports stateless requests and legacy initialize/session flows. The caller supplies the shutdown token, allowed hosts, allowed origins, and server identity through `HttpConfig`
+The HTTP router serves `/mcp`, `/{server}/mcp`, `/mcp/{server}`, `/mcp/{server}/mcp`, legacy `/mcp/sse` and `/mcp/sse/messages`, `/mcp/enabled`, and `/mcp-rest/tools/list` and `/mcp-rest/tools/call`. `routes` returns the protocol routes and the `/mcp-rest` routes apart so a host can authenticate each group its own way, and `router` merges them. Streamable HTTP supports stateless requests and legacy initialize/session flows. The caller supplies the shutdown token, allowed hosts, allowed origins, and server identity through `HttpConfig`
 
 `NativeGateway` aggregates upstream tools, prompts, resources, and resource templates. Tool and prompt calls resolve registered server prefixes, including prefixes containing hyphens. Resource names receive prefixes while their URIs remain unchanged, and reads require exactly one selected server. Tool allowlists apply to discovery and execution. Upstream pagination is drained with cycle detection. Aggregate tool listings retain healthy servers and expose sanitized outcomes under `_meta["litellm.ai/server_outcomes"]`, while scoped REST listings preserve upstream failures
 

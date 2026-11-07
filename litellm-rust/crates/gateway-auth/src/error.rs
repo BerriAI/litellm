@@ -6,7 +6,7 @@ use litellm_error::Source;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("missing or invalid bearer token")]
+    #[error("missing or invalid API key")]
     InvalidToken,
     #[error("invalid UI credentials or session")]
     InvalidSession,
