@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
@@ -85,7 +86,37 @@ func upsertLiteLLMFallback(d *schema.ResourceData, m interface{}, action string)
 	}
 
 	d.SetId(d.Get("model").(string))
-	return resourceLiteLLMFallbackRead(d, m)
+	return retryFallbackRead(d, m, 5)
+}
+
+// retryFallbackRead reads the fallback back after a write, retrying with backoff while the read
+// clears the ID. Behind a load balancer the read can reach a proxy replica that has not loaded the
+// new fallback yet and answers 404 (eventual consistency, same as retryModelRead).
+func retryFallbackRead(d *schema.ResourceData, m interface{}, maxRetries int) error {
+	delay := 1 * time.Second
+	maxDelay := 10 * time.Second
+	model := d.Id()
+
+	for i := 0; i < maxRetries; i++ {
+		if err := resourceLiteLLMFallbackRead(d, m); err != nil {
+			return err
+		}
+		if d.Id() != "" {
+			return nil
+		}
+		d.SetId(model)
+
+		if i < maxRetries-1 {
+			log.Printf("[INFO] Fallback for model %s not found yet (eventual consistency), retrying in %v...", model, delay)
+			time.Sleep(delay)
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+	}
+
+	return fmt.Errorf("fallback for model %s was written but not found after %d read attempts; re-running apply should resolve this", model, maxRetries)
 }
 
 func resourceLiteLLMFallbackCreate(d *schema.ResourceData, m interface{}) error {
