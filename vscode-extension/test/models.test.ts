@@ -85,6 +85,10 @@ describe("describeModels", () => {
       name: "gpt-5.6",
       family: "gpt-5.6",
       detail: "$4.00 in / $20.00 out per 1M tokens",
+      inputCost: 4,
+      outputCost: 20,
+      pricing: "$4.00 in / $20.00 out per 1M tokens",
+      priceCategory: "high",
       maxInputTokens: 922000,
       maxOutputTokens: 128000,
       imageInput: true,
@@ -136,6 +140,12 @@ describe("describeModels", () => {
     expect(models.map((model) => model.id)).toEqual(["unlabeled", "gpt-5.6"]);
   });
 
+  it("includes responses mode groups", () => {
+    const models = describeModels(parsed(gatewayGroup({ model_group: "responses-model", mode: "responses" })));
+    expect(models.map((model) => model.id)).toEqual(["responses-model"]);
+    expect(models[0]?.maxInputTokens).toBeGreaterThanOrEqual(100000);
+  });
+
   it("falls back to assumed context limits and says so", () => {
     const [model] = describeModels(parsed(gatewayGroup({ max_input_tokens: null, max_output_tokens: null })));
     expect(model).toMatchObject({ maxInputTokens: ASSUMED_MAX_INPUT_TOKENS, maxOutputTokens: ASSUMED_MAX_OUTPUT_TOKENS });
@@ -151,9 +161,12 @@ describe("describeModels", () => {
       ),
     );
     expect(both?.detail).toBe("No pricing configured");
+    expect(both?.inputCost).toBeUndefined();
+    expect(both?.pricing).toBeUndefined();
     expect(both?.tooltip).toContain("Input: no price configured");
     expect(inputOnly?.detail).toBe("$4.00 in / n/a out per 1M tokens");
     expect(free?.detail).toBe("$0.00 in / $0.00 out per 1M tokens");
+    expect(free).toMatchObject({ pricing: "$0.00 in / $0.00 out per 1M tokens", priceCategory: "low" });
   });
 });
 
