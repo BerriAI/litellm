@@ -7,7 +7,7 @@ an ordered set of top K tools based on semantic similarity.
 
 import asyncio
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 

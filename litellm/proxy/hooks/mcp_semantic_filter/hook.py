@@ -24,6 +24,8 @@ from litellm.proxy.mcp_server.semantic_tool_filter import (
 )
 
 if TYPE_CHECKING:
+    from openai.types.responses.function_tool_param import FunctionToolParam
+
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.semantic_tool_filter import (
@@ -57,7 +59,7 @@ class _OpenAIToolLoader(Protocol):
         *,
         user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
-    ) -> Awaitable[tuple[Sequence[object], Mapping[str, str]]]: ...
+    ) -> Awaitable[tuple[Sequence["FunctionToolParam"], Mapping[str, str]]]: ...
 
 
 class _PydanticTool(Protocol):
@@ -155,7 +157,7 @@ class SemanticToolFilterHook(CustomLogger):
         if not mcp_tools:
             return []
 
-        load_openai_tools: Final = (
+        load_openai_tools: Final[_OpenAIToolLoader] = (
             LiteLLM_Proxy_MCP_Handler.process_mcp_tools_to_openai_format
             if self._load_openai_tools is None
             else self._load_openai_tools
