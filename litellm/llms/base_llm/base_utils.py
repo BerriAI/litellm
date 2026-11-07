@@ -5,7 +5,6 @@ Utility functions for base LLM classes.
 import copy
 import itertools
 import json
-import math
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
@@ -14,7 +13,7 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its system member by the role literal
 
 from litellm._logging import verbose_logger
@@ -196,6 +195,7 @@ class ResponseFormatSchema:
 
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
+_FINITE_JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue], config=ConfigDict(allow_inf_nan=False))
 _NAMES: Final = TypeAdapter(frozenset[str])
 
 
@@ -206,19 +206,11 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
         return None
 
 
-def _finite_float(literal: str) -> float:
-    number: Final = float(literal)
-    if math.isinf(number):
-        raise ValueError(f"{literal} overflows a float")
-    return number
-
-
 def decoded_json_object(text: str) -> Mapping[str, JsonValue] | None:
     try:
-        decoded: Final = _DECODED_JSON.validate_python(json.loads(text, parse_float=_finite_float))
+        return _FINITE_JSON_OBJECT.validate_python(json.loads(text))
     except (ValueError, RecursionError):
         return None
-    return as_json_object(decoded)
 
 
 def _names(value: object) -> frozenset[str]:
