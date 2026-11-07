@@ -1955,10 +1955,10 @@ async def test_proxy_startup_after_a_failed_migration_does_not_reuse_the_closed_
     async with proxy_startup_event(FastAPI()) as state:
         assert state["database"] is None
 
-
 @pytest.mark.asyncio
 async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
     from fastapi import FastAPI
+
 
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
@@ -5696,27 +5696,15 @@ def _content_policy_router(**router_kwargs: object) -> litellm.Router:
         model_list=[
             {
                 "model_name": "primary",
-                "litellm_params": {
-                    "model": "openai/gpt-5.4-mini",
-                    "api_key": "fake",
-                    "mock_response": "primary answered",
-                },
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
             },
             {
                 "model_name": "secondary",
-                "litellm_params": {
-                    "model": "openai/gpt-5.4-mini",
-                    "api_key": "fake",
-                    "mock_response": "secondary answered",
-                },
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "secondary answered"},
             },
             {
                 "model_name": "backup",
-                "litellm_params": {
-                    "model": "openai/gpt-5.4-nano",
-                    "api_key": "fake",
-                    "mock_response": "backup answered",
-                },
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
             },
         ],
         num_retries=0,
@@ -5796,9 +5784,7 @@ async def test_db_content_policy_fallbacks_layer_over_the_litellm_settings_rules
     "invalid_rule",
     [{"secondary": "backup"}, ["backup"], dict[str, list[str]](), {"secondary": ["backup"], "primary": ["secondary"]}],
 )
-async def test_an_invalid_db_content_policy_rule_skips_only_itself(
-    monkeypatch: pytest.MonkeyPatch, invalid_rule: object
-):
+async def test_an_invalid_db_content_policy_rule_skips_only_itself(monkeypatch: pytest.MonkeyPatch, invalid_rule: object):
     monkeypatch.setattr(litellm, "content_policy_fallbacks", [{"primary": ["backup"]}])
     router: Final = _content_policy_router()
 
