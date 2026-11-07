@@ -508,3 +508,12 @@ def map_developer_role_to_system_role(
     """
     keep_cache_control: Final = _request_keeps_developer_cache_control(messages, other_request_fields)
     return [_developer_message_as_system_message(message, keep_cache_control) for message in messages]
+
+
+def map_developer_role_to_system_role_for_batch(
+    messages: Sequence[AllMessageValues],
+) -> list[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role in batch records, which drop a developer message's cache mark.
+    """
+    return [_developer_message_as_system_message(message, keep_cache_control=False) for message in messages]

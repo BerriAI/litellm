@@ -4989,6 +4989,23 @@ def test_system_injection_point_caches_a_developer_prompt_on_bedrock_converse(
     assert _count_converse_cache_points(sent_bodies[-1]) == 1
 
 
+def test_auto_prompt_caching_caches_a_developer_prompt_on_bedrock_converse(local_model_cost_map: None) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        enable_prompt_caching=True,
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+
+
 @pytest.mark.parametrize(
     "developer_content",
     [
