@@ -7,7 +7,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 
 from datetime import datetime
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
@@ -49,10 +49,12 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
 
     model_config = ConfigDict(protected_namespaces=())
 
+
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if values.get("spend") is None:
+        spend = values.get("spend")
+        if spend is None or (isinstance(spend, (int, float)) and spend < 0):
             values.update({"spend": 0.0})
         if values.get("models") is None:
             values.update({"models": []})

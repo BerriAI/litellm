@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from typing import Final, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -86,6 +86,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 class LiteLLM_TeamTable(TeamBase):
     team_id: str
     spend: float | None = None
+
     max_parallel_requests: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
@@ -121,6 +122,10 @@ class LiteLLM_TeamTable(TeamBase):
 
         if isinstance(values.get("members_with_roles"), dict) and not values["members_with_roles"]:
             values["members_with_roles"] = []
+
+        spend = values.get("spend")
+        if spend is not None and isinstance(spend, (int, float)) and spend < 0:
+            values["spend"] = 0.0
 
         for field in dict_fields:
             value = values.get(field)

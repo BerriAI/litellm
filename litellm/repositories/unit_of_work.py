@@ -39,6 +39,14 @@ class KeySpendResetWrites:
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
+    def queue_clamp_negative_spend(self, tokens: Sequence[str]) -> None:
+        if not tokens:
+            return
+        self.table.update_many(
+            where={"token": {"in": list(tokens)}, "spend": {"lt": 0}},
+            data={"spend": 0},
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class UserSpendResetWrites:
@@ -50,6 +58,14 @@ class UserSpendResetWrites:
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
+    def queue_clamp_negative_spend(self, user_ids: Sequence[str]) -> None:
+        if not user_ids:
+            return
+        self.table.update_many(
+            where={"user_id": {"in": list(user_ids)}, "spend": {"lt": 0}},
+            data={"spend": 0},
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class TeamSpendResetWrites:
@@ -59,6 +75,14 @@ class TeamSpendResetWrites:
         self.table.update(
             where={"team_id": team_id},
             data=_spend_reset_data(budget_reset_at, spend_decrement),
+        )
+
+    def queue_clamp_negative_spend(self, team_ids: Sequence[str]) -> None:
+        if not team_ids:
+            return
+        self.table.update_many(
+            where={"team_id": {"in": list(team_ids)}, "spend": {"lt": 0}},
+            data={"spend": 0},
         )
 
 
