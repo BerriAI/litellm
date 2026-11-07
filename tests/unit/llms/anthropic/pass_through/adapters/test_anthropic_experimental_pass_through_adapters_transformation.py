@@ -1,6 +1,7 @@
 import base64
 import functools
 import json
+import logging
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -5492,25 +5493,40 @@ def _sent_reasoning_items(request: httpx.Request) -> list[object]:
 @pytest.mark.usefixtures("_chat_bridge_httpx")
 async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
     respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
         side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
     )
 
-    response: Final = await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
-        api_base=_RETRY_API_BASE,
-        api_key="fake-key",
-        api_version="2025-04-01-preview",
-        max_tokens=64,
-        tools=_RETRY_TOOLS,
-        messages=_history_with_foreign_reasoning(),
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="azure/gpt-5.4-nano",
+            api_base=_RETRY_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            max_tokens=64,
+            tools=_RETRY_TOOLS,
+            messages=_history_with_foreign_reasoning(),
+        )
 
+    warnings: Final = tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and record.name == "LiteLLM"
+    )
+    retry_warnings: Final = tuple(message for message in warnings if "retrying once without it" in message)
     assert route.call_count == 2
     assert len(_sent_reasoning_items(route.calls[0].request)) == 1
     assert _sent_reasoning_items(route.calls[1].request) == []
     assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
+    assert retry_warnings == (
+        "Backend rejected replayed encrypted reasoning, retrying once without it. "
+        "provider=azure model=azure/gpt-5.4-nano status=400 code=invalid_encrypted_content",
+    )
+    assert all(
+        "gAAA_foreign" not in message and "litellm_encrypted_reasoning:" not in message for message in warnings
+    )
 
 
 @pytest.mark.usefixtures("_chat_bridge_httpx")

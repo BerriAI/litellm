@@ -83,15 +83,46 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
+def _provider_error_code(body: object) -> str | None:
+    mapping: Final = as_str_mapping(body)
+    if mapping is None:
+        return None
+    nested: Final = as_str_mapping(mapping.get("error"))
+    source: Final = nested if nested is not None else mapping
+    code: Final = source.get("code")
+    return code if isinstance(code, str) else None
+
+
+def _logged_rejection_code(error: litellm.BadRequestError) -> str:
+    if error.code == "invalid_encrypted_content" or _provider_error_code(error.body) == "invalid_encrypted_content":
+        return "invalid_encrypted_content"
+    if "invalid_encrypted_content" in str(error):
+        return "invalid_encrypted_content"
+    return "could_not_be_verified"
+
+
+def _completion_text(completion_kwargs: _CompletionKwargs, key: str) -> str:
+    value: Final = completion_kwargs.get(key)
+    return value if isinstance(value, str) else ""
+
+
 def _messages_without_rejected_reasoning(
     messages: _AnthropicMessages,
     error: litellm.BadRequestError,
+    completion_kwargs: _CompletionKwargs,
 ) -> "_AnthropicMessages | None":
     error_message: Final = str(error)
     rejected: Final = "invalid_encrypted_content" in error_message or "could not be verified" in error_message
     if not rejected or not messages_carry_encrypted_reasoning(messages):
         return None
-    verbose_logger.warning("Backend rejected replayed encrypted reasoning, retrying once without it: %s", error)
+    verbose_logger.warning(
+        "Backend rejected replayed encrypted reasoning, retrying once without it. "
+        "provider=%s model=%s status=%s code=%s",
+        _completion_text(completion_kwargs, "custom_llm_provider"),
+        _completion_text(completion_kwargs, "model"),
+        error.status_code,
+        _logged_rejection_code(error),
+    )
     return _ANTHROPIC_MESSAGES.validate_python(strip_encrypted_reasoning_blocks_from_anthropic_messages(messages))
 
 
@@ -103,7 +134,7 @@ async def _acompletion_without_rejected_reasoning(
     try:
         return await litellm.acompletion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error)
+        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error, completion_kwargs)
         if replayed_messages is None:
             raise
         return await litellm.acompletion(**prepare_replay(replayed_messages))
@@ -117,7 +148,7 @@ def _completion_without_rejected_reasoning(
     try:
         return litellm.completion(**completion_kwargs)
     except litellm.BadRequestError as error:
-        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error)
+        replayed_messages: Final = _messages_without_rejected_reasoning(messages, error, completion_kwargs)
         if replayed_messages is None:
             raise
         return litellm.completion(**prepare_replay(replayed_messages))
