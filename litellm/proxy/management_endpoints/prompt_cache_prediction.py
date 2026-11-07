@@ -101,7 +101,7 @@ async def predict_cache_cost(
     for deployment in (current, candidate):
         await can_key_call_resolved_model(
             model=deployment.model_name,
-            llm_model_list=llm_router.get_model_list(),
+            llm_model_list=llm_router.registry().deployments(),
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )

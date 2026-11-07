@@ -1,4 +1,6 @@
 import datetime
+import copy
+import logging
 from typing import Final
 import httpx
 import pytest
@@ -15,6 +17,8 @@ from litellm.llms.oci.chat.transformation import (
     OCIRequestWrapper,
     version,
 )
+from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload
+from litellm.types.llms.openai import AllMessageValues
 
 TEST_MODEL_NAME = "xai.grok-4"
 TEST_MODEL = f"oci/{TEST_MODEL_NAME}"
@@ -1103,19 +1107,25 @@ class TestOCIReasoningEffort:
         )
         assert chat_request.get("reasoningEffort") == "HIGH"
 
-    def test_reasoning_effort_unsupported_on_cohere_dropped(self):
-        """drop_params=True → silently drop reasoning_effort for Cohere."""
+    def test_reasoning_effort_unsupported_on_cohere_dropped_with_one_warning(self, caplog):
         from litellm.llms.oci.chat.transformation import OCIChatConfig
 
         config = OCIChatConfig()
-        result = config.map_openai_params(
-            non_default_params={"reasoning_effort": "low"},
-            optional_params={},
-            model="cohere.command-latest",
-            drop_params=True,
-        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=True,
+            )
+        drop_warnings = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
         assert "reasoning_effort" not in result
         assert "reasoningEffort" not in result
+        assert len(drop_warnings) == 1
+        assert all(
+            fragment in drop_warnings[0]
+            for fragment in ("reasoning_effort='low'", "cohere.command-latest", "(drop_params=True)")
+        )
 
     def test_reasoning_effort_unsupported_on_cohere_raises(self):
         """drop_params=False → raise rather than ship a payload Cohere will reject."""
@@ -2110,16 +2120,20 @@ class TestReasoningEffortGating:
         assert "reasoning_effort" not in OCIChatConfig().get_supported_openai_params("meta.llama-3.3-70b-instruct")
 
     @pytest.mark.parametrize("model", SERVED_GROK_4_20_MODELS)
-    def test_reasoning_effort_dropped_under_drop_params(self, local_model_cost_map, model):
-        result = OCIChatConfig().map_openai_params(
-            non_default_params={"reasoning_effort": "low", "temperature": 0.1},
-            optional_params={},
-            model=model,
-            drop_params=True,
-        )
+    def test_reasoning_effort_dropped_under_drop_params_with_one_warning(self, local_model_cost_map, model, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            result = OCIChatConfig().map_openai_params(
+                non_default_params={"reasoning_effort": "low", "temperature": 0.1},
+                optional_params={},
+                model=model,
+                drop_params=True,
+            )
+        drop_warnings = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
         assert "reasoningEffort" not in result
         assert "reasoning_effort" not in result
         assert result["temperature"] == 0.1
+        assert len(drop_warnings) == 1
+        assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='low'", model, "(drop_params=True)"))
 
     def test_reasoning_effort_raises_without_drop_params_for_gated_grok(self, local_model_cost_map, monkeypatch):
         monkeypatch.setattr(litellm, "drop_params", False)
@@ -2193,4 +2207,75 @@ def test_transform_request_sends_a_pdf_file_part_as_an_image_data_url() -> None:
                 {"type": "IMAGE", "imageUrl": {"url": pdf_data_url}},
             ],
         }
+    ]
+
+
+@pytest.mark.parametrize("model", ["google.gemini-2.5-flash", "oci/google.gemini-2.5-flash"])
+@pytest.mark.parametrize("multipart", [False, True])
+@pytest.mark.parametrize("interleaved", [False, True])
+def test_gemini_preserves_all_system_instructions(model: str, multipart: bool, interleaved: bool) -> None:
+    first: Final = "End every answer with PINEAPPLE."
+    second: Final = "Start every answer with BANANA."
+    conversation: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "Four."},
+    ]
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": first},
+        *(conversation if interleaved else []),
+        {"role": "system", "content": [{"type": "text", "text": second}] if multipart else second},
+        *(conversation if not interleaved else []),
+        {"role": "user", "content": "Repeat it."},
+    ]
+    original: Final = copy.deepcopy(messages)
+    payload: Final = OCICompletionPayload.model_validate(
+        OCIChatConfig().transform_request(
+            model=model,
+            messages=messages,
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+    )
+    chat: Final = payload.chatRequest
+    assert isinstance(chat, OCIChatRequestPayload)
+    assert [message.role for message in chat.messages] == ["SYSTEM", "USER", "ASSISTANT", "USER"]
+    assert chat.messages[0].model_dump(exclude_none=True) == {
+        "role": "SYSTEM",
+        "content": (
+            [{"type": "TEXT", "text": first}, {"type": "TEXT", "text": second}]
+            if multipart
+            else [{"type": "TEXT", "text": f"{first}\n\n{second}"}]
+        ),
+    }
+    assert [message.model_dump(exclude_none=True) for message in chat.messages[1:]] == [
+        {"role": "USER", "content": [{"type": "TEXT", "text": "What is 2+2?"}]},
+        {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "Four."}]},
+        {"role": "USER", "content": [{"type": "TEXT", "text": "Repeat it."}]},
+    ]
+    assert messages == original
+
+
+@pytest.mark.parametrize("model", ["xai.grok-4", "meta.llama-4-maverick"])
+def test_other_oci_models_preserve_system_message_positions(model: str) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Agent prompt."},
+        {"role": "user", "content": "Hello."},
+        {"role": "system", "content": "Conversation summary."},
+    ]
+    payload: Final = OCICompletionPayload.model_validate(
+        OCIChatConfig().transform_request(
+            model=model,
+            messages=messages,
+            optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+            litellm_params={},
+            headers={},
+        )
+    )
+    chat: Final = payload.chatRequest
+    assert isinstance(chat, OCIChatRequestPayload)
+    assert [message.model_dump(exclude_none=True) for message in chat.messages] == [
+        {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "Agent prompt."}]},
+        {"role": "USER", "content": [{"type": "TEXT", "text": "Hello."}]},
+        {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "Conversation summary."}]},
     ]

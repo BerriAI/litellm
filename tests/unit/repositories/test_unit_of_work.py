@@ -168,7 +168,8 @@ async def test_every_cascade_dependent_writes_to_its_own_table_on_the_one_batch(
         return batches[-1]
 
     async with budget_cascade_unit_of_work(_new_batch) as uow:
-        writes = [getattr(uow, field.name) for field in fields(uow)]
+        uow.row_locks.queue_row_locks(["budget-1"])
+        writes = [getattr(uow, field.name) for field in fields(uow) if field.name != "row_locks"]
         for write in writes:
             if isinstance(write, SpendResetWrites):
                 write.queue_spend_zero(where={"budget_id": "budget-1"})
@@ -177,8 +178,10 @@ async def test_every_cascade_dependent_writes_to_its_own_table_on_the_one_batch(
 
     assert len(batches) == 1, "the cascade must open exactly one transaction"
     batch = batches[0]
-    assert len(batch.calls) == len(writes), "a dependent bound to a batch of its own would not land here"
-    assert len({call[0] for call in batch.calls}) == len(writes), "two dependents share one table"
+    table_writes = [call for call in batch.calls if call[0] != "execute_raw"]
+    assert len(table_writes) == len(writes), "a dependent bound to a batch of its own would not land here"
+    assert len({call[0] for call in table_writes}) == len(writes), "two dependents share one table"
+    assert [call[0] for call in batch.calls].count("execute_raw") > 0, "the row locks share the cascade's batch"
     assert batch.commit_count == 1
 
 

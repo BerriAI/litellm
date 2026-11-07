@@ -9,11 +9,14 @@ from typing import Final, TypedDict
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+_ADAPTIVE_BUDGET_REASON: Final = "it is not an integer, so litellm sends adaptive thinking with no budget."
 
 
 class ThinkingPayload(TypedDict, total=False):
@@ -102,6 +105,10 @@ class TencentChatConfig(OpenAIGPTConfig):
         if isinstance(budget, int):
             coerced_with_budget: Final[ThinkingPayload] = {"type": "adaptive", "budget_tokens": budget}
             return coerced_with_budget
+        if budget is not None:
+            warn_dropped_reasoning(
+                "thinking.budget_tokens", budget, model, _ADAPTIVE_BUDGET_REASON, drop_params_gated=False
+            )
         coerced: Final[ThinkingPayload] = {"type": "adaptive"}
         return coerced
 

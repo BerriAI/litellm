@@ -15,11 +15,11 @@ import os
 import posixpath
 import re
 import sys
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
 
 import httpx
 import openai
@@ -31,7 +31,8 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     AWS_ERROR_TYPE_HEADER,
@@ -50,8 +51,14 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    anthropic_pass_through_api_base,
+    merge_anthropic_beta_headers,
+)
+from litellm.llms.azure.common_utils import entra_rejection_in
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
@@ -59,11 +66,16 @@ from litellm.llms.azure.passthrough.transformation import (
 from litellm.llms.bedrock.passthrough.transformation import is_bedrock_streaming_endpoint
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
+    DeepgramSpeakMeter,
     deepgram_listen_callback_params,
     deepgram_listen_is_priced,
     deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
+    deepgram_speak_character_rate,
+    deepgram_speak_registry_key,
+    deepgram_speak_requested_model,
+    deepgram_speak_websocket_target,
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
@@ -72,9 +84,15 @@ from litellm.llms.openai.common_utils import is_openai_agents_api_path, openai_a
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+from litellm.proxy.auth.auth_checks import (
+    can_agent_call_model,
+    can_key_call_resolved_model,
+    key_model_aliases_for_auth_check,
+    team_model_aliases_for_auth_check,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
@@ -82,6 +100,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
+    user_api_key_auth_accepted_websocket_for_model,
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
 )
@@ -91,6 +110,7 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -102,6 +122,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
@@ -117,14 +138,26 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_websocket_passthrough_logging_handler import (
+    openai_websocket_frame_kind,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    STORED_PROMPT_PROBE_MODEL,
     HttpPassThroughEndpointHelpers,
+    WebsocketFrameModelAllowed,
+    WebsocketFrameModelGate,
+    WebsocketFrameModelRefused,
+    WebsocketFrameModelVerdict,
+    WebsocketUpstreamFrameClassifier,
+    YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
+    refuse_websocket,
+    truncated_close_reason,
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
-from litellm.proxy.utils import is_known_model
+from litellm.proxy.utils import is_known_model, normalize_route_for_root_path
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
@@ -132,10 +165,12 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
+from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    WebSocketSessionMeter,
 )
 from litellm.types.passthrough_endpoints.tinyfish import (
     TINYFISH_AUTHENTICATED_RUN_FIELDS,
@@ -145,7 +180,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
@@ -182,7 +217,7 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
     """
     try:
         model: Final = request_body.get("model")
-        return is_known_model(model, llm_router)
+        return isinstance(model, str) and is_known_model(model, llm_router)
     except Exception:
         return False
 
@@ -201,7 +236,7 @@ def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
 
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
     return frozenset(
-        _deployment_model_name(row["litellm_params"]) for row in llm_router.get_model_list(model_name=model_group) or ()
+        _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
 
 
@@ -212,9 +247,8 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     A JSON body need not be an object, so a list or scalar can reach here; it
     carries no streaming flag.
     """
-    if not isinstance(request_body, dict):
-        return False
-    return bool(request_body.get("stream", False))
+    body: Final = as_str_mapping(request_body)
+    return body is not None and bool(body.get("stream", False))
 
 
 def _optional_str(value: object) -> str | None:
@@ -597,7 +631,7 @@ async def vllm_proxy_route(
         )
 
     return await llm_passthrough_factory_proxy_route(
-        endpoint=endpoint,
+        endpoint=endpoint_under_api_base(endpoint, get_secret_str("VLLM_API_BASE")),
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
@@ -712,6 +746,85 @@ def typesafe_allowlist_model_names() -> tuple[str, ...]:
         name for name in priced_names if match_routing_generalization(name) == "typesafe"
     )
     return ("typesafe/*", *jev_models_typesafe_serves)
+
+
+_EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
+    EuJevDecisionRequest,
+    {
+        "model": "eu-jeff-latest",
+        "state": "I was charged twice. Can I get a refund?",
+        "questions": {
+            "team": {
+                "type": "choice",
+                "instructions": "Which team should handle this?",
+                "criteria": {"billing": "Payments, invoices, and refunds", "support": "Technical issues and bugs"},
+            },
+            "is_refund_request": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+            "frustration": {
+                "type": "score",
+                "instructions": "How frustrated is the customer?",
+                "criteria": ["calm", "mildly annoyed", "angry"],
+            },
+        },
+    },
+)
+
+
+eu_jev_router: Final = APIRouter(route_class=YieldsToConfiguredPassThroughRoute)
+
+
+@eu_jev_router.post(
+    "/eu_jev/v1/systemone",
+    tags=["eu/jev Pass-through", "pass-through"],
+    responses={200: {"model": EuJevDecisionResponse}},
+    openapi_extra={"requestBody": _EU_JEV_DECISION_REQUEST_BODY},
+)
+async def eu_jev_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
+
+    `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
+    and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
+    `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+    """
+    body: Final = TypeAdapter(dict[str, object]).validate_python(await read_request_body(request))
+    if "custom_body" in body:
+        raise HTTPException(status_code=400, detail="custom_body is not supported for eu_jev requests")
+    if body.get("stream"):
+        raise HTTPException(status_code=400, detail="Streaming is not supported for eu_jev requests")
+    eu_jev_credentials: Final = passthrough_endpoint_router.get_proxy_wide_credentials(custom_llm_provider="eu_jev")
+    if eu_jev_credentials is None:
+        raise HTTPException(status_code=503, detail="eu_jev is not configured, set EU_JEV_API_KEY on the proxy")
+    base_url: Final = httpx.URL(
+        (eu_jev_credentials.api_base or get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com")
+        .rstrip("/")
+        .removesuffix("/v1")
+    )
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint="v1/systemone",
+        target=str(updated_url),
+        custom_headers={
+            "Authorization": f"Bearer {eu_jev_credentials.api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="eu_jev",
+        is_streaming_request=False,
+    )
+    return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
+        await endpoint_func(request, fastapi_response, user_api_key_dict)
+    )
+
+
+router.include_router(eu_jev_router)
 
 
 @router.post(
@@ -963,7 +1076,7 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
-    base_target_url = os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+    base_target_url = anthropic_pass_through_api_base()
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -1300,18 +1413,17 @@ async def handle_bedrock_count_tokens(
         litellm_params: Final = {"user_api_key_dict": user_api_key_dict}
         resolved_model = model  # Default fallback
 
-        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router else None
+        deployments: Final = llm_router.registry().deployments(model) if llm_router else None
         deployment: Final = deployments[0] if deployments else None
         if deployment is not None:
             model_litellm_params: Final = deployment.get("litellm_params", {})
 
-            # Get the resolved model ID from the configuration
             if "model" in model_litellm_params:
                 resolved_model = model_litellm_params["model"]
 
             # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
             for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                if key != "user_api_key_dict":
                     litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
@@ -1987,7 +2099,7 @@ async def transcribe_sdk_proxy_route(
     )
 
 
-def _resolve_vertex_model_from_router(
+async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
     encoded_endpoint: str,
@@ -2015,7 +2127,7 @@ def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
-        deployment: Final = llm_router.get_available_deployment_for_pass_through(model=model_id)
+        deployment: Final = await llm_router.select(model_id, kind="pass_through")
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
@@ -2270,6 +2382,16 @@ async def _relay_router_model(
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
+    except Exception as error:
+        rejection: Final = entra_rejection_in(error)
+        if rejection is None:
+            raise
+        raise ProxyException(
+            message=redact_internal_details_from_client_message(rejection.message),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=rejection.status_code,
+        ) from error
 
     if not is_streaming_request:
         return await _relay_upstream_response(cast(httpx.Response, result))
@@ -2336,7 +2458,9 @@ async def relay_nvidia_nim_request(
     request_body: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    model_group: Final = nvidia_nim_model_group_in_path(endpoint, llm_router.get_model_list()) if llm_router else None
+    model_group: Final = (
+        nvidia_nim_model_group_in_path(endpoint, llm_router.registry().deployments()) if llm_router else None
+    )
     if llm_router is None or model_group is None:
         rejection: Final[RelayRejection] = {
             "error": "no NVIDIA NIM model group in the path; call /nvidia_nim/{model_group}/v1/infer with a model "
@@ -3038,7 +3162,7 @@ async def _base_vertex_proxy_route(
                 vertex_project,
                 vertex_location,
                 deployment_model_info,
-            ) = _resolve_vertex_model_from_router(
+            ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
                 encoded_endpoint=encoded_endpoint,
@@ -3290,19 +3414,6 @@ def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm
     return joined_path_str
 
 
-_OPENAI_WS_ALL_MODEL_ACCESS: Final = frozenset(
-    {
-        SpecialModelNames.all_proxy_models.value,
-        SpecialModelNames.all_team_models.value,
-        "*",
-    }
-)
-
-
-def _has_model_restrictions(model_allowlists: tuple[Sequence[str], ...]) -> bool:
-    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for allowlist in model_allowlists for model in allowlist)
-
-
 @dataclass(frozen=True, slots=True)
 class _OpenAIWebsocketRefusal:
     close_reason: str
@@ -3319,19 +3430,21 @@ class _OpenAIWebsocketErrorFrame(TypedDict):
     error: ReadOnly[_OpenAIWebsocketErrorDetail]
 
 
+_OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL: Final = (
+    "This gateway could not authorize the model named in this frame, so the session was closed. Try again, "
+    "and ask a proxy admin to check the gateway logs if it keeps happening."
+)
+
+_OPENAI_WS_ALIASED_MODEL_REFUSAL: Final = (
+    "This key cannot use a model alias over OpenAI websocket passthrough. The passthrough sends each frame to "
+    "OpenAI unchanged, so name the model this key may use directly."
+)
+
 _OPENAI_WS_DISABLED_REFUSAL: Final = _OpenAIWebsocketRefusal(
     close_reason="OpenAI websocket passthrough is disabled",
     message=(
         "OpenAI websocket passthrough is disabled on this gateway. A proxy admin can turn it on by "
         "setting general_settings.enable_openai_websocket_passthrough to true."
-    ),
-)
-
-_OPENAI_WS_MODEL_RESTRICTED_REFUSAL: Final = _OpenAIWebsocketRefusal(
-    close_reason="Keys with model restrictions cannot use OpenAI websocket passthrough",
-    message=(
-        "Keys with model restrictions cannot use OpenAI websocket passthrough, because this route "
-        "relays frames to the provider without reading which model they ask for."
     ),
 )
 
@@ -3343,19 +3456,9 @@ def _is_openai_websocket_passthrough_enabled(general_settings: Mapping[str, obje
     return setting is True
 
 
-class _OpenAIWebsocketModelAllowlists(Protocol):
-    async def __call__(self, valid_token: UserAPIKeyAuth, /) -> tuple[Sequence[str], ...]: ...
-
-
-async def _openai_websocket_refusal(
-    user_api_key_dict: UserAPIKeyAuth,
-    general_settings: Mapping[str, object],
-    model_allowlists: _OpenAIWebsocketModelAllowlists,
-) -> _OpenAIWebsocketRefusal | None:
+def _openai_websocket_refusal(general_settings: Mapping[str, object]) -> _OpenAIWebsocketRefusal | None:
     if not _is_openai_websocket_passthrough_enabled(general_settings):
         return _OPENAI_WS_DISABLED_REFUSAL
-    if _has_model_restrictions(await model_allowlists(user_api_key_dict)):
-        return _OPENAI_WS_MODEL_RESTRICTED_REFUSAL
     return None
 
 
@@ -3370,6 +3473,9 @@ class _WebsocketRelay(Protocol):
         forward_headers: bool,
         endpoint: str,
         accept_websocket: bool,
+        client_frame_model_gate: WebsocketFrameModelGate | None = None,
+        upstream_frame_kind: WebsocketUpstreamFrameClassifier | None = None,
+        meter: WebSocketSessionMeter | None = None,
     ) -> None: ...
 
 
@@ -3377,18 +3483,95 @@ def _websocket_relay() -> _WebsocketRelay:
     return websocket_passthrough_request
 
 
-def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+def _proxy_error_type(denial: ProxyException) -> str:
+    return denial.type.value if isinstance(denial.type, ProxyErrorTypes) else denial.type
 
-    async def resolve(valid_token: UserAPIKeyAuth, /) -> tuple[Sequence[str], ...]:
-        return await enforced_model_allowlists(
-            valid_token=valid_token,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+
+FrameModelAuthorizer: TypeAlias = Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]]
+
+
+def _frame_model_authorizer() -> FrameModelAuthorizer:
+    return user_api_key_auth_accepted_websocket_for_model
+
+
+def _proxy_model_list() -> Sequence[object] | None:
+    from litellm.proxy import proxy_server
+
+    return as_object_list(attribute_or_none(proxy_server, "llm_model_list"))
+
+
+def _gateway_remaps_model(model: str, frame_auth: UserAPIKeyAuth, llm_router: Router | None) -> bool:
+    alias_maps: Final = (
+        key_model_aliases_for_auth_check(frame_auth) or {},
+        team_model_aliases_for_auth_check(frame_auth) or {},
+        alias_map(litellm.model_alias_map),
+    )
+    targets: Final = (
+        *(aliases.get(model) for aliases in alias_maps),
+        llm_router.registry().resolve(model, kind="alias") if llm_router is not None else None,
+    )
+    return any(target not in (None, model) for target in targets)
+
+
+def _aliased_model_verdict(
+    allowed: WebsocketFrameModelAllowed, probe: WebsocketFrameModelVerdict
+) -> WebsocketFrameModelVerdict:
+    match probe:
+        case WebsocketFrameModelRefused(error_type=error_type) if error_type.endswith("_model_access_denied"):
+            return WebsocketFrameModelRefused(message=_OPENAI_WS_ALIASED_MODEL_REFUSAL, error_type=error_type)
+        case WebsocketFrameModelRefused():
+            return probe
+        case WebsocketFrameModelAllowed():
+            return allowed
+
+
+def _proxy_frame_model_gate(
+    authorize_frame_model: Annotated[FrameModelAuthorizer, Depends(_frame_model_authorizer)],
+) -> WebsocketFrameModelGate:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
+
+    async def authorize(websocket: WebSocket, model: str) -> WebsocketFrameModelVerdict:
+        connect_reservation: Final = attribute_or_none(websocket.state, "budget_reservation")
+        await release_or_invalidate_budget_reservation(
+            budget_reservation=connect_reservation if isinstance(connect_reservation, dict) else None
         )
+        frame_auth: Final = await authorize_frame_model(websocket, model)
+        access_groups: Final = tuple(frame_auth.matched_model_access_groups or ())
+        llm_router: Final = proxy_server.llm_router
+        try:
+            await can_key_call_resolved_model(
+                model=model, llm_model_list=_proxy_model_list(), valid_token=frame_auth, llm_router=llm_router
+            )
+            await can_agent_call_model(
+                model=model,
+                valid_token=frame_auth,
+                llm_router=llm_router,
+                prisma_client=proxy_server.prisma_client,
+                user_api_key_cache=proxy_server.user_api_key_cache,
+                proxy_logging_obj=proxy_server.proxy_logging_obj,
+            )
+        finally:
+            await release_or_invalidate_budget_reservation(budget_reservation=frame_auth.budget_reservation)
+        allowed: Final = WebsocketFrameModelAllowed(access_groups=access_groups)
+        if not _gateway_remaps_model(model, frame_auth, llm_router):
+            return allowed
+        return _aliased_model_verdict(allowed, await gate(websocket, STORED_PROMPT_PROBE_MODEL))
 
-    return resolve
+    async def gate(websocket: WebSocket, model: str, /) -> WebsocketFrameModelVerdict:
+        try:
+            return await authorize(websocket, model)
+        except ProxyException as denial:
+            return WebsocketFrameModelRefused(message=denial.message, error_type=_proxy_error_type(denial))
+        except HTTPException as denial:
+            return WebsocketFrameModelRefused(message=str(denial.detail), error_type="invalid_request_error")
+        except litellm.BudgetExceededError as exhausted:
+            return WebsocketFrameModelRefused(message=exhausted.message, error_type="budget_exceeded")
+        except Exception:  # noqa: BLE001  # fail closed: a gate that cannot answer refuses, and says so in band
+            verbose_proxy_logger.exception("OpenAI websocket passthrough: the frame model gate failed on %s", model)
+            return WebsocketFrameModelRefused(message=_OPENAI_WS_UNAVAILABLE_AUTH_REFUSAL, error_type="server_error")
+
+    return gate
 
 
 def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
@@ -3400,6 +3583,14 @@ def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
     return requested_subprotocols[0] if requested_subprotocols else None
 
 
+async def _opening_model_refusal(
+    websocket: WebSocket, query_string: str, frame_model_gate: WebsocketFrameModelGate
+) -> WebsocketFrameModelRefused | None:
+    opening_models: Final = dict.fromkeys(httpx.QueryParams(query_string).get_list("model"))
+    verdicts: Final = tuple([await frame_model_gate(websocket, model) for model in opening_models])
+    return next((verdict for verdict in verdicts if isinstance(verdict, WebsocketFrameModelRefused)), None)
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -3408,12 +3599,12 @@ async def openai_websocket_proxy_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
-    model_allowlists: Annotated[_OpenAIWebsocketModelAllowlists, Depends(_proxy_model_allowlists)],
+    frame_model_gate: Annotated[WebsocketFrameModelGate, Depends(_proxy_frame_model_gate)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
     negotiated_subprotocol: Final = _negotiated_websocket_subprotocol(websocket)
 
-    refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
+    refusal: Final = _openai_websocket_refusal(general_settings)
     if refusal is not None:
         await websocket.accept(subprotocol=negotiated_subprotocol)
         error_frame: Final[_OpenAIWebsocketErrorFrame] = {
@@ -3459,14 +3650,21 @@ async def openai_websocket_proxy_route(
 
     await websocket.accept(subprotocol=negotiated_subprotocol)
 
+    opening_refusal: Final = await _opening_model_refusal(websocket, query_string, frame_model_gate)
+    if opening_refusal is not None:
+        await refuse_websocket(websocket, opening_refusal)
+        return
+
     await relay(
         websocket=websocket,
         target=wss_target,
         custom_headers=custom_headers,
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
-        endpoint=websocket.url.path,
+        endpoint=normalize_route_for_root_path(websocket.url.path) or websocket.url.path,
         accept_websocket=False,
+        client_frame_model_gate=frame_model_gate,
+        upstream_frame_kind=openai_websocket_frame_kind,
     )
 
 
@@ -3516,7 +3714,9 @@ async def deepgram_listen_websocket_route(
     if not deepgram_listen_is_priced(target):
         await websocket.close(
             code=1008,
-            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
+            reason=truncated_close_reason(
+                _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target))
+            ),
         )
         return
 
@@ -3528,6 +3728,54 @@ async def deepgram_listen_websocket_route(
         forward_headers=False,
         endpoint=websocket.url.path,
         accept_websocket=False,
+    )
+
+
+async def deepgram_speak_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=deepgram_speak_requested_model(websocket.url.query)
+    )
+
+
+@router.websocket("/deepgram/v1/speak")
+@router.websocket("/deepgram/speak")
+async def deepgram_speak_websocket_route(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_speak_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
+        region_name=None,
+    )
+    if deepgram_api_key is None:
+        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    target: Final = deepgram_speak_websocket_target(
+        api_base=get_secret_str("DEEPGRAM_API_BASE"),
+        query_string=websocket.url.query,
+    )
+    character_rate: Final = deepgram_speak_character_rate(target)
+    if character_rate is None:
+        await websocket.close(
+            code=1008,
+            reason=truncated_close_reason(
+                _DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_speak_registry_key(target))
+            ),
+        )
+        return
+
+    await relay(
+        websocket=websocket,
+        target=target,
+        custom_headers={"Authorization": f"Token {deepgram_api_key}"},
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+        meter=DeepgramSpeakMeter(target, character_rate),
     )
 
 
@@ -3734,7 +3982,8 @@ async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] 
         parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_body))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    return frozenset(parsed) if isinstance(parsed, dict) else None
+    fields: Final = as_str_mapping(parsed)
+    return None if fields is None else frozenset(fields)
 
 
 def _tinyfish_route_timeout() -> float | None:
@@ -3942,7 +4191,7 @@ def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None
     upstream: Final = next(
         (
             deployment["litellm_params"].get("model")
-            for deployment in (llm_router.get_model_list() or ())
+            for deployment in (llm_router.registry().deployments() or ())
             if deployment.get("model_name") in candidates
         ),
         None,
@@ -4020,7 +4269,12 @@ async def vertex_ai_live_websocket_passthrough(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data={},
+                request_data={
+                    "model": model or "",
+                    "custom_llm_provider": litellm.LlmProviders.VERTEX_AI.value,
+                    "call_type": CallTypes.pass_through.value,
+                    "litellm_call_id": str(uuid.uuid4()),
+                },
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:
             await websocket.close(code=1011, reason=VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON)
@@ -4055,6 +4309,8 @@ async def vertex_ai_live_websocket_passthrough(
         forward_headers=False,
         endpoint="/vertex_ai/live",
         accept_websocket=False,
+        builtin_provider_route=True,
+        model=model,
         setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
             vertex_project=resolved_project,
             vertex_location=resolved_location,
@@ -4377,10 +4633,16 @@ async def watsonx_proxy_route(
     if provider_config is None:
         raise HTTPException(status_code=404, detail="Watsonx passthrough config not found")
 
+    watsonx_credentials: Final = passthrough_endpoint_router.get_proxy_wide_deployment_credentials(
+        custom_llm_provider="watsonx"
+    )
+    api_key: Final = watsonx_credentials.api_key if watsonx_credentials is not None else None
+    api_base: Final = watsonx_credentials.api_base if watsonx_credentials is not None else None
+
     # Get complete URL with version parameter
     complete_url, _ = provider_config.get_complete_url(
-        api_base=None,
-        api_key=None,
+        api_base=api_base,
+        api_key=api_key,
         model="",
         endpoint=endpoint,
         request_query_params=None,
@@ -4394,8 +4656,8 @@ async def watsonx_proxy_route(
         messages=[],
         optional_params={},
         litellm_params={},
-        api_key=None,
-        api_base=None,
+        api_key=api_key,
+        api_base=api_base,
     )
 
     # Check for streaming

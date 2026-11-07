@@ -57,11 +57,9 @@ CONTENT_POLICY_PROMPT = (
 COOLDOWN_SECONDS = 30.0
 REPLICA_PROPAGATION_SECONDS = 15.0
 
-# The smallest-context chat model OpenAI still serves (16385 tokens). A prompt
-# past that limit comes back as a real `context_length_exceeded` 400, which is
-# what litellm maps to ContextWindowExceededError.
-SMALL_CONTEXT_MODEL = "openai/gpt-3.5-turbo"
-SMALL_CONTEXT_LIMIT_TOKENS = 16385
+SMALL_CONTEXT_MODEL: Final = "openai/gpt-5.4-nano"
+# model_prices_and_context_window.json, gpt-5.4-nano, verified 2026-11-02
+SMALL_CONTEXT_LIMIT_TOKENS: Final = 272000
 
 
 def oversized_prompt(marker: str) -> str:
@@ -107,7 +105,7 @@ def create_timeout_deployment(proxy: ProxyClient, name: str) -> str:
 
 @step(f"Add a deployment named {{name}} that calls the small-context model {SMALL_CONTEXT_MODEL}")
 def create_small_context_deployment(proxy: ProxyClient, name: str) -> str:
-    """Register a deployment on the smallest-context model OpenAI still serves, so an
+    """Register a deployment with a smaller context window than the backup, so an
     oversized prompt earns a real context-window refusal from the provider."""
     return proxy.create_model(name, LiteLLMParamsBody(model=SMALL_CONTEXT_MODEL, api_key=REAL_KEY))
 
@@ -263,8 +261,7 @@ def spend_only_request_of(proxy: ProxyClient, spent_key: str) -> None:
 
 @step(f"Add a deployment named {{name}} that calls {SMALL_CONTEXT_MODEL} and takes all of its group's traffic")
 def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str) -> str:
-    """The always-picked half of a retry pair on the smallest-context model OpenAI
-    still serves: it holds all of the model group's shuffle weight, so an oversized
+    """The always-picked half of a retry pair on the smaller-context model: it holds all of the model group's shuffle weight, so an oversized
     prompt opens on it and earns a real context-window refusal, which never benches
     a deployment, so only the retry itself can steer the request off it."""
     return proxy.register_model(

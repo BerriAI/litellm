@@ -229,7 +229,7 @@ async def authorize_member_auto_router_dependencies(
         (
             dependency,
             dependency.model_name,
-            llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id),
+            llm_router.registry().deployments(dependency.model_name, team_id=team.team_id),
         )
         for dependency in dependencies
     ):
