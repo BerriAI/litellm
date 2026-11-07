@@ -4360,6 +4360,7 @@ version = "0.1.0"
 dependencies = [
  "aws-credential-types",
  "backon",
+ "bytes",
  "litellm-error",
  "litellm-http",
  "litellm-s3",

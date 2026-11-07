@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use bytes::Bytes;
+
 use litellm_http::Client;
 use litellm_s3::ProvideCredentials;
 use litellm_s3::S3Uri;
@@ -9,6 +11,8 @@ use reqwest::header::{ETAG, HeaderMap, RETRY_AFTER};
 use url::Url;
 
 use crate::{Error, RETRYABLE_STATUSES, Target};
+
+pub(crate) const MAX_BODY_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fetched {
@@ -50,7 +54,7 @@ pub(crate) async fn http(
         retryable: true,
         retry_after: None,
     };
-    let response = client
+    let mut response = client
         .get(url)
         .timeout(timeout)
         .send()
@@ -71,11 +75,17 @@ pub(crate) async fn http(
             retry_after,
         });
     }
-    let body = response.bytes().await.map_err(transport)?;
-    Ok(Fetched {
-        body: body.to_vec(),
-        etag,
-    })
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_BODY_BYTES)
+    {
+        return Err(Rejected::fatal(Error::body_too_large(MAX_BODY_BYTES)));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport)? {
+        append(&mut body, &chunk).map_err(Rejected::fatal)?;
+    }
+    Ok(Fetched { body, etag })
 }
 
 /// S3 failures are final: the SDK already classifies its own errors and a missing or denied object stays so
@@ -106,17 +116,32 @@ pub(crate) async fn s3(
             .key(&object.key)
             .send()
             .await?;
+        if output
+            .content_length()
+            .is_some_and(|length| length.unsigned_abs() > MAX_BODY_BYTES)
+        {
+            return Err(Error::body_too_large(MAX_BODY_BYTES));
+        }
         let etag = output.e_tag().map(str::to_owned);
-        let body = output.body.collect().await?;
-        Ok::<_, Error>(Fetched {
-            body: body.to_vec(),
-            etag,
-        })
+        let mut stream = output.body;
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.try_next().await? {
+            append(&mut body, &chunk)?;
+        }
+        Ok::<_, Error>(Fetched { body, etag })
     };
     tokio::time::timeout(timeout, fetched)
         .await
         .unwrap_or_else(|elapsed| Err(Error::from(elapsed)))
         .map_err(Rejected::fatal)
+}
+
+fn append(body: &mut Vec<u8>, chunk: &Bytes) -> Result<(), Error> {
+    if (body.len() + chunk.len()) as u64 > MAX_BODY_BYTES {
+        return Err(Error::body_too_large(MAX_BODY_BYTES));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 fn etag(headers: &HeaderMap) -> Option<String> {

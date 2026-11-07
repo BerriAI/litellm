@@ -25,11 +25,17 @@ enum Repr {
     S3Body(#[source] ByteStreamError),
     #[error("S3 GetObject timed out")]
     S3Timeout(#[source] Elapsed),
+    #[error("response body is over the {limit} byte limit")]
+    BodyTooLarge { limit: u64 },
 }
 
 impl Error {
     pub fn unsupported_scheme(scheme: String) -> Self {
         Self(Box::new(Repr::UnsupportedScheme { scheme }))
+    }
+
+    pub(crate) fn body_too_large(limit: u64) -> Self {
+        Self(Box::new(Repr::BodyTooLarge { limit }))
     }
 }
 

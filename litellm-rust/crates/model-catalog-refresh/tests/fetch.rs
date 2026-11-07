@@ -27,6 +27,7 @@ enum Answer {
     Raw(&'static str),
     Stall,
     StallBody,
+    Oversized,
 }
 
 /// A scripted upstream: the n-th request gets the n-th answer, repeating the last, and every request head is kept
@@ -60,6 +61,15 @@ impl Upstream {
                     match answer {
                         Answer::Raw(raw) => stream.write_all(raw.as_bytes()).unwrap(),
                         Answer::Stall => std::thread::sleep(Duration::from_secs(5)),
+                        Answer::Oversized => {
+                            let chunk = vec![b' '; 1024 * 1024];
+                            let written = stream
+                                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                                .and_then(|()| {
+                                    (0..=100).try_for_each(|_| stream.write_all(&chunk))
+                                });
+                            drop(written);
+                        }
                         Answer::StallBody => {
                             stream
                                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{")
@@ -456,4 +466,47 @@ async fn an_s3_fetch_without_credentials_fails_without_a_request() {
     );
     assert!(!failed.retryable);
     assert!(upstream.heads().is_empty());
+}
+
+const DECLARED_OVERSIZED: &str =
+    "HTTP/1.1 200 OK\r\nContent-Length: 104857601\r\nConnection: close\r\n\r\n";
+
+#[rstest]
+#[case::http_declared(Answer::Raw(DECLARED_OVERSIZED), false)]
+#[case::http_streamed(Answer::Oversized, false)]
+#[case::s3_declared(Answer::Raw(DECLARED_OVERSIZED), true)]
+#[case::s3_streamed(Answer::Oversized, true)]
+#[tokio::test]
+async fn a_body_over_100_mib_fails_without_a_retry(#[case] answer: Answer, #[case] s3: bool) {
+    let upstream = Upstream::serve(vec![answer, Answer::Raw(OK)]);
+    let failed = match s3 {
+        true => fetched_from_s3(&s3_target("s3://prices/cost.json", &upstream), &keys()).await,
+        false => fetched(&target(&upstream.url()), POLICY, Start::Fresh).await,
+    }
+    .unwrap_err();
+    assert!(
+        failed
+            .reason
+            .contains("response body is over the 104857600 byte limit"),
+        "{}",
+        failed.reason
+    );
+    assert!(!failed.retryable);
+    assert_eq!(upstream.heads().len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_body_of_exactly_100_mib_is_fetched() {
+    let upstream = Upstream::serve(vec![Answer::Raw(Box::leak(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: 104857600\r\nConnection: close\r\n\r\n{}",
+            " ".repeat(100 * 1024 * 1024)
+        )
+        .into_boxed_str(),
+    ))]);
+    let fetched = fetched(&target(&upstream.url()), POLICY, Start::Fresh)
+        .await
+        .unwrap();
+    assert_eq!(fetched.body.len(), 100 * 1024 * 1024);
 }
