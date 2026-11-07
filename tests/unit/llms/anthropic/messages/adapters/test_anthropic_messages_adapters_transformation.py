@@ -2,7 +2,7 @@ import base64
 import functools
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -6000,3 +6000,110 @@ async def test_xai_web_search_turn_replays_the_reasoning_its_responses_route_min
 
     assert route.call_count == 1
     assert [item["encrypted_content"] for item in _sent_reasoning_items(route.calls[0].request)] == ["gAAA_same_org"]
+
+
+def _responses_sse(events: Sequence[Mapping[str, object]]) -> bytes:
+    return b"".join(
+        f"event: {event['type']}\ndata: {json.dumps({**event, 'sequence_number': number})}\n\n".encode()
+        for number, event in enumerate(events)
+    )
+
+
+def _reasoning_item(item_id: str, encrypted: str, summary: str = "") -> dict[str, object]:
+    return {
+        "type": "reasoning",
+        "id": item_id,
+        "summary": [{"type": "summary_text", "text": summary}] if summary else [],
+        "encrypted_content": encrypted,
+    }
+
+
+def _streamed_blocks(frames: str) -> list[tuple[str, str, str | None]]:
+    events: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in frames.splitlines() if line.startswith("data: ")
+    )
+    deltas: Final = tuple(event for event in events if event["type"] == "content_block_delta")
+
+    def block_deltas(index: int) -> tuple[Mapping[str, str], ...]:
+        return tuple(delta["delta"] for delta in deltas if delta["index"] == index)
+
+    return [
+        (
+            event["content_block"]["type"],
+            "".join(delta.get("thinking", "") for delta in block_deltas(event["index"])),
+            next(
+                (delta["signature"] for delta in block_deltas(event["index"]) if delta["type"] == "signature_delta"),
+                None,
+            ),
+        )
+        for event in events
+        if event["type"] == "content_block_start"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
+    respx_mock: respx.MockRouter,
+) -> None:
+    response: Final = {**_RETRY_REPLY, "id": "resp_two_summaries", "status": "in_progress", "output": []}
+    message: Final = {
+        "type": "message",
+        "id": "msg_two_summaries",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Oslo", "annotations": []}],
+    }
+    first: Final = _reasoning_item("rs_1", "gAAA_first", "Oslo is further north.")
+    second: Final = _reasoning_item("rs_2", "gAAA_second", "Check the forecast.")
+    completed: Final = {**response, "status": "completed", "output": [first, second, message]}
+
+    def summary_delta(output_index: int, item_id: str, text: str) -> dict[str, object]:
+        return {
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": output_index,
+            "item_id": item_id,
+            "summary_index": 0,
+            "delta": text,
+        }
+
+    events: Final = (
+        {"type": "response.created", "response": response},
+        {"type": "response.output_item.added", "output_index": 0, "item": _reasoning_item("rs_1", "")},
+        summary_delta(0, "rs_1", "Oslo is further north."),
+        {"type": "response.output_item.done", "output_index": 0, "item": first},
+        {"type": "response.output_item.added", "output_index": 1, "item": _reasoning_item("rs_2", "")},
+        summary_delta(1, "rs_2", "Check the forecast."),
+        {"type": "response.output_item.done", "output_index": 1, "item": second},
+        {"type": "response.output_item.added", "output_index": 2, "item": {**message, "content": []}},
+        {
+            "type": "response.output_text.delta",
+            "output_index": 2,
+            "item_id": "msg_two_summaries",
+            "content_index": 0,
+            "delta": "Oslo",
+        },
+        {"type": "response.output_item.done", "output_index": 2, "item": message},
+        {"type": "response.completed", "response": completed},
+    )
+    respx_mock.post(url__regex=_RETRY_URL).mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events))
+    )
+
+    stream: Final = await litellm.anthropic.messages.acreate(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        stream=True,
+        messages=[{"role": "user", "content": "Which city is colder?"}],
+    )
+    frames: Final = b"".join([chunk async for chunk in stream]).decode()
+
+    assert _streamed_blocks(frames) == [
+        ("thinking", "Oslo is further north.", encrypted_reasoning_signature("gAAA_first")),
+        ("thinking", "Check the forecast.", encrypted_reasoning_signature("gAAA_second")),
+        ("text", "", None),
+    ]
