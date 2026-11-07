@@ -1,0 +1,48 @@
+{
+  "source": "a5826182f6d59e6d3d28bb8bb9b72620d6c01368",
+  "before_source": "d44a94ee0068f90c087e79879c4a7972b38aef25",
+  "before_scope": "PR3 frontend and same backend API/data; PR4 changes only frontend",
+  "history": "Synthetic daily history copied into an isolated database; actual live HTTP and UI, no mocked responses",
+  "checks": [
+    "All five alert families",
+    "Key50x positive baseline",
+    "Activity matches actual HTTP totals",
+    "Key/team/user/model Activity tabs match API totals",
+    "Existing retirement migration workflow",
+    "Monitoring defaults and optional edit",
+    "Existing email settings link",
+    "Collapsed updates and pinned footer",
+    "Desktop/dark/narrow without document overflow"
+  ],
+  "page_errors": [],
+  "notification_geometry": [
+    {
+      "footer_before_scroll_y": 582,
+      "footer_after_scroll_y": 582
+    }
+  ],
+  "expected_activity_totals": [
+    {
+      "family": "spend",
+      "requests": 57000
+    },
+    {
+      "family": "latency",
+      "requests": 16000
+    },
+    {
+      "family": "traffic",
+      "requests": 7100
+    },
+    {
+      "family": "reliability",
+      "requests": 8000
+    },
+    {
+      "family": "retirement",
+      "requests": 2101
+    }
+  ],
+  "duration_seconds": 173.24,
+  "inference_calls": 0
+}

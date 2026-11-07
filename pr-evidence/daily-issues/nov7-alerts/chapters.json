@@ -1,0 +1,98 @@
+[
+  {
+    "seconds": 0.25,
+    "caption": "Alerts combines model retirements and performance changes. This demo uses synthetic daily history; every screen reads live HTTP responses from a local LiteLLM proxy."
+  },
+  {
+    "seconds": 11.39,
+    "caption": "Open the key spend alert."
+  },
+  {
+    "seconds": 15.14,
+    "caption": "This key spent fifty times its established daily baseline. Related request changes appear in the same investigation."
+  },
+  {
+    "seconds": 23.24,
+    "caption": "Scroll to Activity."
+  },
+  {
+    "seconds": 27.02,
+    "caption": "The charts keep the alert's key and saved date range. You can inspect resources and source signals only when you need them."
+  },
+  {
+    "seconds": 37.35,
+    "caption": "Return to Alerts and open the provider latency alert."
+  },
+  {
+    "seconds": 42.54,
+    "caption": "The comparison and Activity share the measured provider scope. Grouping shows related observations; it does not claim a proven root cause."
+  },
+  {
+    "seconds": 52.38,
+    "caption": "Open the reliability alert."
+  },
+  {
+    "seconds": 56.15,
+    "caption": "Here the saved comparison explains the error change and its baseline, with the matching activity below."
+  },
+  {
+    "seconds": 63.82,
+    "caption": "Open the traffic alert."
+  },
+  {
+    "seconds": 67.57,
+    "caption": "The same investigation view explains a drop in requests against established history."
+  },
+  {
+    "seconds": 73.5,
+    "caption": "Open the model retirement alert."
+  },
+  {
+    "seconds": 77.35,
+    "caption": "The retirement date, replacement guidance, and recorded usage stay together. Open Migration details for the existing migration workflow."
+  },
+  {
+    "seconds": 86.57,
+    "caption": "The migration page preserves affected keys and replacement guidance."
+  },
+  {
+    "seconds": 91.18,
+    "caption": "Return to Alerts and open Settings."
+  },
+  {
+    "seconds": 95.24,
+    "caption": "Daily monitoring starts with defaults. Settings explains when checks are waiting for history or catching up. Email setup uses the existing Email Settings page."
+  },
+  {
+    "seconds": 106.45,
+    "caption": "Edit Unexpected spend."
+  },
+  {
+    "seconds": 110.36,
+    "caption": "Change the increase factor when you need a different threshold. Advanced controls stay collapsed, and custom rules can target a particular resource."
+  },
+  {
+    "seconds": 120.66,
+    "caption": "Open Notifications."
+  },
+  {
+    "seconds": 124.5,
+    "caption": "Alerts link to the same investigations. Updates are collapsed, and the compact resource links remain at the bottom while the content scrolls."
+  },
+  {
+    "seconds": 135.39,
+    "caption": "The same Activity charts also live on each resource. Open this key\u2019s Activity tab to continue investigating the exact key and dates."
+  },
+  {
+    "seconds": 144.66,
+    "caption": "Team details have Activity too. The chart shows the recorded traffic for this team without rebuilding a filter on the Usage page."
+  },
+  {
+    "seconds": 153.91,
+    "caption": "User details reuse the same Activity view and saved dates. The request totals match the live API response."
+  },
+  {
+    "seconds": 163.15,
+    "caption": "Model Activity uses the underlying model identity and the same dates. These screens reuse the existing charts; the history shown here is synthetic demo data."
+  }
+]
