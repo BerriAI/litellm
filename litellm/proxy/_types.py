@@ -76,9 +76,6 @@ from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.auth.user_api_key_auth import (
-    JWTModelAccessPolicy,
-)
-from litellm.types.proxy.auth.user_api_key_auth import (
     is_jwt as is_jwt,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.carried_budget_state import (
@@ -4740,7 +4737,6 @@ UI_TEAM_ID = "litellm-dashboard"
 
 
 class JWTAuthBuilderResult(TypedDict):
-    model_access_policy: ReadOnly[NotRequired["JWTModelAccessPolicy"]]
     is_proxy_admin: bool
     team_object: LiteLLM_TeamTable | None
     user_object: LiteLLM_UserTable | None

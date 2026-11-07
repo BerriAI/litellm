@@ -50,7 +50,11 @@ from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPExceptio
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.types.agents import AgentResponse
 from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_AccessGroupTable
-from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    _authorize_authenticated_request,
+    authorize_jwt_for_credential_issuance,
+    user_api_key_auth,
+)
 from litellm.types.proxy.auth.user_api_key_auth import JWTModelAccessPolicy
 from starlette.requests import Request
 import litellm.proxy.proxy_server as proxy_server
@@ -165,6 +169,11 @@ async def _jwt_team_selection_identity(
             request._body = json.dumps(request_data).encode()
             if not credential_issuing:
                 return await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+            return (
+                await authorize_jwt_for_credential_issuance(
+                    token, request=request, request_data=request_data, route=route
+                )
+            ).identity
         result: Final = await JWTAuthManager.auth_builder(
             api_key=token,
             jwt_handler=handler,
@@ -177,13 +186,34 @@ async def _jwt_team_selection_identity(
             proxy_logging_obj=MagicMock(),
         )
         identity: Final = JWTAuthManager.user_api_key_auth_from_result(result)
-        if authorize and credential_issuing:
-            await _authorize_authenticated_request(
-                identity, request, request_data, route, token, credential_issuing=True
-            )
         return identity
     finally:
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_unresolved_claim_keeps_model_denial_after_single_membership_is_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    membership_team: Final = LiteLLM_TeamTable(
+        team_id="membership-team",
+        models=["selection-model"],
+        members_with_roles=[Member(user_id="selection-user", role="user")],
+    )
+    selected: Final = await _jwt_team_selection_identity(
+        monkeypatch, (membership_team,), ("unresolved-claim",), ("membership-team",), "selection-model"
+    )
+    assert selected.team_id == "membership-team"
+    with pytest.raises(ProxyException) as denied:
+        await _jwt_team_selection_identity(
+            monkeypatch,
+            (membership_team,),
+            ("unresolved-claim",),
+            ("membership-team",),
+            "selection-model",
+            authorize=True,
+        )
+    assert int(denied.value.code) == 403
 
 
 @pytest.mark.asyncio

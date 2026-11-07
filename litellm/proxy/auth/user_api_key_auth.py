@@ -11,9 +11,10 @@ import asyncio
 import fnmatch
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -76,6 +77,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_object_permission,
     get_org_object_for_request,
     get_project_object,
+    get_role_based_models,
     get_team_member_default_budget,
     get_team_membership,
     get_team_object,
@@ -197,6 +199,7 @@ from litellm.router_api import (
     request_fallback_chain,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.auth.user_api_key_auth import JWTModelAccessPolicy
 from litellm.types.services import ServiceTypes
 
 try:
@@ -401,7 +404,7 @@ def _get_model_names_for_budget_checks(
 
 
 async def _normalize_model_for_auth(
-    request_data: dict[str, object],
+    request_data: dict[str, object],  # mutable-ok: model normalization must update dispatch data
     valid_token: UserAPIKeyAuth,
     request: Request | None,
     route: str,
@@ -2535,18 +2538,17 @@ async def user_api_key_auth_builder(
                                 value=_JWT_PROXY_ADMIN_SENTINEL,
                                 ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
                             )
-                        return JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
+                        return _jwt_identity_from_result(result, request, parent_otel_span)
 
-                    valid_token = JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
-                    if pending_auto_register is not None:
-                        await _authorize_authenticated_request(
-                            user_api_key_auth_obj=valid_token,
-                            request=request,
-                            request_data=request_data,
-                            route=route,
-                            api_key=api_key,
-                            credential_issuing=True,
-                        )
+                    valid_token = (
+                        (
+                            await _authorize_jwt_credential(
+                                result, request, request_data, route, api_key, parent_otel_span
+                            )
+                        ).identity
+                        if pending_auto_register is not None
+                        else _jwt_identity_from_result(result, request, parent_otel_span)
+                    )
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
                     # JWT policy (RBAC, scope, custom_validate, email-domain)
@@ -4210,6 +4212,150 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
         subject_fallback=valid_token.token,
         credential_ref=CredentialRef(token_id=valid_token.token),
     )
+
+
+class _JWTPolicyReader(Protocol):
+    @property
+    def get_rbac_role(
+        self,
+    ) -> Callable[[dict[str, object]], RBAC_ROLES | None]: ...  # mutable-ok: legacy claim-reader input
+
+    @property
+    def get_object_id(
+        self,
+    ) -> Callable[[dict[str, object], str | None], str | None]: ...  # mutable-ok: legacy claim-reader input
+
+    @property
+    def get_team_id(
+        self,
+    ) -> Callable[[dict[str, object], str | None], str | None]: ...  # mutable-ok: legacy claim-reader input
+
+    @property
+    def get_scopes(self) -> Callable[[dict[str, object]], Sequence[str]]: ...  # mutable-ok: legacy claim-reader input
+
+    @property
+    def get_team_ids_from_jwt(
+        self,
+    ) -> Callable[[dict[str, object]], Sequence[str]]: ...  # mutable-ok: legacy claim-reader input
+
+
+def _jwt_policy_reader(handler: _JWTPolicyReader) -> _JWTPolicyReader:
+    return handler
+
+
+def _jwt_identity_from_result(
+    result: JWTAuthBuilderResult, request: Request, parent_otel_span: Span | None = None
+) -> UserAPIKeyAuth:
+    from litellm.proxy import proxy_server
+
+    identity: Final = JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
+    managed: Final = identity.managed_agent_context
+    if managed is not None and managed.mode == "autonomous":
+        return identity
+    handler: Final = proxy_server.jwt_handler
+    reader: Final = _jwt_policy_reader(handler)
+    general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings)
+    claims: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(result["jwt_claims"])
+    config: Final = handler.litellm_jwtauth
+    role: Final = reader.get_rbac_role(claims) if managed is None else None
+    asserted_rbac_team: Final = role == LitellmUserRoles.TEAM and bool(reader.get_object_id(claims, None))
+    team_alias: Final = handler.get_team_alias(claims, None)
+    database_fallback: Final = (
+        config.fallback_to_db_teams is True
+        and not handler.get_all_jwt_team_ids(claims)
+        and not team_alias
+        and not asserted_rbac_team
+    )
+    specific_team: Final = reader.get_team_id(claims, None)
+    claimed_teams: Final = frozenset(reader.get_team_ids_from_jwt(claims)) | (
+        frozenset((specific_team,)) if specific_team and not database_fallback else frozenset[str]()
+    )
+    role_models: Final = (
+        get_role_based_models(role, general_settings) if config.enforce_rbac is True and role is not None else None
+    )
+    scopes: Final = reader.get_scopes(claims)
+    scope_models: Final = (
+        tuple(chain.from_iterable(mapping.models or () for mapping in config.scope_mappings if mapping.scope in scopes))
+        if config.enforce_scope_based_access is True and config.scope_mappings
+        else None
+    )
+    identity.set_jwt_model_policy(
+        JWTModelAccessPolicy(
+            role_models=tuple(role_models) if role_models is not None else None,
+            scope_models=scope_models,
+            required_team=(
+                "database" if database_fallback else "token" if not claimed_teams and identity.team_id is None else None
+            )
+            if config.enforce_team_based_model_access is True and not result["is_proxy_admin"]
+            else None,
+            unresolved_team_ids=claimed_teams
+            if (
+                not result["is_proxy_admin"]
+                and config.team_claim_fallback is not True
+                and not asserted_rbac_team
+                and not request.headers.get("x-litellm-team-id")
+                and not (team_alias and identity.team_id is not None)
+                and identity.team_id not in claimed_teams
+            )
+            else frozenset(),
+        )
+    )
+    return identity
+
+
+class JWTCredentialIdentity(NamedTuple):
+    result: JWTAuthBuilderResult
+    identity: UserAPIKeyAuth
+
+
+async def _authorize_jwt_credential(
+    result: JWTAuthBuilderResult,
+    request: Request,
+    request_data: dict[str, object],  # mutable-ok: central normalization updates dispatch data
+    route: str,
+    api_key: str,
+    parent_otel_span: Span | None = None,
+) -> JWTCredentialIdentity:
+    identity: Final = _jwt_identity_from_result(result, request, parent_otel_span)
+    await _authorize_authenticated_request(identity, request, request_data, route, api_key, credential_issuing=True)
+    return JWTCredentialIdentity(result, identity)
+
+
+async def authorize_jwt_for_credential_issuance(
+    api_key: str,
+    *,
+    request: Request,
+    route: str,
+    request_data: Mapping[str, object] | None = None,
+    provision_identity: bool = True,
+) -> JWTCredentialIdentity:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import (
+        jwt_handler,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    builder: Final[Callable[..., Awaitable[JWTAuthBuilderResult]]] = (
+        JWTAuthManager.auth_builder if provision_identity else JWTAuthManager.authorize_jwt
+    )
+    general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings)
+    data: Final = dict(request_data or {})
+    result: Final = await builder(
+        api_key=api_key,
+        jwt_handler=jwt_handler,
+        request_data=data,
+        general_settings=general_settings,
+        route=route,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        request_headers=request.headers,
+        request_method=request.method,
+    )
+    return await _authorize_jwt_credential(result, request, data, route, api_key)
 
 
 async def authorize_authenticated_model_access(
