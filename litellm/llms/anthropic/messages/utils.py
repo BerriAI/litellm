@@ -1,6 +1,7 @@
 import json
 import os
 from collections.abc import Iterator, Mapping, Sequence
+from enum import Enum
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar
@@ -9,7 +10,6 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
@@ -34,6 +34,11 @@ _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
 
 ThinkingOffSwitch = Literal["disabled", "between_tools"]
+
+
+class ClientEffort(Enum):
+    DROPPED = "dropped"
+
 
 _JsonValue: Final = TypeVar("_JsonValue")
 
@@ -317,7 +322,7 @@ def reasoning_off_level(
     deployment_model_info: object,
     drop_params: bool,
     between_tools: bool,
-) -> str | None:
+) -> str | ClientEffort | None:
     model_info: Final = _deployment_model_info(model, custom_llm_provider, deployment_model_info)
     levels: Final = _resolved_reasoning_efforts(model_info, model, custom_llm_provider)
     if levels == () or (between_tools and levels is None):
@@ -327,12 +332,29 @@ def reasoning_off_level(
         return lowest_tier
     if not drop_params or not _reasons_without_confirming_none(model_info):
         return REASONING_EFFORT_OFF
-    verbose_logger.warning(
-        "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
-        "supports_none_reasoning_effort, because drop_params is set",
-        model,
+    return ClientEffort.DROPPED
+
+
+def drops_off_switch(
+    request: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str | None,
+    *,
+    deployment_model_info: object,
+    drop_params: bool,
+) -> bool:
+    off_switch: Final = thinking_off_switch(request)
+    return (
+        off_switch is not None
+        and reasoning_off_level(
+            model,
+            custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            between_tools=off_switch == "between_tools",
+        )
+        is ClientEffort.DROPPED
     )
-    return None
 
 
 def _reasons_without_confirming_none(model_info: Mapping[str, object] | None) -> bool:

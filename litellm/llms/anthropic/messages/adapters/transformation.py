@@ -15,6 +15,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_
 from litellm.llms.anthropic.messages.utils import (
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
+    ClientEffort,
     is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
@@ -1387,7 +1388,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if mirrors_responses_bridge and off_switch is not None and effort_sent == REASONING_EFFORT_OFF
             else effort_sent
         )
-        if target_effort is None:
+        if target_effort is None or target_effort is ClientEffort.DROPPED:
             return
         new_kwargs["reasoning_effort"] = target_effort
 

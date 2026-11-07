@@ -775,6 +775,25 @@ class TestAClientNoneOnAReasoningDeploymentThatNeverConfirmedIt:
 
         assert completion_kwargs.get("reasoning_effort") == (None if drop_params else "none")
 
+    @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+    def test_the_chat_route_keeps_a_pinned_effort_out_when_drop_params_drops_disabled(
+        self, local_model_cost_map: None, drop_params: bool
+    ) -> None:
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/reasoner-without-levels",
+            thinking={"type": "disabled"},
+            extra_kwargs={
+                "custom_llm_provider": "openai",
+                "drop_params": drop_params,
+                "reasoning_effort": "high",
+                "model_info": {"supports_reasoning": True},
+            },
+        )
+
+        assert completion_kwargs.get("reasoning_effort") == (None if drop_params else "none")
+
 
 _OFF_MAP_OPENAI_DEPLOYMENT: Final = {
     "model": "openai/off-map-hybrid-reasoner",

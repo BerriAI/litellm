@@ -353,6 +353,29 @@ def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops
     assert "reasoning_effort" not in responses_kwargs
 
 
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_disabled(drop_params: bool) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/reasoner-without-levels",
+        thinking={"type": "disabled"},
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "reasoning_effort": "high",
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    sent: Final = {key: responses_kwargs.get(key) for key in ("reasoning", "reasoning_effort")}
+    assert sent == (
+        {"reasoning": None, "reasoning_effort": None}
+        if drop_params
+        else {"reasoning": {"effort": "none"}, "reasoning_effort": "high"}
+    )
+
+
 def test_build_responses_kwargs_under_drop_params_leaves_an_unlisted_effort_to_a_deployment_that_rounds_it() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,

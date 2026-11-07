@@ -5,7 +5,6 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
-from enum import Enum
 from typing import Final, TypeAlias, get_args
 
 from pydantic import TypeAdapter, ValidationError
@@ -60,6 +59,7 @@ from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     REASONING_EFFORT_OFF,
+    ClientEffort,
     ThinkingOffSwitch,
     deployment_reasoning_efforts,
     is_unconfirmed_none,
@@ -84,10 +84,6 @@ AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, o
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 _KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
-
-
-class _ClientEffort(Enum):
-    DROPPED = "dropped"
 
 
 def _split_context_management(
@@ -298,6 +294,13 @@ def _reasoning_for_target(
             drop_params=drop_params,
             between_tools=off_switch == "between_tools",
         )
+        if off_level is ClientEffort.DROPPED:
+            verbose_logger.warning(
+                "Dropping reasoning.effort=none for %s, its model cost map entry does not set "
+                "supports_none_reasoning_effort, because drop_params is set",
+                model,
+            )
+            return off_level
         if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
             return None
         return {**reasoning_params, "effort": off_level}
@@ -307,7 +310,7 @@ def _reasoning_for_target(
             effort,
             model,
         )
-        return _ClientEffort.DROPPED
+        return ClientEffort.DROPPED
     normalized: Final = normalize_reasoning_effort_value(
         effort,
         model=model,
@@ -322,7 +325,7 @@ def _reasoning_for_target(
             normalized,
             model,
         )
-        return _ClientEffort.DROPPED
+        return ClientEffort.DROPPED
     return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
 
 
@@ -468,7 +471,7 @@ def _build_responses_kwargs(
         if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
         else None
     )
-    client_effort_dropped: Final = target_reasoning is _ClientEffort.DROPPED
+    client_effort_dropped: Final = target_reasoning is ClientEffort.DROPPED
     if target_reasoning is not None and not client_effort_dropped:
         responses_kwargs["reasoning"] = target_reasoning
 

@@ -51,6 +51,7 @@ from litellm.llms.anthropic.messages.utils import (
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
     ProxySubCallLoggingKwargs,
+    drops_off_switch,
     is_reasoning_auto_summary_enabled,
     is_unconfirmed_none,
     litellm_logging_obj_from_kwargs,
@@ -661,6 +662,34 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
     @staticmethod
+    def _drops_client_off_switch(
+        request: Mapping[str, object],
+        model: str,
+        target_provider: str | None,
+        provider_kwargs: Mapping[str, object],
+        *,
+        drop_params: bool,
+    ) -> bool:
+        if (
+            not drop_params
+            or target_provider not in RESPONSES_API_PROVIDERS
+            or not drops_off_switch(
+                request,
+                model,
+                target_provider,
+                deployment_model_info=provider_kwargs.get("model_info"),
+                drop_params=drop_params,
+            )
+        ):
+            return False
+        verbose_logger.warning(
+            "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
+            "supports_none_reasoning_effort, because drop_params is set",
+            model,
+        )
+        return True
+
+    @staticmethod
     def _drops_unconfirmed_client_none(completion_kwargs: _CompletionKwargs) -> bool:
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
         effort_options: Final = as_str_mapping(reasoning_effort)
@@ -852,6 +881,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ANTHROPIC_ONLY_REQUEST_KEYS
             | CONVERTED_STREAM_KEYS
             | ({"anthropic_messages", "mcp_servers"} if strips_mcp_servers else {"anthropic_messages"})
+            | (
+                {"reasoning_effort"}
+                if LiteLLMMessagesToCompletionTransformationHandler._drops_client_off_switch(
+                    request_data, model, target_provider, provider_kwargs, drop_params=drop_params
+                )
+                else set()
+            )
         )
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
