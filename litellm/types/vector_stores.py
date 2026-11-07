@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import ConfigDict, FailFast, Field, StrictFloat, StrictInt, StrictStr
+from pydantic import AfterValidator, ConfigDict, FailFast, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -332,11 +332,17 @@ class OpenAIComparisonFilter(LiteLLMBaseModel):
     value: str | bool | int | float | Annotated[tuple[StrictStr | StrictInt | StrictFloat, ...], FailFast()]
 
 
+def _require_members(members: tuple["OpenAIVectorStoreFilter", ...]) -> tuple["OpenAIVectorStoreFilter", ...]:
+    if not members:
+        raise ValueError("an and/or filter needs at least one member")
+    return members
+
+
 class OpenAICompoundFilter(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["and", "or"]
-    filters: tuple["OpenAIVectorStoreFilter", ...] = Field(min_length=1, fail_fast=True)
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], FailFast(), AfterValidator(_require_members)]
 
 
 OpenAIVectorStoreFilter: TypeAlias = Annotated[

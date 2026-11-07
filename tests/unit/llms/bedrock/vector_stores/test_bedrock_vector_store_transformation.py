@@ -1,5 +1,6 @@
 import json
 import traceback
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -649,7 +650,7 @@ async def _rejection(respx_mock: respx.MockRouter, filters: object) -> BaseExcep
     return error.value
 
 
-def _nested_compound(depth: int) -> dict[str, object]:
+def _nested_compound(depth: int) -> Mapping[str, object]:
     if depth == 0:
         return {"type": "eq", "key": "year"}
     return {"type": "and", "filters": [_nested_compound(depth - 1)]}
@@ -694,8 +695,27 @@ async def test_search_rejection_and_its_traceback_do_not_grow_with_nesting_depth
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "drop_params", False)
 
-    shallow: Final = await _rejection(respx_mock, _nested_compound(100))
-    deep: Final = await _rejection(respx_mock, _nested_compound(200))
+    shallow: Final = await _rejection(respx_mock, _nested_compound(160))
+    deep: Final = await _rejection(respx_mock, _nested_compound(240))
 
     assert len(str(deep)) == len(str(shallow))
+    assert "eq.value" in str(deep)
     assert len("".join(traceback.format_exception(deep))) == len("".join(traceback.format_exception(shallow)))
+
+
+@pytest.mark.asyncio
+async def test_search_rejection_names_a_bad_member_the_same_wherever_it_sits(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    good: Final = {"type": "eq", "key": "department", "value": "hr"}
+    bad: Final = {"key": "year"}
+
+    bad_first: Final = str(await _rejection(respx_mock, {"type": "and", "filters": [bad, good]}))
+    bad_last: Final = str(await _rejection(respx_mock, {"type": "and", "filters": [good, bad]}))
+
+    assert bad_first.replace("filters.and.filters.0", "filters.and.filters.1") == bad_last
+    assert "..." not in bad_last
