@@ -3233,15 +3233,28 @@ def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragment
 @pytest.mark.parametrize(
     ("fragments", "expected"),
     [
-        (('{"values": [3, 5]}',), [3, 5]),
-        ((" ", '{"values": [3, 5]}', " "), [3, 5]),
-        (('{"summary": "48420083852775e76508"}',), {"summary": "48420083852775e76508"}),
+        (('{"values": [3, 5]}',), "[3, 5]"),
+        ((" ", '{"values": [3, 5]}', " "), " [3, 5] "),
+        (('{"count": 1e400}',), '{"count": 1e400}'),
+        (('{"values": [1e400]}',), '{"values": [1e400]}'),
+        pytest.param(('{"n": ' + "1" * 5000 + "}",), '{"n": ' + "1" * 5000 + "}", id="int-over-digit-limit"),
     ],
 )
-def test_streamed_json_mode_without_schema_unwraps_a_one_piece_input_like_non_stream(
-    fragments: tuple[str, ...], expected: object
+def test_streamed_json_mode_without_schema_unwraps_values_only_from_a_one_piece_input(
+    fragments: tuple[str, ...], expected: str
 ) -> None:
-    assert json.loads(_schemaless_streamed_json_mode_contents(fragments)) == expected
+    assert _schemaless_streamed_json_mode_contents(fragments) == expected
+
+
+def test_streamed_json_mode_without_schema_unwraps_each_json_tool_blocks_one_piece_input() -> None:
+    json_tool_block: Final = {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}}
+    events: Final = _message_events(
+        (json_tool_block, ({"type": "input_json_delta", "partial_json": '{"values": [1]}'},)),
+        ({**json_tool_block, "id": "toolu_2"}, ({"type": "input_json_delta", "partial_json": '{"values": [2]}'},)),
+    )
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in events)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "[1][2]"
 
 
 def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():

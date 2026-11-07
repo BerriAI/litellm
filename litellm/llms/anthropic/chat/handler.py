@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
+    as_json_object,
     names_a_response_format_property,
     partial_response_format_answer,
     response_format_answer_json,
@@ -175,11 +176,19 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
     return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
-def _is_json_object(text: str) -> bool:
+def _unwrapped_values_answer(arguments: str) -> str:
     try:
-        return isinstance(json.loads(text), dict)
-    except (json.JSONDecodeError, RecursionError):
-        return False
+        payload: Final = _DECODED_JSON.validate_python(json.loads(arguments))
+    except (ValueError, RecursionError):
+        return arguments
+    payload_object: Final = as_json_object(payload)
+    values: Final = None if payload_object is None else payload_object.get("values")
+    if values is None:
+        return arguments
+    try:
+        return json.dumps(values, allow_nan=False)
+    except ValueError:
+        return arguments
 
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
@@ -1330,12 +1339,11 @@ class ModelResponseIterator:
 
     def _stream_schemaless_fragment(self, tool_use: ChatCompletionToolCallChunk) -> str:
         fragment: Final = tool_use.get("function", {}).get("arguments") or ""
-        is_whole_input: Final = not self._schemaless_input_started and _is_json_object(fragment)
+        if tool_use.get("id") is not None:
+            self._schemaless_input_started = False
+        is_first_piece: Final = not self._schemaless_input_started
         self._schemaless_input_started = self._schemaless_input_started or bool(fragment.strip())
-        if not is_whole_input:
-            return fragment
-        message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
-        return fragment if message is None else message.content or ""
+        return _unwrapped_values_answer(fragment) if is_first_piece else fragment
 
     def _stream_response_format_fragment(
         self, tool_use: ChatCompletionToolCallChunk, schema: ResponseFormatSchema
