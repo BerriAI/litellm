@@ -7,6 +7,7 @@ Tests that the card resolver tries both old and new well-known paths.
 from types import SimpleNamespace
 from typing import Any, Final
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -259,17 +260,31 @@ _FOUNDRY_CARD_JSON: Final = {
 
 
 class _FakeHttpxClient:
-    """Answers GETs from a path -> (status, body) map and records the path of each call."""
+    """Answers GETs under ``base_url`` from a path -> (status, body) map, and GETs at the URL's
+    origin from ``origin_responses``; records the path (or the full origin URL) of each call."""
 
-    def __init__(self, base_url: str, responses: dict[str, tuple[int, dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        responses: dict[str, tuple[int, dict[str, Any]]],
+        origin_responses: dict[str, tuple[int, dict[str, Any]]] | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._origin = f"{urlsplit(base_url).scheme}://{urlsplit(base_url).netloc}"
         self._responses = responses
+        self._origin_responses = origin_responses or {}
         self.calls: list[str] = []
+        self.headers_sent: list[Any] = []
 
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:
-        path: Final = url.removeprefix(self._base_url)
-        self.calls.append(path)
-        status_code, body = self._responses[path]
+        self.headers_sent.append(kwargs.get("headers"))
+        if url.startswith(self._base_url + "/"):
+            self.calls.append(url.removeprefix(self._base_url))
+            status_code, body = self._responses[url.removeprefix(self._base_url)]
+        else:
+            assert url.startswith(self._origin + "/"), url
+            self.calls.append(url)
+            status_code, body = self._origin_responses[url.removeprefix(self._origin)]
         return httpx.Response(status_code, json=body, request=httpx.Request("GET", url))
 
 
@@ -315,6 +330,10 @@ async def test_card_resolver_names_every_probed_path_when_discovery_fails():
             "/.well-known/agent.json": (401, {"error": "unauthorized"}),
             "/agentCard/v1.0": (404, {"error": "not found"}),
         },
+        origin_responses={
+            "/.well-known/agent-card.json": (404, {"error": "not found"}),
+            "/.well-known/agent.json": (404, {"error": "not found"}),
+        },
     )
 
     resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_FOUNDRY_BASE_URL)
@@ -327,6 +346,7 @@ async def test_card_resolver_names_every_probed_path_when_discovery_fails():
     assert "/.well-known/agent-card.json (" in message and "HTTP 404" in message
     assert "/.well-known/agent.json (" in message and "HTTP 401" in message
     assert "/agentCard/v1.0 (" in message
+    assert "https://foundry.example.com/.well-known/agent-card.json (" in message
 
 
 @pytest.mark.asyncio
@@ -339,6 +359,10 @@ async def test_card_resolver_discovery_error_is_404_when_every_probe_is_404():
                 "/.well-known/agent.json": (404, {"error": "not found"}),
                 "/agentCard/v1.0": (404, {"error": "not found"}),
             },
+            origin_responses={
+                "/.well-known/agent-card.json": (404, {"error": "not found"}),
+                "/.well-known/agent.json": (404, {"error": "not found"}),
+            },
         ),
         base_url=_FOUNDRY_BASE_URL,
     )
@@ -347,3 +371,173 @@ async def test_card_resolver_discovery_error_is_404_when_every_probe_is_404():
         await resolver.get_agent_card()
 
     assert raised.value.status_code == 404
+
+
+_SUBPATH_AGENT_URL: Final = "http://rsagent:3000/jsonrpc"
+
+_SUBPATH_CARD_JSON: Final = {
+    **_FOUNDRY_CARD_JSON,
+    "name": "rspath",
+    "url": _SUBPATH_AGENT_URL,
+    "supportedInterfaces": [{"url": _SUBPATH_AGENT_URL, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+}
+
+
+_NO_CARD_UNDER_THE_AGENT_PATH: Final = {
+    "/.well-known/agent-card.json": (404, {"error": "not found"}),
+    "/.well-known/agent.json": (404, {"error": "not found"}),
+    "/agentCard/v1.0": (404, {"error": "not found"}),
+}
+
+
+def _subpath_card_json(endpoint: str) -> dict[str, Any]:
+    return {
+        **_SUBPATH_CARD_JSON,
+        "url": endpoint,
+        "supportedInterfaces": [{"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "card_endpoint",
+    [_SUBPATH_AGENT_URL, _SUBPATH_AGENT_URL + "/", "http://rsagent:3000", "http://rsagent:3000/"],
+    ids=["agent url", "agent url with slash", "origin root", "origin root with slash"],
+)
+async def test_card_resolver_falls_back_to_the_well_known_card_at_the_agents_origin(card_endpoint):
+    """A2A 1.0 places the card at ``{origin}/.well-known/agent-card.json`` while the JSON-RPC
+    endpoint is routinely a sub-path, so an agent registered with that endpoint as its URL
+    must still be resolvable, from a card that names that endpoint or a path prefix of it."""
+    httpx_client = _FakeHttpxClient(
+        base_url=_SUBPATH_AGENT_URL,
+        responses=dict(_NO_CARD_UNDER_THE_AGENT_PATH),
+        origin_responses={"/.well-known/agent-card.json": (200, _subpath_card_json(card_endpoint))},
+    )
+
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_SUBPATH_AGENT_URL)
+    result = await resolver.get_agent_card()
+
+    assert httpx_client.calls[-1] == "http://rsagent:3000/.well-known/agent-card.json"
+    assert result.name == "rspath"
+    assert result.supported_interfaces[0].url == card_endpoint
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_keeps_the_agents_headers_off_the_origin_probes():
+    """The public card at the origin's well-known URI is unauthenticated by spec, and the origin
+    may host other applications, so the agent's own headers only go to the agent's paths."""
+    httpx_client = _FakeHttpxClient(
+        base_url=_SUBPATH_AGENT_URL,
+        responses=dict(_NO_CARD_UNDER_THE_AGENT_PATH),
+        origin_responses={"/.well-known/agent-card.json": (200, _subpath_card_json(_SUBPATH_AGENT_URL))},
+    )
+    agent_headers = {"x-agent-token": "secret-for-this-agent"}
+
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_SUBPATH_AGENT_URL)
+    await resolver.get_agent_card(http_kwargs={"headers": agent_headers})
+
+    assert httpx_client.calls[-1] == "http://rsagent:3000/.well-known/agent-card.json"
+    assert httpx_client.headers_sent[:-1] == [agent_headers] * 3
+    assert httpx_client.headers_sent[-1] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "card_json",
+    [
+        {
+            **_subpath_card_json("http://rsagent:3000/grpc"),
+            "supportedInterfaces": [
+                {"url": "http://rsagent:3000/grpc", "protocolBinding": "GRPC", "protocolVersion": "1.0"},
+                {"url": _SUBPATH_AGENT_URL, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+            ],
+        },
+        {
+            **_FOUNDRY_CARD_JSON,
+            "name": "rspath",
+            "url": "http://rsagent:3000/grpc",
+            "preferredTransport": "GRPC",
+            "additionalInterfaces": [{"url": _SUBPATH_AGENT_URL, "transport": "JSONRPC"}],
+        },
+    ],
+    ids=["supportedInterfaces", "additionalInterfaces"],
+)
+async def test_card_resolver_accepts_an_origin_card_that_names_the_agent_url_in_a_later_interface(card_json):
+    """The agent URL may be any of the card's interfaces, not only the first one."""
+    httpx_client = _FakeHttpxClient(
+        base_url=_SUBPATH_AGENT_URL,
+        responses=dict(_NO_CARD_UNDER_THE_AGENT_PATH),
+        origin_responses={"/.well-known/agent-card.json": (200, card_json)},
+    )
+
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_SUBPATH_AGENT_URL)
+    result = await resolver.get_agent_card()
+
+    assert httpx_client.calls[-1] == "http://rsagent:3000/.well-known/agent-card.json"
+    assert result.name == "rspath"
+    assert [interface.url for interface in result.supported_interfaces] == ["http://rsagent:3000/grpc", _SUBPATH_AGENT_URL]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejected_endpoint",
+    ["http://rsagent:3000/other", "http://rsagent:3000/json", "http://elsewhere:9/jsonrpc"],
+    ids=["sibling path", "string prefix but not a path prefix", "other host"],
+)
+async def test_card_resolver_rejects_an_origin_card_that_advertises_another_endpoint(rejected_endpoint):
+    """On a host serving several agents the origin card can belong to another agent, and its
+    endpoint would receive this agent's messages and headers, so it is only taken when one of its
+    interfaces names the configured agent URL or a path prefix of it; otherwise the card counts
+    as not found."""
+    httpx_client = _FakeHttpxClient(
+        base_url=_SUBPATH_AGENT_URL,
+        responses=dict(_NO_CARD_UNDER_THE_AGENT_PATH),
+        origin_responses={
+            "/.well-known/agent-card.json": (200, _subpath_card_json(rejected_endpoint)),
+            "/.well-known/agent.json": (404, {"error": "not found"}),
+        },
+    )
+
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_SUBPATH_AGENT_URL)
+    with pytest.raises(A2AAgentCardDiscoveryError) as raised:
+        await resolver.get_agent_card()
+
+    assert raised.value.status_code == 404
+    message = str(raised.value)
+    assert "http://rsagent:3000/.well-known/agent-card.json (" in message and repr(rejected_endpoint) in message
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_prefers_the_card_relative_to_the_agent_url():
+    """Deployments that serve the card under the agent path keep resolving without an extra
+    round trip, and a host that serves a different card at its origin never wins over them."""
+    httpx_client = _FakeHttpxClient(
+        base_url=_SUBPATH_AGENT_URL,
+        responses={"/.well-known/agent-card.json": (200, dict(_SUBPATH_CARD_JSON))},
+        origin_responses={"/.well-known/agent-card.json": (200, {**_SUBPATH_CARD_JSON, "name": "other agent"})},
+    )
+
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_SUBPATH_AGENT_URL)
+    result = await resolver.get_agent_card()
+
+    assert httpx_client.calls == ["/.well-known/agent-card.json"]
+    assert result.name == "rspath"
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_probes_only_once_when_the_agent_url_is_the_origin():
+    httpx_client = _FakeHttpxClient(
+        base_url="http://rsagent:3000",
+        responses={
+            "/.well-known/agent-card.json": (404, {"error": "not found"}),
+            "/.well-known/agent.json": (404, {"error": "not found"}),
+            "/agentCard/v1.0": (404, {"error": "not found"}),
+        },
+    )
+
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url="http://rsagent:3000/")
+    with pytest.raises(A2AAgentCardDiscoveryError):
+        await resolver.get_agent_card()
+
+    assert httpx_client.calls == ["/.well-known/agent-card.json", "/.well-known/agent.json", "/agentCard/v1.0"]
+
