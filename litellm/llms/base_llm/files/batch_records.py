@@ -3,11 +3,17 @@ from functools import cache
 from types import MappingProxyType
 from typing import Final, cast, get_type_hints
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
+
+
+def row_or_deployment_drop_params(openai_request_body: Mapping[str, object], deployment_drop_params: object) -> bool:
+    row_drop_params: Final = openai_request_body.get("drop_params")
+    return drops_unsupported_params(deployment_drop_params if row_drop_params is None else row_drop_params)
 
 
 @cache

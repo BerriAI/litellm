@@ -33,7 +33,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
@@ -44,7 +44,10 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -777,7 +780,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
     params: Final = {**deployment_params, **request_params}
-    drop_params: Final = drops_unsupported_params(params.get("drop_params"))
+    drop_params: Final = row_or_deployment_drop_params(request_params, deployment_params.get("drop_params"))
     chat_params: Final = tool_params_without_hosted_mcp(
         {
             **get_non_default_completion_params(params),
@@ -1322,7 +1325,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             VertexGeminiConfig.reject_unsupported_sampling_param(
                 model=model, param=", ".join(sampling_params), drop_params=False
             )
-        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
         vertex_params: Final = config.map_openai_params(
             model=model,
             non_default_params=tool_params_without_hosted_mcp(

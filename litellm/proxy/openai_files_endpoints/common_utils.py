@@ -487,7 +487,7 @@ def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str |
 def configured_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    if llm_router is None or "drop_params" in request:
+    if llm_router is None or request.get("drop_params") is not None:
         return MappingProxyType({})
     router_default: Final = RoutingContext(llm_router).default_litellm_params().get("drop_params")
     drop_params: Final = (
