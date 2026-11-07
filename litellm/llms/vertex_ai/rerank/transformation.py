@@ -27,6 +27,8 @@ from litellm.types.rerank import (
     RerankResponseResult,
 )
 
+DISCOVERY_ENGINE_MULTI_REGIONS: Final = frozenset(("eu", "us"))
+
 
 class _VertexRankedRecord(TypedDict):
     id: ReadOnly[str]
@@ -55,7 +57,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> str:
         """
         Get the complete URL for the Vertex AI Discovery Engine ranking API
@@ -83,6 +85,9 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 "Vertex AI project ID is required. Please set 'VERTEXAI_PROJECT', 'litellm.vertex_project', or pass 'vertex_project' parameter"
             )
 
+        location: Final = self.explicit_vertex_ai_location(params)
+        if location in DISCOVERY_ENGINE_MULTI_REGIONS:
+            return f"https://{location}-discoveryengine.googleapis.com/v1/projects/{project_id}/locations/{location}/rankingConfigs/default_ranking_config:rank"
         return f"https://discoveryengine.googleapis.com/v1/projects/{project_id}/locations/global/rankingConfigs/default_ranking_config:rank"
 
     def validate_environment(
