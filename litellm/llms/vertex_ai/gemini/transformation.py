@@ -1272,6 +1272,11 @@ def sync_transform_request_body(
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
 
+    if context_caching:
+        model_info = litellm_params.get("model_info") or {}
+        if model_info.get("supports_prompt_caching") is False:
+            context_caching = False
+
     (
         messages,
         optional_params,
@@ -1407,6 +1412,11 @@ async def async_transform_request_body(
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
+
+    if context_caching:
+        model_info = litellm_params.get("model_info") or {}
+        if model_info.get("supports_prompt_caching") is False:
+            context_caching = False
 
     (
         messages,
