@@ -313,6 +313,12 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     tags=["responses"],
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
 )
+@router.post(
+    "/openai/responses",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+    include_in_schema=False,
+)
 async def responses_api(
     request: Request,
     fastapi_response: Response,
@@ -810,6 +816,12 @@ async def cursor_chat_completions(
     responses=RESPONSES_API_RESPONSE_SCHEMAS,
     openapi_extra=_RETRIEVE_QUERY_OPENAPI,
 )
+@router.get(
+    "/openai/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+    include_in_schema=False,
+)
 async def get_response(
     response_id: str,
     request: Request,
@@ -1242,6 +1254,12 @@ async def _bill_finished_stream(
     tags=["responses"],
     responses=DELETE_RESPONSE_SCHEMAS,
 )
+@router.delete(
+    "/openai/responses/{response_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+    include_in_schema=False,
+)
 async def delete_response(
     response_id: str,
     request: Request,
@@ -1358,6 +1376,12 @@ async def delete_response(
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
 )
+@router.get(
+    "/openai/responses/{response_id}/input_items",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+    include_in_schema=False,
+)
 async def get_response_input_items(
     response_id: str,
     request: Request,
@@ -1425,6 +1449,12 @@ async def get_response_input_items(
     "/openai/v1/responses/compact",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+)
+@router.post(
+    "/openai/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+    include_in_schema=False,
 )
 async def compact_response(
     request: Request,
@@ -1738,6 +1768,12 @@ def _responses_input_as_token_count_messages(
     dependencies=(_user_api_key_auth_dep,),
     tags=_RESPONSES_TAGS,
 )
+@router.post(
+    "/openai/responses/input_tokens",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+    include_in_schema=False,
+)
 async def responses_input_tokens(
     request: Request,
     token_counter: _TokenCounter = _token_counter_dep,
@@ -1869,6 +1905,12 @@ async def responses_input_tokens(
     "/openai/v1/responses/{response_id}/cancel",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
+)
+@router.post(
+    "/openai/responses/{response_id}/cancel",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+    include_in_schema=False,
 )
 async def cancel_response(
     response_id: str,

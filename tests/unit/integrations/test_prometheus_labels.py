@@ -463,6 +463,9 @@ def test_route_normalization_for_sub_routes():
             "/openai/v1/responses/id4/input_items",
             "/openai/v1/responses/{response_id}/input_items",
         ),
+        ("/openai/responses/id5/cancel", "/openai/responses/{response_id}/cancel"),
+        ("/openai/responses/id6/input_items", "/openai/responses/{response_id}/input_items"),
+        ("/openai/responses/id7", "/openai/responses/{response_id}"),
     ]
 
     for original, expected in sub_routes:
