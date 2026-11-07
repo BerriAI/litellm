@@ -328,6 +328,19 @@ def allowed_tools_tool_choice_with_function(tool_choice: object, function_name: 
     return _with_entries(layout, (*_entries_of(layout), _function_entry(layout, function_name)))
 
 
+def allowed_tools_tool_choice_in_auto_mode(tool_choice: object) -> object:
+    layout: Final = _callers_layout(tool_choice)
+    match layout:
+        case None:
+            return tool_choice
+        case ChatAllowedToolsToolChoice():
+            return layout.model_copy(
+                update={"allowed_tools": layout.allowed_tools.model_copy(update={"mode": "auto"})}
+            ).model_dump(mode="json")
+        case ResponsesAllowedToolsToolChoice():
+            return layout.model_copy(update={"mode": "auto"}).model_dump(mode="json")
+
+
 def _gateway_entry(tool: Mapping[str, object], gateway_labels: frozenset[str]) -> tuple[str, str | None] | None:
     entry: Final = _server_entry(tool)
     return entry if entry is not None and entry[0] in gateway_labels else None

@@ -18,7 +18,10 @@ from pydantic import ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_builtin_as_function
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_auto_mode,
+    allowed_tools_tool_choice_with_builtin_as_function,
+)
 from litellm.llms.base_llm.sandbox.transformation import (
     CodeExecutionResult,
     ContainerHandle,
@@ -707,7 +710,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     def _get_followup_optional_params(self, optional_params: dict[str, object]) -> dict[str, object]:
         drop_tool_choice: Final = self._tool_choice_targets_code_interpreter(optional_params.get("tool_choice"))
         return {
-            k: v for k, v in optional_params.items() if k != "tools" and not (k == "tool_choice" and drop_tool_choice)
+            k: allowed_tools_tool_choice_in_auto_mode(v) if k == "tool_choice" else v
+            for k, v in optional_params.items()
+            if k != "tools" and not (k == "tool_choice" and drop_tool_choice)
         }
 
     async def async_post_agentic_loop_response_hook(

@@ -1,6 +1,6 @@
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
@@ -148,7 +148,7 @@ class _LabelScope:
     label: str
     whole_gateway: bool = False
     server_ids: frozenset[str] = frozenset()
-    toolset_tools: Mapping[str, tuple[str, ...]] = MappingProxyType({})
+    toolset_tools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
     def serves(self, server: MCPServer | None, tool_name: str) -> bool:
         if self.whole_gateway:
