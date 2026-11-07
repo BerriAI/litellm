@@ -70,8 +70,10 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    proxy_request_headers,
     redact_nested_match_and_regex_keys,
     require_attributes,
+    stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -4815,7 +4817,8 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging.callback_capabilities()
-        cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+        request_headers: Final = proxy_request_headers(request_data)
+        cost_injection_enabled: Final = stream_cost_injection_requested(request_headers)
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
@@ -4862,7 +4865,7 @@ class ProxyBaseLLMRequestProcessing:
 
                     model_name = request_data.get("model", "")
                     chunk = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
-                        chunk, model_name, request_data.get("litellm_logging_obj")
+                        chunk, model_name, request_data.get("litellm_logging_obj"), request_headers=request_headers
                     )
 
                 # Set before the yield: an async generator suspends at the yield,
@@ -4991,18 +4994,30 @@ class ProxyBaseLLMRequestProcessing:
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: bytes, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: bytes,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> bytes: ...
 
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> object: ...
 
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> object:
         """
         Process a streaming chunk and inject cost information if enabled.
@@ -5011,11 +5026,12 @@ class ProxyBaseLLMRequestProcessing:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
             litellm_logging_obj: The call's logging object, used for pricing
+            request_headers: The proxy request headers, read for the per-request opt-in header
 
         Returns:
             The processed chunk with cost information injected if applicable
         """
-        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+        if not stream_cost_injection_requested(request_headers):
             return chunk
 
         try:
