@@ -134,7 +134,7 @@ GROK_4_7_TOOL_SEARCH_TEST_CASE: Final = replace(
     expected_litellm_response={
         **GROK_4_7_TEST_CASE.expected_litellm_response,
         "id": "chatcmpl-xevjeh2pxs6gjvcn2yz76piwdc4pi6fb2sqwb7psnwitm5higvvq",
-        "usage": {"input_tokens": 162, "output_tokens": 76},
+        "usage": {"input_tokens": 162, "output_tokens": 76, "output_tokens_details": {"thinking_tokens": 57}},
         "content": [{"type": "text", "text": "The web search tool is now loaded and available for use."}],
     },
 )

@@ -201,7 +201,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo3ZGE3NDY3Njc3N2IyZjVkYmQ3MDI1MTI1ZjEzMDdlYWQ0MjM3YTgzN2QxZTJmZDhkY2FkNjhlODM4ODU1Zjg2O3Jlc3BvbnNlX2lkOnJlc3BfMGFmNjdjYjc4YmVhZDJjNjAwNmFkMDIzYTcyNzM0ODdkMGIxNzY4Yjc3ZjY5NTZiNzM=",
         "model": "openai/responses/gpt-6.1-sol",
-        "usage": {"input_tokens": 309, "output_tokens": 140},
+        "usage": {"input_tokens": 309, "output_tokens": 140, "output_tokens_details": {"thinking_tokens": 75}},
         "content": [
             {
                 "type": "redacted_thinking",
