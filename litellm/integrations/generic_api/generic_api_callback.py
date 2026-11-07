@@ -259,12 +259,16 @@ class GenericAPILogger(CustomBatchLogger):
         total_attempts: Final = self.max_retries + 1
         for attempt in range(total_attempts):
             try:
-                return await self.async_httpx_client.post(
+                response = await self.async_httpx_client.post(
                     url=self.endpoint,
                     headers=self.headers,
                     data=data,
                     timeout=self.timeout,
                 )
+                # A 4xx/5xx response is a failed send: raise so `_should_retry_exception` can
+                # retry transient statuses instead of treating the batch as delivered.
+                if response.status_code >= 400:
+                    response.raise_for_status()
             except Exception as e:
                 is_last_attempt = attempt == self.max_retries
                 should_retry = self._should_retry_exception(e)
@@ -279,6 +283,8 @@ class GenericAPILogger(CustomBatchLogger):
                     total_attempts,
                 )
                 await self._sleep_before_retry(attempt)
+            else:
+                return response
 
         raise RuntimeError("Generic API Logger retry loop exited unexpectedly")
 
@@ -370,6 +376,9 @@ class GenericAPILogger(CustomBatchLogger):
         batch: Final = tuple(self.log_queue)
         if not batch:
             return
+        failed_events: Final[  # mutable-ok: filled while the send runs and drained into the queue in finally
+            list[Mapping[str, object] | StandardLoggingPayload]
+        ] = []
         try:
             verbose_logger.debug(
                 "Generic API Logger - about to flush %s events in '%s' format", len(batch), self.log_format
@@ -389,6 +398,9 @@ class GenericAPILogger(CustomBatchLogger):
                 for idx, result in enumerate(responses):
                     if isinstance(result, Exception):
                         verbose_logger.exception("Generic API Logger - Error sending log %s: %s", idx, result)
+                        # Transient failures stay queued for the next flush; permanent ones are dropped.
+                        if self._should_retry_exception(result):
+                            failed_events.append(batch[idx])
                     else:
                         # result is a Response object
                         verbose_logger.debug(
@@ -417,8 +429,26 @@ class GenericAPILogger(CustomBatchLogger):
 
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error sending batch - %s\n%s", e, traceback.format_exc())
+            # Transient failures (timeouts, transport errors, 5xx) are re-queued so the next
+            # flush retries them; permanent failures (4xx, payload errors) are dropped.
+            if self._should_retry_exception(e):
+                failed_events.extend(batch)
         finally:
             del self.log_queue[: len(batch)]
+            if failed_events:
+                # Put undelivered events back at the head of the queue, in order, so the
+                # next flush retries them. Bound the queue like `CustomBatchLogger.flush_queue`
+                # does for loggers that surface failures: drop the oldest events beyond
+                # `max_queue_size` so a persistently unreachable endpoint can't grow it unbounded.
+                self.log_queue[:0] = failed_events
+                overflow: Final = len(self.log_queue) - self.max_queue_size
+                if overflow > 0:
+                    del self.log_queue[:overflow]
+                    verbose_logger.warning(
+                        "Generic API Logger: log queue exceeded max_queue_size=%s; dropped %s oldest events.",
+                        self.max_queue_size,
+                        overflow,
+                    )
             self.last_flush_time = time.time()
 
     def _get_v1_logging_payload(self, kwargs, response_obj, start_time, end_time) -> dict:
