@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from typing import Final, NoReturn
 from unittest.mock import MagicMock
 
@@ -359,6 +360,7 @@ def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_ura
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
     monkeypatch.setattr(os, "urandom", outside_the_fips_provider)
     monkeypatch.setattr(hmac, "new", outside_the_fips_provider)
+    monkeypatch.setattr(time, "time", lambda: 1_800_000_000.0)
     fixed_input: Final = (
         (1).to_bytes(4, "big") + b"litellm-plugin:session-claim:" + b"\x00" + b"chat-ui" + (256).to_bytes(4, "big")
     )
