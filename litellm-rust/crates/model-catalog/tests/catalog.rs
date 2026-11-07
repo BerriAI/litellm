@@ -149,7 +149,7 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
 )]
 #[case::alias_of_claimed_by_a_list(
     json!({"Real": {"litellm_provider": "t"}, "real-latest": {"alias_of": "Real"}, "Other": {"litellm_provider": "t", "aliases": ["real-latest"]}}),
-    r#"Other: alias "real-latest" already belongs to Real"#
+    r#"real-latest: alias "real-latest" already belongs to Other"#
 )]
 #[case::aliases_not_a_list(
     json!({"a": {"litellm_provider": "t", "aliases": "bad"}}),
@@ -449,4 +449,19 @@ fn a_dangling_alias_of_row_is_rejected_and_dropped_from_the_written_document() {
     assert_eq!(removed.len(), 1);
     assert!(catalog.lookup("ghost-latest").is_none());
     assert_eq!(written(&catalog), r#"{"Real":{"litellm_provider":"t"}}"#);
+}
+
+#[rstest]
+fn a_pointer_row_that_repeats_a_listed_alias_is_dropped_and_the_model_is_kept() {
+    let parsed = loaded(json!({
+        "Real": {"litellm_provider": "t", "aliases": ["real-latest"]},
+        "real-latest": {"alias_of": "Real"}
+    }));
+    let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
+    assert_eq!(removed.len(), 1);
+    assert_eq!(catalog.lookup("real-latest").unwrap().canonical_key, "Real");
+    assert_eq!(
+        written(&catalog),
+        r#"{"Real":{"litellm_provider":"t","aliases":["real-latest"]}}"#
+    );
 }

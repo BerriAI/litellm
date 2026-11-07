@@ -130,12 +130,15 @@ def test_finalize_pops_key_and_installs_rules():
         set_fallback_generalizations(previous)
 
 
-def test_alias_of_rows_are_served_as_their_target_and_dangling_ones_are_dropped(caplog) -> None:
+def test_alias_of_rows_are_served_as_their_target_and_dangling_ones_are_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     raw: Final = {
         "real": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1e-6},
         "real-latest": {"alias_of": "real"},
         "ghost-latest": {"alias_of": "ghost"},
         "chain-latest": {"alias_of": "real-latest"},
+        "listed-latest": {"alias_of": "missing", "aliases": ["extra"]},
     }
     with caplog.at_level("WARNING"):
         finalized: Final = _finalize_model_cost_map(raw)
@@ -143,7 +146,9 @@ def test_alias_of_rows_are_served_as_their_target_and_dangling_ones_are_dropped(
     assert "alias_of" not in finalized["real"]
     assert set(finalized) == {"real", "real-latest"}
     assert finalized["real-latest"]["litellm_provider"] == "openai"
-    assert {"ghost-latest", "chain-latest"} <= {record.getMessage().split("'")[1] for record in caplog.records}
+    assert {"ghost-latest", "chain-latest", "listed-latest"} == {
+        record.getMessage().split("'")[1] for record in caplog.records
+    }
 
 
 def test_finalize_with_no_block_clears_rules():

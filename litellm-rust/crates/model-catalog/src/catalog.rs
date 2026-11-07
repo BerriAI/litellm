@@ -189,13 +189,6 @@ impl Catalog {
         }
 
         let mut aliases: IndexMap<String, String> = IndexMap::new();
-        for (alias, target) in pointer_rows {
-            if entries.contains_key(&target) {
-                aliases.insert(alias, target);
-            } else {
-                problems.push(Error::from_key(&alias, Repr::AliasTargetMissing { target }));
-            }
-        }
         for (model, names) in alias_lists {
             for alias in names {
                 if entries.contains_key(&alias) {
@@ -211,6 +204,21 @@ impl Catalog {
                 } else {
                     aliases.insert(alias, model.clone());
                 }
+            }
+        }
+        for (alias, target) in pointer_rows {
+            if !entries.contains_key(&target) {
+                problems.push(Error::from_key(&alias, Repr::AliasTargetMissing { target }));
+            } else if let Some(taken_by) = aliases.get(&alias) {
+                problems.push(Error::from_key(
+                    &alias,
+                    Repr::AliasTaken {
+                        alias: alias.clone(),
+                        taken_by: taken_by.clone(),
+                    },
+                ));
+            } else {
+                aliases.insert(alias, target);
             }
         }
 
@@ -362,8 +370,7 @@ impl Catalog {
         let mut catalog = self;
         catalog.store.edit(|rows| {
             rows.entries.retain(|name, _| !rejected.contains(name));
-            rows.aliases
-                .retain(|alias, owner| !rejected.contains(owner) && !rejected.contains(alias));
+            rows.aliases.retain(|_, owner| !rejected.contains(owner));
         });
         catalog
             .sections
@@ -436,7 +443,6 @@ impl Catalog {
     }
 }
 
-/// One row as read: a model, or an `alias_of` pointer at one
 struct RowRead {
     model: Option<Model>,
     aliases: Option<Vec<String>>,
