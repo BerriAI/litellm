@@ -30,6 +30,7 @@ _EXPECTED: Final[dict[str, JsonValue]] = {
     "object": "search",
     "results": [
         {
+            "id": "https://result.invalid/sdk",
             "title": "SDK result",
             "url": "https://result.invalid/sdk",
             "snippet": "First line.\n\nSecond line.",
