@@ -73,6 +73,38 @@ class GithubCopilotConfig(OpenAIConfig):
     ) -> tuple[str | None, str | None, str]:
         return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
 
+    @staticmethod
+    def _flatten_text_content_blocks(
+        content: object,
+    ) -> tuple[str, object | None] | None:
+        """
+        If content is a list of text-only blocks, returns (flattened_text, cache_control).
+        Leaves multimodal or non-text content (e.g. image_url) untouched by returning None.
+        """
+        if not isinstance(content, list):
+            return None
+
+        extracted_texts: list[str] = []
+        cache_control: object | None = None
+
+        for item in content:
+            if isinstance(item, str):
+                extracted_texts.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type == "text" or (item_type is None and "text" in item):
+                    text_val = item.get("text")
+                    if isinstance(text_val, str):
+                        extracted_texts.append(text_val)
+                    if cache_control is None and "cache_control" in item:
+                        cache_control = item.get("cache_control")
+                else:
+                    return None
+            else:
+                return None
+
+        return "".join(extracted_texts), cache_control
+
     def _transform_messages(
         self,
         messages,
@@ -80,20 +112,34 @@ class GithubCopilotConfig(OpenAIConfig):
     ):
         import litellm
 
-        # Check if system-to-assistant conversion is disabled
-        if litellm.disable_copilot_system_to_assistant:
-            # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
-            # No conversion needed - just return messages as-is
-            return messages
-
-        # Default behavior: convert system messages to assistant for compatibility
+        disable_conversion: Final = bool(litellm.disable_copilot_system_to_assistant)
         transformed_messages: Final = []
         for message in messages:
-            if message.get("role") == "system":
-                # Convert system message to assistant message
-                transformed_messages.append(
-                    cast(AllMessageValues, {**message, "role": "assistant"})  # cast-ok: dict matches the union
-                )
+            role = message.get("role")
+            if role == "system":
+                target_role = "system" if disable_conversion else "assistant"
+                flattened = self._flatten_text_content_blocks(message.get("content"))
+                if flattened is not None:
+                    flattened_content, cache_control = flattened
+                    transformed_message = cast(
+                        AllMessageValues,
+                        {
+                            **message,
+                            "role": target_role,
+                            "content": flattened_content,
+                            **(
+                                {"cache_control": cache_control}
+                                if cache_control is not None and "cache_control" not in message
+                                else {}
+                            ),
+                        },
+                    )
+                else:
+                    transformed_message = cast(
+                        AllMessageValues,
+                        {**message, "role": target_role},
+                    )
+                transformed_messages.append(transformed_message)
             else:
                 transformed_messages.append(message)
 
