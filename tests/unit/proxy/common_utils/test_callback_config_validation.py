@@ -1,11 +1,10 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.proxy.common_utils.callback_config_validation import (
-    callback_backend_name,
     callback_config_error,
     callback_definition,
     callback_definitions_error,
@@ -592,29 +591,43 @@ def test_a_reference_resolves_to_its_definition_and_a_plain_name_does_not() -> N
     )
     assert callback_definition("arize") is None
     assert callback_definition(None) is None
-    assert (callback_backend_name("arize_space_a"), callback_backend_name("langfuse")) == ("arize", "langfuse")
 
 
 @pytest.mark.usefixtures("arize_space_a")
-def test_a_reference_entry_may_not_carry_callback_vars() -> None:
+@pytest.mark.parametrize(
+    "inline_fields",
+    [{"callback_vars": {"arize_space_id": "attacker-space"}}, {"callback_vars": {}}, {"callback_name": "arize"}],
+)
+def test_a_reference_entry_may_not_carry_inline_callback_fields(inline_fields: Mapping[str, object]) -> None:
+    reference: Final = {"callback_settings_name": "arize_space_a", "callback_type": "success"}
+    error: Final = logging_metadata_config_error({"logging": [{**reference, **inline_fields}]})
+    assert error is not None and "arize_space_a" in error and next(iter(inline_fields)) in error
+    assert logging_metadata_config_error({"logging": [reference]}) is None
+
+
+@pytest.mark.usefixtures("arize_space_a")
+@pytest.mark.parametrize("reference_name", ["corp_lf", None, 5, ""])
+def test_a_reference_to_no_definition_is_rejected_at_write_time(reference_name: object) -> None:
     error: Final = logging_metadata_config_error(
-        {
-            "logging": [
-                {
-                    "callback_name": "arize_space_a",
-                    "callback_type": "success",
-                    "callback_vars": {"arize_space_id": "attacker-space"},
-                }
-            ]
-        }
+        {"logging": [{"callback_settings_name": reference_name, "callback_type": "success"}]}
     )
-    assert error is not None and "arize_space_a" in error and "callback_vars" in error
+    assert error is not None and "callback_settings_name" in error
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_callback_name_matching_a_definition_is_an_ordinary_entry() -> None:
+    entry: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+    assert reference_conflicts([entry, {"callback_name": "arize", "callback_vars": {"arize_space_id": "x"}}]) == (
+        frozenset()
+    )
+    error: Final = logging_metadata_config_error({"logging": [entry]})
+    assert error is not None and "needs a callback_vars object" in error
 
 
 @pytest.mark.usefixtures("arize_space_a")
 def test_a_reference_is_the_only_entry_for_its_backend() -> None:
     sibling: Final = {"callback_name": "arize", "callback_type": "success", "callback_vars": {"arize_space_id": "x"}}
-    reference: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+    reference: Final = {"callback_settings_name": "arize_space_a", "callback_type": "success"}
     error: Final = logging_metadata_config_error({"logging": [reference, sibling]})
     assert error is not None and "arize_space_a" in error and "arize" in error
     assert logging_metadata_config_error({"logging": [sibling]}) is None
@@ -626,8 +639,8 @@ def test_a_reference_sits_next_to_entries_for_other_backends() -> None:
         logging_metadata_config_error(
             {
                 "logging": [
-                    {"callback_name": "arize_space_a", "callback_type": "success"},
-                    {"callback_name": "arize_space_a", "callback_type": "failure", "callback_vars": {}},
+                    {"callback_settings_name": "arize_space_a", "callback_type": "success"},
+                    {"callback_settings_name": "arize_space_a", "callback_type": "failure"},
                     {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}},
                 ]
             }
@@ -638,7 +651,7 @@ def test_a_reference_sits_next_to_entries_for_other_backends() -> None:
         logging_metadata_config_error(
             {
                 "logging": [
-                    {"callback_name": "arize_space_a", "callback_type": "success"},
+                    {"callback_settings_name": "arize_space_a", "callback_type": "success"},
                     {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}},
                 ]
             }
@@ -648,21 +661,30 @@ def test_a_reference_sits_next_to_entries_for_other_backends() -> None:
 
 
 def test_logging_entry_keys_change_with_every_field_a_caller_could_edit() -> None:
-    entry: Final = {"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {"b": "2", "a": "1"}}
+    entry: Final = {
+        "callback_settings_name": "arize_space_a",
+        "callback_type": "success",
+        "callback_vars": {"b": "2", "a": "1"},
+    }
     reordered: Final = {
         "callback_type": "success",
         "callback_vars": {"a": "1", "b": "2"},
-        "callback_name": "arize_space_a",
+        "callback_settings_name": "arize_space_a",
     }
     assert logging_entry_keys([entry]) == logging_entry_keys([reordered])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": "failure"}])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_vars": {"a": "1"}}])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_name": "arize"}])
+    assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_settings_name": "arize_space_b"}])
+    assert logging_entry_keys([{**entry, "callback_settings_name": None}]) != logging_entry_keys(
+        [{key: value for key, value in entry.items() if key != "callback_settings_name"}]
+    )
     assert logging_entry_keys([entry]) != logging_entry_keys([entry, entry])
     assert logging_entry_keys(None) == logging_entry_keys("not-a-list") == ()
 
 
-@pytest.mark.parametrize("callback_type", [[], "bogus", 1, {"success": True}])
+@pytest.mark.usefixtures("arize_space_a")
+@pytest.mark.parametrize("callback_type", [[], "bogus", "SUCCESS", "Failure", 1, {"success": True}])
 def test_a_logging_entry_with_a_malformed_callback_type_is_rejected_at_write_time(callback_type: object) -> None:
     """Stored as sent, such an entry fails model validation at request time and its logger silently never runs."""
     error: Final = logging_metadata_config_error(
@@ -670,7 +692,7 @@ def test_a_logging_entry_with_a_malformed_callback_type_is_rejected_at_write_tim
     )
     assert error is not None and "callback_type" in error
     reference_error: Final = logging_metadata_config_error(
-        {"logging": [{"callback_name": "arize_space_a", "callback_type": callback_type}]}
+        {"logging": [{"callback_settings_name": "arize_space_a", "callback_type": callback_type}]}
     )
     assert reference_error is not None and "callback_type" in reference_error
 
@@ -684,7 +706,7 @@ def test_a_logging_entry_with_a_valid_or_absent_callback_type_passes(callback_ty
 
 
 def test_logging_entry_keys_keep_a_malformed_callback_type_distinct_from_a_missing_one() -> None:
-    entry: Final = {"callback_name": "arize_space_a", "callback_vars": {}}
+    entry: Final = {"callback_settings_name": "arize_space_a", "callback_vars": {}}
     assert logging_entry_keys([entry]) == logging_entry_keys([{**entry, "callback_type": None}])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": []}])
     assert logging_entry_keys([entry]) != logging_entry_keys([{**entry, "callback_type": "success"}])
@@ -710,7 +732,7 @@ def langfuse_team_a(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_reference_may_not_sit_next_to_an_entry_of_the_same_credential_family() -> None:
     """The classic langfuse callback reads langfuse_* credentials from the merged map, so a sibling with its own
     host next to a langfuse_otel reference would receive the definition's keys."""
-    reference: Final = {"callback_name": "langfuse_team_a", "callback_type": "success"}
+    reference: Final = {"callback_settings_name": "langfuse_team_a", "callback_type": "success"}
     sibling: Final = {
         "callback_name": "langfuse",
         "callback_type": "success",
@@ -743,7 +765,7 @@ def test_a_failure_only_reference_is_held_to_its_definition_settings(monkeypatch
             }
         },
     )
-    failure_only: Final = {"callback_name": "arize_space_a", "callback_type": "failure"}
+    failure_only: Final = {"callback_settings_name": "arize_space_a", "callback_type": "failure"}
     error: Final = logging_metadata_config_error({"logging": [failure_only]})
     assert error is not None and "excluded_services" in error and "callback_type" in error
     assert logging_metadata_config_error({"logging": [{**failure_only, "callback_type": "success"}]}) is None
@@ -762,6 +784,16 @@ def test_an_ordinary_logging_entry_without_callback_vars_is_rejected_at_write_ti
     )
     assert error is not None and "datadog" in error and "callback_vars" in error
     assert logging_metadata_config_error({"logging": [{"callback_name": "datadog", "callback_vars": {}}]}) is None
+
+
+@pytest.mark.parametrize("callback_vars", [None, "x", ["dd_api_key"]])
+def test_an_ordinary_logging_entry_with_non_object_callback_vars_is_rejected_at_write_time(
+    callback_vars: object,
+) -> None:
+    error: Final = logging_metadata_config_error(
+        {"logging": [{"callback_name": "datadog", "callback_type": "success", "callback_vars": callback_vars}]}
+    )
+    assert error is not None and "datadog" in error and "callback_vars" in error
 
 
 def test_logging_entry_keys_keep_missing_callback_vars_distinct_from_empty_ones() -> None:

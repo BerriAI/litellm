@@ -11445,7 +11445,7 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     assert data["metadata"] == caller_metadata
 
 
-_REFERENCE_ENTRY: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+_REFERENCE_ENTRY: Final = {"callback_settings_name": "arize_space_a", "callback_type": "success"}
 _ARIZE_SPACE_A: Final = {
     "callback_type": "arize",
     "arize_api_key": "resolved-space-a-key",
@@ -11576,7 +11576,7 @@ def test_a_reference_is_skipped_when_a_sibling_carries_a_value_of_its_credential
     }
     auth: Final = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={"logging": [{"callback_name": "langfuse_team_a", "callback_type": "success"}, sibling]},
+        metadata={"logging": [{"callback_settings_name": "langfuse_team_a", "callback_type": "success"}, sibling]},
         team_metadata={},
     )
 
@@ -11585,3 +11585,24 @@ def test_a_reference_is_skipped_when_a_sibling_carries_a_value_of_its_credential
     assert result is not None
     assert result.success_callback == ["langfuse"]
     assert result.callback_vars == sibling["callback_vars"]
+
+
+@pytest.mark.usefixtures("arize_space_a")
+def test_a_key_entry_naming_a_definition_in_callback_name_does_not_resolve_to_it() -> None:
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"logging": [{"callback_name": "arize_space_a", "callback_type": "success", "callback_vars": {}}]},
+        team_metadata={},
+    )
+
+    result: Final = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None
+    assert (result.success_callback, result.callback_vars) == (["arize_space_a"], {})
+
+
+def test_a_reference_to_a_definition_removed_from_the_config_logs_nowhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callback_settings", {})
+    auth: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"logging": [_REFERENCE_ENTRY]}, team_metadata={})
+
+    assert get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock()) is None

@@ -68,7 +68,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import (
-    callback_definition,
+    holds_callback_reference,
     logging_entry_keys,
     logging_metadata_config_error,
 )
@@ -951,9 +951,11 @@ def raise_on_unauthorized_callback_reference(
     """
     if metadata is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    requested: Final = logging_entry_keys(metadata.get("logging"))
-    stored: Final = logging_entry_keys(_stored_logging_entries(existing_metadata))
-    if requested == stored or not any(callback_definition(name) is not None for name, _, _ in (*requested, *stored)):
+    requested_entries: Final = metadata.get("logging")
+    stored_entries: Final = _stored_logging_entries(existing_metadata)
+    if logging_entry_keys(requested_entries) == logging_entry_keys(stored_entries) or not (
+        holds_callback_reference(requested_entries) or holds_callback_reference(stored_entries)
+    ):
         return
     raise HTTPException(
         status_code=403,

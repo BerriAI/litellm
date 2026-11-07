@@ -6658,3 +6658,21 @@ async def test_a_callback_definition_with_a_misspelled_field_fails_boot(tmp_path
 
     with pytest.raises(ValueError, match="arize_api_kye"):
         await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("config_without_db")
+async def test_a_callback_definition_under_litellm_settings_is_validated_like_a_top_level_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("QA_ARIZE_SPACE_A_SPACE", raising=False)
+    config_file: Final = tmp_path / "callbacks.yaml"
+    config_file.write_text(
+        "model_list: []\nlitellm_settings:\n  callback_settings:\n    arize_space_a:\n      callback_type: arize\n"
+        "      arize_api_key: k\n      arize_space_id: os.environ/QA_ARIZE_SPACE_A_SPACE\n"
+    )
+
+    with pytest.raises(ValueError, match=r"callback_settings\.arize_space_a\.arize_space_id"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.callback_settings == {}

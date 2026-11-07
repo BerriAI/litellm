@@ -5525,7 +5525,7 @@ async def test_new_user_cannot_hand_its_auto_created_key_a_callback_reference_fo
         proxy_logging_obj=proxy_server.proxy_logging_obj,
     )
     mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
-    reference: Final = {"logging": [{"callback_name": "arize_space_a", "callback_type": "success"}]}
+    reference: Final = {"logging": [{"callback_settings_name": "arize_space_a", "callback_type": "success"}]}
 
     with pytest.raises(ProxyException) as exc:
         await new_user(

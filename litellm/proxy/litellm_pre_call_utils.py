@@ -77,7 +77,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.callback_config_validation import callback_definition, reference_conflicts
+from litellm.proxy.common_utils.callback_config_validation import (
+    CALLBACK_REFERENCE_FIELD,
+    callback_definition,
+    reference_conflicts,
+)
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -1273,9 +1277,16 @@ def resolved_key_callbacks(logging_entries: object, *, source: str) -> tuple[Add
 def _resolved_key_callback(
     entry: Mapping[str, object], *, source: str, conflicts: frozenset[str]
 ) -> AddTeamCallback | None:
-    definition: Final = callback_definition(entry.get("callback_name"))
-    if definition is None:
+    if CALLBACK_REFERENCE_FIELD not in entry:
         return get_validated_callback_metadata(item=dict(entry), source=source)
+    definition: Final = callback_definition(entry[CALLBACK_REFERENCE_FIELD])
+    if definition is None:
+        verbose_proxy_logger.warning(
+            "Ignoring %s callback metadata naming callback_settings.%s: the proxy config defines no such entry",
+            source,
+            _sanitize_for_log(str(entry[CALLBACK_REFERENCE_FIELD])),
+        )
+        return None
     if definition.name in conflicts:
         verbose_proxy_logger.warning(
             "Ignoring %s callback metadata naming callback_settings.%s: another entry on this key names the %s "
@@ -1285,7 +1296,9 @@ def _resolved_key_callback(
             _sanitize_for_log(definition.backend),
         )
         return None
-    reference: Final = get_validated_callback_metadata(item={**entry, "callback_vars": {}}, source=source)
+    reference: Final = get_validated_callback_metadata(
+        item={**entry, "callback_name": definition.backend, "callback_vars": {}}, source=source
+    )
     if reference is None:
         return None
     return reference.model_copy(

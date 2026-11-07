@@ -24247,7 +24247,7 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
 
 
-_REFERENCE_ENTRY: Final = {"callback_name": "arize_space_a", "callback_type": "success"}
+_REFERENCE_ENTRY: Final = {"callback_settings_name": "arize_space_a", "callback_type": "success"}
 _LANGFUSE_ENTRY: Final = {
     "callback_name": "langfuse",
     "callback_type": "success",
@@ -24301,7 +24301,7 @@ class TestCallbackReferenceWriteGate:
             {"logging": []},
             {"logging": [{**_REFERENCE_ENTRY, "callback_type": "failure"}]},
             {"logging": [{**_REFERENCE_ENTRY, "callback_type": []}]},
-            {"logging": [{"callback_name": "arize_space_a", "callback_type": []}]},
+            {"logging": [{"callback_settings_name": "arize_space_a", "callback_type": []}]},
             {"logging": [{**_REFERENCE_ENTRY, "callback_name": "arize"}]},
             {"logging": [_REFERENCE_ENTRY, _LANGFUSE_ENTRY]},
             {"logging": [{**_LANGFUSE_ENTRY, "callback_vars": {"langfuse_host": "https://attacker.example"}}]},
@@ -24314,7 +24314,7 @@ class TestCallbackReferenceWriteGate:
         """The stored entry is compared with and without an explicit event type, since an admin may have omitted it."""
         for stored in (
             {"logging": [_REFERENCE_ENTRY]},
-            {"logging": [{"callback_name": "arize_space_a"}]},
+            {"logging": [{"callback_settings_name": "arize_space_a"}]},
             {
                 "logging": [
                     _REFERENCE_ENTRY,
@@ -24485,3 +24485,31 @@ async def test_bulk_key_updates_run_the_callback_reference_gate_against_the_stor
     assert exc.value.status_code == 403
     assert "callback_settings" in str(exc.value.detail)
     prisma.update_data.assert_not_awaited()
+
+
+def test_a_non_admin_entry_saved_before_its_name_is_defined_never_picks_up_the_definition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
+
+    monkeypatch.setattr(litellm, "callback_settings", {})
+    plain: Final = {"callback_name": "corp_lf", "callback_type": "success", "callback_vars": {}}
+    assert raise_on_unauthorized_callback_reference({"logging": [plain]}, _non_admin()) is None
+    with pytest.raises(HTTPException) as exc:
+        raise_on_unauthorized_callback_reference(
+            {"logging": [{"callback_settings_name": "corp_lf", "callback_type": "success"}]}, _non_admin()
+        )
+    assert exc.value.status_code == 403
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"corp_lf": {"callback_type": "langfuse", "langfuse_public_key": "pk-op", "langfuse_secret_key": "sk-op"}},
+    )
+    result: Final = get_dynamic_logging_metadata(
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={"logging": [plain]}, team_metadata={}),
+        proxy_config=MagicMock(),
+    )
+
+    assert result is not None
+    assert (result.success_callback, result.callback_vars) == (["corp_lf"], {})

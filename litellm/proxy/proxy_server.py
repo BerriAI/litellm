@@ -7121,6 +7121,9 @@ class ProxyConfig:
                     setattr(litellm, key, value)
                 elif key == "drop_params":
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
+                elif key == "callback_settings":
+                    _check_callback_definitions(_CALLBACK_SETTINGS.validate_python(value))
+                    litellm.callback_settings = value
                 elif key == "suppress_startup_output":
                     continue
                 else:
