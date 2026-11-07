@@ -25,6 +25,7 @@ from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
@@ -2679,20 +2680,39 @@ async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
     assert chat_route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
 
 
-@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+_DIRECT_VECTOR_STORE_FILE_ROUTES: Final = (
+    "avector_store_file_content",
+    "avector_store_file_delete",
+    "avector_store_file_list",
+    "avector_store_file_retrieve",
+)
+
+
+@pytest.mark.parametrize("route_type", _DIRECT_VECTOR_STORE_FILE_ROUTES)
+@pytest.mark.parametrize(
+    "restricted_member",
+    [
+        pytest.param(
+            UserAPIKeyAuth(api_key="restricted-member-key", team_id="team-a", models=["a-langgraph-agent"]),
+            id="key-allowlist",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(api_key="team-blocked-member-key", team_id="team-a", team_models=["a-langgraph-agent"]),
+            id="team-models",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_a_team_key_restricted_away_from_the_openai_deployment_keeps_proxy_credentials_on_a_file_call(
     monkeypatch: pytest.MonkeyPatch,
     route_type: str,
+    restricted_member: UserAPIKeyAuth,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("OPENAI_API_KEY", "proxy-openai-key")
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
-    restricted_member: Final = UserAPIKeyAuth(
-        api_key="restricted-member-key", team_id="team-a", models=["a-langgraph-agent"]
-    )
 
     with respx.mock(assert_all_called=True) as respx_mock:
         route: Final = respx_mock.route(method=method, url=f"https://api.openai.com/v1{path}").mock(
@@ -2709,6 +2729,78 @@ async def test_a_team_key_restricted_away_from_the_openai_deployment_keeps_proxy
         )
 
     assert route.calls.last.request.headers["Authorization"] == "Bearer proxy-openai-key"
+
+
+@pytest.mark.parametrize("route_type", ["avector_store_file_create", "avector_store_file_update"])
+@pytest.mark.asyncio
+async def test_a_team_without_an_openai_deployment_never_sends_the_proxy_key_on_a_model_less_file_write(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "proxy-openai-key")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.route(method=method, url=f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        with pytest.raises(litellm.APIConnectionError, match="not supported for anthropic"):
+            await (
+                await route_request(
+                    dict(_model_less_vector_store_file_request(route_type)),
+                    _team_a_router(("claude", {"model": "anthropic/claude-sonnet-4-5", "api_key": "team-anthropic"})),
+                    None,
+                    route_type,
+                    user_api_key_dict=_TEAM_A_MEMBER,
+                )
+            )
+
+    assert route.call_count == 0
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.standard_logging_objects: Final[list[object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
+        self.logged.set()
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.asyncio
+async def test_a_model_less_file_call_logs_the_team_deployment_it_used(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request(route_type)),
+                _team_a_router(("openai/*", _TEAM_OPENAI_PARAMS)),
+                None,
+                route_type,
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    logged: Final = recorder.standard_logging_objects[-1]
+    assert isinstance(logged, dict), logged
+    assert (logged["model_id"], logged["model_group"], logged["model"]) == ("team-a-openai/*", "openai/*", "openai/*")
 
 
 @pytest.mark.parametrize("newer_first", [True, False])

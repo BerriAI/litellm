@@ -14,16 +14,19 @@ from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    TeamProviderDeployment,
+    authorize_model_for_key,
     carries_explicit_credentials,
     get_team_provider_deployment,
 )
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
+from litellm.router_attempt import metadata_field
 from litellm.router_config import build_router_config
 
 # Client-supplied params that make the router or the call path fabricate a
@@ -754,6 +757,42 @@ def _model_less_team_vector_store_file_call(
     return _ModelLessTeamFileCall(user_api_key_dict, custom_llm_provider)
 
 
+async def _authorized_team_file_deployment(
+    llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
+) -> TeamProviderDeployment | None:
+    deployment: Final = get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider)
+    if deployment is None:
+        return None
+    try:
+        await authorize_model_for_key(deployment.public_model_name, llm_router, call.caller)
+    except ProxyException:
+        return None
+    return deployment
+
+
+def _with_team_deployment_attribution(
+    kwargs: Mapping[str, object],
+    team_deployment: TeamProviderDeployment,
+    llm_router: LitellmRouter | None,
+    route_type: str,
+) -> Mapping[str, object]:
+    deployment: Final = None if llm_router is None else llm_router.registry().deployment(team_deployment.deployment_id)
+    if deployment is None:
+        return kwargs
+    field: Final = metadata_field(route_type)
+    return {
+        **kwargs,
+        field: {
+            **(as_str_mapping(kwargs.get(field)) or {}),
+            "model_group": team_deployment.public_model_name,
+            "deployment": deployment.litellm_params.model,
+            "model_info": deployment.model_info.model_dump(),
+            "api_base": deployment.litellm_params.api_base,
+            "deployment_model_name": deployment.model_name,
+        },
+    }
+
+
 def _merge_router_settings_override(
     data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
 ) -> frozenset[str]:
@@ -961,14 +1000,20 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         model_less_team_file_call: Final = _model_less_team_vector_store_file_call(
             route_type, JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict
         )
-        if model_less_team_file_call is not None:
-            team_file_deployment: Final = get_team_provider_deployment(
-                llm_router, model_less_team_file_call.caller, model_less_team_file_call.custom_llm_provider
+        team_file_deployment: Final = (
+            None
+            if model_less_team_file_call is None
+            else await _authorized_team_file_deployment(llm_router, model_less_team_file_call)
+        )
+        if team_file_deployment is not None:
+            return getattr(litellm, f"{route_type}")(
+                **_with_team_deployment_attribution(
+                    {**direct_litellm_kwargs(), **team_file_deployment.credentials},
+                    team_file_deployment,
+                    llm_router,
+                    route_type,
+                )
             )
-            team_file_credentials: Final[Mapping[str, object]] = (
-                {} if team_file_deployment is None else team_file_deployment.credentials
-            )
-            return getattr(litellm, f"{route_type}")(**{**direct_litellm_kwargs(), **team_file_credentials})
         if route_type in [
             "avideo_list",
             "avideo_status",

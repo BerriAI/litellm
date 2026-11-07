@@ -7,6 +7,7 @@ import io
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -653,9 +654,18 @@ class _ProviderFileRegistration:
 
 
 class _ManagedFilesHookStub:
-    def __init__(self, *, managed_file_id: str | None, can_access: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        managed_file_id: str | None,
+        can_access: bool = True,
+        model_mappings: Mapping[str, Mapping[str, str]] = MappingProxyType({}),
+        unified_file_ids: Mapping[str, str] = MappingProxyType({}),
+    ) -> None:
         self.managed_file_id: Final = managed_file_id
         self.can_access: Final = can_access
+        self.model_mappings: Final = model_mappings
+        self.unified_file_ids: Final = unified_file_ids
         self.registrations: tuple[_ProviderFileRegistration, ...] = ()
 
     async def register_provider_file(
@@ -678,6 +688,16 @@ class _ManagedFilesHookStub:
 
     async def can_user_call_unified_object_id(self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
         return self.can_access
+
+    async def get_model_file_id_mapping(
+        self, file_ids: Sequence[str], litellm_parent_otel_span: object
+    ) -> Mapping[str, Mapping[str, str]]:
+        return {file_id: self.model_mappings[file_id] for file_id in file_ids if file_id in self.model_mappings}
+
+    async def get_unified_file_ids_for_provider_file_ids(
+        self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
 
 
 def _managed_file_id(provider_file_id: str) -> str:
@@ -913,6 +933,36 @@ def test_rag_ingest_with_a_managed_file_id_attaches_the_provider_file_and_return
     assert hook.registrations == ()
 
 
+def test_rag_ingest_with_a_managed_file_id_attaches_the_team_deployment_copy(client_team_a):
+    router: Final = _team_provider_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file-other-copy")
+    hook: Final = _ManagedFilesHookStub(
+        managed_file_id=None,
+        model_mappings={managed_file_id: {"team-deployment": "file-other-copy", team_deployment_id: "file-team-copy"}},
+    )
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-team-copy"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+
+
 def test_rag_ingest_rejects_a_managed_file_id_the_caller_cannot_access(client_team_a):
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
@@ -935,6 +985,59 @@ def test_rag_ingest_rejects_a_managed_file_id_the_caller_cannot_access(client_te
         )
 
     assert response.status_code == 403, response.json()
+    assert mock_aingest.await_count == 0
+
+
+def test_rag_ingest_with_an_empty_file_url_never_claims_a_raw_file_id(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file-raw"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": "file-raw",
+                "file_url": "",
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file-raw"
+    assert hook.registrations == ()
+
+
+def test_rag_ingest_answers_400_for_a_managed_file_id_without_the_managed_files_hook(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": _managed_file_id("file-raw"),
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 400, response.json()
     assert mock_aingest.await_count == 0
 
 
@@ -996,6 +1099,41 @@ def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_search_results_carry_the_managed_file_id_ingest_returned(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    managed_file_id: Final = _managed_file_id("file-ingested")
+    respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json={
+            **_OPENAI_SEARCH_PAGE,
+            "data": [
+                {
+                    "file_id": "file-ingested",
+                    "filename": "handbook.txt",
+                    "score": 0.9,
+                    "attributes": {},
+                    "content": [{"type": "text", "text": "hello"}],
+                }
+            ],
+        }
+    )
+
+    with _installed_managed_files_hook(
+        _ManagedFilesHookStub(managed_file_id=None, unified_file_ids={"file-ingested": managed_file_id})
+    ):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+        )
+
+    assert response.status_code == 200, response.json()
+    search_results: Final = response.json()["choices"][0]["message"]["provider_specific_fields"]["search_results"]
+    assert [hit["file_id"] for hit in search_results["data"]] == [managed_file_id]
 
 
 @pytest.mark.usefixtures("httpx_transport")

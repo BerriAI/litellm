@@ -17,10 +17,10 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
-    ManagedFileIdResolver,
     authorize_model_for_key,
     get_credentials_for_model,
     handle_model_based_routing,
+    managed_file_ids_for_provider_file_ids,
     prepare_data_with_credentials,
     provider_file_id_from_managed_id,
 )
@@ -97,24 +97,15 @@ async def _with_managed_file_list_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> VectorStoreFileListResponse:
     data: Final = response.get("data")
-    if not data or not isinstance(managed_files_obj, ManagedFileIdResolver):
+    if not data:
         return response
 
-    provider_file_ids: Final = tuple(
-        dict.fromkeys(provider_file_id for file in data if isinstance(provider_file_id := file.get("id"), str))
+    id_map: Final = await managed_file_ids_for_provider_file_ids(
+        tuple(provider_file_id for file in data if isinstance(provider_file_id := file.get("id"), str)),
+        managed_files_obj,
+        user_api_key_dict,
     )
-    id_map: Final = await managed_files_obj.get_unified_file_ids_for_provider_file_ids(
-        provider_file_ids=provider_file_ids,
-        user_api_key_dict=user_api_key_dict,
-    )
-    round_trippable_id_map: Final = MappingProxyType(
-        {
-            provider_file_id: managed_file_id
-            for provider_file_id, managed_file_id in id_map.items()
-            if provider_file_id_from_managed_id(managed_file_id) == provider_file_id
-        }
-    )
-    return _with_managed_file_ids(response, round_trippable_id_map)
+    return _with_managed_file_ids(response, id_map)
 
 
 async def _update_request_data_with_managed_file_id(

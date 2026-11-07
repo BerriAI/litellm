@@ -42,7 +42,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     EXPLICIT_CREDENTIAL_KEYS,
+    ManagedFileModelMappingReader,
     ManagedProviderFileRegistrar,
+    ManagedResourceAccessChecker,
     TeamProviderDeployment,
     authorize_managed_resource_id,
     detect_content_type_from_filename,
@@ -65,11 +67,13 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
+    with_managed_search_file_ids,
 )
 from litellm.rag.main import get_ingestion_class
+from litellm.rag.rag_query import RAGQuery
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.types.rag import RAGIngestResponse
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Choices, ModelResponse
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -294,15 +298,60 @@ def _team_provider_credentials(deployment: TeamProviderDeployment | None) -> Map
     )
 
 
+async def _deployment_copy_of_managed_file(
+    file_id: str,
+    deployment: TeamProviderDeployment | None,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> str | None:
+    if deployment is None or not isinstance(managed_files_obj, ManagedFileModelMappingReader):
+        return None
+    mappings: Final = await managed_files_obj.get_model_file_id_mapping((file_id,), user_api_key_dict.parent_otel_span)
+    model_mappings: Final = mappings.get(file_id)
+    return None if model_mappings is None else model_mappings.get(deployment.deployment_id)
+
+
 async def _provider_file_id_for_ingest(
     file_id: str | None,
+    deployment: TeamProviderDeployment | None,
     managed_files_obj: object | None,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> str | None:
     if file_id is None or not is_base64_encoded_unified_file_id(file_id):
         return file_id
+    if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "This proxy does not accept LiteLLM managed file ids. Send the provider's file id instead."
+            },
+        )
     await authorize_managed_resource_id(file_id, "file", user_api_key_dict, managed_files_obj)
-    return provider_file_id_from_managed_id(file_id)
+    deployment_copy: Final = await _deployment_copy_of_managed_file(
+        file_id, deployment, managed_files_obj, user_api_key_dict
+    )
+    return deployment_copy or provider_file_id_from_managed_id(file_id)
+
+
+def _first_choice_search_results(response: ModelResponse) -> Mapping[str, object] | None:
+    first_choice: Final = response.choices[0] if response.choices else None
+    if not isinstance(first_choice, Choices) or first_choice.message.provider_specific_fields is None:
+        return None
+    return _as_string_keyed_mapping(first_choice.message.provider_specific_fields.get("search_results"))
+
+
+async def _with_managed_search_result_ids(
+    response: ModelResponse,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> ModelResponse:
+    search_results: Final = _first_choice_search_results(response)
+    if search_results is None:
+        return response
+    managed_results: Final = await with_managed_search_file_ids(search_results, managed_files_obj, user_api_key_dict)
+    if managed_results is search_results:
+        return response
+    return RAGQuery.add_search_results_to_response(response, managed_results)
 
 
 def _uploaded_content_type(file_data: tuple[str, bytes, str] | None, file_url: str | None) -> str:
@@ -790,7 +839,10 @@ async def rag_ingest(
         )
 
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        ingest_file_id: Final = await _provider_file_id_for_ingest(file_id, managed_files_obj, user_api_key_dict)
+        upload_deployment: Final = team_deployment if not forwarded_credentials else None
+        ingest_file_id: Final = await _provider_file_id_for_ingest(
+            file_id, upload_deployment, managed_files_obj, user_api_key_dict
+        )
 
         # Call ingest
         ingest_response: Final = await litellm.aingest(
@@ -809,13 +861,13 @@ async def rag_ingest(
         response: Final = (
             await _with_registered_upload(
                 ingest_response,
-                upload_deployment=team_deployment if not forwarded_credentials else None,
+                upload_deployment=upload_deployment,
                 content_type=_uploaded_content_type(file_data, file_url),
                 managed_files_obj=managed_files_obj,
                 user_api_key_dict=user_api_key_dict,
                 llm_router=llm_router,
             )
-            if file_data is not None or file_url is not None
+            if file_data is not None or bool(file_url)
             else _with_caller_file_id(ingest_response, file_id)
         )
 
@@ -922,6 +974,7 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
         select_data_generator,
         version,
     )
@@ -1075,7 +1128,9 @@ async def rag_query(
 
         response: Final = await query()
         fastapi_response.headers.update(custom_headers_for(response))
-        return response
+        return await _with_managed_search_result_ids(
+            response, proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict
+        )
 
     except HTTPException:
         raise

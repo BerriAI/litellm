@@ -147,6 +147,15 @@ class ManagedBatchOutputFileWriter(Protocol):
 
 
 @runtime_checkable
+class ManagedFileModelMappingReader(Protocol):
+    async def get_model_file_id_mapping(
+        self,
+        file_ids: Sequence[str],
+        litellm_parent_otel_span: "Span | None",
+    ) -> Mapping[str, Mapping[str, str]]: ...
+
+
+@runtime_checkable
 class ManagedProviderFileRegistrar(Protocol):
     async def register_provider_file(
         self,
@@ -166,6 +175,26 @@ def provider_file_id_from_managed_id(managed_file_id: str) -> str:
 
     match: Final = re.search(r"(?:^|;)llm_output_file_id,([^;]+)", decoded_id)
     return match.group(1).strip() if match else managed_file_id
+
+
+async def managed_file_ids_for_provider_file_ids(
+    provider_file_ids: Sequence[str],
+    managed_files_obj: object | None,
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> Mapping[str, str]:
+    if not provider_file_ids or not isinstance(managed_files_obj, ManagedFileIdResolver):
+        return MappingProxyType({})
+    id_map: Final = await managed_files_obj.get_unified_file_ids_for_provider_file_ids(
+        provider_file_ids=tuple(dict.fromkeys(provider_file_ids)),
+        user_api_key_dict=user_api_key_dict,
+    )
+    return MappingProxyType(
+        {
+            provider_file_id: managed_file_id
+            for provider_file_id, managed_file_id in id_map.items()
+            if provider_file_id_from_managed_id(managed_file_id) == provider_file_id
+        }
+    )
 
 
 def is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
