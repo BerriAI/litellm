@@ -3,10 +3,9 @@ import math
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from threading import Event
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Protocol
 
 from fastapi import Request
-from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -27,10 +26,8 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 
 LDAP_SYNC_JOB_ID: Final = "ldap_team_sync"
-_SETTINGS: Final = TypeAdapter(Mapping[str, object])
 
 
-@runtime_checkable
 class LDAPScheduler(Protocol):
     def add_job(
         self,
@@ -215,24 +212,23 @@ class LDAPSync:
         await self._sync()
 
 
+def ldap_sync_settings(general_settings: Mapping[str, object]) -> LDAPSyncSettings | None:
+    """The validated ``ldap_sync`` settings when the sync is enabled, otherwise ``None``."""
+    raw: Final = general_settings.get("ldap_sync")
+    settings: Final = None if raw is None else LDAPSyncSettings.model_validate(raw)
+    return settings if settings is not None and settings.enabled else None
+
+
 def initialize_ldap_sync(
-    scheduler: object,
-    general_settings: Mapping[str, object],
-    prisma_client: PrismaClient | None,
+    scheduler: LDAPScheduler,
+    settings: LDAPSyncSettings,
+    prisma_client: PrismaClient,
     pod_lock_manager: PodLockManager,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
-    raw: Final = general_settings.get("ldap_sync")
-    if raw is None or _SETTINGS.validate_python(raw).get("enabled") is not True:
-        return
-    settings: Final = LDAPSyncSettings.model_validate(raw)
-    if prisma_client is None:
-        raise ValueError("ldap_sync requires a database")
     if pod_lock_manager.redis_cache is None:
         raise ValueError("ldap_sync requires shared Redis for cross-worker coordination")
-    if not isinstance(scheduler, LDAPScheduler):
-        raise TypeError("ldap_sync requires a scheduler with add_job support")
     job: Final = LDAPSync(settings, prisma_client, pod_lock_manager, user_api_key_cache, proxy_logging_obj)
     scheduler.add_job(
         job.run,

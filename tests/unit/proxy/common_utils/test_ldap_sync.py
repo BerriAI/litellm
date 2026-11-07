@@ -7,7 +7,13 @@ import pytest
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.common_utils.ldap_directory import DirectoryError, DirectoryGroup
-from litellm.proxy.common_utils.ldap_sync import LDAPSync, resolve_user_ids
+from litellm.proxy.common_utils.ldap_sync import (
+    LDAP_SYNC_JOB_ID,
+    LDAPSync,
+    initialize_ldap_sync,
+    ldap_sync_settings,
+    resolve_user_ids,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from tests.unit.proxy.common_utils.test_ldap_directory import ALICE, Connection, entry, group, user
@@ -323,3 +329,52 @@ async def test_nested_group_of_any_class_keeps_the_team_and_its_keys(object_clas
     assert prisma.writer_db.litellm_verificationtoken.rows == [
         {"token": "bob-team-key", "user_id": "bob", "team_id": TEAM}
     ]
+
+
+@pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"ldap_sync": {"enabled": False}}],
+    ids=["absent", "disabled"],
+)
+def test_absent_or_disabled_ldap_sync_has_no_settings(general_settings: Mapping[str, object]):
+    assert ldap_sync_settings(general_settings) is None
+
+
+def test_enabled_ldap_sync_returns_validated_settings():
+    assert ldap_sync_settings({"ldap_sync": SETTINGS.model_dump()}) == SETTINGS
+
+
+class RecordingScheduler:
+    def __init__(self) -> None:
+        self.jobs: list[Mapping[str, object]] = []  # mutable-ok: records registered jobs
+
+    def add_job(self, func: object, trigger: str, **options: object) -> object:
+        self.jobs.append({"trigger": trigger, **options})
+        return object()
+
+
+def test_initialize_registers_one_interval_job():
+    scheduler: Final = RecordingScheduler()
+    initialize_ldap_sync(
+        scheduler,
+        SETTINGS,
+        _FakePrisma(),  # pyright: ignore[reportArgumentType]  # transactional in-process Prisma boundary
+        PodLockManager(LeaseRedis()),  # pyright: ignore[reportArgumentType]  # in-process Redis boundary
+        UserApiKeyCache(),
+        None,  # pyright: ignore[reportArgumentType]  # proxy logging is unused at registration
+    )
+    assert [(job["trigger"], job["id"], job["minutes"]) for job in scheduler.jobs] == [
+        ("interval", LDAP_SYNC_JOB_ID, SETTINGS.interval_minutes)
+    ]
+
+
+def test_initialize_requires_shared_redis():
+    with pytest.raises(ValueError, match="shared Redis"):
+        initialize_ldap_sync(
+            RecordingScheduler(),
+            SETTINGS,
+            _FakePrisma(),  # pyright: ignore[reportArgumentType]  # transactional in-process Prisma boundary
+            PodLockManager(None),
+            UserApiKeyCache(),
+            None,  # pyright: ignore[reportArgumentType]  # proxy logging is unused at registration
+        )

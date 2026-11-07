@@ -1867,12 +1867,9 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         redis_usage_cache=redis_usage_cache,
     )
 
-    _ldap_sync_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get("ldap_sync")
-    if (
-        prisma_client is None
-        and isinstance(_ldap_sync_settings, dict)
-        and _GENERAL_SETTINGS_VIEW.validate_python(_ldap_sync_settings).get("enabled") is True
-    ):
+    from litellm.proxy.common_utils.ldap_sync import ldap_sync_settings
+
+    if prisma_client is None and ldap_sync_settings(general_settings_view()) is not None:
         raise ValueError("ldap_sync requires a database")
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -11866,17 +11863,13 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
-        ldap_general_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
-        ldap_settings: Final = ldap_general_settings.get("ldap_sync")
-        if (
-            isinstance(ldap_settings, dict)
-            and _GENERAL_SETTINGS_VIEW.validate_python(ldap_settings).get("enabled") is True
-        ):
-            from litellm.proxy.common_utils.ldap_sync import initialize_ldap_sync
+        from litellm.proxy.common_utils.ldap_sync import initialize_ldap_sync, ldap_sync_settings
 
+        ldap_settings: Final = ldap_sync_settings(general_settings_view())
+        if ldap_settings is not None:
             initialize_ldap_sync(
                 scheduler=scheduler,
-                general_settings=ldap_general_settings,
+                settings=ldap_settings,
                 prisma_client=prisma_client,
                 pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
                 user_api_key_cache=user_api_key_cache,
