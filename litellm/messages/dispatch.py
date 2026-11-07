@@ -202,8 +202,6 @@ async def _native_amessages(
     # Python's handler leaves the event loop (run_in_executor) before it builds the provider body, so
     # tasks scheduled next to the call, such as the proxy's during_call guardrails, edit the request first
     await asyncio.sleep(0)
-    # Python's async @client wrapper stamps these on every failure; the proxy reads `timeout` for
-    # the x-litellm-timeout header and the router reads `num_retries`.
     try:
         return await native_call_hook(hook, call, args, kwargs)
     except Exception as error:
