@@ -62,7 +62,10 @@ That's it! The provider will be automatically loaded and available.
     
     // Optional: Special handling flags
     "special_handling": {
-      "convert_content_list_to_string": true
+      "convert_content_list_to_string": true,
+      // fail when the provider's own key is missing instead of
+      // falling back to OPENAI_API_KEY / litellm.api_key
+      "require_api_key": true
     },
 
     // Optional: Capabilities every model of this provider has, used when a
