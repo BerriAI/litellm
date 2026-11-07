@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.tool_fields import (
 from litellm.llms.anthropic.common_utils import strip_encrypted_reasoning_blocks_from_anthropic_messages
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
+    openai_thinking_routes_to_responses,
 )
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
@@ -52,7 +53,6 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import ModelResponse
-from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     from litellm.chat_completions.dispatch import ChatResult
@@ -462,34 +462,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         If the user provides a `summary` field in the thinking dict, it is passed
         through to the OpenAI reasoning params (opt-in per OpenAI spec).
         """
-        custom_llm_provider = completion_kwargs.get("custom_llm_provider")
-        if custom_llm_provider is None:
-            try:
-                _, inferred_provider, _, _ = litellm.utils.get_llm_provider(
-                    model=cast(str, completion_kwargs.get("model"))
-                )
-                custom_llm_provider = inferred_provider
-            except Exception:
-                custom_llm_provider = None
-
-        if custom_llm_provider != "openai":
-            return
-
-        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
-            return
-
         model: Final = completion_kwargs.get("model")
-        try:
-            model_info: Final = get_model_info(model=cast(str, model), custom_llm_provider=custom_llm_provider)
-            if model_info and model_info.get("supports_reasoning") is False:
-                # Model doesn't support reasoning/responses API, don't route
-                return
-        except Exception:
-            pass
+        if not isinstance(model, str) or thinking is None:
+            return
+        if not openai_thinking_routes_to_responses(model, completion_kwargs.get("custom_llm_provider"), thinking):
+            return
 
-        if isinstance(model, str) and model and "responses/" not in model:
-            local_model: Final = model.removeprefix(f"{custom_llm_provider}/")
-            completion_kwargs["model"] = f"{custom_llm_provider}/responses/{local_model}"
+        if "responses/" not in model:
+            completion_kwargs["model"] = f"openai/responses/{model.removeprefix('openai/')}"
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()
 

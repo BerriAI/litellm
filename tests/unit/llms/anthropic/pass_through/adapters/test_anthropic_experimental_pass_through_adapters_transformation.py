@@ -5566,3 +5566,36 @@ async def test_messages_do_not_retry_other_rejections(
         )
 
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_openai_thinking_on_the_chat_adapter_keeps_reasoning_its_responses_route_replays(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    route: Final = respx_mock.post(url__regex=r".*openai-thinking\.example/v1/responses").mock(
+        return_value=httpx.Response(200, json=_RETRY_REPLY)
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model="openai/gpt-5-mini",
+        api_base="https://openai-thinking.example/v1",
+        api_key="fake-key",
+        max_tokens=2048,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        messages=[
+            {"role": "user", "content": "Which city is colder?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAA_same_org")},
+                    {"type": "text", "text": "Oslo."},
+                ],
+            },
+            {"role": "user", "content": "And by how much?"},
+        ],
+    )
+
+    assert route.call_count == 1
+    assert [item["encrypted_content"] for item in _sent_reasoning_items(route.calls[0].request)] == ["gAAA_same_org"]

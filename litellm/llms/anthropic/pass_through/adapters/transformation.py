@@ -227,9 +227,34 @@ class ChatRouteInputs:
     tools: Sequence[Mapping[str, object]] | None = None
     reasoning_effort: str | Mapping[str, object] | None = None
     api_base: str | None = None
+    thinking: Mapping[str, object] | None = None
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
+
+
+def _inferred_provider(model: str) -> str | None:
+    try:
+        return litellm.utils.get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # an unknown model name has no inferred provider
+        return None
+
+
+def openai_thinking_routes_to_responses(
+    model: str | None,
+    custom_llm_provider: str | None,
+    thinking: Mapping[str, object] | None,
+) -> bool:
+    if not model or thinking is None or thinking.get("type") != "enabled":
+        return False
+    provider: Final = custom_llm_provider or _inferred_provider(model)
+    if provider != "openai":
+        return False
+    try:
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=provider)
+    except Exception:  # noqa: BLE001  # a model missing from the cost map still routes, as before
+        return True
+    return model_info.get("supports_reasoning") is not False
 
 
 def _keeps_encrypted_reasoning_for_responses(
@@ -239,7 +264,9 @@ def _keeps_encrypted_reasoning_for_responses(
 ) -> bool:
     from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
 
-    return chat_completion_ends_in_responses_api(
+    return openai_thinking_routes_to_responses(
+        model, custom_llm_provider, route.thinking
+    ) or chat_completion_ends_in_responses_api(
         model,
         custom_llm_provider,
         tools=route.tools,
@@ -1321,6 +1348,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 tools=new_kwargs.get("tools"),
                 reasoning_effort=new_kwargs.get("reasoning_effort"),
                 api_base=api_base,
+                thinking=anthropic_message_request.get("thinking"),
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
