@@ -1,6 +1,8 @@
 """Tests for the credential management endpoints."""
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from functools import reduce
 from types import SimpleNamespace
@@ -11,7 +13,7 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
@@ -19,12 +21,17 @@ import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.llms.github_copilot.per_user_auth import _SESSION_CACHE, _session_cache_key
-from litellm.models.credentials import CredentialSource, UserConnectionFlowHandle
+from litellm.models.credentials import (
+    CreateCredentialItem,
+    CredentialSource,
+    UpdateCredentialItem,
+    UserConnectionFlowHandle,
+)
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.credential_endpoints.endpoints import _decode_flow_handle, get_llm_router
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import ProxyConfig, app
 from litellm.types.utils import CredentialItem
 
 client = TestClient(app)
@@ -3345,3 +3352,137 @@ def test_get_credential_by_model_masks_the_deployment_credentials(monkeypatch):
     with pytest.raises(ProxyException) as missing:
         asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "no-such-id", caller))
     assert missing.value.code == "404"
+
+
+_RELOAD_SNAPSHOT_TIMEOUT_SECONDS: Final = 2
+_WRITE_HEAD_START_YIELDS: Final = 50
+
+
+@contextmanager
+def _reload_paused_after_its_db_read(
+    db_credentials: list[CredentialItem],
+    *,
+    stored: CredentialItem | None = None,
+) -> Iterator[tuple[asyncio.Event, asyncio.Event, asyncio.Lock]]:
+    snapshot_taken: Final = asyncio.Event()
+    resume_reload: Final = asyncio.Event()
+
+    async def find_all() -> list[CredentialItem]:
+        snapshot_taken.set()
+        await resume_reload.wait()
+        return db_credentials
+
+    repository: Final = MagicMock()
+    repository.return_value.find_all = find_all
+    repository.return_value.find_by_name = AsyncMock(return_value=stored)
+    repository.return_value.create = AsyncMock(return_value=None)
+    repository.return_value.update_by_name = AsyncMock(return_value=None)
+    repository.return_value.delete_by_name = AsyncMock(return_value=stored)
+    lock: Final = asyncio.Lock()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master"),
+        patch("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock),
+        patch("litellm.proxy.proxy_server.CredentialsRepository", repository),
+        patch("litellm.proxy.credential_endpoints.endpoints.CredentialsRepository", repository),
+        patch("litellm.proxy.common_utils.credential_hydration.CredentialsRepository", repository),
+        patch(
+            "litellm.proxy.credential_endpoints.endpoints._purge_user_connections_for_credential",
+            new_callable=AsyncMock,
+        ),
+        patch.object(ProxyConfig, "get_config", AsyncMock(return_value={})),
+        patch.object(ProxyConfig, "decrypt_credentials", side_effect=lambda cred: cred),
+    ):
+        yield snapshot_taken, resume_reload, lock
+
+
+async def _write_during_reload(
+    fixture: tuple[asyncio.Event, asyncio.Event, asyncio.Lock],
+    write: Callable[[], Awaitable[object]],
+) -> object:
+    snapshot_taken, resume_reload, lock = fixture
+
+    async def periodic_reload() -> None:
+        async with lock:
+            await ProxyConfig().get_credentials(MagicMock())
+
+    reload_task: Final = asyncio.create_task(periodic_reload())
+    await asyncio.wait_for(snapshot_taken.wait(), timeout=_RELOAD_SNAPSHOT_TIMEOUT_SECONDS)
+    write_task: Final = asyncio.create_task(write())
+    for _ in range(_WRITE_HEAD_START_YIELDS):
+        await asyncio.sleep(0)
+    resume_reload.set()
+    await reload_task
+    return await write_task
+
+
+@pytest.mark.asyncio
+async def test_create_credential_survives_a_reload_that_read_the_db_before_the_create(restore_credential_list):
+    from litellm.proxy.credential_endpoints.endpoints import create_credential
+
+    credential: Final = CreateCredentialItem(
+        credential_name="new-cred",
+        credential_values={"api_key": "sk-new"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+
+    with _reload_paused_after_its_db_read([]) as fixture:
+        result: Final = await _write_during_reload(
+            fixture,
+            lambda: create_credential(MagicMock(spec=Request), MagicMock(spec=Response), credential, _as_admin(), None),
+        )
+
+    assert result == {"success": True, "message": "Credential created successfully"}
+    assert CredentialAccessor.find_credential("new-cred") is not None
+
+
+@pytest.mark.asyncio
+async def test_update_credential_survives_a_reload_that_read_the_db_before_the_update(restore_credential_list):
+    from litellm.proxy.credential_endpoints.endpoints import update_credential
+
+    existing: Final = CredentialItem(
+        credential_name="existing-cred",
+        display_name="Old Name",
+        credential_values={"api_key": "sk-old"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    litellm.credential_list.append(existing)
+    patch_body: Final = UpdateCredentialItem(
+        display_name="New Name",
+        credential_values={"api_key": "sk-updated"},
+        credential_info={},
+    )
+
+    with _reload_paused_after_its_db_read([existing], stored=existing) as fixture:
+        result: Final = await _write_during_reload(
+            fixture,
+            lambda: update_credential(
+                MagicMock(spec=Request), MagicMock(spec=Response), patch_body, "existing-cred", _as_admin(), None
+            ),
+        )
+
+    assert result == {"success": True, "message": "Credential updated successfully"}
+    found: Final = CredentialAccessor.find_credential("existing-cred")
+    assert found is not None
+    assert found.display_name == "New Name"
+
+
+@pytest.mark.asyncio
+async def test_delete_credential_survives_a_reload_that_read_the_db_before_the_delete(restore_credential_list):
+    from litellm.proxy.credential_endpoints.endpoints import delete_credential
+
+    doomed: Final = CredentialItem(
+        credential_name="to-delete",
+        credential_values={"api_key": "sk-deleted"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    litellm.credential_list.append(doomed)
+
+    with _reload_paused_after_its_db_read([doomed], stored=doomed) as fixture:
+        result: Final = await _write_during_reload(
+            fixture,
+            lambda: delete_credential(MagicMock(spec=Request), MagicMock(spec=Response), "to-delete", _as_admin()),
+        )
+
+    assert result == {"success": True, "message": "Credential deleted successfully"}
+    assert CredentialAccessor.find_credential("to-delete") is None
