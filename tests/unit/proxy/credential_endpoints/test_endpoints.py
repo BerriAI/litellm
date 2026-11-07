@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from functools import reduce
 from types import SimpleNamespace
@@ -3366,7 +3367,9 @@ class TestCredentialWritesHoldTheReconcileLock:
     MODEL_RECONCILE_LOCK, the lock the reload already holds."""
 
     @staticmethod
-    async def _assert_write_waits_for_the_lock(monkeypatch, call_endpoint, write: str) -> dict:
+    async def _assert_write_waits_for_the_lock(
+        monkeypatch: pytest.MonkeyPatch, call_endpoint: Callable[[], Awaitable[dict[str, object]]], write: str
+    ) -> dict[str, object]:
         lock = asyncio.Lock()
         monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
         async with lock:
@@ -3378,10 +3381,12 @@ class TestCredentialWritesHoldTheReconcileLock:
             )
         return await asyncio.wait_for(task, timeout=5)
 
-    async def test_create_credential_waits_for_an_in_flight_reload(self, monkeypatch, credential_store):
+    async def test_create_credential_waits_for_an_in_flight_reload(
+        self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
+    ) -> None:
         credential_store(create=AsyncMock(return_value=None))
 
-        async def call_endpoint():
+        async def call_endpoint() -> dict[str, object]:
             return await create_credential(
                 request=MagicMock(spec=Request),
                 fastapi_response=MagicMock(),
@@ -3399,7 +3404,9 @@ class TestCredentialWritesHoldTheReconcileLock:
         assert response["success"] is True
         assert [credential.credential_name for credential in litellm.credential_list] == ["fresh"]
 
-    async def test_update_credential_waits_for_an_in_flight_reload(self, monkeypatch, credential_store):
+    async def test_update_credential_waits_for_an_in_flight_reload(
+        self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
+    ) -> None:
         stored = CredentialItem(
             credential_name="existing",
             display_name="before",
@@ -3412,7 +3419,7 @@ class TestCredentialWritesHoldTheReconcileLock:
             update_by_name=AsyncMock(return_value=None),
         )
 
-        async def call_endpoint():
+        async def call_endpoint() -> dict[str, object]:
             return await update_credential(
                 request=MagicMock(spec=Request),
                 fastapi_response=MagicMock(),
@@ -3427,7 +3434,9 @@ class TestCredentialWritesHoldTheReconcileLock:
         assert response["success"] is True
         assert [credential.display_name for credential in litellm.credential_list] == ["after"]
 
-    async def test_delete_credential_waits_for_an_in_flight_reload(self, monkeypatch, credential_store):
+    async def test_delete_credential_waits_for_an_in_flight_reload(
+        self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
+    ) -> None:
         stored = CredentialItem(
             credential_name="doomed",
             credential_values={"api_key": "sk-old"},
@@ -3435,7 +3444,7 @@ class TestCredentialWritesHoldTheReconcileLock:
         )
         credential_store(in_memory=(stored,), delete_by_name=AsyncMock(return_value=MagicMock()))
 
-        async def call_endpoint():
+        async def call_endpoint() -> dict[str, object]:
             return await delete_credential(
                 request=MagicMock(spec=Request),
                 fastapi_response=MagicMock(),

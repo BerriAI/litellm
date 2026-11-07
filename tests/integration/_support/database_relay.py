@@ -91,6 +91,7 @@ class HeldStatementRelay:
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
         self._after: Final = after
+        self._marker_length: Final = max(len(trigger), len(after or b""))
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
         self._released: Final = asyncio.Event()
@@ -134,7 +135,7 @@ class HeldStatementRelay:
                     if inspect and self._holds(window):
                         self.held.set()
                         await self._released.wait()
-                    tail = window[-(len(self._trigger) - 1) :]
+                    tail = window[-(self._marker_length - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
