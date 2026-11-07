@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import Mapping
 from typing import Final
@@ -5,7 +6,7 @@ from typing import Final
 import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration.management._batch_file_caps import hashed
 from pydantic import JsonValue
 
@@ -107,6 +108,70 @@ def test_user_new_refuses_an_env_reference_in_its_keys_logging_metadata(gateway:
         _assert_refused(refused, field)
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == []
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE user_id = %s', (user,)) == []
+
+
+def test_user_new_without_a_key_still_accepts_the_metadata(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        user: Final = f"env-reference-{uuid.uuid4().hex}"
+        created: Final = gateway.request(
+            "POST", "/user/new", {"user_id": user, "metadata": _logging(SPACE_ID), "auto_create_key": False}
+        )
+        if created.status_code == 200:
+            scenario.cleanups.callback(scenario.delete_user, user)
+        assert created.status_code == 200, created.text
+        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == [{"user_id": user}]
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE user_id = %s', (user,)) == []
+
+
+def test_team_key_bulk_update_reports_the_key_with_an_env_reference_as_failed(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        refused_key: Final = scenario.key(team_id=team, metadata={"owner": "env-reference-audit"})
+        plain_key: Final = scenario.key(team_id=team)
+        response: Final = gateway.request(
+            "POST",
+            "/team/key/bulk_update",
+            {
+                "team_id": team,
+                "key_ids": [hashed(refused_key)],
+                "update_fields": {"metadata": _logging(SPACE_ID)},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        assert body["successful_updates"] == [], response.text
+        failed: Final = body["failed_updates"]
+        assert isinstance(failed, list) and len(failed) == 1, response.text
+        failure: Final = object_value(failed[0])
+        assert failure["key"] == hashed(refused_key), response.text
+        assert _refusal(SPACE_ID) in string_value(failure["failed_reason"]), response.text
+        assert _key_metadata(refused_key) == {"owner": "env-reference-audit"}
+        applied: Final = gateway.request(
+            "POST",
+            "/team/key/bulk_update",
+            {"team_id": team, "key_ids": [hashed(plain_key)], "update_fields": {"metadata": {"owner": "x"}}},
+        )
+        assert applied.status_code == 200, applied.text
+        assert _key_metadata(plain_key) == {"owner": "x"}
+
+
+def test_a_stored_env_reference_blocks_metadata_saves_until_it_is_removed(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        legacy: Final = _logging(SPACE_ID)
+        write_rows('UPDATE "LiteLLM_TeamTable" SET metadata = %s::jsonb WHERE team_id = %s', (json.dumps(legacy), team))
+        patched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": {"cost_center": "1"}})
+        _assert_refused(patched, SPACE_ID)
+        assert _team_metadata(team) == legacy
+        unrelated: Final = gateway.request("POST", "/team/update", {"team_id": team, "tpm_limit": 5000})
+        assert unrelated.status_code == 200, unrelated.text
+        assert _team_metadata(team) == legacy
+        cleared: Final = gateway.request("POST", "/team/update", {"team_id": team, "metadata": {"logging": []}})
+        assert cleared.status_code == 200, cleared.text
+        assert object_value(_team_metadata(team))["logging"] == []
+        repatched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": {"cost_center": "1"}})
+        assert repatched.status_code == 200, repatched.text
+        assert object_value(_team_metadata(team))["cost_center"] == "1"
 
 
 @pytest.mark.parametrize("field", FIELDS)
