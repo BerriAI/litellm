@@ -2460,6 +2460,36 @@ class TestToolTransformation:
 
         assert [call["id"] for call in request["messages"][1]["tool_calls"]] == replayed_call_ids
 
+    @pytest.mark.parametrize(
+        ("arguments", "search_tool_name"),
+        [
+            pytest.param({"pattern": "weather"}, "tool_search_tool_regex", id="regex_object"),
+            pytest.param({"query": "weather"}, "tool_search_tool_bm25", id="bm25_object"),
+            pytest.param('{"query": "weather"}', "tool_search_tool_bm25", id="bm25_json"),
+            pytest.param("weather", "tool_search_tool_regex", id="not_json"),
+        ],
+    )
+    def test_stateless_claude_search_is_replayed_under_the_search_tool_its_arguments_belong_to(
+        self, arguments: object, search_tool_name: str
+    ) -> None:
+        items: Final = (
+            {**item, "arguments": arguments} if item["type"] == "tool_search_call" else item
+            for item in _stateless_tool_search_input("srvtoolu_01Search", "completed")
+        )
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(items)
+            ),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [(call["id"], call["function"]["name"]) for call in request["messages"][1]["tool_calls"]] == [
+            ("srvtoolu_01Search", search_tool_name),
+            ("toolu_01Weather", "get_weather"),
+        ]
+
     def test_transform_local_shell_tools_dropped(self) -> None:
         (
             result_tools,

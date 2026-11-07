@@ -1651,6 +1651,36 @@ def test_responses_over_anthropic_return_the_tool_search_output_and_send_the_sea
     assert _sent_assistant_content(route) == [_SEARCH_USE, search_result, weather_use]
 
 
+
+@pytest.mark.parametrize(
+    ("search_tools", "search_use"),
+    [
+        pytest.param((), _SEARCH_USE, id="regex"),
+        pytest.param(
+            ({"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},),
+            {**_SEARCH_USE, "name": "tool_search_tool_bm25", "input": {"query": "weather"}},
+            id="bm25",
+        ),
+    ],
+)
+def test_responses_over_anthropic_send_a_search_back_under_the_anthropic_search_tool_that_ran_it(
+    respx_mock: respx.MockRouter, search_tools: tuple[Mapping[str, object], ...], search_use: Mapping[str, object]
+) -> None:
+    tools: Final = [{"type": "tool_search"}, *search_tools, _WEATHER_TOOL]
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message(search_use, _SEARCH_RESULT, _WEATHER_USE)
+    )
+
+    first: Final = litellm.responses(model=_MODEL, input=list(_WEATHER_QUESTION), tools=tools, api_key="mock_api_key")
+    litellm.responses(
+        model=_MODEL,
+        input=[*_WEATHER_QUESTION, *(item.model_dump(exclude_none=True) for item in first.output), _WEATHER_ANSWER],
+        tools=tools,
+        api_key="mock_api_key",
+    )
+
+    assert _sent_assistant_content(route) == [search_use, _SEARCH_RESULT, _WEATHER_USE]
+
 def _tool_search_stream(*events: Mapping[str, object]) -> httpx.Response:
     return httpx.Response(
         200,
