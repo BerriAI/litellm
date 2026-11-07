@@ -351,6 +351,38 @@ async def test_rust_unary_messages_store_keeps_the_hidden_params_stamped_after_t
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+async def test_messages_cache_stores_the_response_a_yielding_deployment_hook_returned(
+    recording_server: RecordingServer, native: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.integrations.custom_logger import CustomLogger
+
+    redacted: Final = [{"type": "text", "text": "redacted"}]
+
+    class Redact(CustomLogger):
+        async def async_post_call_success_deployment_hook(
+            self, request_data: dict[str, object], response: object, call_type: object
+        ) -> object:
+            await asyncio.sleep(0.05)
+            assert isinstance(response, dict)
+            return {**response, "content": redacted}
+
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    storage: Final = InMemoryCache()
+    monkeypatch.setattr(litellm, "cache", Cache(_backend=storage))
+    monkeypatch.setattr(litellm, "callbacks", [Redact()])
+    first: Final = await invoke("messages", recording_server, {}, native=native)
+    assert isinstance(first, dict)
+    assert first["content"] == redacted
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    hit: Final = await invoke("messages", recording_server, {}, native=native)
+    assert isinstance(hit, dict)
+    assert hit["content"] == redacted
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("namespace_source", ("cache", "metadata"))
 async def test_rust_messages_legacy_cache_honors_request_namespaces(
     recording_server: RecordingServer, namespace_source: str
