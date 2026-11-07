@@ -180,13 +180,13 @@ from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     split_concatenated_json_objects as split_concatenated_json_objects,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-    _image_part_url,  # pyright: ignore[reportPrivateUsage]  # Shared implementation for as_openai_image_part
-)
-from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     anthropic_image_source_to_openai_url as anthropic_image_source_to_openai_url,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     embedding_input_is_all_media as embedding_input_is_all_media,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    image_part_url,
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_embedding_media_for_tpm as split_embedding_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
@@ -537,7 +537,7 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
 
     Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
     """
-    url: Final = _image_part_url(part)
+    url: Final = image_part_url(part)
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
