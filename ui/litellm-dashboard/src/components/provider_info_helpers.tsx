@@ -1,5 +1,6 @@
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import a2aAgentLogo from "../../public/assets/logos/a2a_agent.png";
+import acedatacloudLogo from "../../public/assets/logos/acedatacloud.png";
 import ai21Logo from "../../public/assets/logos/ai21.svg";
 import aiandLogo from "../../public/assets/logos/aiand.svg";
 import aimlApiLogo from "../../public/assets/logos/aiml_api.svg";
@@ -77,6 +78,7 @@ import xaiLogo from "../../public/assets/logos/xai.svg";
 import xinferenceLogo from "../../public/assets/logos/xinference.svg";
 
 export enum Providers {
+  ACEDATACLOUD = "Ace Data Cloud",
   A2A_Agent = "A2A Agent",
   AI21 = "Ai21",
   AI21_CHAT = "Ai21 Chat",
@@ -214,6 +216,7 @@ export enum Providers {
 }
 
 export const provider_map: Record<string, string> = {
+  ACEDATACLOUD: "acedatacloud",
   A2A_Agent: "a2a_agent",
   AI21: "ai21",
   AI21_CHAT: "ai21_chat",
@@ -356,6 +359,7 @@ export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
 
 export const providerLogoMap: Partial<Record<Providers, string>> = {
+  [Providers.ACEDATACLOUD]: acedatacloudLogo.src,
   [Providers.BIGMODEL]: bigmodelLogo.src,
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
@@ -492,6 +496,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 };
 
 const providerPlaceholderMap: Partial<Record<Providers, string>> = {
+  [Providers.ACEDATACLOUD]: "acedatacloud/gpt-6-luna",
   [Providers.AIML]: "aiml/flux-pro/v1.1",
   [Providers.AIAND]: "aiand/openai/gpt-oss-120b",
   [Providers.Anthropic]: "claude-3-opus",
