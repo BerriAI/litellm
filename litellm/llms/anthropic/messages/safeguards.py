@@ -98,7 +98,7 @@ class ClassifierAcompletion(Protocol):
     def __call__(
         self,
         *,
-        messages: Sequence[Mapping[str, object]],
+        messages: list[Mapping[str, object]],
         **kwargs: Unpack[ClassifierCallKwargs],  # kwargs-ok: forwarded verbatim to acompletion, which owns them
     ) -> "Awaitable[ModelResponse | CustomStreamWrapper]": ...
 
@@ -216,7 +216,7 @@ class SafeguardsEvaluator:
             return _every_tool_use_unavailable(tool_uses, "error")
         return {tool_use.id: _verdict_for(parsed.verdicts.get(tool_use.id)) for tool_use in tool_uses}
 
-    def _classifier_messages(self, tool_uses: Sequence[ToolUseUnderReview]) -> Sequence[Mapping[str, object]]:
+    def _classifier_messages(self, tool_uses: Sequence[ToolUseUnderReview]) -> list[Mapping[str, object]]:
         under_review: Final = _prompt_json(
             [{"id": tool_use.id, "name": tool_use.name, "input": tool_use.input} for tool_use in tool_uses]
         )
@@ -225,10 +225,13 @@ class SafeguardsEvaluator:
             f"Conversation so far, one JSON line per turn:\n{self.transcript}\n\n"
             f"Tool calls to classify:\n{under_review}"
         )
-        return (
+        # A list, not a tuple: the cache_control_injection_points hook (location:
+        # message) writes its breakpoints into this sequence in place, and
+        # acompletion hands it to that hook unchanged.
+        return [
             {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
-        )
+        ]
 
     def _call_kwargs(self) -> ClassifierCallKwargs:
         end_user_id: Final = self.litellm_metadata.get("user_api_key_end_user_id")
