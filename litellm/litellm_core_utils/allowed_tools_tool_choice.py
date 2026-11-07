@@ -92,6 +92,10 @@ def _has_name(selector: Mapping[str, object]) -> bool:
     return isinstance(name, str) and name != ""
 
 
+def _names_on_other_tool_types_are_strings(tools: Iterable[Mapping[str, object]]) -> bool:
+    return all(tool.get("type") in ("function", "custom") or "name" not in tool or _has_name(tool) for tool in tools)
+
+
 def _chat_allowed_tool(tool: Mapping[str, object]) -> Mapping[str, object] | None:
     tool_type: Final = tool.get("type")
     if not isinstance(tool_type, str) or tool_type not in ("function", "custom"):
@@ -120,9 +124,9 @@ def parse_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsTool
         return None
     match parsed:
         case ChatAllowedToolsToolChoice():
-            return parsed
+            return parsed if _names_on_other_tool_types_are_strings(parsed.allowed_tools.tools) else None
         case ResponsesAllowedToolsToolChoice():
-            return _chat_layout(parsed)
+            return _chat_layout(parsed) if _names_on_other_tool_types_are_strings(parsed.tools) else None
 
 
 def azure_api_version_takes_tool_choice(api_version: str) -> bool:

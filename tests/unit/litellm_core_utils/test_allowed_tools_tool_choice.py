@@ -14,8 +14,18 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
     refuse_a_malformed_allowed_tools_tool_choice,
     refuse_tool_calls_the_choice_excludes,
+    tool_calls_the_choice_excludes,
     unenforced_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
+)
+
+_CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING: Final = (
+    {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]},
+    {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": {"first": "get_time"}}]},
+    {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": 7}]},
+    {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ""}]},
+    {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}},
+    {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": 7}]}},
 )
 
 _CHAT_LAYOUT: Final[dict[str, object]] = {
@@ -245,6 +255,7 @@ def test_a_choice_the_provider_cannot_take_answers_400_without_drop_params():
     [
         {"type": "allowed_tools", "mode": "required", "tools": []},
         {"type": "allowed_tools", "tools": [{"type": "function", "name": "get_time"}]},
+        *_CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING,
     ],
 )
 def test_a_malformed_choice_is_refused(tool_choice: object):
@@ -252,6 +263,11 @@ def test_a_malformed_choice_is_refused(tool_choice: object):
         refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model")
 
     assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("tool_choice", _CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING)
+def test_a_name_that_is_not_a_string_lists_no_tool(tool_choice: object):
+    assert tool_calls_the_choice_excludes(tool_choice, ("get_time",)) == ("get_time",)
 
 
 @pytest.mark.parametrize("tool_choice", [_FLAT_CHOICE, _CHAT_LAYOUT, "required", None])

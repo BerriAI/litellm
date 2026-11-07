@@ -336,14 +336,20 @@ def test_a_tool_the_choice_excludes_never_runs_when_the_model_ignored_the_choice
     assert not _tools_run_before_the_refusal(_ALLOWED_WEATHER_ONLY, model="openai/gpt-5-mini")
 
 
-def test_a_malformed_choice_is_refused_before_any_request(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize(
+    "tool_choice",
+    [_EMPTY_ALLOWED_TOOLS, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}],
+)
+def test_a_malformed_choice_is_refused_before_any_request(
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter
+) -> None:
     with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
         litellm.run_tool_loop(
             model="openai/gpt-5-mini",
             messages=[{"role": "user", "content": "hi"}],
             tools=WEATHER_TOOLS,
             execute_tool=_tool_result,
-            tool_choice=_EMPTY_ALLOWED_TOOLS,
+            tool_choice=tool_choice,
             drop_params=True,
             api_key="sk-test",
         )
