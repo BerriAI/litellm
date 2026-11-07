@@ -1,4 +1,5 @@
 import json
+import traceback
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -638,3 +639,63 @@ async def test_search_drops_invalid_filters_under_drop_params(
 
     assert retrieve_route.call_count == 1
     assert _sent_filter(retrieve_route) is None
+
+
+async def _rejection(respx_mock: respx.MockRouter, filters: object) -> BaseException:
+    import litellm
+
+    with pytest.raises(litellm.BadRequestError) as error:
+        await _search_with_filters(respx_mock, filters)
+    return error.value
+
+
+def _nested_compound(depth: int) -> dict[str, object]:
+    if depth == 0:
+        return {"type": "eq", "key": "year"}
+    return {"type": "and", "filters": [_nested_compound(depth - 1)]}
+
+
+@pytest.mark.parametrize(
+    ("one_bad_item", "many_bad_items"),
+    [
+        pytest.param(
+            {"type": "in", "key": "remote", "value": [True]},
+            {"type": "in", "key": "remote", "value": [True] * 1000},
+            id="bools-in-list",
+        ),
+        pytest.param(
+            {"type": "and", "filters": [{"key": "year"}]},
+            {"type": "and", "filters": [{"key": "year"}] * 1000},
+            id="untyped-members",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_rejection_names_the_first_bad_item_however_many_follow(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    one_bad_item: dict[str, object],
+    many_bad_items: dict[str, object],
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert str(await _rejection(respx_mock, many_bad_items)) == str(await _rejection(respx_mock, one_bad_item))
+
+
+@pytest.mark.asyncio
+async def test_search_rejection_and_its_traceback_do_not_grow_with_nesting_depth(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    shallow: Final = await _rejection(respx_mock, _nested_compound(100))
+    deep: Final = await _rejection(respx_mock, _nested_compound(200))
+
+    assert len(str(deep)) == len(str(shallow))
+    assert len("".join(traceback.format_exception(deep))) == len("".join(traceback.format_exception(shallow)))

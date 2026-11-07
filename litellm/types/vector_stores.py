@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, StrictFloat, StrictInt, StrictStr
+from pydantic import ConfigDict, FailFast, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -329,14 +329,14 @@ class OpenAIComparisonFilter(LiteLLMBaseModel):
 
     type: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"]
     key: str
-    value: str | bool | int | float | tuple[StrictStr | StrictInt | StrictFloat, ...]
+    value: str | bool | int | float | Annotated[tuple[StrictStr | StrictInt | StrictFloat, ...], FailFast()]
 
 
 class OpenAICompoundFilter(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["and", "or"]
-    filters: tuple["OpenAIVectorStoreFilter", ...] = Field(min_length=1)
+    filters: tuple["OpenAIVectorStoreFilter", ...] = Field(min_length=1, fail_fast=True)
 
 
 OpenAIVectorStoreFilter: TypeAlias = Annotated[
