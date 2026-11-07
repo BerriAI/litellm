@@ -263,3 +263,35 @@ def test_preview_ignores_credential_headers_for_any_other_auth_type(auth_type: M
     )
     assert rest_endpoints._preview_static_headers(request) == _STATIC_HEADERS
     assert rest_endpoints._preview_credential_header_names(request) == ()
+
+
+@pytest.mark.asyncio
+async def test_config_file_server_with_secret_headers_is_rejected_when_loaded() -> None:
+    manager: Final = MCPServerManager()
+    config: Final = {
+        "datadog": {
+            "url": _URL,
+            "transport": MCPTransport.http,
+            "auth_type": MCPAuth.secret_headers,
+            "credentials": {"headers": dict(_CREDENTIAL_HEADERS)},
+        }
+    }
+    with pytest.raises(ValueError, match="'datadog'.*secret_headers"):
+        await manager.load_servers_from_config(config)
+    assert not manager.config_mcp_servers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.api_key])
+async def test_config_file_server_with_another_auth_type_still_loads(auth_type: MCPAuth) -> None:
+    manager: Final = MCPServerManager()
+    config: Final = {
+        "datadog": {
+            "url": _URL,
+            "transport": MCPTransport.http,
+            "auth_type": auth_type,
+            "static_headers": _STATIC_HEADERS,
+        }
+    }
+    await manager.load_servers_from_config(config)
+    assert [server.auth_type for server in manager.config_mcp_servers.values()] == [auth_type]
