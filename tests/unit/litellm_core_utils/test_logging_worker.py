@@ -4,6 +4,7 @@ Tests for the LoggingWorker class to ensure graceful shutdown handling.
 
 import asyncio
 import contextvars
+import inspect
 import io
 import logging
 from typing import Final
@@ -563,6 +564,47 @@ class TestLoggingWorker:
         asyncio.run(enqueue_then_flush())
 
         assert callback.await_count == 1
+
+    def test_flush_returns_after_a_task_the_worker_cannot_start(self):
+        """
+        Regression: when the event loop refuses to start a callback, the queued item was never
+        marked done, so ``flush()`` waited on ``queue.join()`` until its caller gave up. The
+        callback that never ran is closed where it is dropped, instead of waiting for the shutdown
+        cleanup to find it
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        callback = AsyncMock()
+
+        async def never_started():
+            pass
+
+        refused_coroutine = never_started()
+
+        async def enqueue_then_flush_and_stop():
+            loop = asyncio.get_running_loop()
+            previous_factory = loop.get_task_factory()
+
+            def refuse_that_one_callback(running_loop, coro, **kwargs):
+                if coro is refused_coroutine:
+                    raise RuntimeError("the loop refused to start this callback")
+                if previous_factory is not None:
+                    return previous_factory(running_loop, coro, **kwargs)
+                return asyncio.Task(coro, loop=running_loop, **kwargs)
+
+            loop.set_task_factory(refuse_that_one_callback)
+            try:
+                worker.ensure_initialized_and_enqueue(refused_coroutine)
+                worker.ensure_initialized_and_enqueue(callback())
+                await asyncio.wait_for(worker.flush(), timeout=3)
+                await worker.stop(discard_pending=True)
+            finally:
+                loop.set_task_factory(previous_factory)
+
+        asyncio.run(enqueue_then_flush_and_stop())
+
+        assert callback.await_count == 1
+        assert worker.pending_count == 0
+        assert inspect.getcoroutinestate(refused_coroutine) == inspect.CORO_CLOSED
 
     def test_flush_on_exit_swallows_cancellation_and_drains_remaining(self):
         """A callback raising CancelledError must not abort the atexit flush of later events."""
