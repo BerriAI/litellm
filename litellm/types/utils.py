@@ -4751,6 +4751,7 @@ class LlmProviders(str, Enum):
     OPENSEARCH = "opensearch"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
+    WEBWRIGHT = "webwright"
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
     STABILITY = "stability"
