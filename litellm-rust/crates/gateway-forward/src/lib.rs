@@ -5,6 +5,7 @@ mod forward;
 mod rewrite;
 mod server;
 mod settings;
+mod supervisor;
 mod websocket;
 
 pub use error::Error;
@@ -12,6 +13,7 @@ pub(crate) use error::Rejection;
 pub use forward::Forward;
 pub use rewrite::PEER_HEADER;
 pub use settings::{Settings, Upstream};
+pub use supervisor::input_closed;
 
 /// Binds the public listener and forwards to Python until `shutdown` resolves, then drains for
 /// `settings.shutdown_drain`.

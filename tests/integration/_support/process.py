@@ -145,6 +145,11 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def send_signal(process: subprocess.Popen[bytes], signum: signal.Signals) -> None:
+    with suppress(ProcessLookupError):
+        process.send_signal(signum)
+
+
 def graceful_stop_seconds() -> float:
     return readiness_for(import_seconds(), 1)
 
