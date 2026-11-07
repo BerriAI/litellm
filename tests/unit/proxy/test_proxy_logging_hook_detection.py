@@ -1295,3 +1295,42 @@ async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(mon
 
     assert opted_out.native_hooks_ran == ["post_call"]
     assert routed.native_hooks_ran == []
+
+
+class _TagsEachChunk(CustomLogger):
+    async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
+        self, user_api_key_dict, response, request_data
+    ):
+        async for chunk in response:
+            yield f"{chunk} [logger]"
+
+
+class _UppercasesEachChunk(CustomGuardrail):
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        async for chunk in response:
+            yield chunk.upper()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("guardrails_only", "served"), [(True, ["A", "B"]), (False, ["A [logger]", "B [logger]"])])
+async def test_post_call_stream_guardrails_only_leaves_out_callbacks_that_are_not_guardrails(
+    monkeypatch, guardrails_only: bool, served: list[str]
+):
+    guardrail = _UppercasesEachChunk(guardrail_name="upper", event_hook="post_call", default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail, _TagsEachChunk()])
+
+    async def stream():
+        for chunk in ("a", "b"):
+            yield chunk
+
+    chunks = [
+        chunk
+        async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+            response=stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+            request_data={"model": "m", "metadata": {}},
+            guardrails_only=guardrails_only,
+        )
+    ]
+
+    assert chunks == served
