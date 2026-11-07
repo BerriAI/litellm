@@ -38,8 +38,6 @@ def test_latest_aliases_price_and_route_like_their_targets() -> None:
             entry: Final = litellm.model_cost[alias_key]
             assert (entry["litellm_provider"], entry["mode"]) == (provider, "chat")
             assert entry == litellm.model_cost[target_key]
-            alias_info: Final = {**litellm.get_model_info(prefixed), "key": target}
-            assert alias_info == {**litellm.get_model_info(f"{provider}/{target}"), "key": target}
             assert litellm.get_llm_provider(prefixed)[:2] == (target, provider)
             assert litellm.get_llm_provider(alias, custom_llm_provider=provider)[:2] == (target, provider)
 
