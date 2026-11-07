@@ -1,0 +1,85 @@
+paths:
+  high:
+    - "litellm/proxy/auth/**"
+    - "litellm/proxy/management_endpoints/**"
+    - "litellm/proxy/spend_tracking/**"
+    - "litellm/proxy/db/**"
+    - "**/migrations/**"
+    - "**/schema.prisma"
+    - "litellm/caching/**"
+    - "litellm/router.py"
+    - "litellm/router_utils/**"
+    - "litellm/proxy/proxy_server.py"
+    - "litellm/__init__.py"
+    - "litellm/utils.py"
+    - "litellm/proxy/guardrails/**"
+    - "litellm/proxy/hooks/**"
+    - "litellm/proxy/custom_hooks/**"
+    - "enterprise/enterprise_hooks/**"
+    - "enterprise/litellm_enterprise/proxy/hooks/**"
+    - "enterprise/litellm_enterprise/proxy/auth/**"
+    - "enterprise/litellm_enterprise/proxy/management_endpoints/**"
+    - "litellm/secret_managers/**"
+    - "litellm/proxy/pass_through_endpoints/**"
+    - "litellm/passthrough/**"
+    - "litellm/proxy/_experimental/mcp_server/auth/**"
+    - "litellm/proxy/_experimental/mcp_server/outbound_credentials/**"
+    - "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py"
+    - "litellm/proxy/_experimental/mcp_server/**/*oauth*"
+    - "litellm/proxy/_experimental/mcp_server/**/*_flow.py"
+    - "litellm/proxy/_experimental/mcp_server/proxy_api_credentials.py"
+    - ".github/**"
+    - ".circleci/**"
+    - "**/pyproject.toml"
+    - "uv.lock"
+    - "**/package*.json"
+    - "**/Dockerfile*"
+    - "scripts/*gate*"
+  medium:
+    - "**/CLAUDE.md"
+    - "**/AGENTS.md"
+    - "**/GEMINI.md"
+    - "**/conftest.py"
+    - "helm/**"
+    - "docker/**"
+  low:
+    - "cookbook/**"
+    - "model_prices_and_context_window.json"
+    - "litellm/model_prices_and_context_window_backup.json"
+    - "**/*.md"
+    - "**/*.mdx"
+    - "*-budget.json"
+
+modules:
+  medium_from: 2
+  high_from: 4
+
+size:
+  low:
+    lines_under: 100
+    files_up_to: 3
+  medium:
+    lines_under: 400
+    files_up_to: 10
+  ignore:
+    - "uv.lock"
+    - "**/package-lock.json"
+    - "ui/litellm-dashboard/src/lib/http/schema.d.ts"
+
+tests:
+  files:
+    - "**/tests/**"
+    - "**/*.test.*"
+    - "**/*.spec.*"
+    - "**/__tests__/**"
+
+authors:
+  low:
+    - "devin-ai-integration[bot]"
+
+guards:
+  additive_rows:
+    - "model_prices_and_context_window.json"
+    - "litellm/model_prices_and_context_window_backup.json"
+  lowered_limits:
+    - "*-budget.json"
