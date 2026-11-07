@@ -5037,6 +5037,28 @@ def test_system_injection_point_caches_both_a_system_and_a_developer_prompt() ->
     )
 
 
+def test_developer_prompts_only_take_the_breakpoints_configured_points_leave_over() -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "system", "content": "You answer policy questions."},
+            *({"role": "developer", "content": f"{_DEVELOPER_PREFIX} Note {note}."} for note in range(3)),
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ],
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].messages[-1].content[-1] == {"cachePoint": {"type": "default"}}
+    assert _count_converse_cache_points(sent_bodies[-1]) == 4
+
+
 def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints() -> None:
     sent_bodies: Final[list[Mapping[str, object]]] = []
 
