@@ -1744,20 +1744,28 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_options_i
 _CALLER_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
 
 
+def _claude_router(deployment_model: str, deployment_params: Mapping[str, JsonValue]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude-agent",
+                "litellm_params": {"model": deployment_model, "api_key": "sk-ant-test", **deployment_params},
+            }
+        ]
+    )
+
+
 async def _count_on_a_claude_deployment(
     monkeypatch: pytest.MonkeyPatch,
     deployment_model: str,
     body: Mapping[str, JsonValue],
     reply: Callable[[httpx.Request], httpx.Response],
     user_agent: str = "python-httpx/0.28.1",
+    deployment_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> tuple[object, tuple[httpx.Request, ...]]:
     import litellm.proxy.proxy_server as proxy_server
 
-    router: Final = Router(
-        model_list=[
-            {"model_name": "claude-agent", "litellm_params": {"model": deployment_model, "api_key": "sk-ant-test"}}
-        ]
-    )
+    router: Final = _claude_router(deployment_model, deployment_params)
     request: Final = _json_request(
         {"model": "claude-agent", "messages": [{"role": "user", "content": "Weather in SF?"}], **body},
         user_agent,
@@ -2078,7 +2086,6 @@ async def _claude_inference_body(model: str, options: Mapping[str, JsonValue]) -
     ("request_drop_params", "user_agent"),
     (
         ({"drop_params": True}, "python-httpx/0.28.1"),
-        ({"drop_params": " true "}, "python-httpx/0.28.1"),
         ({}, "claude-cli/2.1.0 (external, cli)"),
     ),
 )
@@ -2104,6 +2111,44 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_thinking_
     assert {name: counted.get(name) for name in ("thinking", "output_config")} == {
         name: dropped.get(name) for name in ("thinking", "output_config")
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_drop_params", "request_drop_params"),
+    ((True, "maybe"), (True, False), (None, " true ")),
+)
+async def test_anthropic_count_tokens_reads_the_request_drop_params_over_the_deployments_like_inference(
+    monkeypatch: pytest.MonkeyPatch, deployment_drop_params: bool | None, request_drop_params: JsonValue
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    thinking: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 2000, "summary": "auto"}
+    deployment_params: Final[Mapping[str, JsonValue]] = (
+        {} if deployment_drop_params is None else {"drop_params": deployment_drop_params}
+    )
+    with respx.mock:
+        inference_route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, json=_CLAUDE_MESSAGE_REPLY)
+        )
+        await _claude_router("anthropic/claude-opus-4-7", deployment_params).aanthropic_messages(
+            model="claude-agent",
+            messages=[{"role": "user", "content": "Weather in SF?"}],
+            max_tokens=4096,
+            thinking=thinking,
+            drop_params=request_drop_params,
+        )
+    sent: Final = json.loads(inference_route.calls.last.request.content)
+
+    response, (count,) = await _count_on_a_claude_deployment(
+        monkeypatch,
+        "anthropic/claude-opus-4-7",
+        {"thinking": thinking, "drop_params": request_drop_params},
+        lambda _: httpx.Response(200, json={"input_tokens": 7}),
+        deployment_params=deployment_params,
+    )
+
+    assert not isinstance(response, JSONResponse)
+    assert json.loads(count.content).get("thinking") == sent.get("thinking")
 
 
 @pytest.mark.asyncio

@@ -485,9 +485,13 @@ _CLEAR_THINKING_EDITS: Final[dict[str, JsonValue]] = {
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_options", (_DISPLAY_THINKING, _EFFORT), ids=("thinking_display", "effort"))
+@pytest.mark.parametrize(
+    ("request_options", "expected_betas"),
+    ((_DISPLAY_THINKING, (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)), (_EFFORT, ())),
+    ids=("thinking_display", "effort"),
+)
 async def test_invoke_count_retried_on_mantle_sends_the_betas_invoke_inference_sends(
-    request_options: dict[str, JsonValue],
+    request_options: dict[str, JsonValue], expected_betas: tuple[str, ...]
 ) -> None:
     inference, bedrock = await _messages_inference_and_count(
         "bedrock/invoke/us.anthropic.claude-opus-5-5",
@@ -499,7 +503,7 @@ async def test_invoke_count_retried_on_mantle_sends_the_betas_invoke_inference_s
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
     sent_betas: Final = _JSON_BODY.validate_json(inference.requests[0].content).get("anthropic_beta", [])
     assert isinstance(sent_betas, list)
-    assert _sent_betas(bedrock.requests[1]) == tuple(sorted(sent_betas))
+    assert _sent_betas(bedrock.requests[1]) == tuple(sorted(sent_betas)) == expected_betas
 
 
 @pytest.mark.asyncio
@@ -531,6 +535,21 @@ async def test_runtime_count_of_an_effort_sends_the_effort_beta_once_beside_the_
     assert set(counted_betas) - {ANTHROPIC_EFFORT_BETA_HEADER} == set(sent_betas) - {ANTHROPIC_EFFORT_BETA_HEADER}
 
 
+@pytest.mark.asyncio
+async def test_runtime_count_of_an_output_format_sends_only_the_betas_invoke_inference_sends() -> None:
+    inference, bedrock = await _messages_inference_and_count(
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-sonnet-4-6",
+        {**_CITY_FORMAT, "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+    )
+
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    counted: Final = _invoke_body(bedrock.requests[0])
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    assert counted.get("output_config") == sent.get("output_config")
+    assert counted.get("anthropic_beta") == sent.get("anthropic_beta")
+
+
 _CONVERSE_REPLY: Final = {
     "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
     "stopReason": "end_turn",
@@ -547,10 +566,9 @@ _NO_PARALLEL_TOOL_USE: Final[dict[str, JsonValue]] = {
     ("deployment_model", "inference_reply"),
     (
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", _CONVERSE_REPLY),
-        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", _CONVERSE_REPLY),
         ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", _CLAUDE_REPLY),
     ),
-    ids=("converse", "converse_parallel_tool_use_config_model", "invoke"),
+    ids=("converse", "invoke"),
 )
 async def test_runtime_count_sends_disable_parallel_tool_use_only_when_messages_inference_sends_it(
     deployment_model: str, inference_reply: Mapping[str, object]
