@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 
 # Now we can safely import app
 from litellm.proxy.proxy_server import app
+from litellm.router import Router
 from litellm.types.search import SearchToolInfoResponse
 
 client = TestClient(app)
@@ -1599,3 +1600,44 @@ async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(
     assert info.json()["litellm_params"]["api_base"] == listed_params[0]["api_base"] != rewritten_params["api_base"]
     assert "pplx-loaded-key" not in listed.text + info.text
     assert info.json()["created_at"] == listed.json()["search_tools"][0]["created_at"] == "2026-09-01T00:00:00"
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_search_tool_created_through_the_api_keeps_its_downstream_tool_name(salt_key):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state({})
+    router = Router(model_list=[], search_tools=[])
+    prisma_client = _prisma_client_over(_InMemorySearchToolsTable())
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: proxy globals are the only seam
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),  # test-quality-ok: proxy globals are the only seam
+            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: proxy globals are the only seam
+        ):
+            response = TestClient(app).post(
+                "/search_tools",
+                json={
+                    "search_tool": {
+                        "search_tool_name": "proxy-alias",
+                        "litellm_params": {
+                            "search_provider": "litellm_proxy",
+                            "api_base": "https://proxy.example.com",
+                            "search_tool_name": "remote-tavily",
+                        },
+                    }
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert [
+        (tool["search_tool_name"], tool["litellm_params"].get("search_tool_name"))
+        for tool in router.search_tools
+    ] == [("proxy-alias", "remote-tavily")]

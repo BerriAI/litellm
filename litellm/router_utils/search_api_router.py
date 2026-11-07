@@ -90,7 +90,7 @@ class SearchAPIRouter:
     def get_matching_search_tools(
         router_instance: _SearchToolsRouter,
         search_tool_name: str,
-    ) -> list:
+    ) -> list[SearchToolTypedDict]:
         """
         Get all search tools matching the given name.
 
@@ -220,7 +220,7 @@ class SearchAPIRouter:
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
                 tool_litellm_params=litellm_params,
             )
-            protected_params: Final = frozenset(("search_provider", "api_key", "api_base"))
+            protected_params: Final = frozenset(("search_provider", "api_key", "api_base", "search_tool_name"))
             search_params: Final = MappingProxyType(
                 {
                     key: value
@@ -237,6 +237,7 @@ class SearchAPIRouter:
                 search_provider=search_provider,
                 api_key=api_key,
                 api_base=api_base,
+                search_tool_name=litellm_params.get("search_tool_name"),
                 **search_params,
             )
 

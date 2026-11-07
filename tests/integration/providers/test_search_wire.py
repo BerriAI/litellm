@@ -347,3 +347,38 @@ def test_sdk_search_with_an_unknown_virtual_key_never_reaches_the_tool(gateway: 
                 api_key=f"sk-{uuid.uuid4().hex}",
             )
         assert wire.drain() == ()
+
+
+def test_a_proxy_search_tool_calls_the_downstream_tool_its_own_params_name(gateway: Gateway) -> None:
+    downstream_key: Final = "sk-synthetic-downstream-key"
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/search/remote-tavily"), request.target
+        assert request.headers["authorization"] == f"Bearer {downstream_key}", request.headers
+        assert json.loads(request.body) == {"query": _QUERY, "max_results": 2}, request.body
+        return Reply(body=json.dumps(_EXPECTED_TAVILY_RESPONSE).encode())
+
+    tool: Final = f"proxy-alias-{uuid.uuid4().hex}"
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.post(
+            "/search_tools",
+            {
+                "search_tool": {
+                    "search_tool_name": tool,
+                    "litellm_params": {
+                        "search_provider": "litellm_proxy",
+                        "api_key": downstream_key,
+                        "api_base": wire.url,
+                        "search_tool_name": "remote-tavily",
+                    },
+                }
+            },
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/search_tools/{created['search_tool_id']}")
+        response: Final = gateway.request(
+            "POST", f"/v1/search/{tool}", {"query": _QUERY, "max_results": 2}, key=scenario.key()
+        )
+        assert len(wire.drain()) == 1
+
+    assert response.status_code == 200, response.text
+    assert json.loads(response.content) == _EXPECTED_TAVILY_RESPONSE
