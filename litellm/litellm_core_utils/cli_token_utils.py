@@ -20,6 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+from filelock import FileLock, Timeout
 from pydantic import ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import (
@@ -45,6 +46,11 @@ from litellm.litellm_core_utils.private_json import (
     write_private_json,
 )
 from litellm.types.llms.base_model import LiteLLMBaseModel
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialNotLoaded:
+    detail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,8 +145,39 @@ def get_cli_token_file_path() -> str:
     return str(config_dir / "token.json")
 
 
+def cli_token_lock() -> FileLock:
+    """Lock metadata and keychain operations beside the directory so read-only stores still allow logout."""
+    directory: Final = Path(get_cli_token_file_path()).parent
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    path: Final = directory.with_name(f"{directory.name}-token.lock")
+    return FileLock(str(path), timeout=60, mode=0o600, is_singleton=True)
+
+
 def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | None:
-    """Load the stored CLI credential, or None when this machine has none"""
+    """Load a stored CLI credential, or None when it cannot be loaded."""
+    outcome: Final = read_cli_token(vault=vault)
+    return outcome if isinstance(outcome, CliTokenRecord) else None
+
+
+def read_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | CredentialNotLoaded | None:
+    if not Path(get_cli_token_file_path()).exists():
+        return None
+    try:
+        with cli_token_lock():
+            return _load_cli_token(vault)
+    except Timeout:
+        return CredentialNotLoaded(
+            "CLI credential store is busy. Retry this command after the other credential operation finishes. "
+            "This command did not change your stored login."
+        )
+    except OSError:
+        return CredentialNotLoaded(
+            "Could not lock the CLI credential store. Retry this command after checking the lock file permissions. "
+            "This command did not change your stored login."
+        )
+
+
+def _load_cli_token(vault: SecretVault) -> CliTokenRecord | None:
     record: Final = _read_token_file()
     if record is None:
         return None
@@ -148,6 +185,14 @@ def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | N
 
 
 def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
+    try:
+        with cli_token_lock():
+            return _save_cli_token(record, vault)
+    except (OSError, Timeout) as error:
+        return CredentialNotSaved(str(error))
+
+
+def _save_cli_token(record: CliTokenRecord, vault: SecretVault) -> SecretSave:
     """Store a freshly minted credential. Reports where its secret material ended up, and why.
 
     The token file is what makes a keychain-backed credential findable again, and it is also the
@@ -218,6 +263,14 @@ def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -
 
 
 def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
+    try:
+        with cli_token_lock():
+            return _clear_cli_token(vault)
+    except (OSError, Timeout) as error:
+        return CredentialNotCleared(str(error))
+
+
+def _clear_cli_token(vault: SecretVault) -> SecretClear:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
     A logout the keychain never answered keeps the token file, with its secret taken out, because
@@ -339,13 +392,17 @@ def get_litellm_gateway_api_key(
         >>>         base_url="https://your-proxy.com/v1"
         >>>     )
     """
-    record: Final = _read_token_file()
-    if record is None:
+    try:
+        with cli_token_lock():
+            record: Final = _read_token_file()
+            if record is None:
+                return None
+            if expected_base_url is not None and record.base_url != expected_base_url.rstrip("/"):
+                return None
+            resolved: Final = _resolve_secret(record, vault)
+            return None if resolved is None else resolved.key
+    except (OSError, Timeout):
         return None
-    if expected_base_url is not None and record.base_url != expected_base_url.rstrip("/"):
-        return None
-    resolved: Final = _resolve_secret(record, vault)
-    return None if resolved is None else resolved.key
 
 
 def is_cli_token_fresh(

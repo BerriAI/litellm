@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
     CredentialNotRecorded,
     CredentialNotSaved,
+    cli_token_lock,
     save_cli_token,
 )
 from litellm.proxy.client.cli import cli
@@ -35,6 +36,7 @@ from litellm.proxy.client.cli.commands.auth import (
     whoami,
 )
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 
 @pytest.fixture
@@ -693,7 +695,7 @@ class TestWhoamiCommand:
             timestamp=time.time() - 3600,
         )
 
-        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
+        with patch("litellm.proxy.client.cli.commands.auth.read_cli_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -705,7 +707,7 @@ class TestWhoamiCommand:
 
     def test_whoami_not_authenticated(self):
         """Test whoami when user is not authenticated"""
-        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=None):
+        with patch("litellm.proxy.client.cli.commands.auth.read_cli_token", return_value=None):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -731,7 +733,7 @@ class TestWhoamiCommand:
             timestamp=STALE_TOKEN_TIMESTAMP,
         )
 
-        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
+        with patch("litellm.proxy.client.cli.commands.auth.read_cli_token", return_value=token_data):
             result: Final = self.runner.invoke(whoami)
 
         assert result.exit_code == 0
@@ -743,7 +745,7 @@ class TestWhoamiCommand:
         """Test whoami with token missing some fields"""
         token_data = CliTokenRecord(key="sk-live", timestamp=time.time() - 3600)
 
-        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=token_data):
+        with patch("litellm.proxy.client.cli.commands.auth.read_cli_token", return_value=token_data):
             result = self.runner.invoke(whoami)
 
             assert result.exit_code == 0
@@ -813,7 +815,7 @@ class TestWhoamiCommand:
 
         with (
             patch(
-                "litellm.proxy.client.cli.commands.auth.load_cli_token",
+                "litellm.proxy.client.cli.commands.auth.read_cli_token",
                 return_value=token_data,
             ),
             patch("time.time", return_value=1000),
@@ -982,7 +984,7 @@ class TestPrintTokenCommand:
         self.runner = CliRunner()
 
     def test_no_stored_token_fails_cleanly(self):
-        with patch("litellm.proxy.client.cli.commands.auth.load_cli_token", return_value=None):
+        with patch("litellm.proxy.client.cli.commands.auth.read_cli_token", return_value=None):
             result = self.runner.invoke(print_token, obj={})
 
         assert result.exit_code != 0
@@ -994,7 +996,7 @@ class TestPrintTokenCommand:
         one). Must use token.json's own base_url, not a hardcoded default."""
         with (
             patch(
-                "litellm.proxy.client.cli.commands.auth.load_cli_token",
+                "litellm.proxy.client.cli.commands.auth.read_cli_token",
                 return_value=CliTokenRecord(
                     base_url="https://litellm-proxy.corp.com",
                     key="sk-prod-fresh",
@@ -1016,7 +1018,7 @@ class TestPrintTokenCommand:
         token minted for proxy A must not reach a helper invocation aimed
         at proxy B, even though the token itself is otherwise fresh."""
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.read_cli_token",
             return_value=CliTokenRecord(
                 base_url="https://other-server.com",
                 key="sk-should-not-print",
@@ -1035,7 +1037,7 @@ class TestPrintTokenCommand:
         """`lite up`'s own bound invocation shape: --base-url matching the token's origin
         must succeed exactly like the bare/legacy invocation does."""
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.read_cli_token",
             return_value=CliTokenRecord(
                 base_url="http://localhost:4000",
                 key="sk-matches",
@@ -1056,7 +1058,7 @@ class TestPrintTokenCommand:
         refresh call on every single invocation (apiKeyHelper gets called
         frequently)."""
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.read_cli_token",
             return_value=CliTokenRecord(
                 base_url="http://localhost:4000",
                 key="sk-cached-fresh",
@@ -1091,7 +1093,7 @@ class TestPrintTokenCommand:
         _register_models_answer("sk-stale-key", proxy_answer)
 
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.read_cli_token",
             return_value=CliTokenRecord(
                 base_url=STALE_TOKEN_BASE_URL,
                 key="sk-stale-key",
@@ -1110,7 +1112,7 @@ class TestPrintTokenCommand:
         _register_models_answer("sk-stale-key", requests.ReadTimeout("proxy sent nothing"))
 
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.read_cli_token",
             return_value=CliTokenRecord(
                 base_url=STALE_TOKEN_BASE_URL,
                 key="sk-stale-key",
@@ -1128,7 +1130,7 @@ class TestPrintTokenCommand:
     @responses.activate
     def test_key_without_a_recorded_proxy_still_expires_after_the_client_window(self):
         with patch(
-            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.read_cli_token",
             return_value=CliTokenRecord(key="sk-old-format", timestamp=STALE_TOKEN_TIMESTAMP),
         ):
             result: Final = self.runner.invoke(print_token, obj={})
@@ -2227,6 +2229,78 @@ def test_print_token_reads_the_connection_from_the_context_object(
     assert result.exit_code == expected_exit_code
     assert result.stdout == expected_stdout
     assert result.stderr == expected_stderr
+
+
+def test_print_token_uses_the_saved_key_when_the_initializer_did_not_get_one(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    vault: Final = secret_vault_factory()
+    record: Final = CliTokenRecord(
+        base_url="https://test.example.com",
+        key="sk-fixture-reloaded",
+        timestamp=1000.0,
+        expires_at=1e20,
+        refresh_token="fixture-refresh",
+    )
+    assert save_cli_token(record, vault=vault) == SecretStored()
+    result: Final = CliRunner().invoke(
+        print_token,
+        obj={
+            "base_url": record.base_url,
+            "api_key": None,
+            "api_key_from_token_file": True,
+            "base_url_explicit": True,
+            "secret_vault": vault,
+        },
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{record.key}\n"
+
+
+@responses.activate
+def test_logout_reports_a_lock_failure_without_revoking_or_clearing_the_credential(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    _write_home_json(isolated_home, "token.json", _pkce_record(timestamp=1000.0, expires_at=0.0))
+    responses.add(responses.POST, f"{PKCE_BASE_URL}/revoke", json={}, status=200)
+    path: Final = isolated_home / ".litellm" / "token.json"
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory(blob=_secret_blob("https://test.example.com", "sk-fixture-vault"))
+    original_secret: Final = vault.blob
+    Path(cli_token_lock().lock_file).mkdir()
+
+    result: Final = CliRunner().invoke(logout, obj={"secret_vault": vault})
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Could not lock the CLI credential store. No credential operation was started" in result.stderr
+    assert len(responses.calls) == 0
+    assert path.read_bytes() == original
+    assert vault.blob == original_secret
+    assert vault.reads == 0
+    assert vault.erases == 0
+
+
+def test_print_token_reports_an_unavailable_lock_without_claiming_the_login_is_missing(
+    isolated_home: Path,
+    secret_vault_factory: type[FakeSecretVault],
+) -> None:
+    _write_home_json(isolated_home, "token.json", _pkce_record(timestamp=1000.0, expires_at=0.0))
+    path: Final = isolated_home / ".litellm" / "token.json"
+    original: Final = path.read_bytes()
+    vault: Final = secret_vault_factory()
+    Path(cli_token_lock().lock_file).mkdir()
+
+    result: Final = CliRunner().invoke(print_token, obj={"secret_vault": vault})
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Retry this command" in result.stderr
+    assert "lite login" not in result.stderr
+    assert "Not authenticated" not in result.stderr
+    assert path.read_bytes() == original
+    assert vault.reads == 0
+    assert vault.writes == []
 
 
 def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_stored(isolated_home):
