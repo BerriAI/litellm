@@ -57,8 +57,8 @@ def _read_scope_caller(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth | No
 
 
 def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    """Return the hashed key token that identifies this caller, or None for master key."""
-    return user_api_key_dict.token
+    """Return the hashed key token when it identifies the caller's own scope."""
+    return None if user_api_key_dict.impersonated_by is not None else user_api_key_dict.token
 
 
 # Status transitions driven by event_type
@@ -237,10 +237,13 @@ async def create_workflow_run(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
+    caller: Final = _caller_key(user_api_key_dict)
+    if caller is None:
+        raise HTTPException(status_code=403, detail="Impersonated callers cannot create workflow runs.")
     try:
         create_data: Final[_RunCreateData] = {
             "workflow_type": data.workflow_type,
-            "created_by": _caller_key(user_api_key_dict),
+            "created_by": caller,
         }
         if data.input is not None:
             create_data["input"] = _json(data.input)
@@ -283,8 +286,9 @@ async def list_workflow_runs(
     # Non-admin callers are scoped to their own key.
     if not user_api_key_has_admin_view(user_api_key_dict):
         caller: Final = _caller_key(user_api_key_dict)
-        if caller:
-            where["created_by"] = caller
+        if caller is None:
+            return {"runs": (), "count": 0}
+        where["created_by"] = caller
 
     try:
         runs: Final[Sequence[object]] = await WorkflowRunRepository(prisma_client).table.find_many(

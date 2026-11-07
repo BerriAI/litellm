@@ -50,6 +50,10 @@ class ControlPlaneException(Exception):
         super().__init__(body.detail)
 
 
+def bad_gateway(detail: str) -> ErrorBody:
+    return error_body("bad-gateway", "Bad Gateway", 502, detail)
+
+
 def _render(body: ErrorBody) -> JSONResponse:
     response: Final = error_response(body)
     if body.status == 401:
