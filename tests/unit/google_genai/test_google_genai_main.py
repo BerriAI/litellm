@@ -4,7 +4,7 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
-
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -324,7 +324,7 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
 
-async def _call_entrypoint(entrypoint: str, output_cap: dict[str, dict[str, int]]) -> None:
+async def _call_entrypoint(entrypoint: str, output_cap: Mapping[str, Mapping[str, int]]) -> None:
     from litellm.google_genai.main import (
         agenerate_content,
         agenerate_content_stream,
@@ -357,7 +357,7 @@ async def _call_entrypoint(entrypoint: str, output_cap: dict[str, dict[str, int]
     "entrypoint", ["generate_content", "agenerate_content", "generate_content_stream", "agenerate_content_stream"]
 )
 async def test_adapter_path_sends_the_output_cap_in_every_spelling(
-    _httpx_transport: None, entrypoint: str, output_cap: dict[str, dict[str, int]]
+    _httpx_transport: None, entrypoint: str, output_cap: Mapping[str, Mapping[str, int]]
 ) -> None:
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{_CHAT_UPSTREAM}/chat/completions").mock(side_effect=_chat_reply)
@@ -369,7 +369,7 @@ async def test_adapter_path_sends_the_output_cap_in_every_spelling(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output_cap", _OUTPUT_CAP_SPELLINGS)
 async def test_native_gemini_request_carries_the_output_cap_in_every_spelling(
-    _httpx_transport: None, output_cap: dict[str, dict[str, int]]
+    _httpx_transport: None, output_cap: Mapping[str, Mapping[str, int]]
 ) -> None:
     from litellm.google_genai.main import agenerate_content
 

@@ -4,6 +4,7 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 import json
 import unittest
+from collections.abc import Mapping
 
 import pytest
 
@@ -94,7 +95,7 @@ def test_list_contents_transformation():
     ],
     ids=["camelCase", "snake_case"],
 )
-def test_config_parameter_mapping(config: dict[str, object]):
+def test_config_parameter_mapping(config: Mapping[str, object]):
     """Test that config parameters are correctly mapped"""
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 

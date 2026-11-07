@@ -16,7 +16,7 @@ Redis.
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
 import pytest
 
@@ -1473,6 +1473,63 @@ async def test_project_otpm_injects_google_genai_native_output_cap(
         expected_config_field
     ]
     assert "max_tokens" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configs",
+    [
+        {"config": {}, "generationConfig": {"maxOutputTokens": 100}},
+        {"generationConfig": {"maxOutputTokens": 100}, "generation_config": {"max_output_tokens": 10}},
+        {"config": {"maxOutputTokens": 100}, "generationConfig": {"maxOutputTokens": 10}},
+    ],
+)
+async def test_project_otpm_checks_the_first_non_empty_google_genai_config(rate_limiter, configs):
+    handler, cache = rate_limiter
+    model = "gemini/gemini-3-flash-preview"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-google-genai-config-precedence"),
+        project_id="project-google-genai-config-precedence",
+        project_metadata={"model_otpm_limit": {model: 50}},
+    )
+
+    with pytest.raises(Exception, match="Rate limit exceeded for model_per_project_otpm") as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=cache,
+            data={"model": model, "contents": [{"role": "user", "parts": [{"text": "Hello"}]}], **configs},
+            call_type="agenerate_content",
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 429
+
+
+@pytest.mark.asyncio
+async def test_project_otpm_injects_cap_into_the_first_non_empty_google_genai_config(rate_limiter):
+    handler, cache = rate_limiter
+    model = "gemini/gemini-3-flash-preview"
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-google-genai-config-inject-precedence"),
+        project_id="project-google-genai-config-inject-precedence",
+        project_metadata={"model_otpm_limit": {model: 40}},
+    )
+    data: Final = {
+        "model": model,
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "config": {},
+        "generationConfig": {"temperature": 0},
+        "generation_config": {"max_output_tokens": 5000},
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="agenerate_content",
+    )
+
+    assert data["generationConfig"] == {"temperature": 0, "maxOutputTokens": 10}
+    assert data["config"] == {}
 
 
 @pytest.mark.asyncio
