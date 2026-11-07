@@ -22,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
-from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import (
     AmazonEmbeddingRequest,
     CohereEmbeddingRequest,
@@ -101,23 +100,8 @@ class BedrockEmbedding(BaseAWSLLM):
     ) -> tuple[Credentials | None, str]:
         auth_params: Final = pop_aws_auth_params(optional_params)
         explicit_region_name: Final = optional_params.pop("aws_region_name", None)
-        aws_region_name = region_from_model if explicit_region_name is None else explicit_region_name
-
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(litellm_aws_region_name, str):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name: Final = get_secret("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(standard_aws_region_name, str):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
-
+        requested_region: Final = region_from_model if explicit_region_name is None else explicit_region_name
+        aws_region_name: Final = self._get_aws_region_name(optional_params={"aws_region_name": requested_region})
         credentials: Final[Credentials | None] = (
             None if bearer_token is not None else self.resolve_credentials(auth_params, aws_region_name)
         )
@@ -446,11 +430,6 @@ class BedrockEmbedding(BaseAWSLLM):
         ### TRANSFORMATION ###
         unencoded_model_id: Final = model_id_param or bedrock_model
         modelId: Final = urllib.parse.quote(unencoded_model_id, safe="")
-        aws_region_name = self._get_aws_region_name(
-            optional_params={"aws_region_name": aws_region_name},
-            model=bedrock_model,
-            model_id=unencoded_model_id,
-        )
         provider: Final = self.get_bedrock_embedding_provider(bedrock_model)
         if provider is None:
             raise Exception(
