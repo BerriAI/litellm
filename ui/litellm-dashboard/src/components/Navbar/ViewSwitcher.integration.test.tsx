@@ -179,7 +179,9 @@ describe("ViewSwitcher", () => {
 
   it("should switch from Chat to the connected Moyai deployment", async () => {
     state.pathname = "/ui/chat";
-    const settings = { values: { enable_chat_ui: true, moyai_url: "https://moyai.example.com" } };
+    const settings = {
+      values: { enable_chat_ui: true, enable_moyai_ui: true, moyai_url: "https://moyai.example.com" },
+    };
     getUiSettingsMock.mockResolvedValue(settings);
     const user = userEvent.setup();
     renderSwitcher();
@@ -189,7 +191,33 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("https://moyai.example.com");
   });
 
+  it("should hide Moyai from the switcher when an admin turns it off", async () => {
+    getUiSettingsMock.mockResolvedValue({
+      values: { enable_chat_ui: true, enable_moyai_ui: false, moyai_url: "https://moyai.example.com" },
+    });
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" });
+    expect(screen.queryByRole("menuitem", { name: /Moyai/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["settings are still loading", () => new Promise(() => {})],
+    ["the proxy does not report the setting", () => Promise.resolve({ values: { enable_chat_ui: false } })],
+  ])("should keep Moyai in the switcher while %s", async (_, loadSettings) => {
+    getUiSettingsMock.mockImplementation(loadSettings);
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Moyai Cloud Coding Agent" }));
+    expect(assignSpy).toHaveBeenCalledWith("/ui/moyai");
+  });
+
   it("should keep the local Moyai route available when Chat is disabled", async () => {
+    getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: false, enable_moyai_ui: true } });
     const user = userEvent.setup();
     renderSwitcher();
 

@@ -173,7 +173,11 @@ describe("UISettings", () => {
       buildSettingsResponse({
         data: {
           ...buildSettingsResponse().data,
-          values: { ...buildSettingsResponse().data.values, moyai_url: "https://moyai.example.com" },
+          values: {
+            ...buildSettingsResponse().data.values,
+            enable_moyai_ui: true,
+            moyai_url: "https://moyai.example.com",
+          },
         },
       }),
     );
@@ -192,10 +196,76 @@ describe("UISettings", () => {
   });
 
   it("shows a link to the Moyai page when not connected", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: true },
+        },
+      }),
+    );
     render(<UISettings />);
 
     expect(screen.getByText("Not connected")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Connect from the Moyai page" })).toHaveAttribute("href", "/ui/moyai");
+  });
+
+  it("shows Moyai as disabled without a connect link when an admin turns it off", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: false },
+        },
+      }),
+    );
+    render(<UISettings />);
+
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Connect from the Moyai page" })).not.toBeInTheDocument();
+  });
+
+  it("locks the Moyai switch when the config file owns enable_moyai_ui", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: false },
+          source: { enable_moyai_ui: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+
+    expect(screen.getByRole("switch", { name: "Enable Moyai" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText(/Managed by general_settings.enable_moyai_ui in the config file/)).toBeInTheDocument();
+  });
+
+  it("turns Moyai off by patching enable_moyai_ui", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+    mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, enable_moyai_ui: true },
+        },
+      }),
+    );
+    render(<UISettings />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("switch", { name: "Enable Moyai" }));
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { enable_moyai_ui: false },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
   });
 
   it("should toggle require auth for public AI Hub setting and call update", () => {
