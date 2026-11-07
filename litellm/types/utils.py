@@ -4312,6 +4312,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "supports_regex_lookaround",
         "supports_assistant_prefill",
+        "supports_sampling_params",
         "supports_bedrock_native_structured_output",
         "supports_bedrock_native_structured_output_by_default",
         "supports_per_turn_control",

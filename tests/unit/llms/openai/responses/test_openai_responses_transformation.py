@@ -13,6 +13,7 @@ from openai.types.responses.response_compaction_item import ResponseCompactionIt
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
@@ -5052,3 +5053,40 @@ def test_compact_request_keeps_stream_under_drop_params(config: OpenAIResponsesA
     )
 
     assert {key: data[key] for key in data if key != "input"} == {"model": "gpt-5.4-mini", "stream": True}
+
+
+@pytest.mark.parametrize("param,value", [("temperature", 0.5), ("top_p", 0.9)])
+@pytest.mark.parametrize("model", ["o3", "openai/o3", "o4-mini", "o1-pro"])
+def test_o_series_responses_rejects_or_drops_sampling(model: str, param: str, value: float) -> None:
+    config: Final = OpenAIResponsesAPIConfig()
+    assert config.map_openai_params({param: value}, model, drop_params=True) == {}
+    with pytest.raises(litellm.UnsupportedParamsError):
+        config.map_openai_params({param: value}, model, drop_params=False)
+
+
+@pytest.mark.parametrize(
+    "model,reasoning,expected",
+    [
+        ("gpt-5.1", {"effort": "none"}, {"temperature": 0.5, "top_p": 0.9, "reasoning": {"effort": "none"}}),
+        ("gpt-5.5", {"effort": "none"}, {"temperature": 0.5, "top_p": 0.9, "reasoning": {"effort": "none"}}),
+        ("gpt-5.5", {"effort": "medium"}, {"reasoning": {"effort": "medium"}}),
+        ("gpt-5-chat-latest", None, {"temperature": 0.5, "top_p": 0.9}),
+        ("openai/custom-sampling-deployment", None, {"temperature": 0.5, "top_p": 0.9}),
+        ("openai/gpt-5-custom-sampling-deployment", None, {}),
+    ],
+)
+def test_responses_sampling_effort_and_unknown_fallback(
+    model: str, reasoning: dict[str, str] | None, expected: dict[str, object]
+) -> None:
+    params: Final = {"temperature": 0.5, "top_p": 0.9, **({"reasoning": reasoning} if reasoning else {})}
+    assert OpenAIResponsesAPIConfig().map_openai_params(params, model, drop_params=True) == expected
+
+
+def test_responses_empty_sampling_params() -> None:
+    assert OpenAIResponsesAPIConfig().map_openai_params({}, "o3", drop_params=False) == {}
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_hosted_vllm_responses_keeps_sampling_when_effort_is_none(drop_params: bool) -> None:
+    params: Final = {"temperature": 0.5, "top_p": 0.9, "reasoning": {"effort": "none"}}
+    assert HostedVLLMResponsesAPIConfig().map_openai_params(params, "gpt-5.1", drop_params) == params

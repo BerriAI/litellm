@@ -10,6 +10,21 @@ from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
 import os
 
 
+@pytest.mark.parametrize("param,value", [("temperature", 0.5), ("top_p", 0.9)])
+def test_o_series_chat_sampling_cost_map_override(param: str, value: float) -> None:
+    model: Final = "openai/o3-sampling-enabled-test"
+    with patch.dict(litellm.model_cost, {model: {"litellm_provider": "openai", "mode": "chat", "supports_sampling_params": True}}):
+        assert OpenAIOSeriesConfig().map_openai_params({param: value}, {}, model, False) == {param: value}
+
+
+@pytest.mark.parametrize("param,value", [("temperature", 0.5), ("top_p", 0.9)])
+def test_o_series_chat_sampling_unknown_fallback(param: str, value: float) -> None:
+    config: Final = OpenAIOSeriesConfig()
+    assert config.map_openai_params({param: value}, {}, "o3-unknown-test", True) == {}
+    with pytest.raises(litellm.UnsupportedParamsError):
+        config.map_openai_params({param: value}, {}, "o3-unknown-test", False)
+
+
 @pytest.mark.parametrize(
     "model_name,expected",
     [

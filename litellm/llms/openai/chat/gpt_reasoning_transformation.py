@@ -11,6 +11,7 @@ from litellm.utils import (
     has_catalog_entry,
     is_explicitly_disabled_factory,
     supports_factory,
+    supports_sampling_params,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
@@ -206,6 +207,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return cls._supports_reasoning_effort_level(model, level)
 
     @classmethod
+    def sampling_params_allowed(cls, model: str, effort: str | None, *, fallback_allowed: bool) -> bool:
+        lookup: Final = cls._model_map_lookup_name(model)
+        if cls._supports_reasoning_effort_level(model, "none") and cls.effort_resolves_to_none(model, effort):
+            return True
+        flag: Final = supports_sampling_params(lookup)
+        return fallback_allowed if flag is None else flag
+
+    @classmethod
     def effort_resolves_to_none(cls, model: str, effective_effort: str | None) -> bool:
         """Whether this request's reasoning effort ends up as "none", which is the single
         condition under which the provider accepts a non-default temperature or the
@@ -318,7 +327,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
         if not self._supports_reasoning_effort_level(model, "none"):
-            non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
+            non_supported_params.extend(["logprobs", "top_logprobs"])
+            if not self.sampling_params_allowed(model, None, fallback_allowed=False):
+                non_supported_params.append("top_p")
 
         return [param for param in base_gpt_series_params if param not in non_supported_params]
 
@@ -398,7 +409,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
         supports_none: Final = self._supports_reasoning_effort_level(model, "none")
         if supports_none:
-            sampling_params: Final = ["logprobs", "top_logprobs", "top_p"]
+            sampling_params: Final = ["logprobs", "top_logprobs"]
             has_sampling: Final = any(p in non_default_params for p in sampling_params)
             if has_sampling and not self.effort_resolves_to_none(model, effective_effort):
                 if litellm.drop_params or drop_params:
@@ -415,12 +426,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                         status_code=400,
                     )
 
+        sampling_allowed: Final = self.sampling_params_allowed(model, effective_effort, fallback_allowed=False)
+        if "top_p" in non_default_params and not sampling_allowed:
+            if litellm.drop_params or drop_params:
+                non_default_params.pop("top_p", None)
+            else:
+                raise litellm.utils.UnsupportedParamsError(
+                    message=f"{model} only supports top_p when reasoning_effort resolves to 'none'",
+                    status_code=400,
+                )
         if "temperature" in non_default_params:
             temperature_value: Final[float | None] = non_default_params.pop("temperature")
             if temperature_value is not None:
-                # a non-default temperature rides on the effort resolving to "none", not on
-                # the model merely supporting it
-                if (supports_none and self.effort_resolves_to_none(model, effective_effort)) or temperature_value == 1:
+                if sampling_allowed or temperature_value == 1:
                     optional_params["temperature"] = temperature_value
                 elif litellm.drop_params or drop_params:
                     pass

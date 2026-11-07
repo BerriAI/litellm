@@ -3564,6 +3564,11 @@ def supports_audio_input(model: str, custom_llm_provider: str | None = None) -> 
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
 
 
+def supports_sampling_params(model: str, custom_llm_provider: str | None = None) -> bool | None:
+    info: Final = lookup_catalog_model_info(model, custom_llm_provider)
+    return None if isinstance(info, ModelInfoLookupMiss) else info.get("supports_sampling_params")
+
+
 def supports_video_input(model: str, custom_llm_provider: str | None = None) -> bool:
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_video_input")
 
@@ -7618,6 +7623,7 @@ def get_model_info_helper(
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
+                supports_sampling_params=_model_info.get("supports_sampling_params", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
                 supports_box_questions=_model_info.get("supports_box_questions", None),
