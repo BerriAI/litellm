@@ -113,16 +113,27 @@ def _is_conversation_item(item: object) -> bool:
     return block.get("type") != "file"
 
 
-def _request_message_count(kwargs: Mapping[str, object]) -> int:
+REQUEST_MESSAGE_COUNT_KWARG: Final = "_litellm_request_message_count"
+
+
+def request_message_count(kwargs: Mapping[str, object]) -> int:
     """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
+    caller_count: Final = kwargs.get(REQUEST_MESSAGE_COUNT_KWARG)
+    if isinstance(caller_count, int) and not isinstance(caller_count, bool):
+        return caller_count
     messages: Final = kwargs.get("messages")
     if isinstance(messages, list):
         return len(messages)
     input_items: Final = kwargs.get("input")
+    if isinstance(input_items, str):
+        return 0 if kwargs.get("call_type") in ("embedding", "aembedding") else 1
     if not isinstance(input_items, list):
         return 0
     items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
     return sum(1 for item in items if _is_conversation_item(item))
+
+
+_request_message_count = request_message_count
 
 
 class Cache:
