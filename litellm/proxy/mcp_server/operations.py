@@ -3093,6 +3093,55 @@ async def mcp_get_prompt(
     )
 
 
+async def _resolve_resource_server(
+    url: AnyUrl,
+    allowed_mcp_servers: Sequence[MCPServer],
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    oauth2_headers: dict[str, str] | None,
+    raw_headers: dict[str, str] | None,
+    client_ip: str | None,
+) -> MCPServer | None:
+    """Resolve a resource URI to the one allowed server that advertises it.
+
+    A client can read a URI it learned from tool metadata without calling
+    ``resources/list`` first, so a cache miss discovers each allowed server's
+    resources once. ``get_resources_from_server`` records the owner of every
+    resource it lists, and the manager returns ``None`` when the URI is unknown
+    or advertised by more than one allowed server.
+    """
+    uri: Final = str(url)
+    server: Final = global_mcp_server_manager.get_mcp_server_from_resource_uri(uri, allowed_mcp_servers)
+    if server is not None:
+        return server
+
+    async def discover(candidate: MCPServer) -> None:
+        try:
+            server_auth_header, extra_headers = _prepare_mcp_server_headers(
+                server=candidate,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_auth_header=mcp_auth_header,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+                scope_servers=list(allowed_mcp_servers),
+            )
+            await global_mcp_server_manager.get_resources_from_server(
+                server=candidate,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+            )
+        except Exception as error:
+            verbose_logger.debug("Failed to discover resources for server %s: %s", candidate.name, error)
+
+    await asyncio.gather(*(discover(candidate) for candidate in allowed_mcp_servers))
+    return global_mcp_server_manager.get_mcp_server_from_resource_uri(uri, allowed_mcp_servers)
+
+
 async def mcp_read_resource(
     url: AnyUrl,
     user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -3120,13 +3169,28 @@ async def mcp_read_resource(
             detail="User not allowed to read this resource.",
         )
 
-    if len(allowed_mcp_servers) != 1:
+    server: Final = (
+        allowed_mcp_servers[0]
+        if len(allowed_mcp_servers) == 1
+        else await _resolve_resource_server(
+            url=url,
+            allowed_mcp_servers=allowed_mcp_servers,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+    )
+    if server is None:
         raise HTTPException(
             status_code=400,
-            detail=("Multiple MCP servers configured; read_resource currently supports exactly one allowed server."),
+            detail=(
+                "Multiple MCP servers configured; could not resolve the requested resource URI "
+                "to exactly one allowed server."
+            ),
         )
-
-    server: Final = allowed_mcp_servers[0]
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,

@@ -81,6 +81,7 @@ def cleanup_mcp_global_state():
                 slot.task.cancel()
         global_mcp_server_manager.registry.clear()
         global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
         global_mcp_server_manager._oauth_discovery_slots = ()
         yield
         for slot in global_mcp_server_manager._oauth_discovery_slots:
@@ -88,6 +89,7 @@ def cleanup_mcp_global_state():
                 slot.task.cancel()
         global_mcp_server_manager.registry.clear()
         global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
         global_mcp_server_manager._oauth_discovery_slots = ()
     except ImportError:
         # MCP not available, skip cleanup
@@ -1300,23 +1302,93 @@ async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, 
 
 
 @pytest.mark.asyncio
+async def test_mcp_read_resource_routes_uri_to_owning_server_in_multi_server_session():
+    try:
+        from litellm.proxy.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+    server_a = MCPServer(server_id="server-a-id", name="server-a", transport=MCPTransport.http)
+    server_b = MCPServer(server_id="server-b-id", name="server-b", transport=MCPTransport.http)
+    uri = "ui://server-a/widget.html"
+    read_result = ReadResourceResult(
+        contents=[TextResourceContents(uri=uri, text="<html></html>", mimeType="text/html")]
+    )
+
+    async def get_resources(server, **kwargs):
+        if server is server_a:
+            return global_mcp_server_manager._create_prefixed_resources([Resource(uri=uri, name="widget.html")], server)
+        return []
+
+    getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
+    with (
+        patch(
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ),
+        patch(
+            "litellm.proxy.mcp_server.operations._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch(
+            "litellm.proxy.mcp_server.operations._enforce_mcp_server_rate_limit",
+            AsyncMock(),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_resources_from_server",
+            AsyncMock(side_effect=get_resources),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(return_value=read_result),
+        ) as read_mock,
+    ):
+        result = await mcp_read_resource(url=uri, user_api_key_auth=user_api_key_auth)
+
+    assert result is read_result
+    read_mock.assert_awaited_once()
+    assert read_mock.await_args.kwargs["server"] is server_a
+
+
+@pytest.mark.asyncio
 async def test_mcp_read_resource_multiple_servers_error():
     try:
         from litellm.proxy.mcp_server.server import mcp_read_resource
     except ImportError:
         pytest.skip("MCP server not available")
 
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
     user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+    server_a = MCPServer(server_id="server-a-id", name="server-a", transport=MCPTransport.http)
+    server_b = MCPServer(server_id="server-b-id", name="server-b", transport=MCPTransport.http)
 
-    server_a = MagicMock()
-    server_b = MagicMock()
-    server_a.name = "server_a"
-    server_b.name = "server_b"
-
-    with patch(
-        "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
-        AsyncMock(return_value=[server_a, server_b]),
-    ) as mock_allowed:
+    getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
+    with (
+        patch(
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ) as mock_allowed,
+        patch(
+            "litellm.proxy.mcp_server.operations._prepare_mcp_server_headers",
+            return_value=(None, None),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_resources_from_server",
+            AsyncMock(return_value=[]),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(),
+        ) as read_mock,
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await mcp_read_resource(
                 url="https://example.com/resource",
@@ -1326,6 +1398,7 @@ async def test_mcp_read_resource_multiple_servers_error():
     mock_allowed.assert_awaited_once()
     assert exc_info.value.status_code == 400
     assert "Multiple MCP servers" in str(exc_info.value.detail)
+    read_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
