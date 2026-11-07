@@ -3,6 +3,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -116,6 +117,13 @@ class _ManagedFileIds:
         return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
 
 
+class _UnreachableManagedFilesTable:
+    async def get_unified_file_ids_for_provider_file_ids(
+        self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        raise httpx.ConnectError("database is unreachable")
+
+
 def _search_hit(file_id: str) -> Mapping[str, object]:
     return {"file_id": file_id, "filename": f"{file_id}.txt", "score": 0.5, "content": []}
 
@@ -154,3 +162,15 @@ async def test_search_hits_keep_provider_file_ids_without_the_managed_files_hook
     page: Final = _search_page(_search_hit("file-ingested"))
 
     assert await with_managed_search_file_ids(page, None, UserAPIKeyAuth(api_key="k", team_id="team-a")) == page
+
+
+@pytest.mark.asyncio
+async def test_search_hits_keep_provider_file_ids_when_the_managed_file_lookup_fails() -> None:
+    page: Final = _search_page(_search_hit("file-ingested"))
+
+    assert (
+        await with_managed_search_file_ids(
+            page, _UnreachableManagedFilesTable(), UserAPIKeyAuth(api_key="k", team_id="team-a")
+        )
+        == page
+    )

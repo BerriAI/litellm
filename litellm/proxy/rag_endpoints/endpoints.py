@@ -52,6 +52,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_team_provider_deployment,
     is_base64_encoded_unified_file_id,
     provider_file_id_from_managed_id,
+    team_deployment_the_caller_may_use,
 )
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
@@ -839,7 +840,11 @@ async def rag_ingest(
         )
 
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        upload_deployment: Final = team_deployment if not forwarded_credentials else None
+        upload_deployment: Final = (
+            None
+            if forwarded_credentials
+            else await team_deployment_the_caller_may_use(team_deployment, llm_router, user_api_key_dict)
+        )
         ingest_file_id: Final = await _provider_file_id_for_ingest(
             file_id, upload_deployment, managed_files_obj, user_api_key_dict
         )

@@ -21,11 +21,13 @@ from typing import (
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
@@ -177,6 +179,23 @@ def provider_file_id_from_managed_id(managed_file_id: str) -> str:
     return match.group(1).strip() if match else managed_file_id
 
 
+async def _unified_file_ids_or_empty_on_db_failure(
+    managed_files_obj: ManagedFileIdResolver,
+    provider_file_ids: Sequence[str],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> Mapping[str, str]:
+    try:
+        return await managed_files_obj.get_unified_file_ids_for_provider_file_ids(
+            provider_file_ids=provider_file_ids,
+            user_api_key_dict=user_api_key_dict,
+        )
+    except Exception as e:
+        if not PrismaDBExceptionHandler.is_database_infrastructure_error(e):
+            raise
+        verbose_proxy_logger.warning("Managed file id lookup failed, keeping provider file ids: %s", e)
+        return MappingProxyType({})
+
+
 async def managed_file_ids_for_provider_file_ids(
     provider_file_ids: Sequence[str],
     managed_files_obj: object | None,
@@ -184,9 +203,8 @@ async def managed_file_ids_for_provider_file_ids(
 ) -> Mapping[str, str]:
     if not provider_file_ids or not isinstance(managed_files_obj, ManagedFileIdResolver):
         return MappingProxyType({})
-    id_map: Final = await managed_files_obj.get_unified_file_ids_for_provider_file_ids(
-        provider_file_ids=tuple(dict.fromkeys(provider_file_ids)),
-        user_api_key_dict=user_api_key_dict,
+    id_map: Final = await _unified_file_ids_or_empty_on_db_failure(
+        managed_files_obj, tuple(dict.fromkeys(provider_file_ids)), user_api_key_dict
     )
     return MappingProxyType(
         {
@@ -521,6 +539,20 @@ async def authorize_model_for_key(
         valid_token=user_api_key_dict,
         llm_router=llm_router,
     )
+
+
+async def team_deployment_the_caller_may_use(
+    deployment: TeamProviderDeployment | None,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> TeamProviderDeployment | None:
+    if deployment is None:
+        return None
+    try:
+        await authorize_model_for_key(deployment.public_model_name, llm_router, user_api_key_dict)
+    except ProxyException:
+        return None
+    return deployment
 
 
 async def get_authorized_credentials_for_model(

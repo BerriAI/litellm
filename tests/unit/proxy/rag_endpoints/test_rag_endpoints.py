@@ -855,6 +855,39 @@ def test_rag_ingest_keeps_the_provider_file_id_when_the_upload_used_other_creden
     assert hook.registrations == ()
 
 
+def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_checks_reject(client_team_a):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": _TEAM_PROVIDER_KEY, "api_base": _TEAM_OPENAI_BASE},
+                "model_info": {"team_id": _TEAM_ID},
+            }
+        ]
+    )
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+    one_model_key: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
+
+    with (
+        aingest_patch as aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: one_model_key}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook.registrations == ()
+    assert aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
 @pytest.mark.parametrize(
     ("router_factory", "hook"),
     [

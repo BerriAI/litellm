@@ -20,9 +20,9 @@ from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_reque
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
-    authorize_model_for_key,
     carries_explicit_credentials,
     get_team_provider_deployment,
+    team_deployment_the_caller_may_use,
 )
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
@@ -760,14 +760,9 @@ def _model_less_team_vector_store_file_call(
 async def _authorized_team_file_deployment(
     llm_router: LitellmRouter | None, call: _ModelLessTeamFileCall
 ) -> TeamProviderDeployment | None:
-    deployment: Final = get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider)
-    if deployment is None:
-        return None
-    try:
-        await authorize_model_for_key(deployment.public_model_name, llm_router, call.caller)
-    except ProxyException:
-        return None
-    return deployment
+    return await team_deployment_the_caller_may_use(
+        get_team_provider_deployment(llm_router, call.caller, call.custom_llm_provider), llm_router, call.caller
+    )
 
 
 def _with_team_deployment_attribution(
