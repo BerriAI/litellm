@@ -382,6 +382,28 @@ def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[
                 block["name"] = original_names[name]
 
 
+def _with_original_tool_fields(
+    tool: AllAnthropicToolsValues, request_tools: Sequence[object]
+) -> AllAnthropicToolsValues:
+    """Restore Anthropic-only fields (defer_loading, strict, input_examples, allowed_callers, ...)
+    that the OpenAI round trip drops, from the request tool of the same name. Fields the
+    guardrail returned still win."""
+    name: Final = anthropic_tool_name(tool)
+    original: Final = next(
+        (
+            fields
+            for request_tool in request_tools
+            if (fields := as_str_mapping(request_tool)) is not None
+            and "function" not in fields
+            and fields.get("name") == name
+        ),
+        None,
+    )
+    if name is None or original is None:
+        return tool
+    return cast(AllAnthropicToolsValues, {**original, **tool})  # cast-ok: superset of an Anthropic tool
+
+
 def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
     if "function" not in tool:
         return tool
@@ -936,6 +958,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             original_tool_names: Final = _original_tool_names(
                 cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
             )
+            original_request_tools: Final = tuple(
+                list_field(cast(Mapping[str, object], data), "tools")  # cast-ok: Anthropic request body
+            )
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data if request_data is None else request_data,
@@ -954,7 +979,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         _with_original_name(tool, original_tool_names.declared)
                     )
                     if converted_tool is not None:
-                        anthropic_tools.append(converted_tool)
+                        anthropic_tools.append(_with_original_tool_fields(converted_tool, original_request_tools))
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
                     merge_returned_tools_into_request_tools(
