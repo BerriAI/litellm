@@ -274,6 +274,7 @@ impl LegacyCallbacks for PythonLogger {
     ) -> PyResult<()> {
         let coroutine =
             Logging::AsyncSuccessHandler.call(py, (self.object(py), response, start, end))?;
+        Logging::MarkAsyncSuccessEnqueued.call(py, (self.object(py),))?;
         let enqueue = Logging::Enqueue.call(py, (&coroutine,));
         if enqueue.is_err()
             && let Err(error) = coroutine.call_method0("close")
