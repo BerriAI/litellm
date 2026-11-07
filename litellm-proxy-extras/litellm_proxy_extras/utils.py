@@ -31,6 +31,7 @@ from litellm_proxy_extras.replica_identity import (
     apply_replica_identity_full,
 )
 from litellm_proxy_extras.request_log_indexes import (
+    DISABLE_REQUEST_LOG_INDEX_BUILD_ENV_VAR,
     ensure_request_log_indexes,
     filter_request_log_index_diff,
 )
@@ -1496,6 +1497,12 @@ class ProxyExtrasDBManager:
         migrations target. Idempotent and never raises; False when an index is still
         missing or invalid, so the migration job reports it and gets rerun instead of
         leaving the table unindexed until the next deploy."""
+        if str_to_bool(os.environ.get(DISABLE_REQUEST_LOG_INDEX_BUILD_ENV_VAR)):
+            logger.info(
+                "%s is set, skipping the request-log index build",
+                DISABLE_REQUEST_LOG_INDEX_BUILD_ENV_VAR,
+            )
+            return True
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
             return True

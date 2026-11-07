@@ -60,6 +60,7 @@ REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
 )
+DISABLE_REQUEST_LOG_INDEX_BUILD_ENV_VAR: Final = "LITELLM_DISABLE_REQUEST_LOG_INDEX_BUILD"
 
 _IDENTIFIER_MAX_BYTES: Final = 63
 _DDL_LOCK_TIMEOUT: Final = "200ms"
@@ -163,13 +164,21 @@ def ensure_request_log_indexes(
     replica gets in between partitions rather than waiting for the whole table. Any
     failure is logged and left for the next index build; the result says whether
     every index ended up valid. Never raises."""
-    import psycopg
+    try:
+        import psycopg
+    except ImportError as exc:
+        logger.warning(
+            "psycopg is not installed or could not be loaded; skipping the request-log index build. "
+            "Install the litellm[extra_proxy] extra, which includes psycopg: %s",
+            exc,
+        )
+        return False
 
     try:
         with connect(database_url) as connection:
             connection.execute("SET statement_timeout = 0")
             results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
-    except psycopg.Error as exc:
+    except (psycopg.Error, ImportError) as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)
         return False
     if not all(results):
