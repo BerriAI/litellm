@@ -4,15 +4,26 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
-from collections.abc import Iterator
+import asyncio
+from datetime import datetime
+from threading import Event
+from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
+import respx
+import httpx
 
 
 
 
 import litellm
+from litellm.google_genai.main import agenerate_content_stream, generate_content_stream
+from litellm.llms.custom_llm import CustomLLM, CustomLLMError
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
@@ -382,3 +393,394 @@ async def test_vertex_generate_content_spend_follows_the_deployment_location(
     recorded: Final = await _logged_vertex_generate_content_cost(location, stream=stream)
 
     assert recorded == pytest.approx(expected), (location, stream)
+
+
+class NativeContentLLM(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: tuple[dict[str, object], ...] = ()
+        self.response: dict[str, object] = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}],
+                    },
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 5, "totalTokenCount": 8},
+        }
+
+    def generate_content(self, **kwargs: object) -> dict[str, object]:
+        self.requests = (*self.requests, kwargs)
+        return self.response
+
+    async def agenerate_content(self, **kwargs: object) -> dict[str, object]:
+        self.requests = (*self.requests, kwargs)
+        return self.response
+
+
+class CompletionContentLLM(CustomLLM):
+    def completion(self, **kwargs: object) -> litellm.ModelResponse:
+        return litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "adapter result"}}])
+
+    async def acompletion(self, **kwargs: object) -> litellm.ModelResponse:
+        return self.completion(**kwargs)
+
+
+class StreamingContentLLM(NativeContentLLM):
+    def streaming(self, **kwargs: object) -> Iterator[litellm.GenericStreamingChunk]:
+        yield litellm.GenericStreamingChunk(
+            text="stream adapter",
+            tool_use=None,
+            is_finished=True,
+            finish_reason="stop",
+            index=0,
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        )
+
+    async def astreaming(self, **kwargs: object) -> AsyncIterator[litellm.GenericStreamingChunk]:
+        for chunk in self.streaming(**kwargs):
+            yield chunk
+
+
+@pytest.fixture
+def native_content_handler(monkeypatch: pytest.MonkeyPatch) -> NativeContentLLM:
+    handler: Final = NativeContentLLM()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": handler}])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    litellm.utils.custom_llm_setup()
+    return handler
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_native_content_preserves_images_and_config(
+    native_content_handler: NativeContentLLM, is_async: bool
+) -> None:
+    contents: Final = [{"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "aW5wdXQ="}}]}]
+    config: Final = {"imageConfig": {"aspectRatio": "1:1"}, "responseModalities": ["IMAGE"], "seed": 17}
+    tools: Final = [{"googleSearch": {}}]
+    request: Final = dict(
+        model="native_image_test/image-model",
+        contents=contents,
+        config=config,
+        tools=tools,
+        safetySettings=[],
+        systemInstruction={"parts": [{"text": "draw"}]},
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result is native_content_handler.response
+    received: Final = native_content_handler.requests[0]
+    assert received["model"] == "image-model"
+    assert received["contents"] is contents
+    assert received["config"] == config
+    assert received["tools"] is tools
+    optional_params: Final = received["optional_params"]
+    assert isinstance(optional_params, dict)
+    assert optional_params["safetySettings"] == []
+    assert optional_params["systemInstruction"] == request["systemInstruction"]
+    params: Final = received["litellm_params"]
+    assert isinstance(params, litellm.types.router.GenericLiteLLMParams)
+    assert params.custom_llm_provider == "native_image_test"
+    assert received["logging_obj"] is not None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("config", [None, {}])
+@pytest.mark.asyncio
+async def test_custom_native_content_preserves_empty_request(
+    native_content_handler: NativeContentLLM, is_async: bool, config: object
+) -> None:
+    request: Final = dict(model="native_image_test/image-model", contents=[], config=config)
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result is native_content_handler.response
+    received: Final = native_content_handler.requests[0]
+    assert received["contents"] == []
+    assert received["config"] == config
+    assert received["tools"] is None
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_without_native_hook_uses_completion(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    request: Final = dict(model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}])
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+class FailingCompletionContentLLM(CustomLLM):
+    def completion(self, **kwargs: object) -> litellm.ModelResponse:
+        raise CustomLLMError(status_code=429, message="adapter quota exhausted")
+
+    async def acompletion(self, **kwargs: object) -> litellm.ModelResponse:
+        return self.completion(**kwargs)
+
+
+class ContentFailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: tuple[str, ...] = ()
+        self.asynchronous_calls: tuple[str, ...] = ()
+        self.logged: Final = Event()
+
+    def log_failure_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        self.calls = (*self.calls, str(kwargs["call_type"]))
+        self.logged.set()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.asynchronous_calls = (*self.asynchronous_calls, str(kwargs["call_type"]))
+        self.log_failure_event(kwargs, response_obj, start_time, end_time)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("use_logging_context", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_delivers_per_request_failure_callbacks_once(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, use_logging_context: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": FailingCompletionContentLLM()}]
+    )
+    global_recorder: Final = ContentFailureRecorder()
+    request_recorder: Final = ContentFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [global_recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [global_recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    callback_args: Final = (
+        {"litellm_logging_obj": Logging(
+            model="native_image_test/chat-model", messages=[], stream=False,
+            call_type="agenerate_content" if is_async else "generate_content",
+            start_time=datetime(2026, 1, 1), litellm_call_id="failure-test", function_id="failure-test",
+            dynamic_failure_callbacks=[request_recorder], dynamic_async_failure_callbacks=[request_recorder],
+        )}
+        if use_logging_context else {"failure_callback": [request_recorder.log_failure_event]}
+    )
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
+        **callback_args,
+    )
+    if is_async:
+        with pytest.raises(litellm.RateLimitError, match="adapter quota exhausted"):
+            await litellm.agenerate_content(**request)
+    else:
+        with pytest.raises(litellm.RateLimitError, match="adapter quota exhausted"):
+            litellm.generate_content(**request)
+    assert await asyncio.to_thread(request_recorder.logged.wait, 5)
+    assert await asyncio.to_thread(global_recorder.logged.wait, 5)
+    expected: Final = ("acompletion" if is_async else "completion",)
+    assert request_recorder.calls == expected
+    assert global_recorder.calls == expected
+    assert request_recorder.asynchronous_calls == (expected if is_async and use_logging_context else ())
+    assert global_recorder.asynchronous_calls == (expected if is_async else ())
+
+
+@pytest.mark.asyncio
+async def test_router_custom_native_content_leg(native_content_handler: NativeContentLLM) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "image-group", "litellm_params": {"model": "native_image_test/image-model", "order": 0}},
+            {
+                "model_name": "image-group",
+                "litellm_params": {"model": "gemini/test-model", "api_key": "test-key", "order": 1},
+            },
+        ]
+    )
+    result: Final = await router.agenerate_content(model="image-group", contents=[], config={})
+    assert result == native_content_handler.response
+    assert native_content_handler.requests[0]["contents"] == []
+    assert native_content_handler.requests[0]["config"] == {}
+
+
+class FailingContentLLM(CustomLLM):
+    def generate_content(self, **kwargs: object) -> dict[str, object]:
+        raise CustomLLMError(status_code=429, message="native quota exhausted")
+
+    async def agenerate_content(self, **kwargs: object) -> dict[str, object]:
+        raise CustomLLMError(status_code=429, message="native quota exhausted")
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_native_content_maps_errors(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": FailingContentLLM()}]
+    )
+    if is_async:
+        with pytest.raises(litellm.RateLimitError, match="native quota exhausted"):
+            await litellm.agenerate_content(model="native_image_test/image-model", contents=[])
+    else:
+        with pytest.raises(litellm.RateLimitError, match="native quota exhausted"):
+            litellm.generate_content(model="native_image_test/image-model", contents=[])
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_stream_uses_completion_adapter(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    handler: Final = StreamingContentLLM()
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": handler}])
+    stream: Final = (
+        await agenerate_content_stream(model="native_image_test/chat-model", contents=[])
+        if is_async
+        else generate_content_stream(model="native_image_test/chat-model", contents=[])
+    )
+    chunks: Final = [chunk async for chunk in stream]
+    assert any(b"stream adapter" in chunk for chunk in chunks)
+    assert handler.requests == ()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_native_config_cannot_overwrite_accounting_context(
+    native_content_handler: NativeContentLLM, is_async: bool
+) -> None:
+    config: Final = {
+        "litellm_params": {"metadata": {}},
+        "model": "spoofed",
+        "custom_llm_provider": "spoofed",
+        "call_type": "spoofed",
+        "seed": 17,
+    }
+    metadata: Final = {"user_api_key": "trusted-key-id", "user_api_key_team_id": "trusted-team"}
+    request: Final = dict(model="native_image_test/image-model", contents=[], config=config, metadata=metadata)
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    received: Final = native_content_handler.requests[0]
+    logged: Final = received["logging_obj"].model_call_details
+    assert result is native_content_handler.response
+    assert received["config"] == config
+    assert logged["litellm_params"]["metadata"]["user_api_key"] == "trusted-key-id"
+    assert logged["litellm_params"]["metadata"]["user_api_key_team_id"] == "trusted-team"
+    assert logged["model"] == "image-model"
+    assert logged["custom_llm_provider"] == "native_image_test"
+    assert logged["call_type"] == ("agenerate_content" if is_async else "generate_content")
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_builtin_native_content_keeps_priority_over_colliding_custom_handler(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "gemini", "custom_handler": native_content_handler}])
+    litellm.utils.custom_llm_setup()
+    request: Final = dict(
+        model="gemini/test-model",
+        contents=[{"parts": [{"text": "draw"}]}],
+        config={"responseModalities": ["IMAGE"]},
+        api_key="test-key",
+    )
+    with respx.mock:
+        route: Final = respx.post(
+            "https://generativelanguage.googleapis.com/v1alpha/models/test-model:generateContent"
+        ).respond(200, json=native_content_handler.response)
+        if is_async:
+            client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+            try:
+                result = await litellm.agenerate_content(**request, client=client)
+            finally:
+                await client.close()
+        else:
+            result = litellm.generate_content(**request)
+    assert result.candidates == native_content_handler.response["candidates"]
+    assert result.usageMetadata == native_content_handler.response["usageMetadata"]
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["generationConfig"] == request["config"]
+    assert native_content_handler.requests == ()
+
+
+class ContentSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sync_calls: tuple[str, ...] = ()
+        self.async_calls: tuple[str, ...] = ()
+        self.sync_logged = Event()
+        self.async_logged = asyncio.Event()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.sync_calls = (*self.sync_calls, kwargs["call_type"])
+        self.sync_logged.set()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.async_calls = (*self.async_calls, kwargs["call_type"])
+        self.async_logged.set()
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_accounts_for_one_success(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    recorder: Final = ContentSuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    outer_logging: Final = Logging(
+        model="native_image_test/chat-model", messages=[], stream=False,
+        call_type="agenerate_content" if is_async else "generate_content",
+        start_time=datetime(2026, 1, 1), litellm_call_id="adapter-accounting", function_id="adapter-accounting",
+    )
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
+        litellm_logging_obj=outer_logging,
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    if is_async:
+        await asyncio.wait_for(recorder.async_logged.wait(), timeout=5)
+        await GLOBAL_LOGGING_WORKER.flush()
+        await outer_logging.async_success_handler(result=result)
+        assert recorder.async_calls == ("acompletion",)
+    else:
+        assert await asyncio.to_thread(recorder.sync_logged.wait, 5)
+        outer_logging.success_handler(result=result)
+        assert recorder.sync_calls == ("completion",)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_delivers_per_request_success_callbacks_once(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    global_recorder: Final = ContentSuccessRecorder()
+    request_recorder: Final = ContentSuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [global_recorder])
+    monkeypatch.setattr(litellm, "success_callback", [global_recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [global_recorder])
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
+        success_callback=[request_recorder.async_log_success_event if is_async else request_recorder.log_success_event],
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    if is_async:
+        await asyncio.wait_for(
+            asyncio.gather(request_recorder.async_logged.wait(), global_recorder.async_logged.wait()), timeout=5
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert request_recorder.async_calls == ("acompletion",)
+        assert global_recorder.async_calls == ("acompletion",)
+    else:
+        assert await asyncio.to_thread(request_recorder.sync_logged.wait, 5)
+        assert await asyncio.to_thread(global_recorder.sync_logged.wait, 5)
+        assert request_recorder.sync_calls == ("completion",)
+        assert global_recorder.sync_calls == ("completion",)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
