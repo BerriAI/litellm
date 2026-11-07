@@ -28,8 +28,17 @@ def cost_calculator(
     call_type: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> float | None:
+    caller_set_prices: Final = model_info is not None and any(
+        model_info.get(key) is not None
+        for key in (
+            "input_cost_per_image",
+            "output_cost_per_image",
+            "output_cost_per_image_1K",
+            "output_cost_per_image_2K",
+        )
+    )
     billed_cost: Final = xai_reported_cost_in_usd(getattr(image_response.usage, "cost_in_usd_ticks", None))
-    if billed_cost is not None:
+    if billed_cost is not None and not caller_set_prices:
         return billed_cost
 
     requested_quality: Final = quality or image_response.quality or _request_param(optional_params, "quality") or "auto"

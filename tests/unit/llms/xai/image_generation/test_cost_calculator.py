@@ -26,13 +26,12 @@ def _response(ticks: object = None) -> ImageResponse:
 def test_billed_cost_is_request_total_even_for_multiple_images(ticks: int, call_type: str) -> None:
     assert (
         CostCalculatorUtils.route_image_generation_cost_calculator(
-            model="unmapped-image-fixture",
+            model="grok-imagine-image-2.0",
             custom_llm_provider="xai",
             completion_response=_response(ticks),
             n=4,
             call_type=call_type,
             optional_params={"resolution": "2k", "quality": "medium"},
-            model_info={"output_cost_per_image_2K": 7.0},
         )
         == ticks / 10_000_000_000
     )
@@ -120,6 +119,26 @@ def test_deployment_flat_price_overrides_shared_resolution_price() -> None:
         n=2,
         model_info={"output_cost_per_image": 0.83},
     ) == pytest.approx(0.83 * 2)
+
+
+@pytest.mark.parametrize(
+    "price_key,resolution",
+    (
+        ("input_cost_per_image", "1k"),
+        ("output_cost_per_image", "1k"),
+        ("output_cost_per_image_1K", "1k"),
+        ("output_cost_per_image_2K", "2k"),
+    ),
+)
+def test_deployment_image_price_overrides_billed_ticks(price_key: str, resolution: str) -> None:
+    assert CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="grok-imagine-image-2.0",
+        custom_llm_provider="xai",
+        completion_response=_response(1234567890),
+        n=3,
+        optional_params={"resolution": resolution},
+        model_info={price_key: 0.83},
+    ) == pytest.approx(0.83 * 3)
 
 
 def test_shared_resolution_prices_are_used_when_ticks_are_absent() -> None:
