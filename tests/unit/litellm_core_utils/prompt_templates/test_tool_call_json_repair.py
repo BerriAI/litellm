@@ -122,8 +122,9 @@ def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str,
 
 
 def test_parse_tool_call_arguments_repair_warning_previews_the_first_200_characters(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
     arguments: Final = '{"patient": "Jane Doe", "note": "' + "x" * 300 + '"'
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
@@ -134,6 +135,27 @@ def test_parse_tool_call_arguments_repair_warning_previews_the_first_200_charact
         f"{arguments[:200]}..." in caplog.text
     )
     assert arguments not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    (
+        ('{"patient": "Jane Doe"', {"patient": "Jane Doe"}),
+        ('{"note": "' + "x" * 189 + '"', {"note": "x" * 189}),
+    ),
+)
+def test_parse_tool_call_arguments_repair_warning_logs_arguments_up_to_200_characters_whole(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: str,
+    expected: dict[str, str],
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
+
+    assert result == expected
+    assert f"Original ({len(arguments)} chars): {arguments}\n" in caplog.text
 
 
 def test_parse_tool_call_arguments_repair_warning_redacts_arguments_when_message_logging_is_off(
