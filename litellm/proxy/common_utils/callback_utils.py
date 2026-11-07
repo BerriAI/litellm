@@ -409,7 +409,7 @@ def initialize_callbacks_on_proxy(
 
             PrometheusLogger._mount_metrics_endpoint()
     else:
-        litellm.callbacks = [
+        litellm.callbacks.append(
             _loaded_callback_or_raise(
                 entry=value,
                 loaded=_LOADED_CALLBACK.validate_python(
@@ -419,7 +419,7 @@ def initialize_callbacks_on_proxy(
                     )
                 ),
             )
-        ]
+        )
     verbose_proxy_logger.debug("%s Initialized Callbacks - %s %s", blue_color_code, litellm.callbacks, reset_color_code)
 
 
