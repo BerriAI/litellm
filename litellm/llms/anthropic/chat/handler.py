@@ -175,6 +175,13 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
     return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
+def _is_json_object(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), dict)
+    except (json.JSONDecodeError, RecursionError):
+        return False
+
+
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
     try:
         payload: Final = _DECODED_JSON.validate_python(json.loads(held))
@@ -736,6 +743,7 @@ class ModelResponseIterator:
         self._withheld_answer_close: str = ""
         self._streamed_answer_keys: frozenset[str] | None = None
         self._held_prose: str = ""
+        self._schemaless_input_started: bool = False
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -1316,9 +1324,18 @@ class ModelResponseIterator:
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
             self.converted_response_format_tool = True
-            return tool_use.get("function", {}).get("arguments") or "", None
+            return self._stream_schemaless_fragment(tool_use), None
 
         return text, tool_use
+
+    def _stream_schemaless_fragment(self, tool_use: ChatCompletionToolCallChunk) -> str:
+        fragment: Final = tool_use.get("function", {}).get("arguments") or ""
+        is_whole_input: Final = not self._schemaless_input_started and _is_json_object(fragment)
+        self._schemaless_input_started = self._schemaless_input_started or bool(fragment.strip())
+        if not is_whole_input:
+            return fragment
+        message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
+        return fragment if message is None else message.content or ""
 
     def _stream_response_format_fragment(
         self, tool_use: ChatCompletionToolCallChunk, schema: ResponseFormatSchema
