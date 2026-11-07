@@ -6,7 +6,7 @@ from typing import Final
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import LITELLM_DETAILED_TIMING
+from litellm.constants import is_detailed_timing_enabled
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
@@ -243,7 +243,7 @@ class ResponseMetadata:
         # 3. Detailed per-phase timing (opt-in via env var)
         #########################################################
         llm_api_duration_ms: Final[float | None] = logging_obj.model_call_details.get("llm_api_duration_ms")
-        if LITELLM_DETAILED_TIMING and llm_api_duration_ms is not None:
+        if is_detailed_timing_enabled() and llm_api_duration_ms is not None:
             detailed: Final[dict[str, float]] = {
                 "timing_llm_api_ms": round(llm_api_duration_ms, 4),
             }
