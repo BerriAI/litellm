@@ -25,7 +25,6 @@ from pydantic import TypeAdapter
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
-    CONTENT_FILTER_STREAMING_CREDENTIAL_HOLDBACK_CHARS,
     CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
     CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -79,7 +78,7 @@ from .competitor_intent import (
     AirlineCompetitorIntentChecker,
     BaseCompetitorIntentChecker,
 )
-from .patterns import CREDENTIAL_PATTERN_NAMES, PATTERN_EXTRA_CONFIG, get_compiled_pattern
+from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -2073,8 +2072,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         Per-stream inputs for buffer trimming: the retained tail length (the default
         context, widened to the longest configured keyword), the unreleased tail length
-        (widened when a credential pattern is configured, since provider keys run longer
-        than the default holdback), the category exception
+        (widened to the longest holdback a configured prebuilt pattern declares, since
+        provider keys run longer than the default), the category exception
         phrases, which suppress matches anywhere in the scanned text, and the conditional
         category words, which only match when paired inside one sentence.
         """
@@ -2084,10 +2083,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
         return _StreamedScanPlan(
             context_chars=max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword),
-            holdback_chars=(
-                CONTENT_FILTER_STREAMING_CREDENTIAL_HOLDBACK_CHARS
-                if any(entry["pattern_name"] in CREDENTIAL_PATTERN_NAMES for entry in self.compiled_patterns)
-                else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS
+            holdback_chars=max(
+                (
+                    PATTERN_STREAMING_HOLDBACK_CHARS.get(entry["pattern_name"], CONTENT_FILTER_STREAMING_HOLDBACK_CHARS)
+                    for entry in self.compiled_patterns
+                ),
+                default=CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
             ),
             exception_phrases=tuple(
                 phrase for category in self.loaded_categories.values() for phrase in category.exceptions

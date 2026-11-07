@@ -315,6 +315,34 @@ def test_credential_pattern_ignores_non_keys(pattern_name: str, text: str) -> No
     assert get_compiled_pattern(pattern_name).search(text) is None
 
 
+@pytest.mark.parametrize("suffix", ["请检查", "é", "ü der Schlüssel"])
+@pytest.mark.parametrize(
+    ("pattern_name", "key"),
+    [
+        pytest.param("openai_api_key", "sk-" + "a" * 20 + "T3BlbkFJ" + "b" * 20, id="openai-legacy"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 35, id="gemini-legacy"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 50, id="gemini-auth-key"),
+    ],
+)
+def test_credential_pattern_matches_key_followed_by_non_ascii_letters(pattern_name: str, key: str, suffix: str) -> None:
+    match: Final = get_compiled_pattern(pattern_name).search(f"我的密钥是{key}{suffix}")
+    assert match is not None
+    assert match.group(0) == key
+
+
+@pytest.mark.parametrize(
+    "leading",
+    [
+        pytest.param("sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74, id="another-key"),
+        pytest.param("sk-proj-" + "x" * 20 + "T3BlbkFJ" + "y" * 192, id="key-shaped-filler"),
+        pytest.param("sk-proj-" + "x" * 100 + "T3BlbkFJ" + "y" * 100, id="long-key-shaped-filler"),
+    ],
+)
+def test_openai_key_pattern_masks_a_key_glued_to_preceding_key_shaped_text(leading: str) -> None:
+    key: Final = "sk-proj-" + "c" * 74 + "T3BlbkFJ" + "d" * 74
+    assert get_compiled_pattern("openai_api_key").sub("[KEY]", leading + key) == "[KEY][KEY]"
+
+
 @pytest.mark.parametrize("prefix", ["sk-proj-", "sk-svcacct-", "sk-admin-", "sk-None-"])
 def test_openai_key_pattern_scans_repeated_prefixes_without_stalling(prefix: str) -> None:
     prompt: Final = prefix * (128_000 // len(prefix))

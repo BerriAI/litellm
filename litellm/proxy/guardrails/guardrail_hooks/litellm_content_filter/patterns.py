@@ -11,10 +11,11 @@ import re
 from collections.abc import Iterator, Sequence
 from enum import Enum
 from re import Pattern
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
@@ -26,6 +27,7 @@ class _PatternEntry(TypedDict):
     pattern: ReadOnly[str]
     category: ReadOnly[str]
     description: ReadOnly[str]
+    streaming_holdback_chars: ReadOnly[NotRequired[int]]
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -70,6 +72,7 @@ KNOWN_PATTERN_KEYS: Final = {
     "category",
     "action",
     "description",
+    "streaming_holdback_chars",
 }
 
 PATTERN_EXTRA_CONFIG: Final[dict[str, dict[str, Any]]] = {}
@@ -116,7 +119,13 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
         PATTERN_CATEGORIES[category] = []
     PATTERN_CATEGORIES[category].append(pattern_data["name"])
 
-CREDENTIAL_PATTERN_NAMES: Final = frozenset(PATTERN_CATEGORIES.get("Credential Patterns", ()))
+PATTERN_STREAMING_HOLDBACK_CHARS: Final = MappingProxyType(
+    {
+        pattern_data["name"]: pattern_data["streaming_holdback_chars"]
+        for pattern_data in _PATTERNS_DATA["patterns"]
+        if "streaming_holdback_chars" in pattern_data
+    }
+)
 
 
 # Build display names mapping from JSON

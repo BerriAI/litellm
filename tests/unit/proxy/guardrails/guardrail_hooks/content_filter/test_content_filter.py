@@ -919,12 +919,21 @@ class TestContentFilterGuardrail:
         # masked_entity_count for email is the real count, not N×.
         assert entry["masked_entity_count"].get("email") == 1
 
-    @staticmethod
+    @classmethod
     async def _collect_streamed_text(
+        cls,
         guardrail: ContentFilterGuardrail,
         chunks: list[str],
         metadata: dict[str, list[StandardLoggingGuardrailInformation]],
     ) -> str:
+        return "".join(await cls._collect_streamed_deltas(guardrail, chunks, metadata))
+
+    @staticmethod
+    async def _collect_streamed_deltas(
+        guardrail: ContentFilterGuardrail,
+        chunks: list[str],
+        metadata: dict[str, list[StandardLoggingGuardrailInformation]],
+    ) -> list[str]:
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         async def mock_stream():
@@ -951,7 +960,7 @@ class TestContentFilterGuardrail:
             request_data={"messages": [], "model": "gpt-4o", "metadata": metadata},
         ):
             yielded.append(chunk.choices[0].delta.content or "")
-        return "".join(yielded)
+        return yielded
 
     @pytest.mark.asyncio
     async def test_streaming_hook_scans_bounded_window_per_chunk(self):
@@ -1069,25 +1078,50 @@ class TestContentFilterGuardrail:
         assert [d["keyword"] for d in entry["guardrail_response"]] == [phrase]
 
     @pytest.mark.asyncio
-    async def test_streaming_hook_masks_whole_provider_key_split_across_chunks(self):
+    @pytest.mark.parametrize(
+        ("pattern_name", "key"),
+        [
+            ("openai_api_key", "sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74),
+            ("anthropic_api_key", "sk-ant-api03-" + "a" * 93 + "AA"),
+            ("gemini_api_key", "AQ." + "a" * 55),
+        ],
+    )
+    async def test_streaming_hook_masks_whole_provider_key_split_across_chunks(self, pattern_name: str, key: str):
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="test-streaming-provider-key",
             patterns=[
                 ContentFilterPattern(
                     pattern_type="prebuilt",
-                    pattern_name="openai_api_key",
+                    pattern_name=pattern_name,
                     action=ContentFilterAction.MASK,
                 )
             ],
             event_hook=GuardrailEventHooks.post_call,
         )
-        key: Final = "sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74
         text: Final = f"Use {key} to call the API."
         chunks: Final = [text[i : i + 4] for i in range(0, len(text), 4)]
 
         streamed: Final = await self._collect_streamed_text(guardrail, chunks, {})
 
-        assert streamed == "Use [OPENAI_API_KEY_REDACTED] to call the API."
+        assert streamed == f"Use [{pattern_name.upper()}_REDACTED] to call the API."
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_keeps_default_holdback_without_provider_key_patterns(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-older-credential-patterns",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+                for name in ("aws_access_key", "aws_secret_key", "github_token", "slack_token", "generic_api_key")
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        text: Final = "plain words with nothing secret in them. " * 12
+        chunks: Final = [text[i : i + 10] for i in range(0, len(text), 10)]
+
+        deltas: Final = await self._collect_streamed_deltas(guardrail, chunks, {})
+
+        assert "".join(deltas) == text
+        assert len(next(delta for delta in reversed(deltas) if delta)) <= CONTENT_FILTER_STREAMING_HOLDBACK_CHARS
 
     @pytest.mark.asyncio
     async def test_streaming_hook_blocks_keyword_longer_than_scan_context(self):
