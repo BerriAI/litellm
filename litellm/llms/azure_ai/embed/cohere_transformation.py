@@ -9,12 +9,69 @@ Convers
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
+from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo, get_azure_ai_auth_headers
+from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
-from litellm.types.llms.openai import EmbeddingCreateParams
+from litellm.types.llms.openai import AllMessageValues, EmbeddingCreateParams
 from litellm.types.utils import EmbeddingResponse, Usage
 from litellm.utils import is_base64_encoded
+
+
+class AzureAICohereNativeEmbeddingConfig(CohereEmbeddingConfig):
+    @staticmethod
+    def supports_model(model: str, api_base: str | None = None) -> bool:
+        path: Final = urlsplit(api_base or "").path.rstrip("/")
+        name: Final = model.lower().removeprefix("azure_ai/")
+        return path.endswith(("/providers/cohere", "/providers/cohere/v2", "/providers/cohere/v2/embed")) or (
+            name.startswith("cohere-embed-") and not name.startswith(("cohere-embed-v3", "cohere-embed-v4"))
+        )
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        stream: bool | None = None,
+    ) -> str:
+        resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+        if resolved_base is None:
+            raise ValueError("Azure AI API base is required for native Cohere embeddings")
+        parts: Final = urlsplit(resolved_base)
+        path: Final = parts.path.rstrip("/")
+        endpoint: Final = (
+            path
+            if path.endswith("/providers/cohere/v2/embed")
+            else f"{path}/embed"
+            if path.endswith("/providers/cohere/v2")
+            else f"{path}/v2/embed"
+            if path.endswith("/providers/cohere")
+            else f"{path.removesuffix('/models')}/providers/cohere/v2/embed"
+        )
+        return urlunsplit((parts.scheme, parts.netloc, endpoint, parts.query, parts.fragment))
+
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict[str, str]:  # mutable-ok: BaseEmbeddingConfig requires a mutable header dictionary
+        return {
+            "Content-Type": "application/json",
+            **get_azure_ai_auth_headers(
+                api_key=AzureFoundryModelInfo.get_api_key(api_key), litellm_params=litellm_params
+            ),
+            **headers,
+        }
 
 
 class AzureAICohereConfig:
