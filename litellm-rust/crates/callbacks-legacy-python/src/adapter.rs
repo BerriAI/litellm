@@ -2023,7 +2023,7 @@ mod terminal_tests {
     #[case::async_listened(
         true,
         c"",
-        &["async_success_handler", "enqueued", "sync_success_for_async_call"]
+        &["async_success_handler", "mark_async_success_enqueued", "enqueued", "sync_success_for_async_call"]
     )]
     #[case::async_deferred(true, c"logger._defer_async_logging = True", &[])]
     #[case::async_with_fallbacks(true, c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
@@ -2065,7 +2065,7 @@ assert getattr(logger, 'deferred_success_result', (response,))[0] is response
     }
 
     #[rstest]
-    #[case::accepted(c"", &["sync_success_for_async_call", "async_success_handler", "enqueued"])]
+    #[case::accepted(c"", &["sync_success_for_async_call", "async_success_handler", "mark_async_success_enqueued", "enqueued"])]
     #[case::accepted_with_fallbacks(c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
     fn a_deferred_success_runs_sync_callbacks_only_once_released(
         #[case] script: &CStr,
@@ -2102,13 +2102,13 @@ logger.enqueue_deferred_logging()
     #[case::deferred(
         c"logger._defer_async_logging = True",
         c"logger.enqueue_deferred_logging()",
-        &["sync_success_for_async_call", "async_success_handler", "enqueued"]
+        &["sync_success_for_async_call", "async_success_handler", "mark_async_success_enqueued", "enqueued"]
     )]
     #[case::deferred_and_blocked(c"logger._defer_async_logging = True", c"", &[])]
     #[case::immediate(
         c"",
         c"",
-        &["async_success_handler", "enqueued", "sync_success_for_async_call", "sync_success_for_async_call"]
+        &["async_success_handler", "mark_async_success_enqueued", "enqueued", "sync_success_for_async_call", "sync_success_for_async_call"]
     )]
     fn a_fallback_attempt_on_the_same_logger_leaves_the_first_success_claimed(
         #[case] script: &CStr,
@@ -2167,7 +2167,7 @@ logger.enqueue_deferred_logging()
 assert logger.names() == [], logger.calls
 logger.enqueue_deferred_logging()
 logger.enqueue_deferred_logging()
-assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued'], logger.calls
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'mark_async_success_enqueued', 'enqueued'], logger.calls
 assert logger.calls[0][1] is response
 assert logger.calls[1][1] is response
 ");
