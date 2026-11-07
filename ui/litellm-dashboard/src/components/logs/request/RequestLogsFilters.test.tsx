@@ -47,8 +47,8 @@ function renderFilters(filters: Record<string, string> = {}) {
   return { set };
 }
 
-function StatefulFilters() {
-  const [filters, setFilters] = useState<Record<string, string | undefined>>({});
+function StatefulFilters({ initialFilters = {} }: { initialFilters?: Record<string, string | undefined> }) {
+  const [filters, setFilters] = useState<Record<string, string | undefined>>(initialFilters);
   return (
     <RequestLogsFilters
       get={(id: string) => filters[id]}
@@ -185,6 +185,48 @@ describe("RequestLogsFilters", () => {
 
     await waitFor(() => expect(useInfiniteKeyAliases).toHaveBeenCalled());
     expect(useInfiniteKeyAliases).toHaveBeenCalledWith(50, undefined, undefined);
+  });
+
+  it("switches Key Alias from is to is not while keeping the selected alias", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.KEY_ALIAS]: "noisy" });
+
+    await user.click(screen.getByRole("combobox", { name: "Key Alias operator" }));
+    await user.click(await screen.findByRole("option", { name: "is not" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.KEY_ALIAS, undefined);
+    expect(set).toHaveBeenCalledWith("exclude_key_alias", "noisy");
+  });
+
+  it("selects an alias with the is not operator from an empty filter", async () => {
+    vi.mocked(useInfiniteKeyAliases).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: { pages: [{ aliases: ["noisy"] }], pageParams: [1] },
+    } as unknown as ReturnType<typeof useInfiniteKeyAliases>);
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(screen.getByRole("combobox", { name: "Key Alias operator" }));
+    await user.click(await screen.findByRole("option", { name: "is not" }));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Search a key alias"), "noisy");
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, "noisy");
+  });
+
+  it("keeps a restored is not operator when clearing the alias to choose another", async () => {
+    vi.mocked(useInfiniteKeyAliases).mockReturnValue({
+      ...emptyInfiniteQuery,
+      data: { pages: [{ aliases: ["noisy", "quiet"] }], pageParams: [1] },
+    } as unknown as ReturnType<typeof useInfiniteKeyAliases>);
+    const user = userEvent.setup();
+    renderWithProviders(<StatefulFilters initialFilters={{ [LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS]: "noisy" }} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear", hidden: true }));
+
+    expect(screen.getByRole("combobox", { name: "Key Alias operator" })).toHaveTextContent("is not");
+    await chooseSelectOption(user, screen.getByPlaceholderText("Search a key alias"), "quiet");
+    expect(screen.getByRole("combobox", { name: "Key Alias operator" })).toHaveTextContent("is not");
+    expect(screen.getByPlaceholderText("Search a key alias")).toHaveValue("quiet");
   });
 
   it("does not leak the team scope into the Model lookup", async () => {
