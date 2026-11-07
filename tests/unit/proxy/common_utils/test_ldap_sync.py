@@ -107,9 +107,6 @@ class LeaseRedis:
     async def async_get_cache(self, key: str) -> object | None:
         return self.values.get(key)
 
-    async def async_delete_cache(self, key: str) -> int:
-        return 1 if self.values.pop(key, None) is not None else 0
-
 
 def job_for(
     prisma: _FakePrisma,
@@ -189,24 +186,23 @@ async def test_second_worker_cannot_sync_while_first_workers_run_holds_the_lock(
     release.set()
     await running
     assert not second_connection.closed
-    assert redis.values == {}
 
 
 @pytest.mark.asyncio
-async def test_finished_run_releases_the_lock_so_a_restarted_worker_syncs_immediately():
+async def test_lock_outlives_a_finished_run_so_other_workers_skip_the_rest_of_the_interval():
     prisma: Final = _FakePrisma(teams=[_team()])
     redis: Final = LeaseRedis()
     first: Final = Connection([group(TEAM, member=[])])
-    restarted: Final = Connection([group(TEAM, member=[])])
+    later: Final = Connection([group(TEAM, member=[])])
     await job_for(prisma, first, redis=redis).run()
-    assert redis.values == {}
-    await job_for(prisma, restarted, redis=redis).run()
+    await job_for(prisma, later, redis=redis).run()
     assert first.closed
-    assert restarted.closed
+    assert not later.closed
+    assert redis.values
 
 
 @pytest.mark.asyncio
-async def test_failed_run_still_releases_the_lock(monkeypatch: pytest.MonkeyPatch):
+async def test_failed_run_keeps_the_lock_until_the_next_interval(monkeypatch: pytest.MonkeyPatch):
     redis: Final = LeaseRedis()
     job: Final = job_for(_FakePrisma(teams=[_team()]), Connection([group(TEAM, member=[])]), redis=redis)
 
@@ -216,7 +212,7 @@ async def test_failed_run_still_releases_the_lock(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(job, "_sync", failing_sync)
     with pytest.raises(RuntimeError):
         await job.run()
-    assert redis.values == {}
+    assert redis.values
 
 
 @pytest.mark.asyncio
