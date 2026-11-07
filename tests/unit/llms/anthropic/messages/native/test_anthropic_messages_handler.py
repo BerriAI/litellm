@@ -2762,7 +2762,12 @@ async def test_native_messages_passthrough_preserves_cache_salt_isolation_inputs
             **kwargs,
         )
 
-    assert [body.get("cache_salt") for body in upstream.bodies] == ["salt-a", "salt-b", None, "salt-a"]
+    assert [body.get("cache_salt", "<absent>") for body in upstream.bodies] == [
+        "salt-a",
+        "salt-b",
+        "<absent>",
+        "salt-a",
+    ]
 
 
 @pytest.mark.asyncio
@@ -2773,6 +2778,31 @@ async def test_direct_anthropic_messages_still_drops_cache_salt() -> None:
         max_tokens=8,
         messages=[{"role": "user", "content": "long prompt"}],
         model="anthropic/claude-sonnet-4-6",
+        api_key="test-key",
+        cache_salt="salt-a",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+    )
+
+    assert "cache_salt" not in upstream.bodies[-1]
+
+
+@pytest.mark.asyncio
+async def test_json_provider_anthropic_messages_still_drops_cache_salt() -> None:
+    from litellm.llms.openai_like.messages.transformation import JSONProviderAnthropicMessagesConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="gpt-6-sol", provider=LlmProviders.CORTECS
+    )
+    assert isinstance(config, JSONProviderAnthropicMessagesConfig)
+
+    upstream: Final = _RecordNativeMessages()
+    await litellm.anthropic_messages(
+        max_tokens=8,
+        messages=[{"role": "user", "content": "long prompt"}],
+        model="cortecs/gpt-6-sol",
+        api_base="https://cortecs.example.com/v1",
         api_key="test-key",
         cache_salt="salt-a",
         client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
