@@ -68,8 +68,10 @@ _MIGRATION_DEADLOCK_MARKER = "deadlock detected"
 _MIGRATION_LOCK_TIMEOUT_MARKER = "canceling statement due to lock timeout"
 INDEX_REPAIR_ADVISORY_LOCK_KEY: Final = int.from_bytes(b"litellm", "big")
 _TRANSIENT_INDEX_SUFFIX_RE: Final = re.compile(r"_cc(?:new|old)\d*$")
+_SIZE_CAPPED_REQUEST_LOG_INDEXES: Final = tuple(index for index in REQUEST_LOG_INDEXES if index.max_bytes is not None)
 _INVALID_LITELLM_INDEXES_SQL: Final = (
-    "SELECT n.nspname, c.relname, pg_size_pretty(pg_table_size(t.oid)) "
+    "SELECT n.nspname AS schema, c.relname AS name, pg_size_pretty(pg_table_size(t.oid)) AS table_size, "
+    't.relname AS "table" '
     "FROM pg_index i "
     "JOIN pg_class c ON c.oid = i.indexrelid "
     "JOIN pg_class t ON t.oid = i.indrelid "
@@ -88,6 +90,11 @@ class _InvalidIndex:
     schema: str
     name: str
     table_size: str
+    table: str
+
+    @property
+    def left_to_the_request_log_index_build(self) -> bool:
+        return any(self.name == index.partition_index_name(self.table) for index in _SIZE_CAPPED_REQUEST_LOG_INDEXES)
 
 
 MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
@@ -844,8 +851,11 @@ class ProxyExtrasDBManager:
     def _invalid_litellm_indexes(
         conn: "psycopg.Connection[tuple[str, str, str]]", schema: str
     ) -> tuple[_InvalidIndex, ...]:
-        rows: Final = conn.execute(_INVALID_LITELLM_INDEXES_SQL, (schema, "LiteLLM\\_%")).fetchall()
-        return tuple(_InvalidIndex(*row) for row in rows)
+        from psycopg.rows import class_row
+
+        with conn.cursor(row_factory=class_row(_InvalidIndex)) as cursor:
+            invalid: Final = cursor.execute(_INVALID_LITELLM_INDEXES_SQL, (schema, "LiteLLM\\_%")).fetchall()
+        return tuple(index for index in invalid if not index.left_to_the_request_log_index_build)
 
     @staticmethod
     def _index_repair(index: _InvalidIndex) -> tuple["psycopg.sql.Composed", str]:

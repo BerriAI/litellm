@@ -5,8 +5,10 @@ background, once it serves).
 A migration cannot build them: a plain `CREATE INDEX` blocks spend-log inserts for the
 whole build, and `CREATE INDEX CONCURRENTLY` is refused on a partitioned parent
 (db_scripts/partition_spend_logs.sql). `REQUEST_LOG_INDEXES` is the one list to extend;
-names match what Prisma derives from the `@@index` declarations in schema.prisma, so an
-index a database already has is recognized and never rebuilt.
+names of plain indexes match what Prisma derives from the `@@index` declarations in
+schema.prisma, so an index a database already has is recognized and never rebuilt.
+Prisma cannot declare a partial index, and its schema diff ignores one, so a partial
+index lives only here.
 """
 
 import hashlib
@@ -15,7 +17,8 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from itertools import chain
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.migration_data_checks import (
@@ -33,20 +36,31 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class RequestLogIndex:
-    """One index the migration job owns: the table, the exact Prisma index name and the
-    column list as it would be written after `ON <table>`."""
+    """One index the migration job owns: the table, the exact Prisma index name, the
+    column list as it would be written after `ON <table>`, the WHERE predicate of a
+    partial index, and the largest table the build takes on by itself. An index whose
+    build has to read each row's metadata takes time in proportion to the table's size on
+    disk, so above that size it is left for an operator to build off-peak instead of
+    holding the migration job past its deadline."""
 
     table: str
     name: str
     definition: str
+    predicate: str | None = None
+    max_bytes: int | None = None
 
     @property
     def columns(self) -> tuple[str, ...]:
         return tuple(re.findall(r'"([^"]+)"', self.definition))
 
+    @property
+    def body(self) -> str:
+        return self.definition if self.predicate is None else f"{self.definition} WHERE {self.predicate}"
+
     def partition_index_name(self, partition: str) -> str:
-        """The child index name for one partition, built the way Postgres names the
-        children of a partitioned index, and kept within the 63 byte identifier limit."""
+        """The child index name this job builds on one partition, kept within the 63 byte
+        identifier limit. Postgres names the children it creates for a new partition after
+        their columns instead, so a partition's child is found by attachment, never by name."""
         name: Final = f"{partition}_{self.name.removeprefix(f'{self.table}_')}"
         if len(name.encode()) <= _IDENTIFIER_MAX_BYTES:
             return name
@@ -59,6 +73,13 @@ class RequestLogIndex:
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
+    RequestLogIndex(
+        "LiteLLM_SpendLogs",
+        "LiteLLM_SpendLogs_error_code_startTime_idx",
+        "((left(metadata->'error_information'->>'error_code', 128)), \"startTime\")",
+        "(metadata->'error_information'->>'error_code') IS NOT NULL",
+        max_bytes=4 * 1024**3,
+    ),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
@@ -73,6 +94,12 @@ _CREATE_INDEX_STATEMENT: Final = re.compile(
     re.IGNORECASE,
 )
 _TABLE_KIND_SQL: Final = "SELECT c.relkind = 'p' AS partitioned FROM pg_class c WHERE c.oid = to_regclass(%s)"
+_TABLE_BYTES_SQL: Final = (
+    "WITH RECURSIVE tree(oid) AS (SELECT to_regclass(%(table)s)::oid "
+    "UNION ALL SELECT i.inhrelid FROM pg_inherits i JOIN tree ON i.inhparent = tree.oid) "
+    "SELECT COALESCE(SUM(pg_table_size(c.oid)), 0)::bigint AS total "
+    "FROM tree JOIN pg_class c ON c.oid = tree.oid WHERE c.relkind = 'r'"
+)
 _CHILDREN_WITHOUT_THE_INDEX_SQL: Final = (
     "SELECT child.relname AS name, n.nspname AS schema, child.relkind = 'p' AS partitioned "
     "FROM pg_inherits i JOIN pg_class child ON child.oid = i.inhrelid "
@@ -128,6 +155,14 @@ class _TableKind:
     partitioned: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _TableBytes:
+    total: int
+
+
+_IndexOutcome = Literal["in_place", "left_for_operator", "not_in_place"]
+
+
 def filter_request_log_index_diff(diff_sql: str, indexes: tuple[RequestLogIndex, ...] = REQUEST_LOG_INDEXES) -> str:
     """The `prisma migrate diff` script without the statements that create a migration-job-owned
     index, which the schema declares and the migrations deliberately do not build."""
@@ -161,20 +196,29 @@ def ensure_request_log_indexes(
     """Build every listed index that is missing or invalid. Each build step runs under
     the migration coordinator lock, held per statement so a resolver booting on another
     replica gets in between partitions rather than waiting for the whole table. Any
-    failure is logged and left for the next index build; the result says whether
-    every index ended up valid. Never raises."""
+    failure is logged and left for the next index build, and an index on a table over its
+    `max_bytes` is logged and left for an operator; the result says whether every
+    other index ended up valid. Never raises."""
     import psycopg
 
     try:
         with connect(database_url) as connection:
             connection.execute("SET statement_timeout = 0")
-            results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
+            outcomes: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
     except psycopg.Error as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)
         return False
-    if not all(results):
+    if "not_in_place" in outcomes:
         logger.warning("Some request-log indexes are not in place yet, leaving them for the next index build")
         return False
+    left_for_operator: Final = tuple(
+        index.name for index, outcome in zip(indexes, outcomes) if outcome == "left_for_operator"
+    )
+    if left_for_operator:
+        logger.warning(
+            "Request-log indexes are in place except %s, left for an operator to build", ", ".join(left_for_operator)
+        )
+        return True
     logger.info("Request-log indexes are all in place")
     return True
 
@@ -215,17 +259,121 @@ def _with_bounded_lock(
     return False
 
 
-def _ensure_index(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex) -> bool:
+def _ensure_index(
+    connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex
+) -> _IndexOutcome:
     from psycopg.rows import class_row
 
     with connection.cursor(row_factory=class_row(_TableKind)) as cursor:
         table: Final = cursor.execute(_TABLE_KIND_SQL, (_regclass_name(connection, schema, index.table),)).fetchone()
     if table is None:
         logger.info("Table %s does not exist yet, skipping index %s", index.table, index.name)
-        return True
-    if table.partitioned:
-        return build_index_on_partitioned_table(connection, schema, index)
-    return _build_leaf_index(connection, schema, index.table, index.name, index)
+        return "in_place"
+    if _too_large_to_build(connection, schema, index, partitioned=table.partitioned):
+        return "left_for_operator"
+    built: Final = (
+        build_index_on_partitioned_table(connection, schema, index)
+        if table.partitioned
+        else _build_leaf_index(connection, schema, index.table, index.name, index)
+    )
+    return "in_place" if built else "not_in_place"
+
+
+def _too_large_to_build(
+    connection: "psycopg.Connection[tuple[object, ...]]", schema: str, index: RequestLogIndex, partitioned: bool
+) -> bool:
+    if index.max_bytes is None:
+        return False
+    existing: Final = _index_state(connection, schema, index.name)
+    if existing is not None and existing.valid:
+        return False
+    size: Final = _table_bytes(connection, schema, index.table)
+    if size <= index.max_bytes:
+        return False
+    logger.warning(
+        "Not building index %s on %s: the table takes %s on disk, more than the %s it builds by itself. Build it "
+        "off-peak by running each of these statements on its own, for example with psql -f, and the next index build "
+        "finds it in place:\n%s",
+        index.name,
+        index.table,
+        _gib(size),
+        _gib(index.max_bytes),
+        "".join(
+            f"{statement};\n"
+            for statement in _operator_build_statements(connection, schema, index, index.table, index.name, partitioned)
+        ),
+    )
+    return True
+
+
+def _gib(size: int) -> str:
+    return f"{size / 1024**3:.1f} GiB"
+
+
+def _table_bytes(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, table: str) -> int:
+    """The table's size on disk across its partitions, TOAST and dead rows included: an upper bound on what a build
+    reads, known without ANALYZE, where a row count misses how large each row's metadata is."""
+    from psycopg.rows import class_row
+
+    with connection.cursor(row_factory=class_row(_TableBytes)) as cursor:
+        size: Final = cursor.execute(_TABLE_BYTES_SQL, {"table": _regclass_name(connection, schema, table)}).fetchone()
+    return size.total if size is not None else 0
+
+
+def _operator_build_statements(
+    connection: "psycopg.Connection[tuple[object, ...]]",
+    schema: str,
+    index: RequestLogIndex,
+    table: str,
+    name: str,
+    partitioned: bool,
+) -> tuple[str, ...]:
+    """What an operator runs by hand to finish the build from where it stands: the steps this job takes, so no
+    statement holds spend-log writes back for the length of a build. A partitioned table gets the metadata-only
+    parent index, then each partition still missing its child gets a CONCURRENTLY build and ATTACH PARTITION. An
+    invalid index an interrupted build left gets REINDEX CONCURRENTLY, which CREATE ... IF NOT EXISTS would skip."""
+    from psycopg import sql
+
+    found: Final = _index_state(connection, schema, name)
+    existing: Final = found if found is not None and found.table == table else None
+    if existing is not None and existing.valid:
+        return ()
+    if not partitioned and existing is not None:
+        return (sql.SQL("REINDEX INDEX CONCURRENTLY {}").format(sql.Identifier(schema, name)).as_string(connection),)
+    if not partitioned:
+        leaf: Final = sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ").format(
+            sql.Identifier(name), sql.Identifier(schema, table)
+        )
+        return (_create_index_statement(connection, leaf, index.body).decode(),)
+    parent: Final = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON ONLY {} ").format(
+        sql.Identifier(name), sql.Identifier(schema, table)
+    )
+    parent_statement: Final = (
+        () if existing is not None else (_create_index_statement(connection, parent, index.body).decode(),)
+    )
+    children: Final = _children_without_the_index(connection, schema, table, name)
+    return parent_statement + tuple(
+        chain.from_iterable(_operator_child_statements(connection, schema, name, child, index) for child in children)
+    )
+
+
+def _operator_child_statements(
+    connection: "psycopg.Connection[tuple[object, ...]]",
+    schema: str,
+    parent_index: str,
+    child: _Relation,
+    index: RequestLogIndex,
+) -> tuple[str, ...]:
+    from psycopg import sql
+
+    child_index: Final = index.partition_index_name(child.name)
+    attach: Final = sql.SQL("ALTER INDEX {} ATTACH PARTITION {}").format(
+        sql.Identifier(schema, parent_index), sql.Identifier(child.schema, child_index)
+    )
+    built: Final = _operator_build_statements(
+        connection, child.schema, index, child.name, child_index, child.partitioned
+    )
+    return (*built, attach.as_string(connection))
 
 
 def _regclass_name(connection: "psycopg.Connection[tuple[object, ...]]", schema: str, name: str) -> str:
@@ -256,9 +404,12 @@ def _equivalent_indexes(
 ) -> tuple[_EquivalentIndex, ...]:
     """The indexes on `table` other than `name` with the same definition: default btree
     over the same columns in the same order, no expression, predicate, DESC or custom
-    opclass or collation, and not attached under a partitioned index. Valid ones first."""
+    opclass or collation, and not attached under a partitioned index. Valid ones first.
+    Empty for a partial index, whose predicate this lookup cannot compare."""
     from psycopg.rows import class_row
 
+    if index.predicate is not None:
+        return ()
     with connection.cursor(row_factory=class_row(_EquivalentIndex)) as cursor:
         return tuple(
             cursor.execute(
@@ -371,7 +522,7 @@ def _build_leaf_index(
         prefix: Final = sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ").format(
             sql.Identifier(name), sql.Identifier(schema, table)
         )
-        connection.execute(_create_index_statement(connection, prefix, index.definition))
+        connection.execute(_create_index_statement(connection, prefix, index.body))
         built: Final = _index_state(connection, schema, name)
         return built is not None and built.valid
 
@@ -440,7 +591,7 @@ def _create_parent_index(
     prefix: Final = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON ONLY {} ").format(
         sql.Identifier(name), sql.Identifier(schema, table)
     )
-    statement: Final = _create_index_statement(connection, prefix, index.definition)
+    statement: Final = _create_index_statement(connection, prefix, index.body)
     connection.execute(statement)
     return True
 
