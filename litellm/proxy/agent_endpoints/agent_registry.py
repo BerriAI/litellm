@@ -89,6 +89,9 @@ class AgentRecord(Protocol):
     def kill_switch(self) -> Mapping[str, object] | None: ...
 
     @property
+    def static_headers(self) -> Mapping[str, object] | None: ...
+
+    @property
     def spend(self) -> float: ...
 
     def model_dump(self) -> AgentRecordDump: ...
@@ -300,6 +303,39 @@ def serialize_agent_kill_switch(incoming: object, existing: object) -> str:
         _KILL_SWITCH_ADAPTER.validate_python(incoming), parse_agent_kill_switch(existing)
     )
     return safe_dumps(restored.model_dump() if restored is not None else None)
+
+
+_STATIC_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
+_EMPTY_STATIC_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def redact_agent_static_headers(
+    headers: Mapping[str, str] | None,
+) -> dict[str, str] | None:  # mutable-ok: AgentResponse.static_headers is declared as a plain dict, not Mapping
+    if headers is None:
+        return None
+    return {name: REDACTED_BY_LITELM_STRING for name in headers}
+
+
+def _parse_agent_static_headers(value: object) -> Mapping[str, str]:
+    if value is None:
+        return _EMPTY_STATIC_HEADERS
+    try:
+        if isinstance(value, str):
+            return _STATIC_HEADERS_ADAPTER.validate_json(value)
+        return _STATIC_HEADERS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return _EMPTY_STATIC_HEADERS
+
+
+def serialize_agent_static_headers(incoming: Mapping[str, str] | None, existing: object) -> str:
+    """A header echoed back as the redaction marker keeps its stored value, or is dropped if none is stored"""
+    stored: Final = _parse_agent_static_headers(existing)
+    restored: Final = (
+        (name, stored.get(name) if value == REDACTED_BY_LITELM_STRING else value)
+        for name, value in (incoming or _EMPTY_STATIC_HEADERS).items()
+    )
+    return safe_dumps({name: value for name, value in restored if value is not None})
 
 
 _MISSING_AGENT_PARAM: Final = object()
@@ -615,7 +651,9 @@ class AgentRegistry:
 
             # Serialize static_headers
             static_headers_obj: Final = agent.get("static_headers")
-            static_headers_val: Final[str | None] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
+            static_headers_val: Final[str | None] = (
+                serialize_agent_static_headers(static_headers_obj, None) if static_headers_obj else None
+            )
 
             extra_headers_val: Final = agent.get("extra_headers")
             access_group_ids_val: Final = agent.get("access_group_ids")
@@ -750,8 +788,9 @@ class AgentRegistry:
                 if rate_field in agent:
                     update_data[rate_field] = agent.get(rate_field)
             if "static_headers" in agent:
-                headers_value: Final = agent.get("static_headers")
-                update_data["static_headers"] = safe_dumps(dict(headers_value) if headers_value is not None else {})
+                update_data["static_headers"] = serialize_agent_static_headers(
+                    agent.get("static_headers"), existing_agent.get("static_headers")
+                )
             if "extra_headers" in agent:
                 extra_headers_value: Final = agent.get("extra_headers")
                 update_data["extra_headers"] = extra_headers_value if extra_headers_value is not None else []
@@ -827,9 +866,8 @@ class AgentRegistry:
             agent_card_params: Final[str] = safe_dumps(agent_card_params_dict)
 
             # Serialize static_headers for update
-            static_headers_obj_u: Final = agent.get("static_headers")
-            static_headers_val_u: Final[str] = (
-                safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
+            static_headers_val_u: Final[str] = serialize_agent_static_headers(
+                agent.get("static_headers"), existing_row.static_headers if existing_row is not None else None
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
             access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))
