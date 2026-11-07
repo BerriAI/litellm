@@ -11031,8 +11031,6 @@ async def async_data_generator(
         for guarded_layer in (stream_source, stream_iterator):
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
-        if not provider_output_sent:
-            await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
@@ -11075,7 +11073,7 @@ async def async_data_generator(
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     finally:
-        await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        disconnect_billed: Final = await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
             response=_UNTYPED_VALUE.validate_python(response),
@@ -11084,6 +11082,9 @@ async def async_data_generator(
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if client_disconnected and not provider_output_sent and not disconnect_billed:
+            with anyio.CancelScope(shield=True):
+                await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
 
 
 def select_data_generator(

@@ -2868,6 +2868,44 @@ async def test_proxy_data_generator_cancel_before_any_chunk_reconciles_to_input_
 
 
 @pytest.mark.asyncio
+async def test_proxy_data_generator_cancel_billed_on_disconnect_settles_once(
+    spend_counter_state,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    counter_cache, key_cache = spend_counter_state
+    valid_token, reservation = await _reserve_for_stream(
+        counter_cache, key_cache, ProxyLogging(user_api_key_cache=key_cache), "key-proxy-gen-billed"
+    )
+
+    async def record_disconnect(request, request_data, client_disconnected):
+        return True
+
+    async def bill_held_back_output(request_data, response):
+        await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=1.25)
+        return True
+
+    monkeypatch.setattr(
+        "litellm.proxy.common_request_processing._record_streaming_client_disconnect_if_needed", record_disconnect
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.common_request_processing._bill_partial_streamed_spend_on_disconnect", bill_held_back_output
+    )
+
+    async def cancel_before_chunk(**_kwargs):
+        if False:
+            yield {}
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await _drain_proxy_data_generator(valid_token, cancel_before_chunk)
+
+    assert counter_cache.get_local("spend:key:key-proxy-gen-billed") == pytest.approx(1.25)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
 async def test_proxy_data_generator_cancel_after_chunk_keeps_reservation(
     spend_counter_state,
 ):
