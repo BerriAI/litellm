@@ -16578,6 +16578,9 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-5-5": {
+        "aliases": [
+            "claude-sonnet-latest"
+        ],
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -16979,6 +16982,9 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
+        "aliases": [
+            "claude-fable-latest"
+        ],
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -17024,6 +17030,9 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5-5": {
+        "aliases": [
+            "claude-opus-latest"
+        ],
         "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 5e-06,
@@ -18850,6 +18859,9 @@
         ]
     },
     "dashscope/qwen3.8-max": {
+        "aliases": [
+            "dashscope/qwen-max-latest"
+        ],
         "cache_read_input_token_cost": 2.5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "dashscope",
@@ -18866,6 +18878,9 @@
         "supports_vision": true
     },
     "dashscope/qwen3.8-flash": {
+        "aliases": [
+            "dashscope/qwen-flash-latest"
+        ],
         "cache_creation_input_token_cost": 2e-07,
         "cache_read_input_token_cost": 1.6e-08,
         "input_cost_per_token": 1.5e-07,
@@ -37580,6 +37595,9 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-6-astra": {
+        "aliases": [
+            "gpt-astra-latest"
+        ],
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_12hr": 2.5e-05,
         "cache_creation_input_token_cost_above_12hr_ultrafast": 0.00015,
@@ -37778,6 +37796,9 @@
         "supports_xhigh_reasoning_effort": true
     },
     "gpt-6-luna": {
+        "aliases": [
+            "gpt-luna-latest"
+        ],
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_12hr": 2.5e-07,
         "cache_creation_input_token_cost_above_12hr_batches": 1.25e-07,
@@ -39001,6 +39022,9 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.4-mini": {
+        "aliases": [
+            "gpt-mini-latest"
+        ],
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -43004,6 +43028,9 @@
         "max_output_tokens": 8192
     },
     "minimax/MiniMax-M3": {
+        "aliases": [
+            "minimax/minimax-latest"
+        ],
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_above_512k_tokens": 6e-07,
         "output_cost_per_token": 1.2e-06,
@@ -44486,6 +44513,9 @@
         "supports_vision": true
     },
     "moonshot/kimi-k3": {
+        "aliases": [
+            "moonshot/kimi-latest"
+        ],
         "cache_creation_input_token_cost": 3e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -55711,6 +55741,9 @@
         "supports_web_search": true
     },
     "xai/grok-4.7": {
+        "aliases": [
+            "xai/grok-latest"
+        ],
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
         "cache_read_input_token_cost_above_200k_tokens_batches": 8e-07,
@@ -55823,6 +55856,9 @@
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-5.3": {
+        "aliases": [
+            "zai/glm-latest"
+        ],
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
@@ -55839,6 +55875,9 @@
         "supports_tool_choice": true
     },
     "zai/glm-5.3-flash": {
+        "aliases": [
+            "zai/glm-flash-latest"
+        ],
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1.5e-07,
@@ -63714,6 +63753,9 @@
         "supports_vision": true
     },
     "deepseek/deepseek-v4-flash": {
+        "aliases": [
+            "deepseek/deepseek-flash-latest"
+        ],
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 6e-09,
         "input_cost_per_token": 3e-07,
@@ -63822,6 +63864,9 @@
         "supports_vision": true
     },
     "deepseek/deepseek-v4-pro": {
+        "aliases": [
+            "deepseek/deepseek-pro-latest"
+        ],
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 4.4e-08,
         "input_cost_per_token": 1.32e-06,
@@ -76671,6 +76716,9 @@
         "supports_vision": true
     },
     "gpt-6.1-sol": {
+        "aliases": [
+            "gpt-sol-latest"
+        ],
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_12hr": 5e-06,
         "cache_creation_input_token_cost_above_12hr_ultrafast": 3e-05,
@@ -77271,6 +77319,9 @@
         "supports_vision": true
     },
 "claude-haiku-5-5": {
+        "aliases": [
+            "claude-haiku-latest"
+        ],
         "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
         "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
         "cache_creation_input_token_cost_above_100k_tokens_batches": 3.125e-07,
@@ -80237,6 +80288,9 @@
         "supports_web_search": true
     },
     "gpt-6.1-terra": {
+        "aliases": [
+            "gpt-terra-latest"
+        ],
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_12hr": 2.5e-06,
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 5e-06,
