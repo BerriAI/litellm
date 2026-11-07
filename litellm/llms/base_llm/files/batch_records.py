@@ -3,11 +3,17 @@ from functools import cache
 from types import MappingProxyType
 from typing import Final, cast, get_type_hints
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 
 
 def _frozen_mapping(items: Iterable[tuple[str, object]]) -> Mapping[str, object]:
     return MappingProxyType(dict(items))
+
+
+def row_or_deployment_drop_params(openai_request_body: Mapping[str, object], deployment_drop_params: object) -> bool:
+    row_drop_params: Final = openai_request_body.get("drop_params")
+    return drops_unsupported_params(deployment_drop_params if row_drop_params is None else row_drop_params)
 
 
 @cache
@@ -18,6 +24,7 @@ def _responses_request_keys() -> frozenset[str]:
 def responses_batch_body_to_chat_body(
     openai_request_body: Mapping[str, object],
     custom_llm_provider: str | None = None,
+    drop_params: bool | None = None,
 ) -> dict[str, object]:  # mutable-ok: provider transforms take the bridged chat body as a plain dict
     """
     Rewrite the body of an OpenAI `/v1/responses` batch record as a Chat Completions body.
@@ -50,5 +57,6 @@ def responses_batch_body_to_chat_body(
         input=chat_input,
         responses_api_request=responses_request,
         custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
         metadata=openai_request_body.get("metadata"),
     )

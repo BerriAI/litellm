@@ -10877,3 +10877,18 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "toolConfig" not in request
     assert "toolChoice" not in json.dumps(request)
     assert "tool_choice" not in json.dumps(request)
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_converse_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        model,
+        {
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        drop_params=True,
+    )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(request)

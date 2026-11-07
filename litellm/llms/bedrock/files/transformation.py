@@ -41,9 +41,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
+from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -935,7 +939,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
     @staticmethod
-    def _transform_responses_body_to_chat_body(openai_request_body: _OpenAIBatchRecordBody) -> Mapping[str, object]:
+    def _transform_responses_body_to_chat_body(
+        openai_request_body: _OpenAIBatchRecordBody, drop_params: bool
+    ) -> Mapping[str, object]:
         """
         Rewrite an OpenAI `/v1/responses` batch body as a Chat Completions body.
 
@@ -944,16 +950,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         model), so `input`, `instructions`, `max_output_tokens` and the tool
         params translate identically in batch and real time.
         """
-        chat_body: Final = responses_batch_body_to_chat_body(openai_request_body)
-        drop_params: Final = openai_request_body.get("drop_params")
-        if drop_params is None:
+        chat_body: Final = responses_batch_body_to_chat_body(openai_request_body, drop_params=drop_params)
+        row_drop_params: Final = openai_request_body.get("drop_params")
+        if row_drop_params is None:
             return chat_body
-        return _frozen_mapping(chain(chat_body.items(), (("drop_params", drop_params),)))
+        return _frozen_mapping(chain(chat_body.items(), (("drop_params", row_drop_params),)))
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
         openai_request_body: _OpenAIBatchRecordBody,
         record_kind: BedrockBatchRecordKind,
+        drop_params: bool,
     ) -> Mapping[str, object]:
         """
         Normalize a non-embedding batch body to the Chat Completions shape the
@@ -963,7 +970,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             case BedrockBatchRecordKind.TEXT_COMPLETION:
                 return BedrockFilesConfig._transform_text_completion_body_to_chat_body(openai_request_body)
             case BedrockBatchRecordKind.RESPONSES:
-                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body)
+                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body, drop_params)
             case BedrockBatchRecordKind.CHAT:
                 return openai_request_body
             case BedrockBatchRecordKind.EMBEDDING:
@@ -974,6 +981,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         openai_request_body: Mapping[str, Any],
         model: str,
         provider: str | None = None,
+        deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
         Transform OpenAI request body to Bedrock-compatible modelInput
@@ -987,6 +995,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
@@ -1001,12 +1010,20 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 custom_llm_provider="bedrock",
                 messages=messages,
                 model_info=deployment_model_info(litellm_params),
+                drop_params=drop_params,
                 **MappingProxyType(
-                    {
-                        k: v
-                        for k, v in optional_params.items()
-                        if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
-                    }
+                    tool_params_without_hosted_mcp(
+                        {
+                            k: v
+                            for k, v in optional_params.items()
+                            if k != "drop_params"
+                            and (not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES)
+                        },
+                        model=model,
+                        route="bedrock",
+                        drop_params=drop_params,
+                        remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                    )
                 ),
             )
             return config.transform_request(
@@ -1029,10 +1046,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
-                non_default_params=optional_params,
+                non_default_params=tool_params_without_hosted_mcp(
+                    {k: v for k, v in optional_params.items() if k != "drop_params"},
+                    model=model,
+                    route="bedrock",
+                    drop_params=drop_params,
+                    remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                ),
                 optional_params={},
                 model=model,
-                drop_params=optional_params.get("drop_params") is True,
+                drop_params=drop_params,
             )
             return converse_config.transform_request(
                 model=model,
@@ -1044,9 +1067,20 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- All other providers: passthrough (OpenAI-compatible models
         #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
+        passthrough_params: Final = {k: v for k, v in optional_params.items() if k != "drop_params"}
         return {
             "messages": messages,
-            **{k: v for k, v in optional_params.items() if k != "drop_params"},
+            **(
+                tool_params_without_hosted_mcp(
+                    passthrough_params,
+                    model=model,
+                    route="bedrock",
+                    drop_params=True,
+                    remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                )
+                if drop_params
+                else passthrough_params
+            ),
         }
 
     def _resolve_batch_record_model_and_provider(
@@ -1063,7 +1097,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return target_model, target_provider
 
     def _transform_openai_jsonl_content_to_bedrock_jsonl_content(
-        self, openai_jsonl_content: Sequence[_OpenAIBatchRecord], target_model: str = ""
+        self,
+        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
+        target_model: str = "",
+        deployment_drop_params: object = None,
     ) -> list[_BedrockBatchRecord]:
         """
         Transforms OpenAI JSONL content to Bedrock batch format
@@ -1109,9 +1146,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 )
             else:
                 model_input = self._map_openai_to_bedrock_params(
-                    openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
+                    openai_request_body=self._transform_batch_body_to_chat_body(
+                        openai_body,
+                        record_kind,
+                        row_or_deployment_drop_params(openai_body, deployment_drop_params),
+                    ),
                     model=model_for_transform,
                     provider=provider,
+                    deployment_drop_params=deployment_drop_params,
                 )
 
             # Create Bedrock batch record
@@ -1125,15 +1167,18 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         openai_jsonl_content: Sequence[_OpenAIBatchRecord],
         target_model: str = "",
+        deployment_drop_params: object = None,
     ) -> list[_BedrockBatchRecord]:  # mutable-ok: mirrors override contract
-        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content, target_model)
+        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content, target_model, deployment_drop_params
+        )
 
     def transform_create_file_request(
         self,
         model: str,
         create_file_data: CreateFileRequest,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> bytes | str | dict:
         """
         Transform file request and return a pre-signed request for S3.
@@ -1159,7 +1204,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
             bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                openai_jsonl_content, target_model=target_model
+                openai_jsonl_content,
+                target_model=target_model,
+                deployment_drop_params=litellm_params.get("drop_params"),
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):

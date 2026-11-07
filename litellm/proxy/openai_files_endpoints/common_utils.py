@@ -660,6 +660,26 @@ def add_deployment_model_info(
     }
 
 
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.get_credential_deployment(model_id=model_id)
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def configured_drop_params(
+    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    router_defaults: Final = cast(  # cast-ok: the Router stores default_litellm_params as an untyped dict
+        Mapping[str, object], llm_router.default_litellm_params
+    )
+    router_default: Final = router_defaults.get("drop_params")
+    drop_params: Final = (
+        router_default if isinstance(router_default, (bool, str)) else _deployment_drop_params(llm_router, model_id)
+    )
+    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,

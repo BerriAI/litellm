@@ -5,9 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
+    configured_drop_params,
     get_credentials_for_model,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
@@ -652,3 +654,22 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
     assert "batch_processed" not in written
     assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
     assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+
+@pytest.mark.parametrize(("model_id", "expected"), [("vertex-batch-drop", True), ("vertex-batch-keep", False)])
+def test_an_upload_with_a_null_drop_params_takes_its_deployments_drop_params(model_id: str, expected: bool) -> None:
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch-drop",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": True},
+            },
+            {
+                "model_name": "vertex-batch-keep",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
+            },
+        ]
+    )
+
+    assert configured_drop_params(llm_router, model_id, {"drop_params": None}) == {"drop_params": expected}

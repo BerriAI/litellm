@@ -2,9 +2,11 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
+import respx
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
@@ -41,6 +43,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -6559,3 +6562,103 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+_DEEPWIKI_MCP_TOOL: Final = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    }
+)
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+@pytest.mark.parametrize("function_names", [("get_weather",), ("get_weather", "deepwiki")])
+@pytest.mark.parametrize("server_label", ["deepwiki", "unsent"])
+def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_function(
+    monkeypatch: pytest.MonkeyPatch, server_label: str, function_names: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), *map(_function_tool, function_names)],
+        tool_choice={"type": "mcp", "server_label": server_label},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == list(function_names)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_function_tool_choice_under_drop_params_still_forces_the_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+        tool_choice={"type": "function", "name": "get_weather"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert sent["toolConfig"]["functionCallingConfig"]["allowed_function_names"] == ["get_weather"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_without_drop_params_is_a_400_on_a_route_that_runs_the_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = respx.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_weather",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Sunny."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 2},
+        }
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(
+            model="anthropic/claude-haiku-5-5",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL)],
+            tool_choice={"type": "mcp", "server_label": "deepwiki"},
+            api_key="anthropic-test-key",
+        )
+
+    assert raised.value.status_code == 400
+    assert not anthropic.called
