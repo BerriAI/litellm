@@ -247,16 +247,72 @@ async def _is_vector_store_granted_to_any(
     return False
 
 
+async def _group_store_ids_for_context(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
+    """Reads only add access here, so a group or team that cannot be read grants nothing."""
+    from litellm.proxy.auth.auth_checks import get_team_object, vector_stores_opened_by_groups
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    team_id: Final = user_api_key_dict.team_id
+    try:
+        team: Final = (
+            await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_id is not None
+            else None
+        )
+        return await vector_stores_opened_by_groups(user_api_key_dict, team)
+    except Exception as e:  # noqa: BLE001  # grants nothing, per the docstring
+        verbose_proxy_logger.debug("Could not read access groups for vector store access: %s", e)
+        return frozenset()
+
+
+async def _group_granted_vector_store_ids(auth_contexts: tuple[UserAPIKeyAuth, ...]) -> frozenset[str]:
+    return frozenset[str]().union(*[await _group_store_ids_for_context(context) for context in auth_contexts])
+
+
+def _is_group_granted(vector_store: LiteLLM_ManagedVectorStore, group_store_ids: frozenset[str]) -> bool:
+    """Two managed ids can share a provider id, so only a store known by its provider id matches by one."""
+    from litellm.proxy.auth.auth_checks import provider_vector_store_id
+
+    store_id: Final = vector_store.get("vector_store_id") or ""
+    if store_id in group_store_ids:
+        return True
+    return provider_vector_store_id(store_id) == store_id and store_id in map(provider_vector_store_id, group_store_ids)
+
+
+async def can_user_read_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """Using or reading a store also counts access groups. Managing one does not."""
+    if await can_user_access_vector_store(vector_store, user_api_key_dict):
+        return True
+    auth_contexts: Final = await _vector_store_auth_contexts(user_api_key_dict)
+    return _is_group_granted(vector_store, await _group_granted_vector_store_ids(auth_contexts))
+
+
 async def filter_listable_vector_stores(
     vector_stores: Iterable[LiteLLM_ManagedVectorStore],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[LiteLLM_ManagedVectorStore, ...]:
-    """Non-admins only see stores their key, one of their teams' object_permission, or team ownership grants."""
+    """Non-admins only see stores their key, a team's object_permission, team ownership or access groups grant."""
     if _is_proxy_admin(user_api_key_dict):
         return tuple(vector_stores)
 
     auth_contexts: Final = await _vector_store_auth_contexts(user_api_key_dict)
-    return tuple([vs for vs in vector_stores if await _is_vector_store_granted_to_any(vs, auth_contexts)])
+    group_store_ids: Final = await _group_granted_vector_store_ids(auth_contexts)
+    return tuple(
+        [
+            vs
+            for vs in vector_stores
+            if _is_group_granted(vs, group_store_ids) or await _is_vector_store_granted_to_any(vs, auth_contexts)
+        ]
+    )
 
 
 async def get_litellm_managed_vector_store(
@@ -350,6 +406,26 @@ async def assert_user_can_access_vector_store_id(
             user_api_key_dict=user_api_key_dict,
             detail=detail,
         )
+    return vector_store
+
+
+async def assert_user_can_read_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if not await can_user_read_vector_store(vector_store, user_api_key_dict):
+        raise HTTPException(
+            status_code=403, detail="Access denied: You do not have permission to access this vector store"
+        )
+
+
+async def assert_user_can_read_vector_store_id(
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> LiteLLM_ManagedVectorStore | None:
+    vector_store: Final = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
+    if vector_store is not None:
+        await assert_user_can_read_vector_store(vector_store, user_api_key_dict)
     return vector_store
 
 

@@ -572,6 +572,7 @@ async def create_access_group(
                     "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
                     "access_skill_names": list(data.access_skill_names or ()),
+                    "access_vector_store_ids": list(data.access_vector_store_ids or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -670,6 +671,7 @@ async def update_access_group(
             "access_mcp_server_ids",
             "access_agent_ids",
             "access_skill_names",
+            "access_vector_store_ids",
         ):
             value = list(iter_items(value or ()))
         update_data[field] = (

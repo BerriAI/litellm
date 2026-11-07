@@ -1593,6 +1593,7 @@ model LiteLLM_AccessGroupTable {
   mcp_tool_permissions    Json?
   access_agent_ids        String[] @default([])
   access_skill_names      String[] @default([])
+  access_vector_store_ids String[] @default([])
 
   assigned_team_ids         String[] @default([])
   assigned_key_ids          String[] @default([])

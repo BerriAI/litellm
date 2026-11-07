@@ -939,6 +939,20 @@
               ],
               "title": "Access Skill Names"
             },
+            "access_vector_store_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Vector Store Ids"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -1128,6 +1142,14 @@
               "title": "Access Skill Names",
               "type": "array"
             },
+            "access_vector_store_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Vector Store Ids",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -1303,6 +1325,20 @@
                 }
               ],
               "title": "Access Skill Names"
+            },
+            "access_vector_store_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Vector Store Ids"
             },
             "assigned_key_ids": {
               "anyOf": [
