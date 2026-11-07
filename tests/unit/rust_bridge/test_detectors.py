@@ -354,7 +354,7 @@ def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -
 
 def test_stream_cost_injection_reads_the_request_header_the_proxy_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
-    opted_in = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
+    opted_in: Final = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
     assert messages_detectors.stream_cost_injection(call(stream=True, **opted_in))
     assert not messages_detectors.stream_cost_injection(call(**opted_in))
     assert not messages_detectors.stream_cost_injection(call(stream=True, proxy_server_request={"headers": {}}))

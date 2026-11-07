@@ -5515,16 +5515,16 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         ProxyLogging._callback_capabilities_cache.clear()
 
-    async def test_opt_in_header_injects_cost_while_global_flag_is_off(self, monkeypatch):
+    async def test_opt_in_header_injects_cost_while_global_flag_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
         monkeypatch.setattr(litellm, "callbacks", [])
         ProxyLogging._callback_capabilities_cache.clear()
-        usage_frame = (
+        usage_frame: Final = (
             b'data: {"object":"chat.completion.chunk","choices":[],'
             b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
         )
 
-        async def stream(headers):
+        async def stream(headers: dict[str, str]) -> list[bytes]:
             return [
                 c
                 async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
@@ -5537,14 +5537,14 @@ class TestAsyncStreamingDataGeneratorFastPath:
                 )
             ]
 
-        plain = await stream({})
-        opted_in = await stream({"x-litellm-include-cost-in-streaming-usage": "true"})
-        declined = await stream({"x-litellm-include-cost-in-streaming-usage": "false"})
+        plain: Final = await stream({})
+        opted_in: Final = await stream({"x-litellm-include-cost-in-streaming-usage": "true"})
+        declined: Final = await stream({"x-litellm-include-cost-in-streaming-usage": "false"})
         ProxyLogging._callback_capabilities_cache.clear()
 
         assert plain == [usage_frame]
         assert declined == [usage_frame]
-        payload = json.loads(opted_in[0].decode("utf-8").split("data:", 1)[1].strip())
+        payload: Final = json.loads(opted_in[0].decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
         assert payload["usage"]["total_tokens"] == 15
 
@@ -10854,19 +10854,21 @@ class TestProcessChunkWithCostInjection:
         payload = json.loads(result.decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
 
-    def test_request_header_opts_a_frame_into_cost_while_global_flag_is_off(self, monkeypatch):
+    def test_request_header_opts_a_frame_into_cost_while_global_flag_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
-        chunk = (
+        chunk: Final = (
             b'data: {"object":"chat.completion.chunk","choices":[],'
             b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
         )
 
         assert ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
-        injected = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+        injected: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
             chunk, "gpt-4o-mini", request_headers={"X-LiteLLM-Include-Cost-In-Streaming-Usage": "True"}
         )
 
-        payload = json.loads(injected.decode("utf-8").split("data:", 1)[1].strip())
+        payload: Final = json.loads(injected.decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
 
     def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):

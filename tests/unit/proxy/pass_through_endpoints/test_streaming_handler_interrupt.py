@@ -450,29 +450,30 @@ async def test_chunk_processor_injects_cost_into_openai_passthrough_usage_frame(
     ("header_value", "cost_expected"), (("true", True), ("1", True), ("false", False), (None, False))
 )
 async def test_chunk_processor_honors_the_opt_in_header_while_global_flag_is_off(
-    monkeypatch, header_value, cost_expected
-):
+    monkeypatch: pytest.MonkeyPatch, header_value: str | None, cost_expected: bool
+) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
-    chunks = _openai_passthrough_stream_chunks()
-    logging_obj = _unarmed_logging_obj(model="gpt-4o-mini")
-    headers = {} if header_value is None else {"x-litellm-include-cost-in-streaming-usage": header_value}
+    chunks: Final = _openai_passthrough_stream_chunks()
+    logging_obj: Final = _unarmed_logging_obj(model="gpt-4o-mini")
+    headers: Final = {} if header_value is None else {"x-litellm-include-cost-in-streaming-usage": header_value}
     logging_obj.model_call_details = {"litellm_params": {"proxy_server_request": {"headers": headers}}}
 
-    received = []
-    async for chunk in PassThroughStreamingHandler.chunk_processor(
-        response=_make_streaming_response(chunks),
-        request_body={"model": "gpt-4o-mini", "stream": True},
-        litellm_logging_obj=logging_obj,
-        endpoint_type=EndpointType.OPENAI,
-        start_time=datetime(2026, 1, 1),
-        passthrough_success_handler_obj=MagicMock(),
-        url_route="/openai/v1/chat/completions",
-        route_streaming_logging=AsyncMock(),
-    ):
-        received.append(chunk)
+    received: Final = [
+        chunk
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=_make_streaming_response(chunks),
+            request_body={"model": "gpt-4o-mini", "stream": True},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.OPENAI,
+            start_time=datetime(2026, 1, 1),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/openai/v1/chat/completions",
+            route_streaming_logging=AsyncMock(),
+        )
+    ]
     await asyncio.sleep(0)
 
-    usage_payloads = [
+    usage_payloads: Final = [
         json.loads(chunk.decode("utf-8").split("data:", 1)[1].strip())
         for chunk in received
         if b'"total_tokens"' in chunk
