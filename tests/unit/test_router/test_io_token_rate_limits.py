@@ -4,7 +4,7 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 
 import asyncio
 import contextvars
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -2143,3 +2143,44 @@ async def test_a_settled_reservation_stays_settled_however_many_others_settle_af
     await check.async_log_failure_event(logged_copy, None, None, None)
 
     assert await _counts(cache) == (0, 0)
+
+
+class _FirstChunkNeverArrives(httpx.AsyncByteStream):
+    def __init__(self, reading: asyncio.Event) -> None:
+        self._reading: Final = reading
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self._reading.set()
+        await asyncio.Event().wait()
+        yield b""
+
+
+@pytest.mark.asyncio
+async def test_a_stream_cancelled_before_its_first_chunk_hands_back_its_reservation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    reading_first_chunk: Final = asyncio.Event()
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_FirstChunkNeverArrives(reading_first_chunk)
+        )
+    )
+    router: Final = _router_with_io_limits()
+    first_minute: Final = _current_minute()
+    call: Final["asyncio.Task[object]"] = asyncio.create_task(
+        router.acompletion(
+            model="limited",
+            messages=PROXY_MESSAGES,
+            max_tokens=100,
+            stream=True,
+            metadata={"user_api_key_hash": "hashed-key"},
+        )
+    )
+    await reading_first_chunk.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert await _io_counters_since(router, first_minute) == (0, 0)

@@ -2513,7 +2513,6 @@ def client(original_function):
                 except BaseException:  # noqa: S110, BLE001  # a failing hook must never replace the real deployment failure, so there is nothing to do with what it raises
                     pass
                 raise
-            mark_attempt_answered()
             end_time = datetime.datetime.now()
 
             streaming_requested: Final = _returns_requested_stream(kwargs, call_type, result)
@@ -2553,6 +2552,7 @@ def client(original_function):
                     )
             elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result
+            mark_attempt_answered()
             ### POST-CALL RULES ###
             post_call_processing(
                 original_response=result,

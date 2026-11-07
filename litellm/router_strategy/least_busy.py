@@ -275,6 +275,7 @@ def _count_locally(cache: DualCache, key: str, delta: int) -> None:
         _warn_unwritable(key, e)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def _async_count_shared(cache: DualCache, key: str, delta: int) -> None:
     redis_cache: Final = cache.redis_cache
     if redis_cache is None:
