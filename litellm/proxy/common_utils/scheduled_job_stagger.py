@@ -33,9 +33,9 @@ import hashlib
 import os
 import socket
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Protocol, overload
 
 from apscheduler.events import EVENT_JOB_SUBMITTED
 from apscheduler.triggers.base import BaseTrigger
@@ -108,6 +108,19 @@ class JobSubmission(Protocol):
     def scheduled_run_times(self) -> Sequence[datetime]: ...
 
 
+@overload
+def _shift(dt: None, delta: timedelta) -> None: ...
+@overload
+def _shift(dt: datetime, delta: timedelta) -> datetime: ...
+def _shift(dt: datetime | None, delta: timedelta) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        # Perform arithmetic in UTC to preserve monotonic timeline across DST transitions (#48286)
+        return (dt.astimezone(timezone.utc) + delta).astimezone(dt.tzinfo)
+    return dt + delta
+
+
 class _OffsetTrigger:
     """
     Delegates to ``base`` on a clock rolled back by ``offset``, then rolls the answer
@@ -125,9 +138,9 @@ class _OffsetTrigger:
         self.offset = offset
 
     def get_next_fire_time(self, previous_fire_time: datetime | None, now: datetime) -> datetime | None:
-        shifted_previous: Final = None if previous_fire_time is None else previous_fire_time - self.offset
-        next_fire_time: Final = self.base.get_next_fire_time(shifted_previous, now - self.offset)
-        return None if next_fire_time is None else next_fire_time + self.offset
+        shifted_previous: Final = _shift(previous_fire_time, -self.offset)
+        next_fire_time: Final = self.base.get_next_fire_time(shifted_previous, _shift(now, -self.offset))
+        return _shift(next_fire_time, self.offset)
 
     def __str__(self) -> str:
         return f"{self.base}[+{int(self.offset.total_seconds())}s]"
