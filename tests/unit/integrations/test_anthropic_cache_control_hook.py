@@ -5141,3 +5141,133 @@ def test_system_injection_point_leaves_a_gemini_developer_prompt_out_of_context_
     )
 
     assert create_cache.called is opens_a_context_cache
+
+
+_LONG_DEVELOPER_PREFIX: Final = " ".join(itertools.repeat(_DEVELOPER_PREFIX, 600))
+_VERTEX_ENDPOINT_HOST: Final = "us-central1-aiplatform.googleapis.com"
+
+
+def test_system_injection_point_leaves_a_developer_prompt_on_a_gemini_tuned_vertex_endpoint_uncached(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from google.oauth2.credentials import Credentials
+
+    from litellm.main import vertex_chat_completion
+
+    monkeypatch.setitem(
+        vertex_chat_completion._credentials_project_mapping,
+        ("offline-vertex-credentials", "offline-project"),
+        (Credentials(token="offline-vertex-token"), "offline-project"),
+    )
+    respx_mock.get(host=_VERTEX_ENDPOINT_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(200, json={"cachedContents": []})
+    )
+    create_cache: Final = respx_mock.post(host=_VERTEX_ENDPOINT_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(
+            200, json={"name": "cachedContents/developer-prefix", "usageMetadata": {"totalTokenCount": 9000}}
+        )
+    )
+    respx_mock.post(host=_VERTEX_ENDPOINT_HOST, path__regex=r":generateContent$").mock(
+        return_value=Response(200, json=dict(_GEMINI_REPLY))
+    )
+
+    litellm.completion(
+        model="vertex_ai/4965075652664360960",
+        base_model="gemini-3.8-flash",
+        messages=[
+            {"role": "developer", "content": _LONG_DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        vertex_project="offline-project",
+        vertex_location="us-central1",
+        vertex_credentials="offline-vertex-credentials",
+        max_retries=0,
+    )
+
+    assert not create_cache.called
+
+
+def test_system_injection_point_caches_a_developer_prompt_on_vertex_claude(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from google.oauth2.credentials import Credentials
+
+    from litellm.main import vertex_partner_models_chat_completion
+
+    monkeypatch.setitem(
+        vertex_partner_models_chat_completion._credentials_project_mapping,
+        ("offline-vertex-credentials", "offline-project"),
+        (Credentials(token="offline-vertex-token"), "offline-project"),
+    )
+    route: Final = respx_mock.post(host="us-east5-aiplatform.googleapis.com", path__regex=r":rawPredict$").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "msg_developer_prefix",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "Rule 8.3."}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 30, "output_tokens": 4},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="vertex_ai/claude-haiku-5-5",
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        vertex_project="offline-project",
+        vertex_location="us-east5",
+        vertex_credentials="offline-vertex-credentials",
+        max_retries=0,
+    )
+
+    assert json.loads(route.calls.last.request.content)["system"] == [
+        {"type": "text", "text": _DEVELOPER_PREFIX, "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "url"),
+    [
+        pytest.param(
+            "openrouter/google/gemini-3.8-flash", "https://openrouter.ai/api/v1/chat/completions", id="openrouter"
+        ),
+        pytest.param("litellm_proxy/gemini-3.8-flash", "https://gateway.invalid/chat/completions", id="litellm_proxy"),
+    ],
+)
+def test_system_injection_point_leaves_a_developer_prompt_for_a_routed_gemini_model_unmarked(
+    model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-developer-prefix",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gemini-3.8-flash",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+            },
+        )
+    )
+
+    litellm.completion(
+        model=model,
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        api_key="offline-key",
+        api_base=url.removesuffix("/chat/completions"),
+    )
+
+    assert "cache_control" not in route.calls.last.request.content.decode()

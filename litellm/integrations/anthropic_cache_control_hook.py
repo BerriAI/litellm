@@ -280,13 +280,16 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
 
 
-def _builds_gemini_contents(model: str, custom_llm_provider: str | None) -> bool:
+def _serves_gemini(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.exceptions import BadRequestError
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
+    if "gemini" in model.lower():
+        return True
     try:
         served_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         chat_config: Final = ProviderConfigManager.get_provider_chat_config(
@@ -294,6 +297,8 @@ def _builds_gemini_contents(model: str, custom_llm_provider: str | None) -> bool
         )
     except (BadRequestError, ValueError):
         return False
+    if provider in (LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value):
+        return uses_vertex_gemini_api(served_model)
     return isinstance(chat_config, VertexGeminiConfig)
 
 
@@ -486,7 +491,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
-            covers_developer=not _builds_gemini_contents(model, custom_llm_provider),
+            covers_developer=not _serves_gemini(model, custom_llm_provider),
         )
         if (
             openai_dialect
