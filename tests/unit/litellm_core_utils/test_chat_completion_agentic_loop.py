@@ -668,6 +668,22 @@ async def test_a_chat_hook_never_runs_a_call_the_choice_excludes(restore_callbac
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_response", [_tool_call_model_response, _custom_tool_call_model_response])
+async def test_a_follow_up_call_never_runs_a_hook_call_the_callers_choice_excludes(restore_callbacks, model_response):
+    hook: Final = _ChatHookLogger()
+
+    with pytest.raises(litellm.BadRequestError, match="tool_choice"):
+        await _acompletion_through_the_hook(
+            hook,
+            model_response(),
+            {"type": "function", "function": {"name": "get_weather"}},
+            _agentic_loop_tool_choice=_ALLOWS_ONLY_GET_WEATHER,
+        )
+
+    assert hook.runs == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_response", [_tool_call_model_response, _custom_tool_call_model_response])
 async def test_a_chat_hook_runs_a_call_the_choice_lists(restore_callbacks, model_response):
     hook: Final = _ChatHookLogger()
 

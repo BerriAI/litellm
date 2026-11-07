@@ -5894,9 +5894,9 @@ def completion(
             {
                 **requested_litellm_params,
                 **(
-                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: requested_tool_choice}
-                    if AGENTIC_LOOP_TOOL_CHOICE_KEY not in kwargs
-                    and parse_allowed_tools_tool_choice(requested_tool_choice) is not None
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY, requested_tool_choice)}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs
+                    or parse_allowed_tools_tool_choice(requested_tool_choice) is not None
                     else {}
                 ),
             },
