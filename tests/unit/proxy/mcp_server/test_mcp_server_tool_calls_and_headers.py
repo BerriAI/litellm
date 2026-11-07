@@ -1237,6 +1237,7 @@ async def test_mcp_read_resource_success():
         oauth2_headers=None,
         raw_headers=None,
         user_api_key_auth=user_api_key_auth,
+        scope_servers=None,
     )
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,
@@ -1353,6 +1354,201 @@ async def test_mcp_read_resource_routes_uri_to_owning_server_in_multi_server_ses
     assert result is read_result
     read_mock.assert_awaited_once()
     assert read_mock.await_args.kwargs["server"] is server_a
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_withholds_caller_bearer_from_inferred_multi_server():
+    """A URI advertisement is not a credential-to-server binding: an inferred
+    client-forwarded server must not receive the caller's request-wide bearer."""
+    try:
+        from litellm.proxy.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="sk-litellm-key", user_id="user")
+    server_a = MCPServer(
+        server_id="server-a-id",
+        name="server-a",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    server_b = MCPServer(
+        server_id="server-b-id",
+        name="server-b",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    uri = "ui://server-a/widget.html"
+    read_result = ReadResourceResult(
+        contents=[TextResourceContents(uri=uri, text="<html></html>", mimeType="text/html")]
+    )
+    raw_headers = {
+        "authorization": "Bearer upstream-token",
+        "x-litellm-api-key": "Bearer sk-litellm-key",
+    }
+
+    async def get_resources(server, **kwargs):
+        if server is server_a:
+            return global_mcp_server_manager._create_prefixed_resources([Resource(uri=uri, name="widget.html")], server)
+        return []
+
+    getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
+    with (
+        patch(
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ),
+        patch(
+            "litellm.proxy.mcp_server.operations._enforce_mcp_server_rate_limit",
+            AsyncMock(),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_resources_from_server",
+            AsyncMock(side_effect=get_resources),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(return_value=read_result),
+        ) as read_mock,
+    ):
+        await mcp_read_resource(
+            url=uri,
+            user_api_key_auth=user_api_key_auth,
+            oauth2_headers={"Authorization": "Bearer upstream-token"},
+            raw_headers=raw_headers,
+        )
+
+    read_mock.assert_awaited_once()
+    extra_headers = read_mock.await_args.kwargs["extra_headers"]
+    assert not extra_headers or "authorization" not in {k.lower() for k in extra_headers}
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_withholds_caller_bearer_from_sole_inferred_consumer():
+    """Even when the inferred server is the only Authorization consumer in scope,
+    URI-inferred routing must withhold the caller's request-wide bearer."""
+    try:
+        from litellm.proxy.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="sk-litellm-key", user_id="user")
+    server_a = MCPServer(
+        server_id="server-a-id",
+        name="server-a",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    server_b = MCPServer(
+        server_id="server-b-id",
+        name="server-b",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        authentication_token="static-key",
+    )
+    uri = "ui://server-a/widget.html"
+    read_result = ReadResourceResult(
+        contents=[TextResourceContents(uri=uri, text="<html></html>", mimeType="text/html")]
+    )
+    raw_headers = {
+        "authorization": "Bearer upstream-token",
+        "x-litellm-api-key": "Bearer sk-litellm-key",
+    }
+
+    async def get_resources(server, **kwargs):
+        if server is server_a:
+            return global_mcp_server_manager._create_prefixed_resources([Resource(uri=uri, name="widget.html")], server)
+        return []
+
+    getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
+    with (
+        patch(
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ),
+        patch(
+            "litellm.proxy.mcp_server.operations._enforce_mcp_server_rate_limit",
+            AsyncMock(),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_resources_from_server",
+            AsyncMock(side_effect=get_resources),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(return_value=read_result),
+        ) as read_mock,
+    ):
+        await mcp_read_resource(
+            url=uri,
+            user_api_key_auth=user_api_key_auth,
+            oauth2_headers={"Authorization": "Bearer upstream-token"},
+            raw_headers=raw_headers,
+        )
+
+    read_mock.assert_awaited_once()
+    assert read_mock.await_args.kwargs["extra_headers"] is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_read_resource_discovery_skips_rate_limited_servers():
+    """Discovery must not fan out to servers that fail per-server admission."""
+    try:
+        from litellm.proxy.mcp_server.server import mcp_read_resource
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="key", user_id="user")
+    server_a = MCPServer(server_id="server-a-id", name="server-a", transport=MCPTransport.http)
+    server_b = MCPServer(server_id="server-b-id", name="server-b", transport=MCPTransport.http)
+
+    async def enforce(_auth, server):
+        if server is server_a:
+            raise ProxyRateLimitError(detail="server RPM exceeded")
+
+    get_resources_mock = AsyncMock(return_value=[])
+    getattr(global_mcp_server_manager, "_resource_uri_to_server_ids", {}).clear()
+    with (
+        patch(
+            "litellm.proxy.mcp_server.operations._get_allowed_mcp_servers",
+            AsyncMock(return_value=[server_a, server_b]),
+        ),
+        patch(
+            "litellm.proxy.mcp_server.operations._enforce_mcp_server_rate_limit",
+            AsyncMock(side_effect=enforce),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_resources_from_server",
+            get_resources_mock,
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(),
+        ) as read_mock,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await mcp_read_resource(
+                url="https://example.com/missing",
+                user_api_key_auth=user_api_key_auth,
+            )
+
+    assert exc_info.value.status_code == 400
+    get_resources_mock.assert_awaited_once()
+    assert get_resources_mock.await_args.kwargs["server"] is server_b
+    read_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
