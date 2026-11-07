@@ -59,7 +59,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const pathname = usePathname();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
-  const moyaiEnabled = Boolean(uiSettings?.values?.enable_moyai_ui);
+  const moyaiEnabled = uiSettings?.values?.enable_moyai_ui !== false;
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");

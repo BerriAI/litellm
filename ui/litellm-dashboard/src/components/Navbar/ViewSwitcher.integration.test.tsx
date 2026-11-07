@@ -203,6 +203,19 @@ describe("ViewSwitcher", () => {
     expect(screen.queryByRole("menuitem", { name: /Moyai/ })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["settings are still loading", () => new Promise(() => {})],
+    ["the proxy does not report the setting", () => Promise.resolve({ values: { enable_chat_ui: false } })],
+  ])("should keep Moyai in the switcher while %s", async (_, loadSettings) => {
+    getUiSettingsMock.mockImplementation(loadSettings);
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Moyai Cloud Coding Agent" }));
+    expect(assignSpy).toHaveBeenCalledWith("/ui/moyai");
+  });
+
   it("should keep the local Moyai route available when Chat is disabled", async () => {
     getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: false, enable_moyai_ui: true } });
     const user = userEvent.setup();

@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
+import { useRouter } from "next/navigation";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import Navbar from "@/components/navbar";
@@ -17,6 +18,7 @@ function MoyaiPageContent() {
   const { t } = useTranslation();
   const { accessToken, userRole } = useAuthorized();
   const { data: uiSettings, isLoading, refetch } = useUISettings();
+  const router = useRouter();
 
   const parsed = useSyncExternalStore(
     () => () => {},
@@ -46,8 +48,13 @@ function MoyaiPageContent() {
   }, [connectedParams, refetch]);
 
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
+  const blocked = !isLoading && uiSettings?.values?.enable_moyai_ui === false;
 
-  const settingsReady = parsed && !isLoading;
+  useEffect(() => {
+    if (blocked) router.replace(uiHref(""));
+  }, [blocked, router]);
+
+  const settingsReady = parsed && !isLoading && !blocked;
   const shouldOpenMoyai = settingsReady && !connectedParams && moyaiUrl;
   useEffect(() => {
     if (shouldOpenMoyai) {
@@ -61,7 +68,7 @@ function MoyaiPageContent() {
   };
 
   let content: React.ReactNode = null;
-  if (parsed && !isLoading) {
+  if (settingsReady) {
     if (connectedParams) {
       content = (
         <MoyaiConnected moyaiUrl={moyaiUrl} keyAlias={connectedParams.keyAlias} models={connectedParams.models} />

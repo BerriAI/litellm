@@ -4174,6 +4174,30 @@ class TestEnableMoyaiUISetting:
         upsert_data = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]
         assert json.loads(upsert_data["create"]["ui_settings"])["enable_moyai_ui"] is False
 
+    def test_patch_refuses_moyai_ui_owned_by_config_file(self, mock_auth, monkeypatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        store: Final = proxy_server.proxy_config.settings
+        store.load_yaml({"enable_moyai_ui": False})
+        monkeypatch.setattr(proxy_server.proxy_config, "_settings_stores", {"general_settings": store})
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma: Final = TestPtuCostAttributionUISetting._mock_prisma(monkeypatch)
+
+        try:
+            response: Final = client.patch("/update/ui_settings", json={"enable_moyai_ui": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["keys"] == ["enable_moyai_ui"]
+        mock_prisma.db.litellm_uisettings.upsert.assert_not_called()
+
 
 class TestApplyUserBudgetToTeamKeysUISetting:
     """``apply_user_budget_to_team_keys`` mirrors general_settings on every GET.

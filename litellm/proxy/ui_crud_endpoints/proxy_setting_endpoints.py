@@ -2090,6 +2090,7 @@ async def update_ui_settings(
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
         prisma_client,
+        proxy_config,
         store_model_in_db,
     )
 
@@ -2172,6 +2173,10 @@ async def update_ui_settings(
 
     # Enforce allowlist and drop anything unexpected
     incoming: Final = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    proxy_config.reject_config_owned_writes(
+        section_name="general_settings",
+        changed_keys={k: v for k, v in incoming.items() if k == "enable_moyai_ui"},
+    )
 
     # Merge with existing persisted settings so a partial PATCH doesn't
     # overwrite fields the caller didn't send.
