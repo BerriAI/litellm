@@ -10,6 +10,10 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
+from fastapi import HTTPException
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import callback_env_reference_error
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
@@ -21,6 +25,7 @@ _ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
+_LOGGING_METADATA: Final = TypeAdapter(Mapping[str, object])
 
 
 def callback_config_error(
@@ -279,7 +284,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = _object_sequence(metadata.get("logging"))
     if entries is None:
         return None
-    entry_error: Final = next(
+    entry_error: Final = logging_metadata_env_reference_error(metadata) or next(
         (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
         None,
     )
@@ -295,6 +300,33 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
                 *(_conflicting_entry_setting_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
             )
             if error is not None
+        ),
+        None,
+    )
+
+
+def logging_metadata_env_reference_error(metadata: Mapping[str, object] | None) -> str | None:
+    entries: Final = _object_sequence(metadata.get("logging")) if metadata else None
+    return next(
+        (error for entry in entries or () if (error := _entry_env_reference_error(entry)) is not None),
+        None,
+    )
+
+
+def raise_on_logging_metadata_env_reference(metadata: object) -> None:
+    if metadata is None:
+        return
+    error: Final = logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(metadata))
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
+def _entry_env_reference_error(entry: object) -> str | None:
+    return next(
+        (
+            error
+            for name, value in _entry_callback_vars(entry).items()
+            if (error := callback_env_reference_error(name, value, source="key/team callback metadata")) is not None
         ),
         None,
     )

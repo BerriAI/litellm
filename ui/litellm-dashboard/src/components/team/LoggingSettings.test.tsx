@@ -34,7 +34,7 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
     // Find the numerical input for langsmith_sampling_rate
-    const numericalInput = screen.getByPlaceholderText("os.environ/LANGSMITH_SAMPLING_RATE");
+    const numericalInput = screen.getByPlaceholderText("Enter langsmith sampling rate");
     expect(numericalInput).toBeInTheDocument();
 
     // Use fireEvent.change to directly set the value (more reliable for number inputs)
@@ -70,7 +70,7 @@ describe("LoggingSettings", () => {
     expect(screen.getByText("Value must be between 0 and 1")).toBeInTheDocument();
 
     // Check that the input has the correct step attribute
-    const numericalInput = screen.getByPlaceholderText("os.environ/LANGSMITH_SAMPLING_RATE");
+    const numericalInput = screen.getByPlaceholderText("Enter langsmith sampling rate");
     expect(numericalInput).toHaveAttribute("step", "0.01");
   });
 
@@ -92,8 +92,8 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
     // Find both number and text inputs
-    const numericalInput = screen.getByPlaceholderText("os.environ/LANGSMITH_SAMPLING_RATE");
-    const textInput = screen.getByPlaceholderText("os.environ/LANGSMITH_API_KEY");
+    const numericalInput = screen.getByPlaceholderText("Enter langsmith sampling rate");
+    const textInput = screen.getByPlaceholderText("Enter langsmith api key");
 
     // Verify initial values are displayed
     expect(numericalInput).toHaveValue(0.3); // NumberInput shows numeric value
@@ -132,7 +132,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
 
-    const apiKeyInput = screen.getByPlaceholderText("os.environ/LANGSMITH_API_KEY");
+    const apiKeyInput = screen.getByPlaceholderText("Enter langsmith api key");
     expect(apiKeyInput).toHaveAttribute("type", "password");
 
     await user.click(screen.getByRole("button", { name: "Show password" }));
@@ -229,7 +229,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
-    expect(screen.queryByPlaceholderText("os.environ/LANGFUSE_SPAN_SCOPE")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Enter langfuse span scope")).not.toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "langfuse span scope" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual(["full", "llm_only"]);
     await user.click(screen.getByRole("option", { name: "llm_only" }));
@@ -252,7 +252,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
-    expect(screen.queryByPlaceholderText("os.environ/ARIZE_OTLP_PROTOCOL")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Enter arize otlp protocol")).not.toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "arize otlp protocol" }));
     expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "grpc",
@@ -278,8 +278,8 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
     expect(screen.queryByRole("combobox", { name: "arize otlp protocol" })).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText("os.environ/ARIZE_API_KEY")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("os.environ/ARIZE_SPACE_ID")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Enter arize api key")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Enter arize space id")).toBeInTheDocument();
   });
 
   it("drops the Arize OTLP protocol from callback_vars when the event type switches to failure", async () => {
@@ -340,8 +340,8 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
-    const successInput = screen.getByPlaceholderText("os.environ/ARIZE_SUCCESS_SAMPLING_RATE");
-    const errorInput = screen.getByPlaceholderText("os.environ/ARIZE_ERROR_SAMPLING_RATE");
+    const successInput = screen.getByPlaceholderText("Enter arize success sampling rate");
+    const errorInput = screen.getByPlaceholderText("Enter arize error sampling rate");
     expect(successInput).toBeInTheDocument();
     expect(errorInput).toBeInTheDocument();
 
@@ -367,7 +367,7 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
-    const numericalInput = screen.getByPlaceholderText("os.environ/LANGSMITH_SAMPLING_RATE");
+    const numericalInput = screen.getByPlaceholderText("Enter langsmith sampling rate");
 
     // Test various decimal values
     const testValues = ["0.1", "0.25", "0.5", "0.75", "1.0"];

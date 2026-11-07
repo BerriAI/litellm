@@ -187,7 +187,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         <NumericalInput
           step={0.01}
           width={400}
-          placeholder={`os.environ/${paramName.toUpperCase()}`}
+          placeholder={t("teams.loggingSettings.enterParam", { label })}
           value={config.callback_vars[paramName] || ""}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
             updateCallbackVar(configIndex, paramName, e.target.value)
@@ -198,7 +198,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     return (
       <CallbackVarInput
         sensitive={paramType === "password"}
-        placeholder={`os.environ/${paramName.toUpperCase()}`}
+        placeholder={t("teams.loggingSettings.enterParam", { label })}
         value={config.callback_vars[paramName] || ""}
         onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
       />
