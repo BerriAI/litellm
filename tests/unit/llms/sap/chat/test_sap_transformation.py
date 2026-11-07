@@ -941,3 +941,82 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+
+class TestToolMessageImages:
+    def _transform(self, messages: list) -> list:
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        cfg = GenAIHubOrchestrationConfig()
+        body = cfg.transform_request(
+            model="anthropic--claude-4-sonnet",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        return body["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+
+    def test_tool_result_image_moves_to_a_following_user_message(self):
+        image_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc="}}
+        messages = [
+            {"role": "user", "content": "Take a screenshot"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "screenshot result"}, image_block],
+            },
+        ]
+        assert self._transform(messages) == [
+            {"role": "user", "content": "Take a screenshot"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "screenshot result"},
+            {"role": "user", "content": [image_block]},
+        ]
+
+    def test_tool_result_image_without_text_gets_a_string_placeholder(self):
+        image_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc="}}
+        messages = [{"role": "tool", "tool_call_id": "call_1", "content": [image_block]}]
+        assert self._transform(messages) == [
+            {"role": "tool", "tool_call_id": "call_1", "content": "Image moved to the following user message"},
+            {"role": "user", "content": [image_block]},
+        ]
+
+    def test_tool_result_without_an_image_is_left_as_is(self):
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}],
+            }
+        ]
+        assert self._transform(messages) == [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}],
+            }
+        ]
+
+
