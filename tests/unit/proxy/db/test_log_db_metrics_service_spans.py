@@ -23,7 +23,7 @@ from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import _PrismaDrainTracker, _TrackedPrismaEngine
-from litellm.proxy.proxy_server import proxy_logging_obj
+from litellm.proxy import proxy_server
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from prometheus_client import REGISTRY
 
@@ -80,9 +80,12 @@ def rig(monkeypatch: pytest.MonkeyPatch) -> _Rig:
     with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
         datadog: Final = DataDogLogger()
     monkeypatch.setattr(litellm, "service_callback", [otel, datadog, "prometheus_system"])
-    monkeypatch.setattr(proxy_logging_obj.service_logging_obj, "dd_logger", datadog, raising=False)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj.service_logging_obj, "dd_logger", datadog, raising=False)
     monkeypatch.setattr(
-        proxy_logging_obj.service_logging_obj, "prometheusServicesLogger", PrometheusServicesLogger(), raising=False
+        proxy_server.proxy_logging_obj.service_logging_obj,
+        "prometheusServicesLogger",
+        PrometheusServicesLogger(),
+        raising=False,
     )
     return _Rig(exporter, provider, datadog)
 
