@@ -55,18 +55,18 @@ def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistant
     name: Final = function.get("name") or ""
     raw_arguments: Final[object] = function.get("arguments")
     try:
-        parsed: Final = (
+        parsed: Final[object] = (
             parse_tool_call_arguments(raw_arguments, tool_name=name, context="Ollama chat request")
             if isinstance(raw_arguments, str) or raw_arguments is None
             else raw_arguments
         )
         arguments: Final = _TOOL_CALL_ARGUMENTS.validate_python({} if parsed is None else parsed)
-    except ValueError as e:
+    except ValueError:
         raise litellm.BadRequestError(
             message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not a JSON object",
             model=model,
             llm_provider="ollama_chat",
-        ) from e
+        ) from None
     return OllamaToolCallFunction(name=name, arguments=arguments)
 
 
