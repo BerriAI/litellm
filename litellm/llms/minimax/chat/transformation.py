@@ -81,10 +81,10 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported OpenAI parameters for MiniMax.
-        Adds reasoning_split and thinking to the list of supported params.
+        Adds reasoning_split, reasoning_effort and thinking to the list of supported params.
         """
         base_params: Final = super().get_supported_openai_params(model=model)
-        additional_params: Final = ["reasoning_split"]
+        additional_params: Final = ["reasoning_split", "reasoning_effort"]
 
         # Add thinking parameter if model supports reasoning
         try:
