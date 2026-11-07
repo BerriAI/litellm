@@ -189,7 +189,9 @@ locals {
     { name = "CONFIG_FILE_PATH", value = local.proxy_config_path },
     { name = "LITELLM_PROXY_CONFIG_S3_BUCKET", value = aws_s3_bucket.this.bucket },
     { name = "LITELLM_PROXY_CONFIG_S3_KEY", value = aws_s3_object.proxy_config[0].key },
-    { name = "LITELLM_PROXY_CONFIG_S3_ETAG", value = aws_s3_object.proxy_config[0].etag },
+    # md5 of the content, not .etag: the aws provider keeps the old etag in the
+    # plan when content changes, so apply fails with an inconsistent final plan
+    { name = "LITELLM_PROXY_CONFIG_S3_ETAG", value = md5(aws_s3_object.proxy_config[0].content) },
   ] : []
 
   proxy_config_fetch_cmd = "python -c \"import os, boto3; boto3.client('s3', region_name=os.environ['AWS_REGION']).download_file(os.environ['LITELLM_PROXY_CONFIG_S3_BUCKET'], os.environ['LITELLM_PROXY_CONFIG_S3_KEY'], os.environ['CONFIG_FILE_PATH'])\""
