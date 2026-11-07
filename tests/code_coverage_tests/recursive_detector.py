@@ -2,6 +2,13 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_monty_schema_pointer",  # JSON pointer length capped at 64 before descending through finite JsonValue containers.
+    "_monty_reference_exists",  # JSON pointer length capped at 64 before descending through finite JsonValue containers.
+    "_monty_schema_error",  # _MAX_SCHEMA_DEPTH=64, returns UNSUPPORTED_SCHEMA at the cap.
+    "_monty_record_error",  # _MAX_SCHEMA_DEPTH=64 and seen-reference cycle guard, fails closed at either bound.
+    "_monty_contains_record",  # _MAX_SCHEMA_DEPTH=64 and seen-reference cycle guard, bounded record discovery only.
+    "_monty_build",  # _MAX_SCHEMA_DEPTH=64, compile_program maps the bound violation to UNSUPPORTED_SCHEMA.
+    "_monty_json_issue",  # Positive max_depth is bounded to 128 by MontyLimits, returns *_TOO_LARGE at the cap.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
