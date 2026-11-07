@@ -59,6 +59,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
     AnthropicThinkingParam,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
@@ -1644,12 +1645,12 @@ def _assistant_blocks(message: AllAnthropicPassThroughMessageValues) -> tuple[ob
     return parts_of(message["content"]) if message["role"] == "assistant" else ()
 
 
-def _stale_tool_search_ids(
+def _results_with_unloaded_tools(
     messages: Sequence[AllAnthropicPassThroughMessageValues], tool_names: frozenset[str]
-) -> frozenset[str]:
+) -> tuple[AnthropicToolSearchToolResultBlock, ...]:
     blocks: Final = chain.from_iterable(map(_assistant_blocks, messages))
     results: Final = (result for result in map(anthropic_tool_search_result, blocks) if result is not None)
-    return frozenset(result.tool_use_id for result in results if not tool_names.issuperset(result.tool_names))
+    return tuple(result for result in results if not tool_names.issuperset(result.tool_names))
 
 
 def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> bool:
@@ -1662,17 +1663,32 @@ def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> boo
             return False
 
 
-def _without_stale_tool_search_blocks(
-    message: AllAnthropicPassThroughMessageValues, stale_ids: frozenset[str]
+def _with_loaded_tool_references_only(block: object, tool_names: frozenset[str]) -> object:
+    result: Final = anthropic_tool_search_result(block)
+    fields: Final = as_str_mapping(block)
+    if result is None or fields is None or tool_names.issuperset(result.tool_names):
+        return block
+    content: Final = as_str_mapping(fields.get("content")) or MappingProxyType({})
+    references: Final = parts_of(content.get("tool_references"))
+    loaded: Final = [reference for reference in references if message_field(reference, "tool_name") in tool_names]
+    return {**fields, "content": {**content, "tool_references": loaded}}
+
+
+def _with_loaded_tool_searches_only(
+    message: AllAnthropicPassThroughMessageValues, stale_ids: frozenset[str], tool_names: frozenset[str]
 ) -> AllAnthropicPassThroughMessageValues | None:
     if message["role"] != "assistant":
         return message
     content: Final = message["content"]
     if isinstance(content, str):
         return message
-    blocks: Final = tuple(content)
-    kept: Final = [block for block in blocks if not _is_stale_tool_search_block(block, stale_ids)]
-    if len(kept) == len(blocks):
+    blocks: Final = list(content)
+    kept: Final = [
+        _with_loaded_tool_references_only(block, tool_names)
+        for block in blocks
+        if not _is_stale_tool_search_block(block, stale_ids)
+    ]
+    if kept == blocks:
         return message
     return {**message, "content": kept} if kept else None
 
@@ -1704,17 +1720,21 @@ def without_stale_tool_search_results(
     messages: Sequence[AllAnthropicPassThroughMessageValues], tools: Sequence[object]
 ) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
     """
-    Drop a replayed tool search, its ``server_tool_use`` and its
-    ``tool_search_tool_result``, when a tool it found is no longer in ``tools``.
-    Anthropic rejects such a history with "Tool reference '<name>' not found in
-    available tools", for example after a follow-up turn removes a tool or sends none.
+    Leave out the tools a replayed tool search found that are no longer in ``tools``,
+    and the whole search, its ``server_tool_use`` and its ``tool_search_tool_result``,
+    when none of them are left. Anthropic rejects such a history with "Tool reference
+    '<name>' not found in available tools", for example after a follow-up turn removes
+    a tool or sends none.
     """
     tool_names: Final = frozenset(name for tool in tools if isinstance(name := message_field(tool, "name"), str))
-    stale_ids: Final = _stale_tool_search_ids(messages, tool_names)
-    if not stale_ids:
+    unloaded: Final = _results_with_unloaded_tools(messages, tool_names)
+    if not unloaded:
         return tuple(messages)
+    stale_ids: Final = frozenset(result.tool_use_id for result in unloaded if tool_names.isdisjoint(result.tool_names))
     return tuple(
-        kept for message in messages if (kept := _without_stale_tool_search_blocks(message, stale_ids)) is not None
+        kept
+        for message in messages
+        if (kept := _with_loaded_tool_searches_only(message, stale_ids, tool_names)) is not None
     )
 
 

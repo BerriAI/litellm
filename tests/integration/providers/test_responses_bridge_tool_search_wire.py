@@ -969,10 +969,11 @@ def _replayed_search_history(marker: str) -> list[JsonValue]:
     ]
 
 
-def test_a_replayed_tool_search_reaches_claude_as_its_search_and_result(gateway: Gateway) -> None:
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke", "vertex_ai"])
+def test_a_replayed_tool_search_reaches_claude_as_its_search_and_result(gateway: Gateway, provider: Provider) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
         body: Final[dict[str, JsonValue]] = {
             "model": model,
             "input": _replayed_search_history(marker),
@@ -983,14 +984,15 @@ def test_a_replayed_tool_search_reaches_claude_as_its_search_and_result(gateway:
         assert response.status_code == 200, response.text
         _assert_search_call_output(_JSON_OBJECT.validate_json(response.content), marker)
         request, sent = _only_request(wire)
-        _assert_anthropic_wire(request, sent, ("get_weather",))
+        _assert_claude_wire(provider, False, request, sent, ("get_weather",))
         _assert_the_search_is_replayed_before_the_function_call(_ITEMS.validate_python(sent["messages"]), marker)
 
 
-def test_a_replayed_tool_search_whose_tool_is_no_longer_sent_is_left_out(gateway: Gateway) -> None:
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke", "vertex_ai"])
+def test_a_replayed_tool_search_whose_tool_is_no_longer_sent_is_left_out(gateway: Gateway, provider: Provider) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
         body: Final[dict[str, JsonValue]] = {
             "model": model,
             "input": _replayed_search_history(marker),

@@ -468,11 +468,12 @@ def _history_tool_ids(messages: Sequence[object]) -> tuple[Sequence[str], Sequen
     ("model", "custom_llm_provider", "expect_search"),
     [
         ("mistral/mistral-small-latest", "mistral", False),
-        ("anthropic/claude-3-7-sonnet-20250219", "anthropic", False),
+        ("anthropic/claude-3-7-sonnet-20250219", "anthropic", True),
+        ("azure_ai/claude-deployment", "azure_ai", True),
         (_MODEL, "anthropic", True),
     ],
 )
-async def test_previous_response_id_drops_a_client_replayed_search_call_only_where_it_cannot_run(
+async def test_previous_response_id_drops_a_client_replayed_search_call_only_off_anthropic(
     model: str, custom_llm_provider: str, expect_search: bool, search_answered: bool
 ) -> None:
     """
@@ -829,25 +830,24 @@ async def test_previous_response_id_sends_back_a_search_the_stored_turn_got_as_i
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("model", "custom_llm_provider"),
-    [("mistral/mistral-small-latest", "mistral"), ("anthropic/claude-3-7-sonnet-20250219", "anthropic")],
-)
-async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_items_where_it_cannot_run(
-    model: str, custom_llm_provider: str
-) -> None:
-    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, model, custom_llm_provider)
+async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_items_off_anthropic() -> None:
+    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, "mistral/mistral-small-latest", "mistral")
 
     assert _history_tool_ids(messages) == (["toolu_01Weather"], ["toolu_01Weather"])
 
 
 @pytest.mark.asyncio
-async def test_previous_response_id_keeps_a_stored_search_for_a_claude_sent_anthropics_own_search_tool() -> None:
-    messages: Final = await _follow_up_messages_after(
-        _STATELESS_SEARCH_TURN,
-        "anthropic/claude-3-7-sonnet-20250219",
-        "anthropic",
-        tools=({"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},),
-    )
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("anthropic/claude-3-7-sonnet-20250219", "anthropic"),
+        ("azure_ai/claude-deployment", "azure_ai"),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-5-5", "bedrock"),
+    ],
+)
+async def test_previous_response_id_keeps_a_stored_search_on_claude_routes_the_cost_map_does_not_flag(
+    model: str, custom_llm_provider: str
+) -> None:
+    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, model, custom_llm_provider)
 
     assert _history_tool_ids(messages)[0] == ["srvtoolu_01Search", "toolu_01Weather"]

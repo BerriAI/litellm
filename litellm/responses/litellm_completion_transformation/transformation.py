@@ -93,7 +93,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStatus,
     ToolChoice,
-    ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
 from litellm.types.responses.main import (
@@ -229,6 +228,20 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
+
+_CONTENT_TYPE_ADAPTER: Final[TypeAdapter[ValidChatCompletionMessageContentTypesLiteral]] = TypeAdapter(
+    ValidChatCompletionMessageContentTypesLiteral
+)
+
+
+def _valid_content_type(content_type: str) -> ValidChatCompletionMessageContentTypesLiteral | None:
+    try:
+        return _CONTENT_TYPE_ADAPTER.validate_python(content_type)
+    except ValidationError:
+        return None
+
+
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
@@ -987,10 +1000,10 @@ class LiteLLMCompletionResponsesConfig:
         return messages
 
     @staticmethod
-    def _without_tool_search_uses_the_request_cannot_run(
-        messages: Sequence[SessionMessage], route: CompletionRoute, tools: Iterable[object]
+    def _without_tool_search_uses_off_anthropic(
+        messages: Sequence[SessionMessage], route: CompletionRoute
     ) -> tuple[SessionMessage, ...]:
-        if request_runs_tool_search(tools, route.model, route.custom_llm_provider):
+        if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
             return tuple(messages)
         search_call_ids: Final = tool_search_call_ids(messages)
         return tuple(
@@ -1029,10 +1042,8 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_request_cannot_run(
-                stored_messages,
-                CompletionRoute.model_validate(litellm_completion_request),
-                _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
+                stored_messages, CompletionRoute.model_validate(litellm_completion_request)
             )
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
@@ -2361,8 +2372,8 @@ class LiteLLMCompletionResponsesConfig:
         if content_type.startswith("input_"):
             stripped: Final = content_type[len("input_") :]
             # Validate stripped type is valid, otherwise default to "text"
-            if stripped in ValidChatCompletionMessageContentTypes:
-                return stripped
+            if valid_stripped := _valid_content_type(stripped):
+                return valid_stripped
             # Handle input_audio -> input_audio (it's already valid)
             if stripped == "audio":
                 return "input_audio"
@@ -2373,10 +2384,7 @@ class LiteLLMCompletionResponsesConfig:
             return "text"
 
         # Return as-is if it's a valid type, otherwise default to "text"
-        if content_type in ValidChatCompletionMessageContentTypes:
-            return content_type
-
-        return "text"
+        return _valid_content_type(content_type) or "text"
 
     @staticmethod
     def transform_instructions_to_system_message(
