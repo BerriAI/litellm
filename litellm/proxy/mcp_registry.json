@@ -78,20 +78,6 @@
       ]
     },
     {
-      "name": "discord",
-      "title": "Discord",
-      "description": "Discord server management, messaging, and bot integration",
-      "icon_url": "https://cdn.simpleicons.org/discord",
-      "category": "Communication",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-discord"],
-      "env_vars": [
-        {"name": "DISCORD_BOT_TOKEN", "description": "Discord Bot Token", "secret": true}
-      ]
-    },
-    {
       "name": "postgresql",
       "title": "PostgreSQL",
       "description": "Query and manage PostgreSQL databases with read-only access",
@@ -106,37 +92,6 @@
       ]
     },
     {
-      "name": "sqlite",
-      "title": "SQLite",
-      "description": "Query and manage SQLite databases",
-      "icon_url": "https://cdn.simpleicons.org/sqlite",
-      "category": "Databases",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sqlite"],
-      "env_vars": [
-        {"name": "SQLITE_DB_PATH", "description": "Path to SQLite database file", "secret": false}
-      ]
-    },
-    {
-      "name": "mysql",
-      "title": "MySQL",
-      "description": "Query and manage MySQL databases",
-      "icon_url": "https://cdn.simpleicons.org/mysql",
-      "category": "Databases",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-mysql"],
-      "env_vars": [
-        {"name": "MYSQL_HOST", "description": "MySQL host", "secret": false},
-        {"name": "MYSQL_USER", "description": "MySQL username", "secret": false},
-        {"name": "MYSQL_PASSWORD", "description": "MySQL password", "secret": true},
-        {"name": "MYSQL_DATABASE", "description": "MySQL database name", "secret": false}
-      ]
-    },
-    {
       "name": "mongodb",
       "title": "MongoDB",
       "description": "Query and manage MongoDB databases and collections",
@@ -145,9 +100,9 @@
       "registry_url": null,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-mongodb"],
+      "args": ["-y", "mongodb-mcp-server"],
       "env_vars": [
-        {"name": "MONGODB_CONNECTION_STRING", "description": "MongoDB connection string", "secret": true}
+        {"name": "MDB_MCP_CONNECTION_STRING", "description": "MongoDB connection string", "secret": true}
       ]
     },
     {
@@ -158,10 +113,13 @@
       "category": "Databases",
       "registry_url": null,
       "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-redis"],
+      "command": "uvx",
+      "args": ["redis-mcp-server"],
       "env_vars": [
-        {"name": "REDIS_URL", "description": "Redis connection URL (e.g., redis://localhost:6379)", "secret": true}
+        {"name": "REDIS_HOST", "description": "Redis host (e.g., localhost)", "secret": false},
+        {"name": "REDIS_PORT", "description": "Redis port (e.g., 6379)", "secret": false},
+        {"name": "REDIS_USERNAME", "description": "Redis username", "secret": false},
+        {"name": "REDIS_PWD", "description": "Redis password", "secret": true}
       ]
     },
     {
@@ -203,21 +161,6 @@
       "env_vars": []
     },
     {
-      "name": "google_calendar",
-      "title": "Google Calendar",
-      "description": "Manage events and calendars in Google Calendar",
-      "icon_url": "https://cdn.simpleicons.org/googlecalendar",
-      "category": "Productivity",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-google-calendar"],
-      "env_vars": [
-        {"name": "GOOGLE_CLIENT_ID", "description": "Google OAuth Client ID", "secret": false},
-        {"name": "GOOGLE_CLIENT_SECRET", "description": "Google OAuth Client Secret", "secret": true}
-      ]
-    },
-    {
       "name": "microsoft_365",
       "title": "Microsoft 365 (Graph)",
       "description": "Outlook mail and calendar, OneDrive and SharePoint files, and Teams through Microsoft Graph, with each user's own Entra ID sign-in. Self-hosted: run ms-365-mcp-server next to the proxy and point the URL at it",
@@ -227,20 +170,6 @@
       "transport": "http",
       "url": "http://localhost:3000/mcp",
       "env_vars": []
-    },
-    {
-      "name": "obsidian",
-      "title": "Obsidian",
-      "description": "Read, search, and manage Obsidian vault notes and files",
-      "icon_url": "https://cdn.simpleicons.org/obsidian",
-      "category": "Productivity",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-obsidian"],
-      "env_vars": [
-        {"name": "OBSIDIAN_VAULT_PATH", "description": "Path to Obsidian vault directory", "secret": false}
-      ]
     },
     {
       "name": "brave_search",
@@ -278,7 +207,7 @@
       "registry_url": null,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-tavily"],
+      "args": ["-y", "tavily-mcp"],
       "env_vars": [
         {"name": "TAVILY_API_KEY", "description": "Tavily API Key", "secret": true}
       ]
@@ -304,7 +233,7 @@
       "registry_url": null,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-playwright"],
+      "args": ["-y", "@playwright/mcp", "--headless"],
       "env_vars": []
     },
     {
@@ -316,10 +245,11 @@
       "registry_url": null,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-browserbase"],
+      "args": ["-y", "@browserbasehq/mcp"],
       "env_vars": [
         {"name": "BROWSERBASE_API_KEY", "description": "Browserbase API Key", "secret": true},
-        {"name": "BROWSERBASE_PROJECT_ID", "description": "Browserbase Project ID", "secret": false}
+        {"name": "BROWSERBASE_PROJECT_ID", "description": "Browserbase Project ID", "secret": false},
+        {"name": "GEMINI_API_KEY", "description": "Gemini API Key for the default Stagehand model", "secret": true}
       ]
     },
     {
@@ -330,8 +260,8 @@
       "category": "Cloud",
       "registry_url": null,
       "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-aws"],
+      "command": "uvx",
+      "args": ["awslabs.aws-api-mcp-server"],
       "env_vars": [
         {"name": "AWS_ACCESS_KEY_ID", "description": "AWS Access Key ID", "secret": true},
         {"name": "AWS_SECRET_ACCESS_KEY", "description": "AWS Secret Access Key", "secret": true},
@@ -362,18 +292,6 @@
       "env_vars": []
     },
     {
-      "name": "docker",
-      "title": "Docker",
-      "description": "Manage Docker containers, images, and networks",
-      "icon_url": "https://cdn.simpleicons.org/docker",
-      "category": "System",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-docker"],
-      "env_vars": []
-    },
-    {
       "name": "stripe",
       "title": "Stripe",
       "description": "Manage payments, customers, and subscriptions via Stripe",
@@ -385,36 +303,6 @@
       "env_vars": []
     },
     {
-      "name": "shopify",
-      "title": "Shopify",
-      "description": "Manage Shopify stores, products, orders, and customers",
-      "icon_url": "https://cdn.simpleicons.org/shopify",
-      "category": "E-Commerce",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-shopify"],
-      "env_vars": [
-        {"name": "SHOPIFY_ACCESS_TOKEN", "description": "Shopify Admin API Access Token", "secret": true},
-        {"name": "SHOPIFY_STORE_URL", "description": "Shopify Store URL (e.g., mystore.myshopify.com)", "secret": false}
-      ]
-    },
-    {
-      "name": "twilio",
-      "title": "Twilio",
-      "description": "Send SMS, make calls, and manage communication via Twilio",
-      "icon_url": "/ui/assets/logos/twilio.svg",
-      "category": "Communication",
-      "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-twilio"],
-      "env_vars": [
-        {"name": "TWILIO_ACCOUNT_SID", "description": "Twilio Account SID", "secret": false},
-        {"name": "TWILIO_AUTH_TOKEN", "description": "Twilio Auth Token", "secret": true}
-      ]
-    },
-    {
       "name": "supabase",
       "title": "Supabase",
       "description": "Manage Supabase projects, databases, and storage",
@@ -423,10 +311,9 @@
       "registry_url": null,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@anthropic/mcp-server-supabase"],
+      "args": ["-y", "@supabase/mcp-server-supabase", "--read-only", "--project-ref=<your-project-ref>"],
       "env_vars": [
-        {"name": "SUPABASE_URL", "description": "Supabase Project URL", "secret": false},
-        {"name": "SUPABASE_SERVICE_ROLE_KEY", "description": "Supabase Service Role Key", "secret": true}
+        {"name": "SUPABASE_ACCESS_TOKEN", "description": "Supabase Personal Access Token", "secret": true}
       ]
     }
   ]
