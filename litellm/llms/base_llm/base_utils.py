@@ -218,7 +218,8 @@ def as_answer_object(value: object) -> Mapping[str, AnswerValue] | None:
 
 def _source_float(text: str) -> float | SourceNumber:
     value: Final = float(text)
-    return value if math.isfinite(value) else SourceNumber(text)
+    written_as_zero: Final = not any(digit in "123456789" for digit in text.lower().partition("e")[0])
+    return value if math.isfinite(value) and (value != 0 or written_as_zero) else SourceNumber(text)
 
 
 def _source_int(text: str) -> int | SourceNumber:
