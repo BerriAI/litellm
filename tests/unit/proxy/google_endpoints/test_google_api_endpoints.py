@@ -3,11 +3,14 @@
 Test to verify the Google GenAI proxy API endpoints
 """
 
+from collections.abc import Callable
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+from litellm.types.utils import TokenCountResponse
 
 
 def _build_test_client():
@@ -88,9 +91,7 @@ def test_google_stream_generate_content_endpoint():
         assert init_kwargs["data"]["_litellm_raw_sse_stream"] is True
         assert init_kwargs["data"]["_litellm_skip_openai_stream_done"] is True
         assert init_kwargs["data"]["model"] == "test-model"
-        assert init_kwargs["data"]["contents"] == [
-            {"role": "user", "parts": [{"text": "Hello"}]}
-        ]
+        assert init_kwargs["data"]["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
 
 
 def test_google_generate_content_data_flows_through_processor():
@@ -123,9 +124,7 @@ def test_google_generate_content_data_flows_through_processor():
         data = mock_init.call_args.kwargs["data"]
         assert data["model"] == "test-model"
         assert data["contents"] == [{"role": "user", "parts": [{"text": "Hello"}]}]
-        assert data["systemInstruction"] == {
-            "parts": [{"text": "Your name is Doodle."}]
-        }
+        assert data["systemInstruction"] == {"parts": [{"text": "Your name is Doodle."}]}
         # generationConfig arrives intact here; the rename to `config` is
         # done downstream in route_request (see test_route_llm_request).
         assert data["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
@@ -160,12 +159,17 @@ def test_google_count_tokens_unchanged():
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
-    fake_response = MagicMock()
-    fake_response.original_response = {
-        "totalTokens": 7,
-        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 7}],
-    }
-    fake_response.total_tokens = 7
+    fake_response = TokenCountResponse(
+        total_tokens=7,
+        request_model="test-model",
+        model_used="test-model",
+        tokenizer_type="gemini_api",
+        original_response={
+            "totalTokens": 7,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 7}],
+        },
+        count_source="provider",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.token_counter",
@@ -180,6 +184,7 @@ def test_google_count_tokens_unchanged():
         assert response.status_code == 200
         body = response.json()
         assert body["totalTokens"] == 7
+        assert body["litellm_count_source"] == "provider"
 
 
 def test_google_count_tokens_unexpected_failure_uses_the_google_error_envelope():
@@ -212,9 +217,14 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
     except ImportError as e:
         pytest.skip(f"Skipping test due to missing dependency: {e}")
 
-    fake_response: Final = MagicMock()
-    fake_response.original_response = {"input_tokens": 2167}
-    fake_response.total_tokens = 2167
+    fake_response: Final = TokenCountResponse(
+        total_tokens=2167,
+        request_model="claude-opus-4-8",
+        model_used="us.anthropic.claude-opus-5-5",
+        tokenizer_type="bedrock_api",
+        original_response={"input_tokens": 2167},
+        count_source="token_count_model",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.token_counter",
@@ -230,3 +240,81 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         body: Final = response.json()
         assert body["totalTokens"] == 2167
         assert body["promptTokensDetails"] == []
+        assert body["litellm_count_source"] == "token_count_model"
+        assert body["litellm_count_model"] == "us.anthropic.claude-opus-5-5"
+
+
+@pytest.mark.parametrize("path", ["/v1beta/models/count-log-claude:countTokens", "/models/count-log-claude:countTokens"])
+def test_google_count_tokens_logs_one_line_with_the_callers_call_id_model_and_count(
+    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]], path: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    claude: Final = {"model": "anthropic/claude-zeta-9", "api_key": "test-key", "api_base": "https://count-tokens.test"}
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-log-claude",
+                    "litellm_params": claude,
+                    "model_info": {"id": "count-log-gemini-deployment"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        anthropic_count_tokens_handler,
+        "get_async_httpx_client",
+        lambda *args, **kwargs: AsyncHTTPHandler(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"input_tokens": 77}, request=request)
+            )
+        ),
+    )
+
+    response: Final = _build_test_client().post(
+        path,
+        json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        headers={"x-litellm-call-id": "count-log-gemini"},
+    )
+
+    assert (response.status_code, response.json()["totalTokens"]) == (200, 77), response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-gemini",
+            "request_model": "count-log-claude",
+            "model_id": "count-log-gemini-deployment",
+            "model_used": "claude-zeta-9",
+            "input_tokens": 77,
+            "count_source": "provider",
+            "status_code": 200,
+        },
+    )
+
+
+def test_google_count_tokens_rejected_body_logs_the_400_it_answers(
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    response: Final = _build_test_client().post(
+        "/v1beta/models/count-log-claude:countTokens",
+        json={"contents": "not a list"},
+        headers={"x-litellm-call-id": "count-log-gemini-bad-body"},
+    )
+
+    assert response.status_code == 400, response.text
+    assert token_count_log_lines() == (
+        {
+            "litellm_call_id": "count-log-gemini-bad-body",
+            "request_model": "count-log-claude",
+            "model_id": None,
+            "model_used": None,
+            "input_tokens": None,
+            "count_source": None,
+            "status_code": 400,
+        },
+    )

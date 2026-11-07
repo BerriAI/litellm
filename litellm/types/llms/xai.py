@@ -1,5 +1,7 @@
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import Literal
+
+from typing_extensions import TypedDict
 
 
 @dataclass(frozen=True, slots=True)

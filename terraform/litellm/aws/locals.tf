@@ -11,6 +11,11 @@ locals {
   # the stack can reference local.name.
   name = "${var.tenant}-litellm-${var.env}"
 
+  gateway_image    = var.gateway_image != "" ? var.gateway_image : "${var.image_registry}/litellm-gateway:${var.image_tag}"
+  backend_image    = var.backend_image != "" ? var.backend_image : "${var.image_registry}/litellm-backend:${var.image_tag}"
+  ui_image         = var.ui_image != "" ? var.ui_image : "${var.image_registry}/litellm-ui:${var.image_tag}"
+  migrations_image = var.migrations_image != "" ? var.migrations_image : "${var.image_registry}/litellm-migrations:${var.image_tag}"
+
   # This is a reusable module — it declares no `provider` block, so the AWS
   # provider's `default_tags` is the caller's concern, not ours. To keep the
   # same per-resource tagging the stack had when it owned the provider, the

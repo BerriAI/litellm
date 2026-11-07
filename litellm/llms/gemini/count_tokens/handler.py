@@ -1,11 +1,13 @@
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
 from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, json_contains
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.utils import LlmProviders
 
@@ -25,8 +27,44 @@ class _GeminiCountTokensResponseRoot(RootModel[_GeminiCountTokensResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _KeywordArguments(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _subscript(value: object, key: str) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _item_assignment_target(value: object) -> _SupportsSetItem:
+    if isinstance(value, _SupportsSetItem):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _function_response_kwargs(value: object) -> _KeywordArguments:
+    if has_attributes(value, _KeywordArguments, "keys"):
+        return value
+    raise TypeError(
+        f"google.genai.types.FunctionResponse() argument after ** must be a mapping, not {type(value).__name__}"
+    )
+
+
 class GoogleAIStudioTokenCounter:
-    def _clean_contents_for_gemini_api(self, contents: Any) -> object:
+    def _clean_contents_for_gemini_api(self, contents: Sequence[Mapping[str, object]] | None) -> object:
         """
         Clean up contents to remove unsupported fields for the Gemini API.
 
@@ -51,12 +89,14 @@ class GoogleAIStudioTokenCounter:
 
         for content in cleaned_contents:
             parts = content["parts"]
-            for part in parts:
-                if "functionResponse" in part:
-                    function_response_data = part["functionResponse"]
-                    function_response_part = FunctionResponse(**function_response_data)
+            for part in iter_items(parts):
+                if json_contains(part, "functionResponse"):
+                    function_response_data = _subscript(part, "functionResponse")
+                    function_response_part = FunctionResponse(**_function_response_kwargs(function_response_data))
                     function_response_part.id = None
-                    part["functionResponse"] = function_response_part.model_dump(exclude_none=True)
+                    _item_assignment_target(part)["functionResponse"] = function_response_part.model_dump(
+                        exclude_none=True
+                    )
 
         return cleaned_contents
 
@@ -65,7 +105,7 @@ class GoogleAIStudioTokenCounter:
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
         base_url: Final = api_base or "https://generativelanguage.googleapis.com"
-        return f"{base_url}/v1beta/models/{model}:countTokens"
+        return join_api_base(base_url, f"v1beta/models/{model}:countTokens")
 
     def __init__(self, client: AsyncHTTPHandler | None = None) -> None:
         super().__init__()

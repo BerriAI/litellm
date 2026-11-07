@@ -237,7 +237,7 @@ async def test_native_aocr_failure_callbacks_receive_call_type_error_and_no_resp
     with pytest.raises(litellm.InternalServerError):
         await call_aocr(server, callbacks=[Observe()])
 
-    assert [observation[0] for observation in observations] == ["sync", "async"]
+    assert [observation[0] for observation in observations] == ["async"]
     assert all(observation[1] == "aocr" for observation in observations)
     assert all(isinstance(observation[2], litellm.InternalServerError) for observation in observations)
     assert all(observation[3] is None for observation in observations)
@@ -278,7 +278,7 @@ async def test_native_aocr_failure_callbacks_receive_state_added_by_pre_call_cal
     with pytest.raises(litellm.InternalServerError):
         await call_aocr(server, callbacks=[TrackInFlightRequest()])
 
-    assert [event for event, _ in observed] == ["sync", "async"]
+    assert [event for event, _ in observed] == ["async"]
     assert all(observed_token is token for _, observed_token in observed)
 
 
@@ -445,7 +445,7 @@ async def test_native_aocr_state_stashed_before_a_blocking_hook_raises_reaches_f
         await call_aocr(server)
     await drain_logging()
 
-    assert observed == [("sync", token, raised.value), ("async", token, raised.value)]
+    assert observed == [("async", token, raised.value)]
 
 
 @pytest.mark.asyncio

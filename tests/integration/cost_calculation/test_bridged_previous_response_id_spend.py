@@ -17,7 +17,7 @@ from integration._support.workers import cost_map_environment
 from integration.cost_calculation.cost_tracking_case import COST_MAP
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])

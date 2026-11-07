@@ -27,7 +27,7 @@ from integration.providers._tool_search_support import (
 )
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _ANTHROPIC_KEY: Final = "scripted-anthropic-key"
 _ANTHROPIC_BASE: Final = "http://api.anthropic.com"

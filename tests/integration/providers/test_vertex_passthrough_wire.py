@@ -41,12 +41,13 @@ from integration.providers._tool_search_support import (
 )
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _PROJECT: Final = "scripted-project"
 _TOKEN: Final = "scripted-vertex-token"
 _CALLER_GOOGLE_TOKEN: Final = "caller-google-token"
 _GEMINI_ROUTER_NAME: Final = "vertex-gemini-router"
+_REJECTED_BETA: Final = "files-api-2025-04-14"
 _REGIONAL: Final = "us-central1-aiplatform.googleapis.com:443"
 _GLOBAL: Final = "aiplatform.googleapis.com:443"
 _BYO: Final = "us-east5-aiplatform.googleapis.com:443"
@@ -239,6 +240,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                 },
             },
         ]
+        config["general_settings"] = {
+            **config["general_settings"],
+            "vertex_ai_pass_through_drop_anthropic_betas": [_REJECTED_BETA],
+        }
         path: Final = directory / "vertex-passthrough.yaml"
         path.write_text(yaml.safe_dump(config))
         environment: Final = {
@@ -564,3 +569,54 @@ def test_vertex_partner_stream_relays_a_tool_search_turn_verbatim_and_logs_it_on
             seconds=70,
         )
         assert rows[0]["status"] == "success", rows
+
+
+@pytest.mark.parametrize("alias", ["/vertex_ai", "/vertex-ai"])
+@pytest.mark.parametrize(
+    ("model_path", "caller_headers", "authority"),
+    [
+        pytest.param(
+            f"/v1/projects/{_PROJECT}/locations/global/publishers/anthropic/models/claude-sonnet-4-5",
+            {},
+            _GLOBAL,
+            id="use_in_pass_through",
+        ),
+        pytest.param(
+            "/v1/projects/byo-project/locations/us-east5/publishers/anthropic/models/claude-byo",
+            {"x-goog-api-key": _CALLER_GOOGLE_TOKEN},
+            _BYO,
+            id="caller-credentials",
+        ),
+    ],
+)
+def test_vertex_partner_call_drops_the_configured_anthropic_beta_and_forwards_the_rest_in_order(
+    rig: _Rig, alias: str, model_path: str, caller_headers: dict[str, str], authority: str
+) -> None:
+    body: Final[dict[str, JsonValue]] = {
+        "anthropic_version": "vertex-2023-10-16",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        response: Final = rig.proxy.client.post(
+            f"{alias}{model_path}:rawPredict",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "anthropic-beta": f"interleaved-thinking-2025-05-14, {_REJECTED_BETA} ,effort-2025-11-24",
+                **caller_headers,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _CLAUDE_REPLY, response.text
+        received: Final = rig.vertex.drain()
+        assert [(request.method, request.target) for request in received] == [("POST", f"{model_path}:rawPredict")], (
+            received
+        )
+        assert rig.tunnel.drain() == [authority]
+        upstream: Final = received[0]
+        assert upstream.headers["anthropic-beta"] == "interleaved-thinking-2025-05-14,effort-2025-11-24", (
+            upstream.headers
+        )
+        assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body

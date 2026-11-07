@@ -1,6 +1,8 @@
 import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { streamErrorMessage } from "@/utils/streamErrorMessage";
 import {
   buildPlaygroundHeaders,
   type CustomHeaders,
@@ -95,6 +97,11 @@ export async function makeInteractionsRequest(
           continue;
         }
 
+        const errorMessage = streamErrorMessage(event);
+        if (errorMessage !== null) {
+          throw new Error(errorMessage);
+        }
+
         const eventType = event.event_type as string | undefined;
 
         if (eventType === "interaction.created" || eventType === "interaction.completed") {
@@ -116,7 +123,7 @@ export async function makeInteractionsRequest(
     if (signal?.aborted) {
       throw error;
     }
-    toast.fromError(`Error occurred while making Interactions API request. Error: ${error}`);
+    toast.fromError(i18n.t("playground.llmCalls.interactionsApi.requestFailed", { error: String(error) }));
     throw error;
   }
 }

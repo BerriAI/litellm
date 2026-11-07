@@ -113,7 +113,7 @@ class MCPPublicServer(LiteLLMBaseModel):
     transport: MCPTransportType
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
-    mcp_info: dict[str, Any] | None = None
+    mcp_info: dict[str, object] | None = None
 
 
 class MCPAllowedClient(LiteLLMBaseModel):
@@ -448,11 +448,11 @@ class MCPPreCallRequestObject(LiteLLMBaseModel):
     """
 
     tool_name: str
-    arguments: dict[str, Any]
+    arguments: dict[str, object]
     server_name: str | None = None
     tool_description: str | None = None
     tool_input_schema: Mapping[str, object] | None = None
-    user_api_key_auth: dict[str, Any] | None = None
+    user_api_key_auth: dict[str, object] | None = None
     hidden_params: HiddenParams = HiddenParams()
 
 
@@ -462,7 +462,7 @@ class MCPPreCallResponseObject(LiteLLMBaseModel):
     """
 
     should_proceed: bool = True
-    modified_arguments: dict[str, Any] | None = None
+    modified_arguments: dict[str, object] | None = None
     error_message: str | None = None
     hidden_params: HiddenParams = HiddenParams()
 
@@ -473,7 +473,7 @@ class MCPDuringCallRequestObject(LiteLLMBaseModel):
     """
 
     tool_name: str
-    arguments: dict[str, Any]
+    arguments: dict[str, object]
     server_name: str | None = None
     tool_description: str | None = None
     tool_input_schema: Mapping[str, object] | None = None

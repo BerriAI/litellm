@@ -44,25 +44,23 @@ fn decode_reads_every_python_envelope(#[case] bytes: &[u8], #[case] response: Va
 #[case::non_utf8(vec![0xff, 0xfe])]
 #[case::deep_nesting(format!("{}None{}", "[".repeat(1000), "]".repeat(1000)).into_bytes())]
 fn decode_rejects_invalid_entries(#[case] bytes: Vec<u8>) {
-    assert_eq!(
-        ResponseCacheCodec.decode(&bytes).unwrap_err(),
-        Error::InvalidEntry
-    );
+    assert!(matches!(
+        ResponseCacheCodec.decode(&bytes),
+        Err(Error::InvalidEntry(_))
+    ));
 }
 
 #[rstest]
 #[case::nan(f64::NAN)]
 #[case::infinity(f64::INFINITY)]
 fn encode_rejects_non_finite_timestamps(#[case] timestamp: f64) {
-    assert_eq!(
-        ResponseCacheCodec
-            .encode(&CacheEntry {
-                timestamp: Some(timestamp),
-                response: json!({}),
-            })
-            .unwrap_err(),
-        Error::InvalidEntry
-    );
+    assert!(matches!(
+        ResponseCacheCodec.encode(&CacheEntry {
+            timestamp: Some(timestamp),
+            response: json!({}),
+        }),
+        Err(Error::InvalidEntry(_))
+    ));
 }
 
 #[rstest]

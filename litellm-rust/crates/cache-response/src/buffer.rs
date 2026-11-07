@@ -26,7 +26,7 @@ impl WriteBuffer {
         now: Duration,
     ) -> Result<(), Error> {
         let pending = {
-            let mut entries = self.entries.lock().map_err(|_| Error::Unavailable)?;
+            let mut entries = self.entries.lock()?;
             entries.push((request.clone(), response, now));
             (entries.len() >= self.flush_size).then(|| std::mem::take(&mut *entries))
         };
@@ -39,7 +39,7 @@ impl WriteBuffer {
     }
 
     pub fn clear(&self) -> Result<(), Error> {
-        self.entries.lock().map_err(|_| Error::Unavailable)?.clear();
+        self.entries.lock()?.clear();
         Ok(())
     }
 }

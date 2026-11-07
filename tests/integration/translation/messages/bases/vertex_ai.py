@@ -10,6 +10,7 @@ from integration.translation.templates.vertex_ai import (
 )
 
 GEMINI_3_5_FLASH_THOUGHT_SIGNATURE: Final = "AY89a1+kriNs9YsPegJQxgjTWsMlxsqPU/UkHDyz4EK+3FRrE52ygqPIHTvkblgKKiO5Fn8R9D3iu//i+YnuuZ+e7W0yxUoFScas89b5rn3vZHsihnUA7VTe3b7beth1IftteoTGZ3F8OSLrSIP8HKn4xTIx35eeNEt5oiD3K5rTQrdklqO277HvTDhu/LuZhZ0pzaWciGQEc61epIBBpC2ygu8V4L8TekUVZnz6qzSzxipdiQStQ8dZou43334hMnxOR6JjJCGxqt/1K+C0vXX6YP6f+Bph5VhPSnvy2Z1uApi3TUxAcsDDyVewIr+ha2G6DPhN1Oi5uZZNhmbvH01Uq5OOquF1uEICq2m/35LhJIbDNM9N7oI1Z6L94P9xdugeFXM2S7wdJfc8sdg09vEzNeA++GK25zRuB4hU7XyaG4XnWjmu2kswi4sf+EyrO/K0P2tb/ZCJu7kJTtWTiD1wgSIl1eqS8ORKKsXDN2hIbFrtsNR50WIvVzd6"
+CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE: Final = "CAQS4wYKEggSEAIYAjgBQgh0aGlua2luZxIMgzBnOw4aYVVqPKRPGgyphQhlJ0pt7tgasWIiMOWM4ATud/TWad7qo/Eh9ZSXhK3IcgnwdgqVeXog9D1q/y69qnyrHdN3a8RYUrAgtyr+BYkQvRW/cF0vH0l86vIM95N77usMXdZKRX3I8XW68KpQedYwFoR12sS9q7A24CcN5UMyQljcF76GhmAFnvpk4yEs7pk8b7ZRSXzBsU6wJfMYCoGXC9r3hZN8m4sBHLJGJRv5ekzEVGVvGCYooE1fBZ8ik/j2DCNOyVdDs4/7xzkqRo7dgFsNJI9Nm7+HgwEdvb1rORObJWooeYb8tfofTFVO43qvNdvM2p2d1Dcf6lsQmvE5fgDFc0t75AuvSZUrgDNe2bMXd2USxxL9YtJ1I9ae96hZAnyOqYZlyiuZf5lZtQQSRouVIdZvFUNonOHLy/Uyw/BGF2bO1/5rIFJBDJC8C6BpbyfDQPpal4YkALulDdgeJWI6dmJYUiK+A+3zcVgQh7at5JPbG5n0tQgO2IFkayqLjCf67AaGS6Xq8J97F+FSwppKvS0TvRbTEvIK1iO3HZZRwcRIcFBn5Llvv6R9JFknXEtohUqvfTnZfuPQ104vxqm91G2rFK1R6C1md6Ze3pJWD0wgkgZyQ7PIKsAmBF1qNoniFi5GVRJx6XHSzr4ZAPDDO1aYABIRl5OWilrkQP3xedj5pcAjJqFuto3cXlhQSNUrocOpEV5IIXxSJc5g5VwYAybpMU4FVImzkCJGJaHLWQKRo0k4IcvXLxBPNXZhop2CkEeazZskF4de0jn1dJa3sQ9rT+7fNVEWPvP+lkBqu/lfObBPVh5jGeouDrRcJvyeYKNZ0NQBdznM5rv4rN8HczeYg1WaYuNOMBvkqT5Zg/UhLHhHV7NWBSa0zt9DPevU/S3OBR1E0YIzCtPFTa0Ia4gGTX40hEc+supCA3h4HpehqMqETGe++Ah+U10HRhlb6lVfRhkU0ypdPqtpodgw/OdUOy7f3/sc31xknudQMoEQqv48F4gR34ee18Op+w1MGn0FAzAFE95D2BuJObRqUhZ6N6nWtlWOqJjCPR+0OrwR3JlxWh19Vxps/ASL6HaJKjClVG2ffojvmVnY8aHjEfI8ifbHE6EYAQ=="
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -481,6 +482,106 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 257,
             "output_tokens_details": {"thinking_tokens": 159},
+        },
+    },
+)
+
+
+CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={**MESSAGES_REQUEST, "model": "vertex_ai/claude-haiku-5-5@default"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-haiku-5-5@default:rawPredict",
+    expected_provider_headers={"authorization": "Bearer scripted-token", "content-type": "application/json"},
+    expected_provider_request={
+        **VERTEX_AI_ANTHROPIC_MESSAGES_REQUEST,
+        "messages": MESSAGES_REQUEST["messages"],
+        "stream": False,
+        "system": [
+            {
+                "type": "text",
+                "text": (
+                    "You help maintain a synthetic Python project. Read the relevant files before suggesting a fix. "
+                    "Explain which file you need next, then call a read-only tool. Never change files. Use the messages "
+                    "client for this project review. Consider zero, negative and non-integer quantities before choosing "
+                    "the next file to inspect."
+                ),
+            },
+        ],
+        "tools": MESSAGES_REQUEST["tools"],
+    },
+    mock_provider_response={
+        **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-haiku-5-5",
+        "id": "msg_vrtx_011Cg8BfjWDUi4ZYQxpy6aVM",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I found validate_quantity defined around line 18, so I'll read the validation.py file from the start "
+                    "through roughly line 60 to capture the full context, keeping in mind I'll need to check how it handles "
+                    "zero, negative, and non-integer cases.\n\n"
+                ),
+                "signature": CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE,
+            },
+            {
+                "type": "text",
+                "text": (
+                    "I'll read `shop/validation.py` first. The search put `validate_quantity` at line 18, so I'll start "
+                    "there and include the lines around it to see how zero, negative, and non-integer values are handled."
+                ),
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01YSY1kAV4ayCLVdBJkSv4dt",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 292,
+            "output_tokens_details": {"thinking_tokens": 129},
+        },
+    },
+    expected_litellm_response={
+        **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "vertex_ai/claude-haiku-5-5@default",
+        "id": "msg_vrtx_011Cg8BfjWDUi4ZYQxpy6aVM",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I found validate_quantity defined around line 18, so I'll read the validation.py file from the start "
+                    "through roughly line 60 to capture the full context, keeping in mind I'll need to check how it handles "
+                    "zero, negative, and non-integer cases.\n\n"
+                ),
+                "signature": CLAUDE_HAIKU_5_5_MESSAGES_THINKING_SIGNATURE,
+            },
+            {
+                "type": "text",
+                "text": (
+                    "I'll read `shop/validation.py` first. The search put `validate_quantity` at line 18, so I'll start "
+                    "there and include the lines around it to see how zero, negative, and non-integer values are handled."
+                ),
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01YSY1kAV4ayCLVdBJkSv4dt",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 292,
+            "output_tokens_details": {"thinking_tokens": 129},
         },
     },
 )

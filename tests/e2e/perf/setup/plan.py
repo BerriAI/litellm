@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Final, Literal, TypeVar
 
 from setup.performance_test_case import Endpoint, PerformanceTestCase, RequestShape, Team
+from setup.ramp import send_offsets
 
 Flag = Literal["n", "i", "b"]
 CallerKind = Literal["jwt", "key"]
@@ -39,6 +40,7 @@ class PlannedRequest:
     flag: Flag
     shape: RequestShape
     input_tokens: int
+    send_at_s: float | None = None
 
     @property
     def blocked(self) -> bool:
@@ -98,6 +100,7 @@ def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
     case.validate()
     rng: Final = random.Random(case.traffic.seed)
     callers: Final = _callers_by_group(case)
+    offsets: Final = None if case.traffic.ramp is None else send_offsets(case.traffic.ramp, case.traffic.seed)
     planned: list[PlannedRequest] = []
     for seq in range(1, case.traffic.total_requests + 1):
         endpoint = _pick(rng, case.traffic.endpoints)
@@ -117,6 +120,7 @@ def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
                 flag=flag,
                 shape=shape,
                 input_tokens=rng.randint(low, high),
+                send_at_s=None if offsets is None else offsets[seq - 1],
             )
         )
     return tuple(planned)

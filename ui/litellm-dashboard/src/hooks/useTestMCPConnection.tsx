@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { testMCPToolsListRequest } from "../components/networking";
 import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT, isClientForwardedTokenMode } from "@/components/mcp_tools/types";
 
@@ -49,6 +50,7 @@ export const useTestMCPConnection = ({
   enabled = true,
   requiresAuthValue = false,
 }: UseTestMCPConnectionProps): UseTestMCPConnectionReturn => {
+  const { t } = useTranslation();
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
@@ -173,7 +175,7 @@ export const useTestMCPConnection = ({
           setHasShownSuccessMessage(true);
         }
       } else {
-        const errorMessage = toolsResponse.message || "Failed to retrieve tools list";
+        const errorMessage = toolsResponse.message || t("mcpServers.useTestMcpConnection.errors.toolsListFailed");
         setToolsError(errorMessage);
         setToolsErrorStatus(typeof toolsResponse.status === "number" ? toolsResponse.status : null);
         setToolsErrorStackTrace(toolsResponse.status === 403 ? null : toolsResponse.stack_trace || null);

@@ -9,6 +9,7 @@ httpx.MockTransport, so no network is touched and nothing is monkeypatched.
 
 import asyncio
 import hashlib
+from typing import Final
 
 import httpx
 import pytest
@@ -20,6 +21,7 @@ from litellm.proxy.auth.password_policy import (
     MIN_ALLOWED_LENGTH,
     PasswordPolicy,
     get_password_policy,
+    is_password_breached,
     validate_password_not_breached,
     validate_password_policy,
     validate_passwords_bulk,
@@ -176,6 +178,18 @@ async def test_breach_check_skipped_when_disabled():
         password="password12345",  # breached in reality, but the check is off
         general_settings={"password_policy_check_breached_passwords": False},
         client=_client_never_called(),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_breach_check_skipped_in_offline_mode(monkeypatch):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+    password = "correct horse battery staple"
+    result = await validate_password_not_breached(
+        password=password,
+        general_settings={},
+        client=_client_returning(f"{_sha1_upper(password)[5:]}:42"),
     )
     assert result is None
 
@@ -343,3 +357,10 @@ async def test_validate_passwords_bulk_mixed_verdicts():
 async def test_validate_passwords_bulk_empty_batch_makes_no_lookups():
     verdicts = await validate_passwords_bulk((), {}, client=_client_never_called())
     assert verdicts == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_mode_keeps_the_breach_check() -> None:
+    client_says_breached: Final = _client_returning(f"{_sha1_upper(STRONG_PASSWORD)[5:]}:1387")
+    assert await is_password_breached(STRONG_PASSWORD, {}, client_says_breached) is True

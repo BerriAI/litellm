@@ -507,11 +507,12 @@ def get_text_external(
     ca_bundle: str | None = None,
 ) -> str | NetworkError:
     """GET an absolute URL outside the proxy whose body is plain text (e.g. a pod log), not JSON.
-    A non-2xx status is reported as a NetworkError so the caller can fail loudly."""
+    A non-2xx status is reported as a NetworkError so the caller can fail loudly. JSON is accepted too so an API
+    that answers an error as a JSON document (the Kubernetes Status on a pod log) returns that error instead of a 406."""
     try:
         resp = requests.get(
             url,
-            headers={"Accept": "text/plain", **(_headers(headers) if headers is not None else {})},
+            headers={"Accept": "text/plain, application/json", **(_headers(headers) if headers is not None else {})},
             timeout=timeout,
             verify=ca_bundle if ca_bundle is not None else True,
         )

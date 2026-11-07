@@ -36,7 +36,7 @@ from tests.integration.cost_calculation.cost_tracking_case import RealtimeRespon
 
 RecordProperty = Callable[[str, object], None]
 
-pytestmark: Final = pytest.mark.timeout(180)
+pytestmark: Final = [pytest.mark.timeout(180), pytest.mark.shares_worker_state]
 
 TRANSCRIBE_MODEL: Final = "gpt-live-transcribe"
 SECOND_TRANSCRIBE_MODEL: Final = "gpt-live-transcribe-second"
