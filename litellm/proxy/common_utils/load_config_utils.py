@@ -48,9 +48,9 @@ def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:
         import boto3
         from botocore.credentials import Credentials
 
-        from litellm.main import bedrock_converse_chat_completion
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-        credentials: Final[Credentials] = bedrock_converse_chat_completion.get_credentials()
+        credentials: Final[Credentials] = BaseAWSLLM().get_credentials()
         s3_client: Final = boto3.client(
             "s3",
             aws_access_key_id=credentials.access_key,

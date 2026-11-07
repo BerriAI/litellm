@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,
     parse_control_options,
     stored_control_options,
+    with_aws_credential_fallbacks,
 )
 from litellm.types.litellm_params import ControlOptions
 from litellm.utils import get_non_default_completion_params
@@ -559,3 +560,24 @@ class TestOpenAIWifKeys:
         params = get_litellm_params()
         for key in self.THREE_KEYS:
             assert key not in params
+
+
+def test_aws_credential_fallbacks_only_fill_credentials_optional_params_leave_unset():
+    merged = with_aws_credential_fallbacks(
+        {"temperature": 0.2, "aws_region_name": "us-west-2", "aws_profile_name": None},
+        {
+            "aws_role_name": "arn:aws:iam::000000000000:role/attributed",
+            "aws_session_name": "user-123",
+            "aws_region_name": "us-east-1",
+            "aws_profile_name": "from-deployment",
+            "api_key": "not-an-aws-param",
+        },
+    )
+
+    assert dict(merged) == {
+        "temperature": 0.2,
+        "aws_region_name": "us-west-2",
+        "aws_profile_name": "from-deployment",
+        "aws_role_name": "arn:aws:iam::000000000000:role/attributed",
+        "aws_session_name": "user-123",
+    }

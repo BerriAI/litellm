@@ -20,7 +20,7 @@ class TestGetFileContentsFromS3:
     """Test suite for S3 config loading functionality."""
 
     @patch("boto3.client")
-    @patch("litellm.main.bedrock_converse_chat_completion")
+    @patch("litellm.llms.bedrock.base_aws_llm.BaseAWSLLM.get_credentials")
     @patch("yaml.safe_load")
     def test_get_file_contents_from_s3_no_temp_file_creation(
         self, mock_yaml_load, mock_bedrock, mock_boto3_client
@@ -38,7 +38,7 @@ class TestGetFileContentsFromS3:
         mock_credentials.access_key = "test_access_key"
         mock_credentials.secret_key = "test_secret_key"
         mock_credentials.token = "test_token"
-        mock_bedrock.get_credentials.return_value = mock_credentials
+        mock_bedrock.return_value = mock_credentials
 
         # Mock S3 client and response
         mock_s3_client = MagicMock()

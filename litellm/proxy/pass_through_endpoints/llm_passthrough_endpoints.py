@@ -1614,8 +1614,7 @@ async def bedrock_proxy_route(
             detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
         )
 
-    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
-    from litellm.llms.bedrock.chat import BedrockConverseLLM
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
 
     aws_region_name: Final = await run_aws_signing(get_secret_str, secret_name="AWS_REGION_NAME")
     base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
@@ -1632,7 +1631,7 @@ async def bedrock_proxy_route(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
-    bedrock_llm: Final = BedrockConverseLLM()
+    bedrock_llm: Final = BaseAWSLLM()
     # Assuming the body contains JSON data, parse it
     try:
         data: Final = await _json_request_body(request)

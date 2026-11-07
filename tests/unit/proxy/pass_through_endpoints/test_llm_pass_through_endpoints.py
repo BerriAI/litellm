@@ -2245,7 +2245,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
                 return_value="us-east-1",
             ),
-            patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
+            patch("litellm.llms.bedrock.base_aws_llm.BaseAWSLLM", return_value=bedrock_llm),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
                 Mock(),

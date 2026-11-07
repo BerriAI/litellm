@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.utils import TokenCountResponse
 
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
@@ -258,7 +259,7 @@ from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from .llms.azure_ai.embed import AzureAIEmbedding
-from .llms.bedrock.chat import BedrockConverseLLM
+from .llms.bedrock.chat.converse_runtime import AmazonConverseRuntimeConfig
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import AmazonAnthropicClaudeConfig
 from .llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, call_with_native_output_fallback
@@ -364,7 +365,6 @@ azure_audio_transcriptions: Final = AzureAudioTranscription()
 huggingface_embed: Final = HuggingFaceEmbedding()
 predibase_chat_completions: Final = PredibaseChatCompletion()
 codestral_text_completions: Final = CodestralTextCompletion()
-bedrock_converse_chat_completion: Final = BedrockConverseLLM()
 bedrock_embedding: Final = BedrockEmbedding()
 bedrock_image_generation = BedrockImageGeneration()
 bedrock_image_edit = BedrockImageEdit()
@@ -4421,10 +4421,8 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
     client: Final = _dispatch_client_http(ctx)
-    custom_prompt_dict = ctx.custom_prompt_dict
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
-    logger_fn: Final = ctx.logger_fn
     logging: Final = ctx.logging
     messages: Final = ctx.messages
     model = ctx.model
@@ -4434,8 +4432,6 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
-
-    custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
     if "aws_bedrock_client" in optional_params:
         verbose_logger.warning(
@@ -4488,24 +4484,29 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
     elif bedrock_route == "converse":
         model = without_bedrock_route_prefix(model)
         converse_model: Final = model
+        converse_headers: Final = update_headers_with_filtered_beta(
+            headers=dict(headers or {}), provider="bedrock_converse"
+        )
 
         def converse_attempt(fallback: NativeOutputFallback | None) -> NativeOutputAttemptResult:
-            return bedrock_converse_chat_completion.completion(
+            return base_llm_http_handler.completion(
                 model=converse_model,
+                stream=stream,
                 messages=messages,
-                custom_prompt_dict=custom_prompt_dict,
+                acompletion=acompletion,
+                api_base=api_base,
                 model_response=model_response,
                 optional_params=optional_params if fallback is None else dict(fallback.optional_params),
                 litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
-                logger_fn=logger_fn,
-                encoding=_get_encoding(),
-                logging_obj=logging,
-                extra_headers=headers,  # Use merged headers instead of original extra_headers
+                shared_session=shared_session,
+                custom_llm_provider="bedrock",
                 timeout=_native_output_attempt_timeout(ctx, fallback),
-                acompletion=acompletion,
-                client=client,
-                api_base=api_base,
+                headers=dict(converse_headers),
+                encoding=_get_encoding(),
                 api_key=api_key,
+                logging_obj=logging,
+                client=client,
+                provider_config=AmazonConverseRuntimeConfig(),
             )
 
         converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
