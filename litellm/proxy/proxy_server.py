@@ -173,7 +173,6 @@ from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
-    strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -19265,7 +19264,7 @@ async def async_queue_request(
         logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         data["metadata"]["user_api_key"] = logged_api_key
         data["metadata"]["user_api_key_hash"] = logged_api_key
-        data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
+        data["metadata"].update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
         _headers: Final = safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
