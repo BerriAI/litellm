@@ -53,6 +53,12 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `pdb.maxUnavailable`        | Maximum number/percentage of pods that can be unavailable during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable)                                                                                                    | `null`                    |
 | `pdb.annotations`           | Extra metadata annotations to add to the PDB                                                                                                                                                                                                  | `{}`                      |
 | `pdb.labels`                | Extra metadata labels to add to the PDB                                                                                                                                                                                                       | `{}`                      |
+| `serviceMonitor.enabled`    | Create a Prometheus Operator ServiceMonitor                                                                                                                                                                                                   | `false`                   |
+| `serviceMonitor.scheme` | Scrape protocol. Authenticated scrapes require `https` | `http` |
+| `serviceMonitor.tlsConfig` | Prometheus Operator TLS settings for the scrape endpoint | `{}` |
+| `serviceMonitor.authSecret.enabled` | Configure bearer authorization for metrics scraping from an existing Kubernetes Secret. Requires `serviceMonitor.scheme: https` | `false` |
+| `serviceMonitor.authSecret.name` | Name of the existing Secret containing a valid LiteLLM key                                                                                                                                                                                | `""`                      |
+| `serviceMonitor.authSecret.key` | Key within the existing Secret that contains the LiteLLM key                                                                                                                                                                             | `""`                      |
 
 | `billingMetrics.enabled`    | Enable enterprise billable-request metering. Requires an enterprise license.                                                                                                                                                                  | `false`                   |
 | `billingMetrics.endpoint`   | Collector that the billable-request counter is pushed to.                                                                                                                                                                                    | `https://telemetry.litellm.ai` |
@@ -106,6 +112,53 @@ data:
   AZURE_OPENAI_API_KEY: TXlTZWN1cmVLM3k=
 type: Opaque
 ```
+
+#### Authenticated Prometheus scraping
+
+The proxy's `/metrics/` endpoint requires authentication by default when proxy authentication is configured. This option is for `metricsServer.enabled: false`, the default. The separate metrics server does not use virtual-key authentication
+
+Authenticated scraping requires `serviceMonitor.scheme: https`. The chart rejects authenticated HTTP scrapes. Configure TLS on the pod's scrape port, either on the proxy or a TLS sidecar, before enabling authentication. Ingress TLS does not protect this direct scrape path. Use `serviceMonitor.tlsConfig` for the Prometheus Operator's [TLS settings](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.SafeTLSConfig), including a trusted CA and the certificate's server name. Keep certificate verification enabled
+
+As a proxy administrator, create a dedicated internal user and a key restricted to the metrics routes. Set `LITELLM_URL` to your proxy URL and `LITELLM_MASTER_KEY` to its administrator credential, then run:
+
+```bash
+curl --fail --silent --show-error "$LITELLM_URL/user/new" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"prometheus-metrics","user_role":"internal_user","auto_create_key":false}'
+
+METRICS_KEY="$(curl --fail --silent --show-error "$LITELLM_URL/key/generate" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"prometheus-metrics","key_alias":"prometheus","allowed_routes":["/metrics","/metrics/"]}' \
+  | jq --exit-status --raw-output .key)"
+
+printf '%s' "$METRICS_KEY" | kubectl --namespace YOUR_RELEASE_NAMESPACE \
+  create secret generic litellm-prometheus-key --from-file=token=/dev/stdin
+unset METRICS_KEY
+```
+
+The Secret must be in the ServiceMonitor namespace and contain the raw key, without a `Bearer ` prefix. The Prometheus Operator must have permission to read it. Reference that Secret in the chart:
+
+```
+serviceMonitor:
+  enabled: true
+  scheme: https
+  tlsConfig:
+    serverName: litellm.monitoring.svc
+    ca:
+      secret:
+        name: litellm-metrics-ca
+        key: ca.crt
+  authSecret:
+    enabled: true
+    name: litellm-prometheus-key
+    key: token
+```
+
+Replace the server name with the name in your scrape endpoint's certificate and create `litellm-metrics-ca` in the ServiceMonitor namespace with the issuing CA certificate in `ca.crt`. Omit `tlsConfig` when the endpoint's certificate is already trusted and matches the scrape target's name. Setting the scheme does not enable a TLS listener on the proxy
+
+The chart does not generate or rotate the LiteLLM key. Keep the key valid and update the Secret when rotating it. If unauthenticated metrics are acceptable for your deployment, leave `authSecret.enabled` set to `false` and set `litellm_settings.require_auth_for_metrics_endpoint: false` in `proxy_config`
 
 #### Enterprise billable-request metering
 
