@@ -431,6 +431,10 @@ def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Respons
 _CONTEXT_LIMIT_OVERFLOW: Final = re.compile(r"exceed context limit: (\d+) \+ \d+ > (\d+)")
 
 
+def _first_max_tokens(*candidates: object) -> int:
+    return next((candidate for candidate in candidates if isinstance(candidate, int)), 1024)
+
+
 class _ThinkingBudget(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -6193,20 +6197,18 @@ class BaseLLMHTTPHandler:
         }
         full_model_name: Final = agentic_view["agentic_loop_params"].get("model", model)
 
-        optional_params: Final = dict(anthropic_messages_optional_request_params)
+        optional_params: Final = _JSON_OBJECT.validate_python(anthropic_messages_optional_request_params)
         optional_params.update(patch.optional_params)
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
 
-        max_tokens = patch.max_tokens
-        if max_tokens is None:
-            max_tokens = cast(int | None, optional_params.pop("max_tokens", None))
-        else:
-            optional_params.pop("max_tokens", None)
-        if max_tokens is None:
-            max_tokens = cast(
-                int, kwargs.get("max_tokens", agentic_view["agentic_loop_params"].get("max_tokens", 1024))
-            )
+        optional_max_tokens: Final = optional_params.pop("max_tokens", None)
+        max_tokens: Final = _first_max_tokens(
+            patch.max_tokens,
+            optional_max_tokens,
+            _OPTIONAL_PARAMS.validate_python(kwargs).get("max_tokens"),
+            agentic_view["agentic_loop_params"].get("max_tokens"),
+        )
 
         internal_keys: Final = {"litellm_logging_obj"}
         kwargs_for_followup: Final = {
