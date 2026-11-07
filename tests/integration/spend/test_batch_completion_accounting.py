@@ -10,11 +10,11 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows, scratch_database
-from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
-from integration._support.upstream import delete_scenario, register_scenario
+from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from tests.integration._support.database import read_rows, scratch_database
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
@@ -430,3 +430,222 @@ def test_batch_reconciliation_delivers_each_configured_logger_once(gateway: Gate
                 BATCH_PROMPT_TOKENS,
                 BATCH_COMPLETION_TOKENS,
             )
+
+
+def test_batch_end_user_budget_enforcement_and_isolation(gateway: Gateway) -> None:
+    """
+    Regression test for #49202:
+    Validates end-to-end attribution, budget enforcement, identity isolation,
+    and observation immutability for asynchronous batch operations.
+
+    Verifies:
+    1. Positive Attribution & Enforcement: Customer A's batch spend settles to
+       LiteLLM_EndUserTable, and subsequent calls for A are denied with budget_exceeded.
+    2. Identity Isolation: Customer B on the same API key runs a separate batch;
+       its charge settles to B's record without cross-contaminating A, and B remains unblocked.
+    3. Creation vs Observation Immutability: Retrieving Customer A's completed batch
+       using a different key does not overwrite the stored creator attribution.
+    4. Replay Idempotency: Subsequent retrievals / poll cycles do not double-bill Customer A.
+    """
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"batch-end-user-{uuid.uuid4().hex[:12]}"
+        handle: Final = register_scenario(scenario_id, batch_routes("gpt-4o-mini"))
+        scenario.cleanups.callback(delete_scenario, handle)
+
+        model: Final = scenario.model(
+            api_base=handle.api_base(),
+            input_cost_per_token=INPUT_COST_PER_TOKEN,
+            output_cost_per_token=OUTPUT_COST_PER_TOKEN,
+        )
+        key: Final = scenario.key(models=[model])
+        viewer_key: Final = scenario.key(models=[model])
+
+        # 1. Setup Customer A (low budget: 0.001) and Customer B (ample budget: 10.0)
+        user_a: Final = f"user-a-{uuid.uuid4().hex[:8]}"
+        gateway.post("/customer/new", {"user_id": user_a, "max_budget": 0.001})
+
+        user_b: Final = f"user-b-{uuid.uuid4().hex[:8]}"
+        gateway.post("/customer/new", {"user_id": user_b, "max_budget": 10.0})
+
+        # 2. Upload batch input file for Customer A
+        file_a_resp: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": model},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
+            key=key,
+        )
+        assert file_a_resp.status_code == 200, file_a_resp.text
+        file_a_id: Final = string_value(JSON_OBJECT.validate_json(file_a_resp.content)["id"])
+
+        # 3. Create batch for Customer A
+        batch_a_resp: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": file_a_id,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": model,
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_a},
+        )
+        assert batch_a_resp.status_code == 200, batch_a_resp.text
+        batch_a_id: Final = string_value(JSON_OBJECT.validate_json(batch_a_resp.content)["id"])
+
+        # 4. Wait for Customer A batch completion
+        retrieval_a: Final = gateway.request("GET", f"/v1/batches/{batch_a_id}", key=key)
+        assert retrieval_a.status_code == 200, retrieval_a.text
+        assert retrieval_a.json()["status"] == "completed", retrieval_a.text
+
+        # 5. Verify CheckBatchCost settlement for Customer A in LiteLLM_EndUserTable
+        user_a_spend_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s',
+                (user_a,),
+            ),
+            lambda values: len(values) == 1 and float(str(values[0]["spend"])) > 0.001,
+            seconds=70,
+        )
+        spend_a_initial: Final = float(str(user_a_spend_rows[0]["spend"]))
+        assert spend_a_initial > 0.001, f"Expected spend for {user_a}"
+
+        # 6. Customer A subsequent request must be denied due to exceeded budget
+        denied_a: Final = gateway.request(
+            "POST",
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_a},
+        )
+        assert denied_a.status_code in [400, 422], denied_a.text
+        assert "budget" in denied_a.text.lower(), denied_a.text
+
+        # 7. Customer B creates and settles their own batch using the SAME API key
+        file_b_resp: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": model},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
+            key=key,
+        )
+        assert file_b_resp.status_code == 200, file_b_resp.text
+        file_b_id: Final = string_value(JSON_OBJECT.validate_json(file_b_resp.content)["id"])
+
+        batch_b_resp: Final = gateway.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": file_b_id,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": model,
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_b},
+        )
+        assert batch_b_resp.status_code == 200, batch_b_resp.text
+        batch_b_id: Final = string_value(JSON_OBJECT.validate_json(batch_b_resp.content)["id"])
+
+        retrieval_b: Final = gateway.request("GET", f"/v1/batches/{batch_b_id}", key=key)
+        assert retrieval_b.status_code == 200, retrieval_b.text
+        assert retrieval_b.json()["status"] == "completed", retrieval_b.text
+
+        # 8. Verify Customer B's batch settled to B's record
+        user_b_spend_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s',
+                (user_b,),
+            ),
+            lambda values: len(values) == 1 and float(str(values[0]["spend"])) > 0,
+            seconds=70,
+        )
+        assert len(user_b_spend_rows) == 1
+
+        # Assert no cross-contamination: Customer A's spend did not absorb B's batch
+        spend_a_current: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert spend_a_current == spend_a_initial, "Customer A spend must not change when Customer B runs a batch"
+
+        # Customer B is NOT budget-denied (has ample budget)
+        b_request: Final = gateway.request(
+            "POST",
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_b},
+        )
+        assert b_request.status_code != denied_a.status_code or "budget" not in b_request.text.lower()
+
+        # 9. Creation vs Observation Immutability: Assert stored creator attribution before and after viewer read
+        creator_before: Final = read_rows(
+            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s',
+            (batch_a_id,),
+        )[0]["end_user_id"]
+        assert creator_before == user_a, f"Expected creator {user_a}, got {creator_before}"
+
+        # Retrieve Customer A's batch using an alternate authorized key
+        retrieval_by_viewer: Final = gateway.request("GET", f"/v1/batches/{batch_a_id}", key=viewer_key)
+        assert retrieval_by_viewer.status_code == 200, retrieval_by_viewer.text
+
+        # Invariant 3: Unified Object Table creator immutability
+        creator_after: Final = read_rows(
+            'SELECT end_user_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s',
+            (batch_a_id,),
+        )[0]["end_user_id"]
+        assert creator_after == user_a, "Observation must not overwrite stored creator end_user_id"
+
+        # 10. Replay / Single Billing Control: Scoped to Batch A settlement identity (Exactly-Once)
+        a_spend_logs: Final = read_rows(
+            'SELECT spend, end_user FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\' AND end_user=%s',
+            (sha256(key.encode()).hexdigest(), user_a),
+        )
+        assert len(a_spend_logs) == 1, f"Expected exactly 1 spend log for Batch A, got {len(a_spend_logs)}"
+
+        # Verify batch_processed is marked True on ManagedObjectTable
+        batch_a_processed: Final = read_rows(
+            'SELECT batch_processed FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s',
+            (batch_a_id,),
+        )[0]["batch_processed"]
+        assert bool(batch_a_processed) is True, "batch_processed must be True after completion"
+
+        current_a_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert current_a_spend == spend_a_initial, "Customer A must be billed exactly once"
+
+        # --- POST-SETTLEMENT OBSERVATION IDEMPOTENCY ---
+        # Verify that subsequent read/GET requests on a terminal batch do not trigger billing side effects
+        re_retrieve: Final = gateway.request(
+            "GET",
+            f"/batches/{batch_a_id}",
+            key=key,
+        )
+        assert re_retrieve.status_code == 200, re_retrieve.text
+
+        # Verify spend logs count remains strictly 1 (GET observation does not append spend rows)
+        post_observation_spend_logs: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=\'aretrieve_batch\' AND end_user=%s',
+            (sha256(key.encode()).hexdigest(), user_a),
+        )
+        assert len(post_observation_spend_logs) == 1, "Observation side-effect: duplicate spend row appended on terminal batch GET"
+
+        # Verify EndUserTable spend has not incremented
+        post_observation_spend: Final = float(str(read_rows('SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_a,))[0]["spend"]))
+        assert post_observation_spend == current_a_spend, f"Observation side-effect: spend increased from {current_a_spend} to {post_observation_spend}"
+
+        # Verify Customer A remains strictly budget-denied
+        recheck_denied: Final = gateway.request(
+            "POST",
+            "/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            key=key,
+            headers={"x-litellm-end-user-id": user_a},
+        )
+        assert recheck_denied.status_code in [400, 422], recheck_denied.text
+        assert "budget" in recheck_denied.text.lower(), recheck_denied.text
