@@ -180,13 +180,6 @@ class UsageAlertModelList(BaseModel, frozen=True):
     end_date: date
 
 
-class UsageAlertNotification(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    incident: UsageAlert
-    rule: UsageAlertRule
-    pending_channels: tuple[UsageAlertChannel, ...]
-
-
 class UsageAlertObservation(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
     entity_id: str | None

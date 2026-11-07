@@ -19,7 +19,6 @@ from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS
 from litellm.types.proxy.usage_alerts import (
     UsageAlert,
-    UsageAlertChannel,
     UsageAlertDefaultSummary,
     UsageAlertEvaluationStatus,
     UsageAlertGroup,
@@ -31,7 +30,6 @@ from litellm.types.proxy.usage_alerts import (
     UsageAlertMetric,
     UsageAlertModelList,
     UsageAlertModelOption,
-    UsageAlertNotification,
     UsageAlertObservation,
     UsageAlertRule,
     UsageAlertRuleInput,
@@ -90,11 +88,6 @@ class _ResourceLabel(BaseModel, frozen=True):
 
 class _ModelIdentity(BaseModel, frozen=True):
     model: str
-
-
-class _Pending(_Record, frozen=True):
-    rule: Mapping[str, object]
-    notified_channels: tuple[UsageAlertChannel, ...]
 
 
 class _Ownership(BaseModel, frozen=True):
@@ -699,36 +692,6 @@ class UsageAlertsRepository:
             )
         )
         return tuple(UsageAlert.model_validate(row.record) for row in rows)
-
-    async def pending_notifications(self, limit: int = 100) -> tuple[UsageAlertNotification, ...]:
-        rows: Final = TypeAdapter(tuple[_Pending, ...]).validate_python(
-            await self.database.query_raw(
-                """SELECT i.record,r.record AS rule,i.notified_channels FROM "LiteLLM_UsageAlertIncident" i JOIN "LiteLLM_UsageAlertRule" r ON r.id=i.rule_id
-            WHERE i.status='open' AND r.enabled AND NOT r.deleted AND EXISTS (
-                SELECT 1 FROM jsonb_array_elements_text(r.record->'notification_channels') channel WHERE NOT (channel=ANY(i.notified_channels)))
-            ORDER BY i.updated_at,i.id LIMIT $1""",
-                limit,
-            )
-        )
-        return tuple(
-            UsageAlertNotification(
-                incident=UsageAlert.model_validate(row.record),
-                rule=UsageAlertRule.model_validate(row.rule),
-                pending_channels=tuple(
-                    channel
-                    for channel in UsageAlertRule.model_validate(row.rule).notification_channels
-                    if channel not in row.notified_channels
-                ),
-            )
-            for row in rows
-        )
-
-    async def mark_notified(self, incident_id: str, channel: UsageAlertChannel) -> None:
-        await self.database.query_raw(
-            'UPDATE "LiteLLM_UsageAlertIncident" SET notified_channels=array_append(notified_channels,$2::text) WHERE id=$1 AND NOT ($2::text=ANY(notified_channels)) RETURNING id',
-            incident_id,
-            channel,
-        )
 
     async def prune(self, retention_days: int = 90, limit: int = 500) -> None:
         await self.database.query_raw(
