@@ -2609,7 +2609,7 @@ async def azure_proxy_route(
                 if vector_store is None:
                     raise Exception(f"Vector store not found for {vector_store_name}")
                 await assert_user_can_call_vector_store_passthrough(
-                    vector_store, user_api_key_dict, provider_config, request.method, endpoint
+                    vector_store, user_api_key_dict, provider_config, request.method, endpoint, store_segment="indexes"
                 )
                 litellm_params = vector_store.get("litellm_params") or {}
                 auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
@@ -3145,6 +3145,7 @@ async def _base_vertex_proxy_route(
             else ProviderConfigManager.get_provider_vector_stores_config(LlmProviders.VERTEX_AI, "search_api"),
             request.method,
             endpoint,
+            store_segment="dataStores",
         )
 
     vertex_project: str | None = get_vertex_project_id_from_url(endpoint)

@@ -1,6 +1,7 @@
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from itertools import accumulate
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -432,13 +433,28 @@ async def assert_user_can_read_vector_store_id(
     return vector_store
 
 
-def _is_provider_read_request(endpoints: VectorStoreIndexEndpoints, method: str, endpoint: str) -> bool:
+def _store_marker_count(segments: Sequence[str], marker: str) -> int:
+    """How many stores the path names: a segment ending in the marker, as an unanchored extractor matches it,
+    followed by an id, which may itself contain the marker."""
+
+    def opens_a_store(after_marker: bool, segment_and_next: tuple[str, str | None]) -> bool:
+        segment, following = segment_and_next
+        return segment.endswith(marker) and following is not None and not after_marker
+
+    return sum(accumulate(zip(segments, (*segments[1:], None)), opens_a_store, initial=False))
+
+
+def _is_provider_read_request(
+    endpoints: VectorStoreIndexEndpoints, method: str, endpoint: str, store_segment: str | None
+) -> bool:
     """A substring match could hide a write, so a read needs a plain path the forwarder keeps as is, ending with a
     read entry. A GET only has to contain one."""
     path: Final = endpoint if endpoint.startswith("/") else f"/{endpoint}"
     if _PLAIN_PROVIDER_PATH.fullmatch(path) is None or not {"", ".", ".."}.isdisjoint(path.split("/")[1:]):
         return False
     if httpx.URL(endpoint).path != endpoint:
+        return False
+    if store_segment is not None and _store_marker_count(path.split("/"), store_segment) > 1:
         return False
     if any(write_method == method and write_path in path for write_method, write_path in endpoints["write"]):
         return False
@@ -454,10 +470,12 @@ async def assert_user_can_call_vector_store_passthrough(
     provider_config: BaseVectorStoreConfig | None,
     method: str,
     endpoint: str,
+    store_segment: str | None = None,
 ) -> None:
-    """Pass-through routes also carry writes, so groups count only on a read the provider's table names."""
+    """Pass-through routes also carry writes, so groups count only on a read the provider's table names.
+    A path naming a second store through `store_segment` is never a read, since the gate checked only the first."""
     if provider_config is not None and _is_provider_read_request(
-        provider_config.get_vector_store_endpoints_by_type(), method, endpoint
+        provider_config.get_vector_store_endpoints_by_type(), method, endpoint, store_segment
     ):
         await assert_user_can_read_vector_store(vector_store, user_api_key_dict)
         return
