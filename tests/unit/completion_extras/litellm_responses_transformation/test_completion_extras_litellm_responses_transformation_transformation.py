@@ -3571,16 +3571,15 @@ def test_transform_response_hands_encrypted_reasoning_to_messages_clients_only()
 
 
 @pytest.mark.parametrize(
-    ("call_type", "kept_ids"),
+    ("keeps_every_reasoning_item", "kept_ids"),
     [
-        pytest.param("anthropic_messages", ["rs_first", "rs_second"], id="messages_client_keeps_every_item"),
-        pytest.param("acompletion", ["rs_second"], id="chat_client_keeps_the_last_item"),
+        pytest.param(True, ["rs_first", "rs_second"], id="messages_client_keeps_every_item"),
+        pytest.param(False, ["rs_second"], id="chat_client_keeps_the_last_item"),
     ],
 )
 def test_non_streamed_tool_turn_hands_messages_clients_every_reasoning_item(
-    call_type: str, kept_ids: list[str]
+    keeps_every_reasoning_item: bool, kept_ids: list[str]
 ) -> None:
-    from types import SimpleNamespace
     from unittest.mock import Mock
 
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -3623,12 +3622,13 @@ def test_non_streamed_tool_turn_hands_messages_clients_every_reasoning_item(
             choices=[],
             usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
         ),
-        logging_obj=SimpleNamespace(call_type=call_type),
+        logging_obj=Mock(),
         request_data={"model": "gpt-5.4-nano"},
         messages=[{"role": "user", "content": "Oslo or Lyon?"}],
         optional_params={},
         litellm_params={"custom_llm_provider": "azure"},
         encoding=Mock(),
+        keeps_every_reasoning_item=keeps_every_reasoning_item,
     )
 
     message: Final = result.choices[0].message

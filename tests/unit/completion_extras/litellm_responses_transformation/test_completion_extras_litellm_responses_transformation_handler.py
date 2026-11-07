@@ -335,3 +335,101 @@ async def test_acompletion_keeps_provider_native_model_id_through_responses(
 
     handed_model = responses_call.call_args.kwargs["model"]
     assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model
+
+
+def _two_reasoning_tool_turn():
+    from openai.types.responses import ResponseFunctionToolCall
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    def reasoning(item_id: str) -> ResponseReasoningItem:
+        return ResponseReasoningItem(
+            id=item_id, summary=[], type="reasoning", encrypted_content=f"gAAAA_{item_id}"
+        )
+
+    def call(index: int, city: str) -> ResponseFunctionToolCall:
+        return ResponseFunctionToolCall(
+            id=f"fc_{index}",
+            type="function_call",
+            status="completed",
+            arguments=f'{{"city": "{city}"}}',
+            call_id=f"call_{index}",
+            name="get_weather",
+        )
+
+    return ResponsesAPIResponse.model_construct(
+        id="resp_two_reasoning",
+        created_at=1,
+        error=None,
+        incomplete_details=None,
+        model="gpt-5.4-nano",
+        output=[reasoning("rs_first"), call(1, "Oslo"), reasoning("rs_second"), call(2, "Lyon")],
+        status="completed",
+        usage=None,
+    )
+
+
+class _CompletedStream:
+    def __init__(self, response):
+        self.completed_response = MagicMock(response=response)
+        self._hidden_params = {}
+
+    def __iter__(self):
+        return iter(())
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+def _messages_client_kwargs(call_type: str):
+    messages = [{"role": "user", "content": "Weather in Oslo and Lyon?"}]
+    return {
+        "model": "gpt-5.4-nano",
+        "custom_llm_provider": "azure",
+        "messages": messages,
+        "optional_params": {},
+        "litellm_params": {},
+        "headers": {},
+        "model_response": ModelResponse(),
+        "logging_obj": LiteLLMLogging(
+            litellm_call_id="test-call",
+            call_type=call_type,
+            model="gpt-5.4-nano",
+            messages=messages,
+            function_id="fn-id",
+            stream=False,
+            start_time=datetime.now(),
+        ),
+    }
+
+
+@pytest.mark.parametrize("is_async", [True, False], ids=["acompletion", "completion"])
+@pytest.mark.parametrize("arrives_streamed", [False, True], ids=["response", "collected_stream"])
+@pytest.mark.parametrize(
+    ("call_type", "kept_ids"),
+    [
+        pytest.param("anthropic_messages", ["rs_first", "rs_second"], id="messages_client"),
+        pytest.param("acompletion", ["rs_second"], id="chat_client"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_non_streamed_bridge_hands_messages_clients_every_reasoning_item(
+    is_async: bool, arrives_streamed: bool, call_type: str, kept_ids: list[str]
+):
+    turn = _two_reasoning_tool_turn()
+    upstream = _CompletedStream(turn) if arrives_streamed else turn
+    bridge = ResponsesToCompletionBridgeHandler()
+    kwargs = _messages_client_kwargs(call_type)
+
+    if is_async:
+        with patch("litellm.aresponses", new=AsyncMock(return_value=upstream)):
+            result = await bridge.acompletion(**kwargs)
+    else:
+        with patch("litellm.responses", return_value=upstream):
+            result = bridge.completion(**kwargs)
+
+    assert [item["id"] for item in result.choices[0].message.reasoning_items] == kept_ids
