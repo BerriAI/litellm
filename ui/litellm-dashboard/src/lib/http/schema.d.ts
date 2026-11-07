@@ -46598,6 +46598,8 @@ export interface components {
             max_retries?: number | null;
             /** Search Provider */
             search_provider: string;
+            /** Search Tool Name */
+            search_tool_name?: string | null;
             /** Timeout */
             timeout?: number | null;
         };

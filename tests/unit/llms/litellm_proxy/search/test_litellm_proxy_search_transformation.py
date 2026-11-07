@@ -170,3 +170,61 @@ def test_search_against_a_proxy_without_auth_sends_no_authorization_header(respx
     )
 
     assert "Authorization" not in route.calls.last.request.headers
+
+
+@pytest.mark.asyncio
+async def test_a_router_proxy_tool_calls_the_downstream_tool_its_params_name(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://proxy.example.com/search/remote-tavily").respond(json=PROXY_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[],
+        search_tools=[
+            {
+                "search_tool_name": "local-alias",
+                "litellm_params": {
+                    "search_provider": "litellm_proxy",
+                    "api_base": "https://proxy.example.com",
+                    "api_key": "sk-downstream-key",
+                    "search_tool_name": "remote-tavily",
+                },
+            }
+        ],
+    )
+
+    response: Final = await router.asearch(
+        model="local-alias", search_tool_name="local-alias", query="What is the LiteLLM proxy?", max_results=2
+    )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer sk-downstream-key"
+    assert json.loads(route.calls.last.request.content) == {"query": "What is the LiteLLM proxy?", "max_results": 2}
+    assert response.model_dump(mode="json") == PROXY_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_a_router_proxy_tool_without_a_downstream_name_is_a_bad_request_before_any_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url__regex=r"https://proxy\.example\.com/.*").respond(json=PROXY_RESPONSE)
+    router: Final = litellm.Router(
+        model_list=[],
+        search_tools=[
+            {
+                "search_tool_name": "local-alias",
+                "litellm_params": {
+                    "search_provider": "litellm_proxy",
+                    "api_base": "https://proxy.example.com",
+                    "api_key": "sk-downstream-key",
+                },
+            }
+        ],
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="search_tool_name"):
+        await router.asearch(model="local-alias", search_tool_name="local-alias", query="What is the LiteLLM proxy?")
+
+    assert route.call_count == 0
+

@@ -25,6 +25,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     timeout: float | None
     max_retries: int | None
     input_cost_per_query: ReadOnly[float | None]
+    search_tool_name: ReadOnly[str | None]
 
 
 class SearchTool(TypedDict, total=False):

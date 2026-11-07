@@ -1012,7 +1012,7 @@ def _generic_attempt(
     return AttemptCall(plan.host_op, final, kwargs, model_name, group)
 
 
-_SEARCH_PROTECTED_PARAMS: Final = frozenset({"search_provider", "api_key", "api_base"})
+_SEARCH_PROTECTED_PARAMS: Final = frozenset({"search_provider", "api_key", "api_base", "search_tool_name"})
 
 
 def _search_attempt(
@@ -1042,6 +1042,7 @@ def _search_attempt(
         "search_provider": search_provider,
         "api_key": params.get("api_key"),
         "api_base": params.get("api_base"),
+        "search_tool_name": params.get("search_tool_name"),
         **search_params,
     }
     return AttemptCall(plan.host_op, final, kwargs, group, group)

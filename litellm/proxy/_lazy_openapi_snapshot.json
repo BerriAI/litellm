@@ -58817,6 +58817,17 @@
               "title": "Search Provider",
               "type": "string"
             },
+            "search_tool_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Tool Name"
+            },
             "timeout": {
               "anyOf": [
                 {
