@@ -33,6 +33,9 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HEADROOM_RETRIEVE_TOOL_NAME,
     HeadroomGuardrail,
@@ -95,7 +98,7 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
         default_on=True,
     )
     defaults.update(kwargs)
-    return HeadroomGuardrail(**defaults)
+    return HeadroomGuardrail(**{"gateway_turn": False, **defaults})
 
 
 def _make_compress_response(
@@ -610,12 +613,17 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("context", [
-    None, {"issued_hashes": ["deadbeef000000000000dead"]},
-    HeadroomRequestContext(frozenset({"deadbeef000000000000dead"}), None, 0.0),
-])
+@pytest.mark.parametrize(
+    "context",
+    [
+        None,
+        {"issued_hashes": ["deadbeef000000000000dead"]},
+        HeadroomRequestContext(frozenset({"deadbeef000000000000dead"}), None, 0.0),
+    ],
+)
 async def test_async_build_agentic_loop_plan_rejects_hash_with_no_known_call(
-    guardrail: HeadroomGuardrail, context: object,
+    guardrail: HeadroomGuardrail,
+    context: object,
 ) -> None:
     """A hash-shaped string planted in message text must not be honored when
     this guardrail has no record of ever issuing it, even if it's echoed back
@@ -921,7 +929,9 @@ HASH_SHAPED_HISTORY = [
 
 
 async def _apply(
-    guardrail: HeadroomGuardrail, messages: list, ccr_hashes: list | None = None,
+    guardrail: HeadroomGuardrail,
+    messages: list,
+    ccr_hashes: list | None = None,
     request_data: dict[str, object] | None = None,
 ) -> dict:
     data: Final = request_data if request_data is not None else {"model": "claude-sonnet-5"}
@@ -3149,3 +3159,320 @@ def test_affinity_requires_trusted_identity_and_caller_session(
     affinity: Final = _session_affinity(candidate)
     assert (affinity is None) is (session is None or not isinstance(auth, UserAPIKeyAuth))
     assert (affinity == _session_affinity(baseline)) is (candidate == baseline)
+
+
+def _gateway_answer(body: dict, **extra: object) -> MagicMock:
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.text = "{}"
+    mock.json.return_value = {
+        "messages": body.get("messages"),
+        "body": body,
+        "tokens_before": 100,
+        "tokens_after": 40,
+        **extra,
+    }
+    return mock
+
+
+def _raised_status(status: int, text: str) -> httpx.HTTPStatusError:
+    """What AsyncHTTPHandler.post does with any non-2xx answer."""
+    request = httpx.Request("POST", "http://headroom/v1/compress")
+    return httpx.HTTPStatusError(text, request=request, response=httpx.Response(status, text=text, request=request))
+
+
+def _caller(api_key: str = "hashed-key") -> dict:
+    return {"metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key=api_key)}}
+
+
+def _gateway_guardrail(**kwargs) -> HeadroomGuardrail:
+    return _make_guardrail(gateway_turn=True, **kwargs)
+
+
+def _posting(guardrail: HeadroomGuardrail, **mock: object):
+    return patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, **mock)
+
+
+async def _apply_turn(guardrail: HeadroomGuardrail, data: dict) -> object:
+    rows = data["messages"] if "messages" in data else data["input"]
+    return await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(structured_messages=rows), request_data=data, input_type="request"
+    )
+
+
+async def _session_of(guardrail: HeadroomGuardrail, data: dict) -> str | None:
+    with _posting(guardrail, return_value=_gateway_answer({"messages": data["messages"]})) as post:
+        await _apply_turn(guardrail, data)
+    return post.await_args.kwargs["json"]["config"].get("session_id")
+
+
+ANTHROPIC_TOOL = {"name": "Read", "description": "long", "input_schema": {"type": "object"}}
+SHORT_ANTHROPIC_TOOL = {"name": "Read", "description": "short", "input_schema": {"type": "object"}}
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_on_anthropic_route_keeps_the_wire_shape_and_applies_the_answer():
+    tool_result = {
+        "type": "tool_result",
+        "tool_use_id": "t1",
+        "content": "text",
+        "cache_control": {"type": "ephemeral"},
+    }
+    messages = [
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+        {"role": "user", "content": [tool_result]},
+    ]
+    folded = [
+        *messages[:2],
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "f"}]},
+    ]
+    data = {
+        "model": "claude-opus-5-5",
+        "system": "system",
+        "tools": [ANTHROPIC_TOOL],
+        "max_tokens": 1024,
+        "stream": True,
+        "temperature": 0.2,
+        "messages": messages,
+        **_caller(),
+    }
+    guardrail = _gateway_guardrail()
+    answer = _gateway_answer({"messages": folded, "tools": [SHORT_ANTHROPIC_TOOL], "system": "trimmed"})
+
+    with _posting(guardrail, return_value=answer) as post:
+        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    payload = post.await_args.kwargs["json"]
+    assert set(payload) == {"model", "system", "tools", "max_tokens", "stream", "messages", "config", "gateway"}
+    assert payload["messages"][2]["content"][0]["type"] == "tool_result"
+    assert payload["tools"] == [ANTHROPIC_TOOL]
+    assert payload["config"] == {"mode": "lossless"}
+    assert result["messages"] == folded
+    assert result["tools"] == [SHORT_ANTHROPIC_TOOL]
+    assert result["system"] == "trimmed"
+    assert result["temperature"] == 0.2
+    stats = _recorded_guardrail_response(result)
+    assert stats["tokens_saved"] == 60
+    entry = result["metadata"]["standard_logging_guardrail_information"][0]
+    assert extract_compression_saved_tokens({"guardrail_information": [entry]}) == 60
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_on_chat_route_applies_the_answer_and_drops_what_headroom_dropped():
+    tool = {"type": "function", "function": {"name": "Read", "description": "long", "parameters": {}}}
+    short = {"type": "function", "function": {"name": "Read", "description": "short", "parameters": {}}}
+    call = {"id": "c", "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+    messages = [
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "c", "content": "text"},
+    ]
+    folded = [*messages[:2], {"role": "tool", "tool_call_id": "c", "content": "folded"}]
+    forced = {"type": "function", "function": {"name": "Read"}}
+    data = {"model": "gpt-5.5", "tools": [tool], "tool_choice": forced, "messages": messages, **_caller()}
+    guardrail = _gateway_guardrail()
+
+    with _posting(guardrail, return_value=_gateway_answer({"messages": folded, "tools": [short]})) as post:
+        result = await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert post.await_args.kwargs["json"]["tool_choice"] == forced
+    assert result["messages"] == folded
+    assert result["tools"] == [short]
+    assert "tool_choice" not in result
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_on_responses_route_applies_the_answer():
+    items = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "task"}]},
+        {"type": "function_call", "call_id": "c", "name": "Read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c", "output": "text"},
+    ]
+    folded = [*items[:2], {"type": "function_call_output", "call_id": "c", "output": "folded"}]
+    tool = {"type": "function", "name": "Read", "description": "long", "parameters": {}}
+    short = {"type": "function", "name": "Read", "description": "short", "parameters": {}}
+    data = {"model": "gpt-5.5", "instructions": "system", "tools": [tool], "input": items, **_caller()}
+    guardrail = _gateway_guardrail()
+    answer = _gateway_answer({"input": folded, "tools": [short], "instructions": "trimmed"})
+
+    with _posting(guardrail, return_value=answer) as post:
+        result = await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    payload = post.await_args.kwargs["json"]
+    assert payload["input"] == items and payload["instructions"] == "system"
+    assert result["input"] == folded
+    assert result["tools"] == [short]
+    assert result["instructions"] == "trimmed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(lambda: _raised_status(400, "Invalid config.mode: 'lossless'"), id="mode_rejected"),
+        pytest.param(
+            lambda: MagicMock(status_code=200, text="{}", **{"json.return_value": {"messages": [{"role": "user"}]}}),
+            id="legacy_shape",
+        ),
+    ],
+)
+async def test_older_headroom_falls_back_and_is_asked_again_later(answer):
+    """Upgrading LiteLLM before Headroom must not turn every request into a 502."""
+    guardrail = _gateway_guardrail()
+    legacy = _make_compress_response([{"role": "user", "content": "earlier compressed"}])
+    messages = [
+        {"role": "user", "content": "earlier"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "now"},
+    ]
+
+    def turn() -> dict:
+        return {"model": "m", "messages": list(messages), **_caller()}
+
+    with _posting(guardrail, side_effect=[answer(), legacy, legacy, _gateway_answer({"messages": messages})]) as post:
+        await _apply_turn(guardrail, turn())
+        assert "gateway" not in post.await_args.kwargs["json"]
+        await _apply_turn(guardrail, turn())
+        assert "gateway" not in post.await_args.kwargs["json"]
+        guardrail._gateway_turn_retry_at = 0.0  # the retry window has passed
+        await _apply_turn(guardrail, turn())
+
+    assert "gateway" in post.await_args.kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_other_400s_fail_closed_and_keep_the_gateway_turn():
+    guardrail = _gateway_guardrail()
+    data = {"model": "m", "messages": [{"role": "user", "content": "task"}], **_caller()}
+
+    with _posting(guardrail, side_effect=_raised_status(400, "config.session_id must be a string")):
+        with pytest.raises(HTTPException) as raised:
+            await _apply_turn(guardrail, data)
+
+    assert raised.value.status_code == 502
+    assert guardrail._gateway_turn_retry_at == 0.0
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_retries_a_session_lock_timeout_once():
+    guardrail = _gateway_guardrail()
+    folded = [{"role": "user", "content": "folded"}]
+    data = {"model": "m", "messages": [{"role": "user", "content": "task"}], **_caller()}
+
+    with _posting(guardrail, side_effect=[_raised_status(503, "busy"), _gateway_answer({"messages": folded})]) as post:
+        await _apply_turn(guardrail, data)
+
+    assert post.await_count == 2
+    assert data["messages"] == folded
+
+
+@pytest.mark.asyncio
+async def test_gateway_session_is_one_conversation_of_one_caller():
+    guardrail = _gateway_guardrail()
+    first = {"role": "user", "content": "a"}
+    marked = {"role": "user", "content": [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}}]}
+    image = {"type": "image", "source": {"type": "url", "url": "https://x.test/a.png"}}
+
+    def turn(row: dict, *rest: dict, api_key: str = "one", session: str = "s", user: str | None = None) -> dict:
+        extra = {"user": user} if user else {}
+        return {"model": "m", "messages": [row, *rest], "session_id": session, **_caller(api_key), **extra}
+
+    base = await _session_of(guardrail, turn(first))
+    assert base is not None
+    assert base == await _session_of(guardrail, turn(first, {"role": "assistant", "content": "b"}))
+    assert base == await _session_of(guardrail, turn(marked))
+    assert base != await _session_of(guardrail, turn(first, session="other"))
+    assert base != await _session_of(guardrail, turn(first, api_key="two"))
+    assert await _session_of(guardrail, turn(first, user="alice")) != await _session_of(
+        guardrail, turn(first, user="bob")
+    )
+    # Claude Code's subagents share the parent's session id.
+    assert base != await _session_of(guardrail, turn({"role": "user", "content": "subagent"}))
+    with_image = {"role": "user", "content": [image]}
+    marked_image = {"role": "user", "content": [{**image, "cache_control": {"type": "ephemeral"}}]}
+    assert await _session_of(guardrail, turn(with_image)) == await _session_of(guardrail, turn(marked_image))
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_without_a_caller_session_stays_stateless():
+    """Many end users behind one key can open with the same row, so they never share a session."""
+    guardrail = _gateway_guardrail()
+    data = {"model": "m", "messages": [{"role": "user", "content": "hi"}], **_caller()}
+    assert await _session_of(guardrail, data) is None
+
+
+@pytest.mark.asyncio
+async def test_auto_router_hop_gets_compressed_structured_messages():
+    """The routing hop has no caller on it and reads only the returned messages."""
+    guardrail = _gateway_guardrail()
+    legacy_rows = [{"role": "user", "content": "earlier compressed"}]
+    messages = [
+        {"role": "user", "content": "earlier"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": "now"},
+    ]
+
+    with _posting(guardrail, return_value=_make_compress_response(legacy_rows)) as post:
+        result = await _apply_turn(guardrail, {"messages": messages, "model": "router"})
+
+    assert "gateway" not in post.await_args.kwargs["json"]
+    assert result["structured_messages"][0]["content"] == "earlier compressed"
+
+
+@pytest.mark.asyncio
+async def test_embeddings_input_never_reaches_headroom():
+    guardrail = _gateway_guardrail()
+    data = {"model": "m", "input": ["some text"], **_caller()}
+    inputs = GenericGuardrailAPIInputs(texts=["some text"])
+
+    with _posting(guardrail) as post:
+        assert await guardrail.apply_guardrail(inputs=inputs, request_data=data, input_type="request") is inputs
+    post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_forwards_and_merges_anthropic_betas():
+    guardrail = _gateway_guardrail()
+    answer = _gateway_answer(
+        {"messages": [{"role": "user", "content": "x"}]}, headers={"anthropic-beta": "plugin-beta"}
+    )
+    data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "x"}],
+        "extra_headers": {"anthropic-beta": "configured-beta", "x-other": "kept"},
+        "proxy_server_request": {"headers": {"Anthropic-Beta": "client-beta"}},
+        **_caller(),
+    }
+
+    with _posting(guardrail, return_value=answer) as post:
+        await _apply_turn(guardrail, data)
+
+    assert post.await_args.kwargs["json"]["gateway"]["request_headers"] == {"anthropic-beta": "client-beta"}
+    assert data["extra_headers"] == {"anthropic-beta": "configured-beta,plugin-beta", "x-other": "kept"}
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_fail_open_leaves_the_request_alone():
+    data = {"model": "m", "messages": [{"role": "user", "content": "task"}], "tools": [{"name": "Read"}], **_caller()}
+    inputs = GenericGuardrailAPIInputs(structured_messages=data["messages"])
+    guardrail = _gateway_guardrail(unreachable_fallback="fail_open")
+
+    with _posting(guardrail, side_effect=httpx.ConnectError("down")) as post:
+        returned = await guardrail.apply_guardrail(inputs=inputs, request_data=data, input_type="request")
+
+    assert post.await_args.kwargs["json"]["gateway"]
+    assert returned is inputs
+    assert data["messages"] == [{"role": "user", "content": "task"}]
+    assert data["tools"] == [{"name": "Read"}]
+
+
+@pytest.mark.asyncio
+async def test_gateway_turn_fail_closed_raises_when_headroom_is_down():
+    data = {"model": "m", "messages": [{"role": "user", "content": "task"}], **_caller()}
+    guardrail = _gateway_guardrail()
+
+    with _posting(guardrail, side_effect=httpx.ConnectError("down")):
+        with pytest.raises(HTTPException) as raised:
+            await _apply_turn(guardrail, data)
+    assert raised.value.status_code == 502

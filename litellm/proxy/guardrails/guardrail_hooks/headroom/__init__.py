@@ -37,6 +37,8 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         unreachable_fallback=litellm_params.unreachable_fallback,
         timeout=litellm_params.timeout,
         ccr_retrieval=litellm_params.ccr_retrieval,
+        gateway_turn=litellm_params.gateway_turn,
+        compression_mode=litellm_params.compression_mode,
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]
         _callback
