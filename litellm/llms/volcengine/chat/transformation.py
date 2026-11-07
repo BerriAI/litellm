@@ -64,6 +64,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
             "tool_choice",
             "function_call",
             "functions",
+            "response_format",
             "max_retries",
             "extra_headers",
             "thinking",
