@@ -1,6 +1,7 @@
 import reprlib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from types import MappingProxyType
 from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
@@ -30,6 +31,23 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_bedrock_project_id",
     }
 )
+
+
+def with_aws_credential_fallbacks(
+    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    """``optional_params`` with each AWS credential kwarg it leaves unset taken from ``litellm_params``."""
+    return MappingProxyType(
+        {
+            **optional_params,
+            **{
+                key: litellm_params[key]
+                for key in AWS_CREDENTIAL_KWARGS_KEYS
+                if optional_params.get(key) is None and litellm_params.get(key) is not None
+            },
+        }
+    )
+
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
 AGENTIC_LOOP_CONTROL_KWARGS_KEYS: Final = frozenset(
