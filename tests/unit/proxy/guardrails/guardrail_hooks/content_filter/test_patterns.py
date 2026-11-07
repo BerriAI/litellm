@@ -4,6 +4,7 @@ Tests for content filter pattern loading from JSON
 
 import json
 import os
+from typing import Final
 
 import pytest
 
@@ -185,157 +186,98 @@ def test_eu_patterns_have_category():
         ), f"Pattern {pattern_name} not in EU PII Patterns category"
 
 
-def test_credential_patterns_loaded():
-    """Verify all added credential patterns are loaded"""
-    required_patterns = [
-        "openai_api_key",
-        "anthropic_api_key",
-        "gemini_api_key",
-    ]
-    for pattern_name in required_patterns:
-        assert pattern_name in PREBUILT_PATTERNS, f"Pattern {pattern_name} not found"
-
-
-def test_credential_patterns_have_category():
-    """Verify credential patterns are in Credential Patterns category"""
-    cred_patterns = [
-        "openai_api_key",
-        "anthropic_api_key",
-        "gemini_api_key",
-    ]
-    category_patterns = PATTERN_CATEGORIES.get("Credential Patterns", [])
-    for pattern_name in cred_patterns:
-        assert pattern_name in category_patterns, f"Pattern {pattern_name} not in Credential Patterns category"
-
-
-# ---------------------------------------------------------------------------
-# openai_api_key
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("pattern_name", ["openai_api_key", "anthropic_api_key", "gemini_api_key"])
+def test_credential_patterns_have_category(pattern_name: str) -> None:
+    assert pattern_name in PATTERN_CATEGORIES.get("Credential Patterns", [])
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("pattern_name", "key"),
     [
-        # Classic sk- format (legacy user keys)
-        "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST",
-        # Project-scoped key (current default)
-        "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEF1234567890abcdef",
-        # Service-account key
-        "sk-svcacct-abcdefghijklmnopqrstuvwxyzABCDEF123456",
-        # Admin key
-        "sk-admin-abcdefghijklmnopqrstuvwxyzABCDEF123456",
-        # Key pasted raw in a debug message
-        "I keep getting 401. My key is sk-proj-TestKeyABCDEFGHIJKLMNOPQRSTUVWXYZ00 is it expired?",
+        pytest.param("openai_api_key", "sk-" + "a" * 20 + "T3BlbkFJ" + "b" * 20, id="openai-legacy"),
+        pytest.param("openai_api_key", "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEF1234567890abcdef", id="openai-project"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 20, id="openai-project-shortest"),
+        pytest.param(
+            "openai_api_key", "sk-svcacct-abcdefghijklmnopqrstuvwxyzABCDEF123456", id="openai-service-account"
+        ),
+        pytest.param("openai_api_key", "sk-admin-abcdefghijklmnopqrstuvwxyzABCDEF123456", id="openai-admin"),
+        pytest.param("openai_api_key", "sk-None-abcdefghijklmnopqrstuvwxyz0123456789", id="openai-user-key"),
+        pytest.param("openai_api_key", "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789-", id="openai-trailing-hyphen"),
+        pytest.param(
+            "anthropic_api_key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP", id="anthropic-versioned"
+        ),
+        pytest.param(
+            "anthropic_api_key", "sk-ant-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU", id="anthropic-unversioned"
+        ),
+        pytest.param("anthropic_api_key", "sk-ant-" + "a" * 20, id="anthropic-shortest"),
+        pytest.param(
+            "anthropic_api_key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789-", id="anthropic-trailing-hyphen"
+        ),
+        pytest.param("gemini_api_key", "AIzaSyD-9tSrke72I6_AQp2h8HI4-uE6QNKQV0", id="gemini-legacy"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 33, id="gemini-legacy-shortest"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 36, id="gemini-legacy-longest"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 34 + "-", id="gemini-legacy-trailing-hyphen"),
+        pytest.param("gemini_api_key", "AQ.Ab8RN6I-7xK9pL2mQ0vW5yZ1uX3tS4rE8qD7cB6aN5mP4oI3uY2", id="gemini-auth-key"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 45, id="gemini-auth-key-shortest"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 55, id="gemini-auth-key-longest"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 49 + "-", id="gemini-auth-key-trailing-hyphen"),
     ],
 )
-def test_openai_api_key_detected(text: str) -> None:
-    pat = get_compiled_pattern("openai_api_key")
-    assert pat.search(text) is not None, f"Expected OpenAI key match in: {text[:60]}..."
+def test_credential_pattern_matches_whole_key(pattern_name: str, key: str) -> None:
+    match: Final = get_compiled_pattern(pattern_name).search(f"I keep getting 401 with {key}, is it expired?")
+    assert match is not None
+    assert match.group(0) == key
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("pattern_name", "text"),
     [
-        "sk-short",  # too short
-        "not-a-key",
-        "sk-ant-api03-thisisanthropicnotopenaiabc123",  # Anthropic key
-        "ordinary sentence without any api key in it",
+        pytest.param("openai_api_key", "sk-short", id="openai-too-short"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 19, id="openai-project-too-short"),
+        pytest.param("openai_api_key", "sk-" + "a" * 20 + "T3BlbkFJ" + "b" * 21, id="openai-legacy-too-long"),
+        pytest.param("openai_api_key", "desk-proj-management-dashboard-v2", id="openai-inside-longer-word"),
+        pytest.param(
+            "openai_api_key", "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST", id="openai-legacy-without-marker"
+        ),
+        pytest.param("openai_api_key", "sk-0123456789abcdef0123456789abcdef", id="openai-other-vendor-sk-key"),
+        pytest.param("openai_api_key", "sk-Xq3vR9tLm2Pa8KdW5yZgQw", id="openai-litellm-virtual-key"),
+        pytest.param(
+            "openai_api_key",
+            "sk-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCd-_x",
+            id="openai-litellm-virtual-key-raised-length",
+        ),
+        pytest.param("openai_api_key", "not-a-key", id="openai-no-prefix"),
+        pytest.param(
+            "openai_api_key", "sk-ant-api03-thisisanthropicnotopenaiabc123", id="openai-ignores-anthropic-key"
+        ),
+        pytest.param("openai_api_key", "ordinary sentence without any api key in it", id="openai-plain-text"),
+        pytest.param("anthropic_api_key", "sk-ant-" + "a" * 19, id="anthropic-too-short"),
+        pytest.param("anthropic_api_key", "flask-ant-design-system-components", id="anthropic-inside-longer-word"),
+        pytest.param(
+            "anthropic_api_key",
+            "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEF1234567890",
+            id="anthropic-ignores-openai-project-key",
+        ),
+        pytest.param(
+            "anthropic_api_key",
+            "sk-admin-abcdefghijklmnopqrstuvwxyzABCDEF123456",
+            id="anthropic-ignores-openai-admin-key",
+        ),
+        pytest.param("anthropic_api_key", "sk-ant", id="anthropic-prefix-only"),
+        pytest.param("anthropic_api_key", "plain text with nothing sensitive", id="anthropic-plain-text"),
+        pytest.param("gemini_api_key", "AIza", id="gemini-prefix-only"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 32, id="gemini-legacy-too-short"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 37, id="gemini-legacy-too-long"),
+        pytest.param("gemini_api_key", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", id="gemini-wrong-prefix"),
+        pytest.param("gemini_api_key", "AQ.", id="gemini-auth-prefix-only"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 44, id="gemini-auth-key-too-short"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 56, id="gemini-auth-key-too-long"),
+        pytest.param("gemini_api_key", "AQ-" + "a" * 50, id="gemini-auth-key-wrong-separator"),
+        pytest.param("gemini_api_key", "x" + "AIza" + "a" * 35, id="gemini-inside-longer-token"),
+        pytest.param("gemini_api_key", "The AQ. was reported at 42 ppm today.", id="gemini-aq-acronym"),
+        pytest.param("gemini_api_key", "Is the question AQ. Maybe it is BQ.", id="gemini-aq-sentence-end"),
+        pytest.param("gemini_api_key", "plain text with no google key", id="gemini-plain-text"),
     ],
 )
-def test_openai_api_key_not_false_positive(text: str) -> None:
-    pat = get_compiled_pattern("openai_api_key")
-    assert pat.search(text) is None, f"Unexpected OpenAI key match in: {text}"
-
-
-# ---------------------------------------------------------------------------
-# anthropic_api_key
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        # Versioned format
-        "sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP",
-        # Short form (older keys)
-        "sk-ant-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU",
-        # Pasted mid-sentence
-        "Authorization failed with sk-ant-api03-TestKeyABCDEFGHIJKLMNOPQRSTUV what is wrong?",
-    ],
-)
-def test_anthropic_api_key_detected(text: str) -> None:
-    pat = get_compiled_pattern("anthropic_api_key")
-    assert pat.search(text) is not None, f"Expected Anthropic key match in: {text[:60]}..."
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "sk-ant-short",  # too short
-        "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEF1234567890",  # OpenAI key
-        "sk-admin-abcdefghijklmnopqrstuvwxyzABCDEF123456",  # OpenAI admin key
-        "sk-ant",  # just the prefix
-        "plain text with nothing sensitive",
-    ],
-)
-def test_anthropic_api_key_not_false_positive(text: str) -> None:
-    pat = get_compiled_pattern("anthropic_api_key")
-    assert pat.search(text) is None, f"Unexpected Anthropic key match in: {text}"
-
-
-# ---------------------------------------------------------------------------
-# gemini_api_key
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        # Legacy AIza key shape (38 chars: AIza + 34)
-        "AIzaSyD-9tSrke72I6_AQp2h8HI4-uE6QNKQV0",
-        # Legacy variant
-        "AIzaSyD-abcdefghijklmnopqrstuvwxyz123",
-        # New Google AI Studio authorization key (starts with AQ. ~53 chars)
-        "AQ.Ab8RN6I-7xK9pL2mQ0vW5yZ1uX3tS4rE8qD7cB6aN5mP4oI3uY2",
-        # Pasted mid-sentence
-        "My Gemini key AIzaSyD-9tSrke72I6_AQp2h8HI4-uE6QNKQV0 is not working",
-        "Error using key AQ.Ab8RN6I-7xK9pL2mQ0vW5yZ1uX3tS4rE8qD7cB6aN5mP4oI3uY2 in prompt",
-    ],
-)
-def test_gemini_api_key_detected(text: str) -> None:
-    pat = get_compiled_pattern("gemini_api_key")
-    assert pat.search(text) is not None, f"Expected Gemini key match in: {text[:60]}..."
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "AIza",  # just prefix
-        "AIzaShort",  # too short
-        "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",  # wrong prefix, right length
-        "AQ.",  # just AQ.
-        "The AQ. was reported at 42 ppm today.",  # AQ acronym ending with period + space
-        "Is the question AQ. Maybe it is BQ.",  # sentence end
-        "AQ.12345",  # short AQ string
-        "plain text with no google key",
-    ],
-)
-def test_gemini_api_key_not_false_positive(text: str) -> None:
-    pat = get_compiled_pattern("gemini_api_key")
-    assert pat.search(text) is None, f"Unexpected Gemini key match in: {text}"
-
-
-# ---------------------------------------------------------------------------
-# Integration: all four patterns are registered and compile cleanly
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "pattern_name",
-    ["openai_api_key", "anthropic_api_key", "gemini_api_key"],
-)
-def test_new_patterns_are_registered(pattern_name: str) -> None:
-    pat = get_compiled_pattern(pattern_name)
-    assert pat is not None
-    assert hasattr(pat, "search")
-
+def test_credential_pattern_ignores_non_keys(pattern_name: str, text: str) -> None:
+    assert get_compiled_pattern(pattern_name).search(text) is None
