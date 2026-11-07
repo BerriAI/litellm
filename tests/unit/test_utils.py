@@ -1058,6 +1058,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_token_cost_balanced": {"type": "number"},
             "cache_read_input_token_cost_ultrafast": {"type": "number"},
             "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_flex": {"type": "number"},
             "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
             "input_cost_per_token_flex": {"type": "number"},
             "input_cost_per_token_priority": {"type": "number"},
