@@ -1486,3 +1486,27 @@ async def test_streaming_mcp_event_order_and_response_id_consistency(
     assert lifecycle_ids[0] == lifecycle_ids[1]
     assert lifecycle_ids[2] != lifecycle_ids[0]
     assert not [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mcp_tools_keep_the_400_for_a_choice_the_chat_bridge_would_drop(
+    respx_mock: respx.MockRouter, stream: bool
+) -> None:
+    async def call_with_the_choice() -> None:
+        response: Final = await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "echo"}]},
+            drop_params=True,
+            stream=stream,
+            api_key="sk-ant-fake",
+        )
+        if stream:
+            [event async for event in response]
+
+    with _echo_tool_served("PING"), pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
+        await call_with_the_choice()
+
+    assert not respx_mock.calls

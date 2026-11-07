@@ -26,6 +26,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     configured_injection_points,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import refuse_unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -461,6 +462,13 @@ def _bridge_kwargs(
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
     return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+
+
+def _refuse_a_choice_the_mcp_tool_run_would_ignore(
+    skip_mcp_handler: bool, tool_choice: object, custom_llm_provider: str | None, model: str
+) -> None:
+    if skip_mcp_handler:
+        refuse_unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, model)
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
@@ -1498,6 +1506,12 @@ def responses(
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
+            _refuse_a_choice_the_mcp_tool_run_would_ignore(
+                skip_mcp_handler,  # pyright: ignore[reportUnknownArgumentType]  # popped from untyped kwargs
+                tool_choice,
+                custom_llm_provider,
+                model,
+            )
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,

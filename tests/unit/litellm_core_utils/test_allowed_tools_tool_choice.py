@@ -4,11 +4,14 @@ from typing import Final
 
 import pytest
 
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    refuse_unenforced_allowed_tools_tool_choice,
+    unenforced_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
 
@@ -145,3 +148,39 @@ def test_parse_rejects_a_malformed_choice_in_either_layout(tool_choice: dict[str
 )
 def test_is_allowed_tools_tool_choice(tool_choice: Mapping[str, object] | str | None, expected: bool):
     assert is_allowed_tools_tool_choice(tool_choice) is expected
+
+
+_FLAT_CHOICE: Final = {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]}
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "custom_llm_provider"),
+    [
+        (_FLAT_CHOICE, "anthropic"),
+        (_CHAT_LAYOUT, "hosted_vllm"),
+        ({"type": "allowed_tools", "mode": "required", "tools": []}, "openai"),
+        ({"type": "allowed_tools", "tools": [{"type": "function", "name": "get_time"}]}, "azure"),
+    ],
+)
+def test_a_tool_runner_refuses_a_choice_nothing_would_enforce(tool_choice: object, custom_llm_provider: str):
+    with pytest.raises(BadRequestError, match="drop_params does not drop it") as exc:
+        refuse_unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, "the-model")
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "custom_llm_provider"),
+    [
+        (_FLAT_CHOICE, "openai"),
+        (_CHAT_LAYOUT, "azure"),
+        (_FLAT_CHOICE, "litellm_proxy"),
+        ("required", "anthropic"),
+        ({"type": "function", "function": {"name": "get_time"}}, "anthropic"),
+        (None, "anthropic"),
+    ],
+)
+def test_a_tool_runner_keeps_a_choice_the_provider_enforces_or_any_other_choice(
+    tool_choice: object, custom_llm_provider: str
+):
+    assert not unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider)

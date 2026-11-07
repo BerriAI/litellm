@@ -248,6 +248,80 @@ def test_stream_rejected_before_any_request(respx_mock: respx.MockRouter) -> Non
     assert route.call_count == 0
 
 
+_FLAT_ALLOWED_TOOLS: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "a"}]}
+_EMPTY_ALLOWED_TOOLS: Final = {"type": "allowed_tools", "mode": "auto", "tools": []}
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_choice"),
+    [("anthropic/claude-haiku-4-5", _FLAT_ALLOWED_TOOLS), ("openai/gpt-5-mini", _EMPTY_ALLOWED_TOOLS)],
+)
+def test_allowed_tools_choice_nothing_enforces_is_refused_under_drop_params(
+    respx_mock: respx.MockRouter, model: str, tool_choice: dict[str, object]
+) -> None:
+    executed: Final[list[ChatCompletionMessageToolCall]] = []
+
+    def execute(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tool_call)
+        return _tool_result(tool_call)
+
+    with pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
+        litellm.run_tool_loop(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=execute,
+            tool_choice=tool_choice,
+            drop_params=True,
+            api_key="sk-test",
+        )
+
+    assert not executed
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_async_loop_refuses_an_allowed_tools_choice_the_provider_cannot_enforce(
+    respx_mock: respx.MockRouter,
+) -> None:
+    async def execute(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        return _tool_result(tool_call)
+
+    with pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
+        await litellm.arun_tool_loop(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=execute,
+            tool_choice=_FLAT_ALLOWED_TOOLS,
+            drop_params=True,
+            api_key="sk-test",
+        )
+
+    assert not respx_mock.calls
+
+
+def test_allowed_tools_choice_the_provider_enforces_reaches_it_every_round(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_response(None, [_tool_call("call_1", "get_weather", {"city": "Paris"})])),
+            httpx.Response(200, json=_openai_response("done")),
+        ]
+    )
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=_tool_result,
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_weather"}]},
+        api_key="sk-test",
+    )
+
+    assert answer == "done"
+    assert [body["tool_choice"]["type"] for body in _request_bodies(respx_mock)] == ["allowed_tools", "allowed_tools"]
+
+
 def test_custom_tool_call_raises_type_error_without_executing(respx_mock: respx.MockRouter) -> None:
     custom_response: Final = _openai_response(
         None,

@@ -1479,3 +1479,41 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
     assert upstream.await_count == (0 if selected else 1)
     tool_message = model_call.await_args.kwargs["messages"][-1]
     assert ("request-selected MCP block" in tool_message["content"]) is selected
+
+
+_MCP_ECHO_TOOL: Final = MCPTool.model_validate(
+    {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+    by_name=False,
+)
+_FLAT_ALLOWED_ECHO: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "echo"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_approval", ["never", "always"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mcp_tools_keep_the_400_for_an_allowed_tools_choice_the_provider_cannot_enforce(
+    respx_mock: respx.MockRouter, require_approval: str, stream: bool
+):
+    execute: Final = AsyncMock(return_value=[])
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([_MCP_ECHO_TOOL], {"echo": "demo"})),
+        ),
+        patch.object(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", execute),
+        pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"),
+    ):
+        await litellm.acompletion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Call echo"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": require_approval}],
+            tool_choice=_FLAT_ALLOWED_ECHO,
+            drop_params=True,
+            stream=stream,
+            api_key="sk-ant-fake",
+        )
+
+    execute.assert_not_awaited()
+    assert not respx_mock.calls
