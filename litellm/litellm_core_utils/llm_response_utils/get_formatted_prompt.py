@@ -1,4 +1,22 @@
-from typing import Literal
+from typing import Final, Literal
+
+from pydantic import TypeAdapter
+
+_INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _get_prompt_from_input(input_data: object, model: str) -> str:
+    if isinstance(input_data, str):
+        return input_data
+    if not isinstance(input_data, (list, tuple)):
+        return ""
+    items: Final = _INPUT_ITEMS.validate_python(input_data)
+    tokens: Final = tuple(token for token in items if isinstance(token, int))
+    if tokens and len(tokens) == len(items):
+        import litellm
+
+        return str(litellm.decode(model=model, tokens=tokens))
+    return "".join(item for item in items if isinstance(item, str))
 
 
 def get_formatted_prompt(
@@ -7,8 +25,11 @@ def get_formatted_prompt(
         "acompletion",
         "completion",
         "embedding",
+        "aembedding",
         "image_generation",
         "audio_transcription",
+        "atranscription",
+        "transcription",
         "moderation",
         "text_completion",
     ],
@@ -36,15 +57,27 @@ def get_formatted_prompt(
                         prompt += function_arguments
     elif call_type == "text_completion":
         prompt = data["prompt"]
-    elif call_type == "embedding" or call_type == "moderation":
+    elif call_type in ("embedding", "aembedding", "moderation"):
+        if "input" not in data:
+            return ""
         if isinstance(data["input"], str):
-            prompt = data["input"]
-        elif isinstance(data["input"], list):
-            for m in data["input"]:
-                prompt += m
-    elif call_type == "image_generation":
+            return data["input"]
+        if isinstance(data["input"], list):
+            items: Final = _INPUT_ITEMS.validate_python(data["input"])
+            model: Final = data["model"] if "model" in data and isinstance(data["model"], str) else ""
+            if any(isinstance(item, list) for item in items):
+                return "".join(_get_prompt_from_input(item, model) for item in items)
+            return _get_prompt_from_input(items, model)
+    elif (
+        call_type
+        in (
+            "image_generation",
+            "audio_transcription",
+            "atranscription",
+            "transcription",
+        )
+        and "prompt" in data
+        and isinstance(data["prompt"], str)
+    ):
         prompt = data["prompt"]
-    elif call_type == "audio_transcription":
-        if "prompt" in data:
-            prompt = data["prompt"]
     return prompt
