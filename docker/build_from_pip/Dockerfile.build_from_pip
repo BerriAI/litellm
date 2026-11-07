@@ -41,7 +41,8 @@ RUN uv venv --python python && \
       "mangum==0.17.0" \
       "azure-ai-contentsafety==1.0.0" \
       "azure-storage-file-datalake==12.20.0" \
-      "pypdf==6.7.5" \
+      "pypdf==6.21.2" \
+      "certifi>=2026.10.19" \
       "llm-sandbox==0.3.31" \
       "detect-secrets==1.5.0" \
       "prisma==0.11.0" \
