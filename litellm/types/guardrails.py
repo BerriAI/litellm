@@ -53,6 +53,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.obsidian_policy import (
+    ObsidianPolicyGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
@@ -147,6 +150,7 @@ class SupportedGuardrailIntegrations(Enum):
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     DEEPKEEP = "deepkeep"
     QOSTODIAN_NEXUS = "qostodian_nexus"
+    OBSIDIAN_POLICY = "obsidian_policy"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
@@ -1426,6 +1430,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
+    ObsidianPolicyGuardrailConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
     RecoConfigModel,
