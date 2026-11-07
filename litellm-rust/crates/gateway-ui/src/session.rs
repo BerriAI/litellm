@@ -49,6 +49,13 @@ struct SessionInfo {
 }
 
 #[derive(Serialize)]
+struct CurrentUserResponse {
+    user_id: String,
+    user_role: &'static str,
+    user_email: Option<String>,
+}
+
+#[derive(Serialize)]
 struct LogoutResponse {
     message: &'static str,
 }
@@ -135,6 +142,21 @@ pub async fn info(
     Ok(Json(SessionInfo {
         user_id: session.user.username,
         user_role: "proxy_admin",
+    }))
+}
+
+pub async fn current_user(
+    session: Result<UiSession, litellm_gateway_auth::Error>,
+) -> Result<impl IntoResponse, Error> {
+    let session = session?;
+    session
+        .identity
+        .authorize(AccessRequest::Ui(UiAction::CurrentUser))
+        .await?;
+    Ok(Json(CurrentUserResponse {
+        user_id: session.user.username,
+        user_role: "proxy_admin",
+        user_email: None,
     }))
 }
 

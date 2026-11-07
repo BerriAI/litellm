@@ -16,6 +16,7 @@ sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+strum.workspace = true
 tower-sessions.workspace = true
 veil.workspace = true
 
