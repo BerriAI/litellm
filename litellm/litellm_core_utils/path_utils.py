@@ -33,7 +33,7 @@ def safe_join(base_dir: str, *parts: str) -> str:
             raise ValueError("Path contains null byte")
     base: Final = os.path.realpath(base_dir)
     resolved: Final = os.path.realpath(os.path.join(base, *parts))
-    if not (resolved.startswith(base + os.sep) or resolved == base):
+    if not (resolved.startswith(os.path.join(base, "")) or resolved == base):
         raise ValueError(f"Path {resolved!r} escapes base directory {base!r}")
     return resolved
 
@@ -50,7 +50,7 @@ def is_within(path: str, base_dir: str) -> bool:
     """True when path, with symlinks resolved, is base_dir or sits inside it."""
     base: Final = os.path.realpath(base_dir)
     resolved: Final = os.path.realpath(path)
-    return resolved.startswith(base + os.sep) or resolved == base
+    return resolved.startswith(os.path.join(base, "")) or resolved == base
 
 
 def join_within(base_dir: str, *parts: str) -> str | None:
@@ -65,7 +65,7 @@ def join_within(base_dir: str, *parts: str) -> str | None:
             return None
     base: Final = os.path.normpath(os.path.abspath(base_dir))
     joined: Final = os.path.normpath(os.path.join(base, *parts))
-    if not joined.startswith(base + os.sep):
+    if joined == base or not joined.startswith(os.path.join(base, "")):
         return None
     return joined
 
