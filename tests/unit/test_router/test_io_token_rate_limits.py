@@ -21,9 +21,10 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.attempt_settlement import routed_attempt
+from litellm.litellm_core_utils.internal_call_metadata import IO_TOKEN_RESERVATION_ID_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.litellm_core_utils.internal_call_metadata import IO_TOKEN_RESERVATION_ID_KEY
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
@@ -42,7 +43,6 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     refund_stale_reservation_before_retry,
     set_io_token_rate_limit_request_kwargs,
 )
-from litellm.router_utils.attempt_settlement import routed_attempt
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )

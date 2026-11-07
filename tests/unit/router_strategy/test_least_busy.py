@@ -16,11 +16,11 @@ import respx
 
 import litellm
 from litellm import Router
-
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from litellm.litellm_core_utils.attempt_settlement import routed_attempt
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
@@ -31,7 +31,6 @@ from litellm.router_strategy.least_busy import (
     release_started_attempt,
     release_unstarted_picks,
 )
-from litellm.router_utils.attempt_settlement import routed_attempt
 from litellm.types.utils import CallTypes, ModelResponse
 
 GROUP: Final = "least-busy-group"

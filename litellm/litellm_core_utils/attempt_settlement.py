@@ -6,6 +6,7 @@ runs to completion even when the request is cancelled mid-release.
 
 import asyncio
 import contextlib
+import sys
 import uuid
 from collections.abc import Coroutine, Generator, Sequence
 from contextvars import ContextVar
@@ -60,8 +61,17 @@ def _finished(task: "asyncio.Task[None]") -> None:
         verbose_router_logger.warning("an attempt's release failed: %s", error)
 
 
+def _start(release: Coroutine[object, object, None]) -> "asyncio.Task[None]":
+    """Run the release up to its first real wait right away, so one that never waits (an in-memory
+    counter) is done before its caller goes on, as it was when the caller awaited it inline."""
+    loop: Final = asyncio.get_running_loop()
+    if sys.version_info >= (3, 12):
+        return asyncio.Task(release, loop=loop, eager_start=True)
+    return loop.create_task(release)
+
+
 def release_in_background(release: Coroutine[object, object, None]) -> "asyncio.Task[None]":
-    task: Final = asyncio.get_running_loop().create_task(release)
+    task: Final = _start(release)
     _RELEASING.add(task)
     task.add_done_callback(_finished)
     return task
@@ -69,7 +79,7 @@ def release_in_background(release: Coroutine[object, object, None]) -> "asyncio.
 
 async def released(releases: Sequence["asyncio.Task[None]"], grace: float | None = None) -> None:
     """Wait for ``releases`` without ever cancelling them: a cancelled waiter leaves them running."""
-    if not releases:
+    if all(release.done() for release in releases):
         return
     _, pending = await asyncio.wait(releases, timeout=grace)
     if pending:

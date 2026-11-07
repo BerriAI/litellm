@@ -18,9 +18,9 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.attempt_settlement import current_attempt_id, release_in_background, released
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
-from litellm.router_utils.attempt_settlement import current_attempt_id, release_in_background, released
 from litellm.types.utils import CallTypes
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60

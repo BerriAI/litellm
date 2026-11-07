@@ -88,6 +88,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     CHAT_ALLOWED_TOOLS_LAYOUT,
     parse_chat_allowed_tools_tool_choice,
 )
+from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     has_attributes,
@@ -110,7 +111,6 @@ from litellm.litellm_core_utils.tool_fields import (
     resolve_deployment_tool_fields,
     tools_without_hosted_mcp,
 )
-from litellm.router_utils.attempt_settlement import mark_attempt_answered
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision

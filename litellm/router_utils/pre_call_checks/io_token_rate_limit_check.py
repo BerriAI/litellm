@@ -34,6 +34,7 @@ from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.attempt_settlement import current_attempt_id, release_in_background, released
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_ATTEMPT_KEY,
@@ -47,7 +48,6 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
-from litellm.router_utils.attempt_settlement import current_attempt_id, release_in_background, released
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
 
@@ -391,6 +391,7 @@ def _reservation(
 ) -> Mapping[str, int | str | None]:
     return MappingProxyType(
         {
+            IO_TOKEN_RESERVATION_ID_KEY: uuid.uuid4().hex,
             ITPM_RESERVED_KEY: itpm_reserved,
             OTPM_RESERVED_KEY: otpm_reserved,
             ITPM_CACHE_KEY: itpm_cache_key,
@@ -404,7 +405,6 @@ def _stash_reservation_in_metadata(request: _IoTokenRateLimitRequest | None, res
     if isinstance(metadata, dict):
         metadata.update(reservation)
         metadata[IO_TOKEN_ATTEMPT_KEY] = current_attempt_id()
-        metadata[IO_TOKEN_RESERVATION_ID_KEY] = uuid.uuid4().hex
 
 
 def _key_for_this_minute(reserved_key: str) -> str:

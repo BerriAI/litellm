@@ -47,6 +47,12 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     prepare_response_for_header_attachment,
 )
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
+from litellm.litellm_core_utils.attempt_settlement import (
+    ATTEMPT_SETTLEMENT_GRACE_SECONDS,
+    RoutedAttempt,
+    released,
+    routed_attempt,
+)
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -216,12 +222,6 @@ from litellm.router_strategy.least_busy import (
     pick_reserves,
     picks_reserve,
     release_started_attempt,
-)
-from litellm.router_utils.attempt_settlement import (
-    ATTEMPT_SETTLEMENT_GRACE_SECONDS,
-    RoutedAttempt,
-    released,
-    routed_attempt,
 )
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
