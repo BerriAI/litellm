@@ -561,11 +561,21 @@ async def team_deployment_the_caller_may_use(
 ) -> TeamProviderDeployment | None:
     if deployment is None:
         return None
+    return (
+        deployment if await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict) else None
+    )
+
+
+async def caller_may_use_model(
+    public_model_name: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
     try:
-        await authorize_model_for_key(deployment.public_model_name, llm_router, user_api_key_dict)
+        await authorize_model_for_key(public_model_name, llm_router, user_api_key_dict)
     except ProxyException:
-        return None
-    return deployment
+        return False
+    return True
 
 
 async def get_authorized_credentials_for_model(

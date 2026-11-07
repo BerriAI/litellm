@@ -397,6 +397,76 @@ async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("key_models", "expected_base", "expected_authorization"),
+    [
+        (["gpt-4o-mini"], "https://allowed-openai.example/v1", "Bearer allowed-key"),
+        ([], "https://restricted-openai.example/v1", "Bearer restricted-key"),
+    ],
+)
+async def test_managed_file_id_reaches_its_upload_deployment_only_when_the_key_may_use_it(
+    monkeypatch: pytest.MonkeyPatch, key_models: list[str], expected_base: str, expected_authorization: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", models=key_models)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "allowed-key",
+                    "api_base": "https://allowed-openai.example/v1",
+                },
+                "model_info": {"id": "gpt-4o-mini-id"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "restricted-key",
+                    "api_base": "https://restricted-openai.example/v1",
+                },
+                "model_info": {"id": "restricted-openai"},
+            },
+        ]
+    )
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "forged-unified-id", "gpt-4o-mini", RAW_FILE_ID, "restricted-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    data, _ = await _update_request_data_with_managed_file_id(
+        data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+        file_id=managed_file_id,
+        request=MagicMock(headers={}, query_params={}),
+        user_api_key_dict=caller,
+        managed_files_obj=ManagedResourceAccessCheckerStub(file_access="allow"),
+        llm_router=router,
+    )
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.get(f"{expected_base}/vector_stores/vs-test/files/{RAW_FILE_ID}").mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row(RAW_FILE_ID)))
+        )
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai"},
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+
+    assert upstream.calls.last.request.headers["Authorization"] == expected_authorization
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("caller_team_id", "upload_copy_status", "expected_url", "expected_authorization"),
     [
         ("team-b", 404, f"{_TEAM_OPENAI_BASE}/vector_stores/vs-test/files/file-team-copy", "Bearer team-openai-key"),

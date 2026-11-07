@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
+    caller_may_use_model,
     carries_explicit_credentials,
     get_credentials_for_model,
     get_team_provider_deployment,
@@ -282,6 +283,11 @@ async def _update_request_data_with_managed_file_id(
                 if raw_vector_store_id is not None
                 and stored_deployment is not None
                 and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
+                and await caller_may_use_model(
+                    stored_deployment.model_info.team_public_model_name or stored_deployment.model_name,
+                    llm_router,
+                    user_api_key_dict,
+                )
                 else None
             )
             upload_routing_model: Final = upload_deployment_id or (
