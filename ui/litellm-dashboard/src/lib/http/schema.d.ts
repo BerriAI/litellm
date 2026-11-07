@@ -30822,6 +30822,11 @@ export interface components {
              */
             allowed_routes?: unknown[] | null;
             /**
+             * Always Include Stream Usage
+             * @description If True, adds stream_options.include_usage to streaming requests so usage is always tracked. If False, turns off stream usage injection on pass-through endpoints.
+             */
+            always_include_stream_usage?: boolean | null;
+            /**
              * Apply User Budget To Team Keys
              * @description If True, a user's personal max_budget is enforced on every request they make, including requests made with a team-scoped key. Defaults to False, where a team-scoped key is governed only by the team and team-member budgets and the key owner's personal max_budget does not apply (see GitHub issue #12905).
              */

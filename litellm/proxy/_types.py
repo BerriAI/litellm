@@ -2501,6 +2501,17 @@ class SpendLogsMetadataFields(BaseModel):
 DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
 
 
+class AdminUIFieldType(str, enum.Enum):
+    BOOLEAN = "Boolean"
+    FLOAT = "Float"
+    INTEGER = "Integer"
+    LIST = "List"
+    PYDANTIC_MODEL = "PydanticModel"
+    REQUEST_TAG_MAPPINGS = "RequestTagMappings"
+    STRING = "String"
+    TYPED_DICTIONARY = "TypedDictionary"
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -2511,7 +2522,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
-    request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
+    request_tag_mappings: Annotated[Sequence[RequestTagMapping] | None, AdminUIFieldType.REQUEST_TAG_MAPPINGS] = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
     )
@@ -2526,13 +2537,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         return rules
 
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
-    max_in_flight_requests_per_worker: int | None = Field(
+    max_in_flight_requests_per_worker: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"
     )
-    max_queued_requests_per_worker: int | None = Field(
+    max_queued_requests_per_worker: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None, ge=0, description="maximum requests waiting for a worker slot"
     )
-    admission_queue_timeout_seconds: float = Field(
+    admission_queue_timeout_seconds: Annotated[float, AdminUIFieldType.FLOAT] = Field(
         1.0, gt=0, description="maximum time a request waits for a worker slot"
     )
     plugins: list[PluginConfig] | None = Field(
@@ -2662,14 +2673,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth",
     )
-    max_parallel_requests: int | None = Field(
+    max_parallel_requests: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="maximum parallel requests for each api key",
     )
-    global_max_parallel_requests: int | None = Field(
+    global_max_parallel_requests: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None, description="global max parallel requests to allow for a proxy instance."
     )
-    user_api_key_cache_max_size: int | None = Field(
+    user_api_key_cache_max_size: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         gt=0,
         description=(
@@ -2678,51 +2689,51 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "lookups keep hitting the DB"
         ),
     )
-    max_request_size_mb: int | None = Field(
+    max_request_size_mb: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
     )
-    max_batch_file_size_mb: int | None = Field(
+    max_batch_file_size_mb: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
-    max_batch_file_records: int | None = Field(
+    max_batch_file_records: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         gt=0,
         description="max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit",
     )
-    max_batch_file_uploads_per_day: int | None = Field(
+    max_batch_file_uploads_per_day: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         gt=0,
         description="max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
     )
-    max_file_downloads_per_minute: int | None = Field(
+    max_file_downloads_per_minute: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         gt=0,
         description="max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
     )
-    max_file_size_mb: int | None = Field(
+    max_file_size_mb: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
-    allowed_file_extensions: tuple[str, ...] | None = Field(
+    allowed_file_extensions: Annotated[tuple[str, ...] | None, AdminUIFieldType.LIST] = Field(
         None,
         description="the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied",
     )
-    blocked_file_extensions: tuple[str, ...] | None = Field(
+    blocked_file_extensions: Annotated[tuple[str, ...] | None, AdminUIFieldType.LIST] = Field(
         None,
         description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
-    max_response_size_mb: int | None = Field(
+    max_response_size_mb: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
     )
-    proxy_config_reload_interval_seconds: int = Field(
+    proxy_config_reload_interval_seconds: Annotated[int, AdminUIFieldType.INTEGER] = Field(
         30,
         gt=0,
         description="how often (in seconds) each pod reloads config-in-DB objects (models, credentials, guardrails, etc.) when store_model_in_db is enabled; lower values speed up multi-pod convergence at the cost of more DB load. Applied on proxy startup",
     )
-    cancel_on_disconnect: bool | None = Field(
+    cancel_on_disconnect: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure",
     )
@@ -2768,7 +2779,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "hidden model can still be called."
         ),
     )
-    return_wildcard_routes: bool | None = Field(
+    return_wildcard_routes: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description=(
             "When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes "
@@ -2851,7 +2862,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         le=7200,
         description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
     )
-    pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
+    pass_through_endpoints: Annotated[list[PassThroughGenericEndpoint] | None, AdminUIFieldType.PYDANTIC_MODEL] = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
     )
@@ -2863,7 +2874,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.",
     )
-    transcribe_media_buckets: list[str] | None = Field(
+    transcribe_media_buckets: Annotated[list[str] | None, AdminUIFieldType.LIST] = Field(
         default=None,
         description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
     )
@@ -2884,7 +2895,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
     )
-    store_prompts_in_spend_logs: bool | None = Field(
+    store_prompts_in_spend_logs: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
@@ -2896,7 +2907,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         False,
         description="If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.",
     )
-    disable_requester_ip_address_logging: bool | None = Field(
+    disable_requester_ip_address_logging: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
     )
@@ -2904,7 +2915,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
     )
-    disable_auto_add_proxy_admin_to_teams: bool | None = Field(
+    disable_auto_add_proxy_admin_to_teams: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
     )
@@ -2912,7 +2923,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.",
     )
-    disable_fallbacks_on_per_model_rate_limits: bool | None = Field(
+    disable_fallbacks_on_per_model_rate_limits: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description=(
             "If true, a request rejected by a key/team/org/project per-model rate limit "
@@ -2936,7 +2947,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "falls under the threshold (default 0.9). Off unless set."
         ),
     )
-    maximum_spend_logs_retention_period: str | None = Field(
+    maximum_spend_logs_retention_period: Annotated[str | None, AdminUIFieldType.STRING] = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
@@ -2944,7 +2955,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
     )
-    maximum_health_check_retention_period: str | None = Field(
+    maximum_health_check_retention_period: Annotated[str | None, AdminUIFieldType.STRING] = Field(
         None,
         description=(
             "Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this "
@@ -2952,7 +2963,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Set this well above health_check_interval because /health and the UI read the latest row per model."
         ),
     )
-    maximum_daily_tag_spend_retention_period: str | None = Field(
+    maximum_daily_tag_spend_retention_period: Annotated[str | None, AdminUIFieldType.STRING] = Field(
         None,
         description=(
             "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
@@ -2988,23 +2999,23 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
-    maximum_spend_logs_cleanup_batch_size: int | None = Field(
+    maximum_spend_logs_cleanup_batch_size: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.",
     )
-    maximum_spend_logs_cleanup_max_batches: int | None = Field(
+    maximum_spend_logs_cleanup_max_batches: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         description="Maximum DELETE statements the spend log cleanup job issues per table per run. Defaults to 500.",
     )
-    maximum_spend_logs_cleanup_run_budget: str | None = Field(
+    maximum_spend_logs_cleanup_run_budget: Annotated[str | None, AdminUIFieldType.STRING] = Field(
         None,
         description="Wall-clock budget for one spend log cleanup run (e.g. '5m'), shared across every table it prunes. A run that hits the budget stops and the next run resumes from where it left off. Defaults to '5m'.",
     )
-    maximum_spend_logs_cleanup_batch_timeout: str | None = Field(
+    maximum_spend_logs_cleanup_batch_timeout: Annotated[str | None, AdminUIFieldType.STRING] = Field(
         None,
         description="Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.",
     )
-    mcp_internal_ip_ranges: list[str] | None = Field(
+    mcp_internal_ip_ranges: Annotated[list[str] | None, AdminUIFieldType.LIST] = Field(
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
     )
@@ -3013,14 +3024,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
         "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
-    mcp_disabled_capabilities: MCPDisabledCapabilities | None = Field(
+    mcp_disabled_capabilities: Annotated[MCPDisabledCapabilities | None, AdminUIFieldType.LIST] = Field(
         None,
         description="MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. "
         "A disabled capability is left out of the initialize and server/discover responses, its list operations "
         "return an empty list without contacting any upstream MCP server, and its get/read operations answer "
         "METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.",
     )
-    mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
+    mcp_allowed_clients: Annotated[list[MCPAllowedClient] | None, AdminUIFieldType.TYPED_DICTIONARY] = Field(
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
     )
@@ -3028,20 +3039,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
     )
-    mcp_client_id_header: str | None = Field(
+    mcp_client_id_header: Annotated[str | None, AdminUIFieldType.STRING] = Field(
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
     )
-    mcp_trusted_proxy_ranges: list[str] | None = Field(
+    mcp_trusted_proxy_ranges: Annotated[list[str] | None, AdminUIFieldType.LIST] = Field(
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",
     )
-    mcp_xff_num_trusted_hops: int | None = Field(
+    mcp_xff_num_trusted_hops: Annotated[int | None, AdminUIFieldType.INTEGER] = Field(
         None,
         ge=1,
         description="Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.",
     )
-    mcp_prefer_client_id_metadata_document: bool | None = Field(
+    mcp_prefer_client_id_metadata_document: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.",
     )
@@ -3049,18 +3060,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, or containing an entry that is not an address or CIDR range, the per-source sign-in limit is off.",
     )
-    store_model_in_db: bool | None = Field(
+    store_model_in_db: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
-    forward_client_headers_to_llm_api: bool | None = Field(
+    always_include_stream_usage: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
+        None,
+        description="If True, adds stream_options.include_usage to streaming requests so usage is always tracked. If False, turns off stream usage injection on pass-through endpoints.",
+    )
+    forward_client_headers_to_llm_api: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
     skill_scanner: SkillScannerConfig | None = Field(
         None, description="Opt-in external scanner for manual admin review of skill submissions"
     )
-    mcp_required_fields: list[str] | None = Field(
+    mcp_required_fields: Annotated[list[str] | None, AdminUIFieldType.LIST] = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
@@ -3147,7 +3162,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
-    apply_user_budget_to_team_keys: bool | None = Field(
+    apply_user_budget_to_team_keys: Annotated[bool | None, AdminUIFieldType.BOOLEAN] = Field(
         None,
         description=(
             "If True, a user's personal max_budget is enforced on every request they "
@@ -3157,7 +3172,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #12905)."
         ),
     )
-    agent_access_default_deny: bool = Field(
+    agent_access_default_deny: Annotated[bool, AdminUIFieldType.BOOLEAN] = Field(
         False,
         description=(
             "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "

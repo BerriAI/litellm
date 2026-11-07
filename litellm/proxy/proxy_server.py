@@ -131,6 +131,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    AdminUIFieldType,
     AwsErrorTypeProxyException,
     CallbackDelete,
     CallInfo,
@@ -20646,53 +20647,16 @@ Keep it more precise, to prevent overwrite other values unintentially
 
 _PLUGIN_KEY_REDACTED: Final = "***"
 
+
+def _admin_ui_field_type(field: FieldInfo) -> str | None:
+    return next((marker.value for marker in field.metadata if isinstance(marker, AdminUIFieldType)), None)
+
+
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "request_tag_mappings": "RequestTagMappings",
-        "max_parallel_requests": "Integer",
-        "global_max_parallel_requests": "Integer",
-        "max_in_flight_requests_per_worker": "Integer",
-        "max_queued_requests_per_worker": "Integer",
-        "admission_queue_timeout_seconds": "Float",
-        "max_request_size_mb": "Integer",
-        "max_batch_file_size_mb": "Integer",
-        "max_batch_file_records": "Integer",
-        "max_batch_file_uploads_per_day": "Integer",
-        "max_file_downloads_per_minute": "Integer",
-        "max_file_size_mb": "Integer",
-        "allowed_file_extensions": "List",
-        "blocked_file_extensions": "List",
-        "max_response_size_mb": "Integer",
-        "proxy_config_reload_interval_seconds": "Integer",
-        "pass_through_endpoints": "PydanticModel",
-        "store_model_in_db": "Boolean",
-        "return_wildcard_routes": "Boolean",
-        "store_prompts_in_spend_logs": "Boolean",
-        "disable_requester_ip_address_logging": "Boolean",
-        "disable_fallbacks_on_per_model_rate_limits": "Boolean",
-        "maximum_spend_logs_retention_period": "String",
-        "maximum_health_check_retention_period": "String",
-        "maximum_daily_tag_spend_retention_period": "String",
-        "maximum_spend_logs_cleanup_batch_size": "Integer",
-        "maximum_spend_logs_cleanup_max_batches": "Integer",
-        "maximum_spend_logs_cleanup_run_budget": "String",
-        "maximum_spend_logs_cleanup_batch_timeout": "String",
-        "mcp_internal_ip_ranges": "List",
-        "mcp_allowed_clients": "TypedDictionary",
-        "mcp_client_id_header": "String",
-        "mcp_trusted_proxy_ranges": "List",
-        "mcp_xff_num_trusted_hops": "Integer",
-        "mcp_prefer_client_id_metadata_document": "Boolean",
-        "always_include_stream_usage": "Boolean",
-        "forward_client_headers_to_llm_api": "Boolean",
-        "mcp_required_fields": "List",
-        "mcp_disabled_capabilities": "List",
-        "cancel_on_disconnect": "Boolean",
-        "disable_auto_add_proxy_admin_to_teams": "Boolean",
-        "apply_user_budget_to_team_keys": "Boolean",
-        "agent_access_default_deny": "Boolean",
-        "user_api_key_cache_max_size": "Integer",
-        "transcribe_media_buckets": "List",
+        name: field_type
+        for name, field in ConfigGeneralSettings.model_fields.items()
+        if (field_type := _admin_ui_field_type(field)) is not None
     }
 )
 
