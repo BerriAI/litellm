@@ -25,7 +25,7 @@ from litellm.types.utils import CallTypes
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 SELECTION_RESERVATION_TTL_SECONDS: Final = 30.0
-SELECTION_RESERVATION_MAX_KEYS: Final = 10_000
+SELECTION_RESERVATION_MAX_KEYS: Final = 20_000
 _RESERVATIONS_LOCK: Final = threading.Lock()
 _PICK_RESERVES: Final[ContextVar[bool]] = ContextVar("least_busy_pick_reserves")
 _PICK_OWNER: Final[ContextVar[str | None]] = ContextVar("least_busy_pick_owner", default=None)

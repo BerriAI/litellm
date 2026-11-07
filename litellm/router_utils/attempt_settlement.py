@@ -14,22 +14,40 @@ from typing import Final
 from litellm._logging import verbose_router_logger
 
 ATTEMPT_SETTLEMENT_GRACE_SECONDS: Final = 5.0
-_ATTEMPT_ID: Final[ContextVar[str | None]] = ContextVar("routed_attempt_id", default=None)
+
+
+class RoutedAttempt:
+    __slots__ = ("answered", "attempt_id")
+
+    def __init__(self) -> None:
+        self.attempt_id: Final = uuid.uuid4().hex
+        self.answered: bool = False
+
+
+_ATTEMPT: Final[ContextVar[RoutedAttempt | None]] = ContextVar("routed_attempt", default=None)
 _RELEASING: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: a release leaves it when it finishes
 
 
 def current_attempt_id() -> str | None:
-    return _ATTEMPT_ID.get()
+    attempt: Final = _ATTEMPT.get()
+    return None if attempt is None else attempt.attempt_id
+
+
+def mark_attempt_answered() -> None:
+    """The provider answered the current routed attempt: what it reserved was spent, not just held."""
+    attempt: Final = _ATTEMPT.get()
+    if attempt is not None:
+        attempt.answered = True
 
 
 @contextlib.contextmanager
-def routed_attempt() -> Generator[str, None, None]:
-    attempt_id: Final = uuid.uuid4().hex
-    token: Final = _ATTEMPT_ID.set(attempt_id)
+def routed_attempt() -> Generator[RoutedAttempt, None, None]:
+    attempt: Final = RoutedAttempt()
+    token: Final = _ATTEMPT.set(attempt)
     try:
-        yield attempt_id
+        yield attempt
     finally:
-        _ATTEMPT_ID.reset(token)
+        _ATTEMPT.reset(token)
 
 
 def _finished(task: "asyncio.Task[None]") -> None:

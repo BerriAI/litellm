@@ -110,6 +110,7 @@ from litellm.litellm_core_utils.tool_fields import (
     resolve_deployment_tool_fields,
     tools_without_hosted_mcp,
 )
+from litellm.router_utils.attempt_settlement import mark_attempt_answered
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -2512,6 +2513,7 @@ def client(original_function):
                 except BaseException:  # noqa: S110, BLE001  # a failing hook must never replace the real deployment failure, so there is nothing to do with what it raises
                     pass
                 raise
+            mark_attempt_answered()
             end_time = datetime.datetime.now()
 
             streaming_requested: Final = _returns_requested_stream(kwargs, call_type, result)

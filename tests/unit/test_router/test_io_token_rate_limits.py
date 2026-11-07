@@ -2072,3 +2072,50 @@ async def test_a_reservation_refunded_through_a_logged_copy_of_its_metadata_is_r
     await check.async_log_failure_event(logged, None, None, None)
 
     assert await _counts(cache) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_retry_refunds_the_reservation_its_previous_attempt_left_behind() -> None:
+    cache: Final = DualCache()
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "metadata": {}}
+
+    async def first_attempt() -> None:
+        with routed_attempt():
+            set_io_token_rate_limit_request_kwargs(request, metadata_channel="metadata")
+            await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+
+    def retry() -> None:
+        with routed_attempt():
+            refund_stale_reservation_before_retry(cache, request)
+
+    await asyncio.create_task(first_attempt())
+    contextvars.copy_context().run(retry)
+
+    assert await _counts(cache) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_request_cancelled_after_its_provider_answered_keeps_the_tokens_it_spent_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    answered: Final = asyncio.Event()
+
+    class SlowSuccessHook(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            answered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, SlowSuccessHook()])
+    router: Final = _router_with_io_limits()
+    first_minute: Final = _current_minute()
+    call: Final["asyncio.Task[tuple[int, int]]"] = asyncio.create_task(_proxy_chat(router, "hi"))
+    await answered.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    _, otpm = await _io_counters_since(router, first_minute)
+    assert otpm == 100

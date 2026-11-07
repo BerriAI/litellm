@@ -1203,11 +1203,11 @@ async def test_an_attempt_that_retried_inside_itself_frees_every_start_once_what
     attempt: Final = _call_kwargs("dep-a")
 
     async def retried_then_cancelled() -> None:
-        with routed_attempt() as attempt_id:
+        with routed_attempt() as routed:
             worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
             worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
             await worker.async_log_failure_event(attempt, None, None, None)
-            release: Final = release_started_attempt(store, cache, attempt_id)
+            release: Final = release_started_attempt(store, cache, routed.attempt_id)
             if release is not None:
                 await release
 
@@ -1215,3 +1215,15 @@ async def test_an_attempt_that_retried_inside_itself_frees_every_start_once_what
 
     assert shared.count(f"{GROUP}_request_count:dep-a") == 0
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+def test_every_call_in_flight_at_once_frees_its_count_with_the_default_store_size() -> None:
+    worker: Final = _worker(None)
+    in_flight: Final = 7_000
+    calls: Final = tuple(_call_kwargs("dep-a", f"call-{n}") for n in range(in_flight))
+    attempts: Final = tuple(_started_in_its_own_attempt(worker, call) for call in calls)
+
+    for attempt, call in zip(attempts, calls, strict=True):
+        attempt.run(worker.log_failure_event, call, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A

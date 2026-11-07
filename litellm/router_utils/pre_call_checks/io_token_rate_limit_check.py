@@ -441,17 +441,19 @@ def _stashed_reservation(kwargs: Mapping[str, object] | None) -> Mapping[str, ob
     return next((channel for channel in channels if channel is not None and ITPM_RESERVED_KEY in channel), None)
 
 
-def _claim_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> tuple[int, int, str | None, str | None]:
+def _claim_reservation_from_kwargs(
+    kwargs: Mapping[str, object] | None, *, any_attempt: bool = False
+) -> tuple[int, int, str | None, str | None]:
     """
     Take the stashed reservation so nothing else settles it. Under a routed attempt only that attempt's
-    own reservation is taken: a late callback of an earlier attempt sharing these kwargs leaves the next
-    attempt's reservation alone.
+    own reservation is taken, unless ``any_attempt``: a late callback of an earlier attempt sharing these
+    kwargs leaves the next attempt's reservation alone.
     """
     stashed: Final = _stashed_reservation(kwargs)
     if stashed is None:
         return 0, 0, None, None
     attempt: Final = current_attempt_id()
-    if attempt is not None and stashed.get(IO_TOKEN_ATTEMPT_KEY) not in (None, attempt):
+    if not any_attempt and attempt is not None and stashed.get(IO_TOKEN_ATTEMPT_KEY) not in (None, attempt):
         return 0, 0, None, None
     reservation: Final = _extract_reservation(stashed)
     reservation_id: Final = stashed.get(IO_TOKEN_RESERVATION_ID_KEY)
@@ -882,9 +884,11 @@ async def async_io_token_reconcile_success(
 def io_token_refund_failure(
     dual_cache: DualCache,
     kwargs: Mapping[str, object] | None,
+    *,
+    any_attempt: bool = False,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
-    reservation: Final = _claim_reservation_from_kwargs(request_kwargs)
+    reservation: Final = _claim_reservation_from_kwargs(request_kwargs, any_attempt=any_attempt)
     itpm_reserved, otpm_reserved, _, _ = reservation
     for key, delta in _refunds(reservation):
         dual_cache.increment_cache(key=key, value=delta, ttl=RoutingArgsTTL)
@@ -915,7 +919,7 @@ def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Mapping
     """
     if not kwargs:
         return
-    io_token_refund_failure(dual_cache, kwargs)
+    io_token_refund_failure(dual_cache, kwargs, any_attempt=True)
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
