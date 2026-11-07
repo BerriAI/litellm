@@ -29,6 +29,12 @@ class UserSearchWhere(TypedDict):
     OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email"], InsensitiveContains], ...]]
 
 
+class UserAliasWhere(TypedDict):
+    """Prisma filter behind `/user/list?user_alias=`: user_alias contains the term, case-insensitive."""
+
+    user_alias: ReadOnly[InsensitiveContains]
+
+
 class UserListResponse(LiteLLMBaseModel):
     """
     Response model for the user list endpoint
