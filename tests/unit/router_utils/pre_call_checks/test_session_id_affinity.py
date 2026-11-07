@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from typing import Final
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
@@ -196,7 +197,7 @@ async def shared_session_router() -> AsyncIterator[tuple[litellm.Router, FakeSer
             patch("redis.Redis.from_url", return_value=sync_client),
             patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
         ):
-            redis: Final = RedisCache(url="redis://session-outage.example:6379/0")
+            redis: Final = RedisCache(url=f"redis://session-outage-{uuid.uuid4().hex}.example:6379/0")
             router.cache.attach_redis_cache(redis)
             yield router, server, redis
     finally:

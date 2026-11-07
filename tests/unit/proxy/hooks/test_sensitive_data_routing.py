@@ -29,7 +29,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
 from litellm.redis.stores.connection import RedisStores
 from litellm.redis.stores.sensitive_route_pins import SensitiveRoutePinStore
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
-from litellm.rust_bridge._native import NativeRedisClient
+from litellm.rust_bridge._native import NativeRedisBreaker, NativeRedisClient
 
 
 class MockInternalUsageCache:
@@ -930,7 +930,9 @@ async def test_an_open_circuit_breaker_keeps_session_routing_in_memory_without_a
             redis_kwargs={"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2},
             namespace=f"open-breaker-{uuid.uuid4()}",
             default_ttl=60,
-            breaker=RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0),
+            breaker=NativeRedisBreaker(
+                RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
+            ),
         )
     )
     handler = PROXY_SensitiveDataRoutingHandler(

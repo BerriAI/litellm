@@ -1166,7 +1166,7 @@ async def test_native_store_failures_fast_fail_the_cache_on_the_same_redis():
     unreached: Final = AsyncMock()
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
-        with pytest.raises(Exception, match="(?i)connect"):
+        with pytest.raises(Exception, match=r"(?i)connect"):
             await store.set("spend:key:lit4930", 1.0, 60)
 
     with patch.object(cache, "init_async_client", return_value=unreached):
