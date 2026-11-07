@@ -3228,29 +3228,32 @@ class ProxyBaseLLMRequestProcessing:
         if contents:
             self.data["contents"] = contents
 
-        ### ROUTE THE REQUEST ###
-        # Do not change this - it should be a constant time fetch - ALWAYS
-        llm_call: Final = await route_request(
-            data=self.data,
-            route_type=route_type,
-            llm_router=llm_router,
-            user_model=user_model,
-            user_api_key_dict=user_api_key_dict,
-        )
-        llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
-        tasks.append(llm_call_task)
-
-        llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
-
         try:
-            if general_settings.get("cancel_on_disconnect", False):
-                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
-            else:
-                responses = await llm_responses
-        except asyncio.CancelledError:
-            if _total_timeout_expired():
-                await _cost_a_call_answered_past_its_total_timeout(llm_call_task, logging_obj)
-            raise
+            ### ROUTE THE REQUEST ###
+            # Do not change this - it should be a constant time fetch - ALWAYS
+            llm_call: Final = await route_request(
+                data=self.data,
+                route_type=route_type,
+                llm_router=llm_router,
+                user_model=user_model,
+                user_api_key_dict=user_api_key_dict,
+            )
+            llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
+            tasks.append(llm_call_task)
+
+            llm_responses: Final = asyncio.gather(
+                *tasks
+            )  # run the moderation check in parallel to the actual llm api call
+
+            try:
+                if general_settings.get("cancel_on_disconnect", False):
+                    responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                else:
+                    responses = await llm_responses
+            except asyncio.CancelledError:
+                if _total_timeout_expired():
+                    await _cost_a_call_answered_past_its_total_timeout(llm_call_task, logging_obj)
+                raise
         finally:
             await _cancel_pending_gather_tasks(tasks)
 

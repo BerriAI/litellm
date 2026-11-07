@@ -4,7 +4,7 @@ import copy
 import datetime
 import gzip
 import json
-from collections.abc import AsyncIterable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13108,6 +13108,7 @@ class TestTotalTimeout:
         monkeypatch: pytest.MonkeyPatch,
         llm_call: Callable[[Mapping[str, object]], object],
         *,
+        routing: Callable[[], Awaitable[None]] | None = None,
         body: Mapping[str, object] = MappingProxyType({}),
         headers: Mapping[str, str] = MappingProxyType({}),
         moderation: Callable[..., object] | None = None,
@@ -13143,6 +13144,8 @@ class TestTotalTimeout:
         hooks.post_call_failure_hook = AsyncMock(return_value=None)
 
         async def fake_route_request(**kwargs):
+            if routing is not None:
+                await routing()
             return llm_call(kwargs["data"])
 
         monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
@@ -13309,3 +13312,29 @@ class TestTotalTimeout:
 
         assert raised.value.code == "408"
         hooks.post_call_failure_hook.assert_not_awaited()
+
+    async def test_a_budget_that_runs_out_while_routing_also_stops_the_moderation_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        moderation_stopped: Final = asyncio.Event()
+
+        async def moderation(**_: object) -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                moderation_stopped.set()
+                raise
+
+        async def stuck_routing() -> None:
+            await asyncio.Event().wait()
+
+        async def never_called(_: Mapping[str, object]) -> object:
+            raise AssertionError
+
+        with pytest.raises(ProxyException) as raised:
+            await self._process(
+                monkeypatch, never_called, routing=stuck_routing, body={"total_timeout": 0.2}, moderation=moderation
+            )
+
+        assert raised.value.code == "408"
+        assert moderation_stopped.is_set()
