@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from typing import Final, Literal
 
+from openai.types.chat.chat_completion_allowed_tool_choice_param import ChatCompletionAllowedToolChoiceParam
+from openai.types.chat.chat_completion_allowed_tools_param import ChatCompletionAllowedToolsParam
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -10,6 +12,9 @@ ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "lite
 
 CHAT_ALLOWED_TOOLS_LAYOUT: Final = (
     '{"type": "allowed_tools", "allowed_tools": {"mode": "auto" | "required", "tools": [<at least one tool>]}}'
+)
+RESPONSES_ALLOWED_TOOLS_LAYOUT: Final = (
+    '{"type": "allowed_tools", "mode": "auto" | "required", "tools": [<at least one tool>]}'
 )
 
 
@@ -27,7 +32,17 @@ class ChatAllowedToolsToolChoice(BaseModel):
     allowed_tools: ChatAllowedTools
 
 
-_CHAT_ALLOWED_TOOLS_TOOL_CHOICE: Final = TypeAdapter(ChatAllowedToolsToolChoice)
+class ResponsesAllowedToolsToolChoice(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["allowed_tools"]
+    mode: Literal["auto", "required"]
+    tools: tuple[Mapping[str, object], ...] = Field(min_length=1)
+
+
+_ALLOWED_TOOLS_TOOL_CHOICE: Final[TypeAdapter[ChatAllowedToolsToolChoice | ResponsesAllowedToolsToolChoice]] = (
+    TypeAdapter(ChatAllowedToolsToolChoice | ResponsesAllowedToolsToolChoice)
+)
 
 
 _SELECTOR: Final = TypeAdapter(dict[str, object])
@@ -70,16 +85,49 @@ def raise_if_allowed_tools_tool_choice_unsupported(
     )
 
 
-def parse_chat_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsToolChoice | None:
-    try:
-        return _CHAT_ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
-    except ValidationError:
-        return None
-
-
 def _has_name(selector: Mapping[str, object]) -> bool:
     name: Final = selector.get("name")
     return isinstance(name, str) and name != ""
+
+
+def _chat_allowed_tool(tool: Mapping[str, object]) -> Mapping[str, object] | None:
+    tool_type: Final = tool.get("type")
+    if not isinstance(tool_type, str) or tool_type not in ("function", "custom") or tool_type in tool:
+        return tool
+    if not _has_name(tool):
+        return None
+    return {**{key: value for key, value in tool.items() if key != "name"}, tool_type: {"name": tool["name"]}}
+
+
+def _chat_layout(choice: ResponsesAllowedToolsToolChoice) -> ChatAllowedToolsToolChoice | None:
+    nested: Final = tuple(_chat_allowed_tool(tool) for tool in choice.tools)
+    if any(tool is None for tool in nested):
+        return None
+    return ChatAllowedToolsToolChoice(
+        type="allowed_tools",
+        allowed_tools=ChatAllowedTools(mode=choice.mode, tools=tuple(tool for tool in nested if tool is not None)),
+    )
+
+
+def parse_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsToolChoice | None:
+    try:
+        parsed: Final = _ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
+    except ValidationError:
+        return None
+    match parsed:
+        case ChatAllowedToolsToolChoice():
+            return parsed
+        case ResponsesAllowedToolsToolChoice():
+            return _chat_layout(parsed)
+
+
+def chat_allowed_tools_tool_choice(choice: ChatAllowedToolsToolChoice) -> ChatCompletionAllowedToolChoiceParam:
+    return ChatCompletionAllowedToolChoiceParam(
+        type="allowed_tools",
+        allowed_tools=ChatCompletionAllowedToolsParam(
+            mode=choice.allowed_tools.mode, tools=[dict(tool) for tool in choice.allowed_tools.tools]
+        ),
+    )
 
 
 def _responses_allowed_tool(tool: Mapping[str, object]) -> Mapping[str, object] | None:

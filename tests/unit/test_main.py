@@ -426,15 +426,21 @@ _ALLOWED_TOOLS_TOOL_CHOICE: Final = {
     "type": "allowed_tools",
     "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
 }
+_RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE: Final = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [{"type": "function", "name": "get_time"}],
+}
 _TWO_TOOLS: Final = [
     {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
 ]
 
 
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
 def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
-    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str, tool_choice: dict[str, object]
 ):
     mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
         return_value=httpx.Response(status_code=200, json=openai_api_response)
@@ -444,7 +450,7 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
         model=model,
         messages=[{"role": "user", "content": "What time is it?"}],
         tools=_TWO_TOOLS,
-        tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+        tool_choice=tool_choice,
         api_base="http://localhost:12346/v1",
         api_key="fake_api_key",
         api_version="2025-04-01-preview",

@@ -7,7 +7,8 @@ import pytest
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
     is_allowed_tools_tool_choice,
-    parse_chat_allowed_tools_tool_choice,
+    chat_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
 
@@ -26,7 +27,7 @@ _CHAT_LAYOUT: Final[dict[str, object]] = {
 
 
 def _parsed(tool_choice: Mapping[str, object]) -> ChatAllowedToolsToolChoice:
-    parsed: Final = parse_chat_allowed_tools_tool_choice(tool_choice)
+    parsed: Final = parse_allowed_tools_tool_choice(tool_choice)
     assert parsed is not None
     return parsed
 
@@ -72,18 +73,59 @@ def test_responses_layout_refuses_to_rewrite_a_malformed_or_conflicting_entry(to
     assert responses_allowed_tools_tool_choice(_parsed(tool_choice)) is None
 
 
+_RESPONSES_LAYOUT: Final[dict[str, object]] = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [
+        {"type": "function", "name": "get_time"},
+        {"type": "custom", "name": "apply_patch", "x-vendor": 1},
+        {"type": "mcp", "server_label": "docs"},
+        {"type": "function", "function": {"name": "already_nested"}},
+    ],
+}
+
+
+def test_responses_layout_is_read_into_the_chat_layout():
+    assert chat_allowed_tools_tool_choice(_parsed(_RESPONSES_LAYOUT)) == {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": "required",
+            "tools": [
+                {"type": "function", "function": {"name": "get_time"}},
+                {"type": "custom", "x-vendor": 1, "custom": {"name": "apply_patch"}},
+                {"type": "mcp", "server_label": "docs"},
+                {"type": "function", "function": {"name": "already_nested"}},
+            ],
+        },
+    }
+
+
+def test_responses_layout_round_trips_back_to_what_the_caller_sent():
+    flat_only: Final = {**_RESPONSES_LAYOUT, "tools": list(_RESPONSES_LAYOUT["tools"])[:3]}
+    assert responses_allowed_tools_tool_choice(_parsed(flat_only)) == flat_only
+
+
 @pytest.mark.parametrize(
     "tool_choice",
     [
-        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
         {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}},
         {"type": "allowed_tools", "allowed_tools": {"mode": "any", "tools": [{"type": "function"}]}},
         {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}, "extra": 1},
+        {"type": "allowed_tools", "mode": "auto", "tools": []},
+        {"type": "allowed_tools", "mode": "none", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function"}]},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "custom", "name": ""}]},
+        {
+            "type": "allowed_tools",
+            "mode": "auto",
+            "tools": [{"type": "function", "name": "get_time"}],
+            "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        },
         {"type": "function", "function": {"name": "get_time"}},
     ],
 )
-def test_parse_rejects_anything_but_the_chat_layout(tool_choice: dict[str, object]):
-    assert parse_chat_allowed_tools_tool_choice(tool_choice) is None
+def test_parse_rejects_a_malformed_choice_in_either_layout(tool_choice: dict[str, object]):
+    assert parse_allowed_tools_tool_choice(tool_choice) is None
 
 
 @pytest.mark.parametrize(
