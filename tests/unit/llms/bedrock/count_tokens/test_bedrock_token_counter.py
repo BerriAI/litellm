@@ -903,7 +903,7 @@ def _message_texts(body: Mapping[str, JsonValue]) -> tuple[str, ...]:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
-async def test_mantle_count_for_a_converse_deployment_sends_the_format_and_betas_converse_inference_sends() -> None:
+async def test_mantle_count_for_a_converse_deployment_sends_converse_format_and_messages_with_mantle_betas() -> None:
     caller_beta: Final = f"{ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER},context-1m-2025-08-07"
     request_options: Final[Mapping[str, JsonValue]] = {**_CITY_FORMAT, **_THINKING}
     inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
@@ -942,58 +942,117 @@ async def test_mantle_count_for_a_converse_deployment_sends_the_format_and_betas
         "schema": json.loads(sent_schema),
     }
     assert _message_texts(counted) == _message_texts(sent)
-    assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0]) != ()
+    assert _sent_betas(bedrock.requests[0]) == _row_sends(caller_beta.split(","), "bedrock_mantle") != ()
 
 
-_CONVERSE_CALLER_BETAS: Final = (
-    _INTERLEAVED_THINKING,
-    _PER_TURN_CONTROL,
-    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value,
-    ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value,
-    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
-    "context-1m-2025-08-07",
-)
+_TOOL_EXAMPLES_BETA: Final = "tool-examples-2025-10-29"
+_TOOLS_WITH_INPUT_EXAMPLES: Final[list[dict[str, JsonValue]]] = [
+    {**_WEATHER_TOOL, "input_examples": [{"city": "Paris"}]}
+]
+_EFFORT_DIRECTIVE: Final[dict[str, JsonValue]] = {"effort": "low"}
+_DIRECTIVE_ONLY_SYSTEM_TURN: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "Hi"},
+    {"role": "assistant", "content": "Hello"},
+    {"role": "system", "content": [], "output_config": _EFFORT_DIRECTIVE},
+    {"role": "user", "content": "Go on."},
+]
+_SYSTEM_TURN_AFTER_USER: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "Hi"},
+    {"role": "system", "content": "Answer briefly", "output_config": _EFFORT_DIRECTIVE},
+    {"role": "assistant", "content": "Hello"},
+    {"role": "user", "content": "Go on."},
+]
+_PER_TURN_CONTROL_OPT_IN: Final[dict[str, JsonValue]] = {"supports_per_turn_control": True}
 
 
-async def _converse_inference_betas(caller_beta: str) -> tuple[str, ...]:
-    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
-    await litellm.anthropic_messages(
-        model=_CONVERSE_DEPLOYMENT_MODEL,
-        messages=MESSAGES,
-        max_tokens=4096,
-        extra_headers={"anthropic-beta": caller_beta},
-        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
-        **_THINKING,
-        **DEPLOYMENT["litellm_params"],
-    )
-    (request,) = inference.requests
-    assert request.url.host == RUNTIME_HOST
-    sent: Final = _at(_JSON_BODY.validate_json(request.content), "additionalModelRequestFields", "anthropic_beta")
-    assert isinstance(sent, list)
-    return _sorted_betas(sent)
+def _carries(body: Mapping[str, JsonValue], key: str, field: str) -> bool:
+    entries: Final = body.get(key)
+    return isinstance(entries, list) and any(isinstance(entry, dict) and field in entry for entry in entries)
+
+
+def _counted_body_and_betas(request: httpx.Request) -> tuple[dict[str, JsonValue], tuple[str, ...]]:
+    if request.url.host == MANTLE_HOST:
+        return _JSON_BODY.validate_json(request.content), _sent_betas(request)
+    body: Final = _invoke_body(request)
+    return body, _sorted_betas(_betas_besides_effort(body))
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
 @pytest.mark.parametrize(
-    ("model_to_use", "count_host", "count_row"),
+    ("model_to_use", "count_host", "model_info", "caller_beta", "messages", "tools", "carried"),
     (
-        (_MANTLE_MODEL, MANTLE_HOST, "bedrock_mantle"),
-        ("us.anthropic.claude-opus-5-5", RUNTIME_HOST, "bedrock"),
+        (
+            _MANTLE_MODEL,
+            MANTLE_HOST,
+            {},
+            _TOOL_EXAMPLES_BETA,
+            MESSAGES,
+            _TOOLS_WITH_INPUT_EXAMPLES,
+            ("tools", "input_examples"),
+        ),
+        (
+            _MANTLE_MODEL,
+            MANTLE_HOST,
+            {},
+            _PER_TURN_CONTROL,
+            _DIRECTIVE_ONLY_SYSTEM_TURN,
+            None,
+            ("messages", "output_config"),
+        ),
+        (
+            _MANTLE_MODEL,
+            MANTLE_HOST,
+            {},
+            _PER_TURN_CONTROL,
+            _SYSTEM_TURN_AFTER_USER,
+            None,
+            ("messages", "output_config"),
+        ),
+        (
+            "us.anthropic.claude-opus-5-5",
+            RUNTIME_HOST,
+            _PER_TURN_CONTROL_OPT_IN,
+            _PER_TURN_CONTROL,
+            _DIRECTIVE_ONLY_SYSTEM_TURN,
+            None,
+            ("messages", "output_config"),
+        ),
     ),
-    ids=("mantle", "runtime"),
+    ids=(
+        "mantle-tool-input-examples",
+        "mantle-directive-only-system-output-config",
+        "mantle-system-output-config-after-user",
+        "runtime-directive-only-system-output-config",
+    ),
 )
-async def test_count_for_a_converse_deployment_sends_only_the_caller_betas_converse_inference_sends(
-    model_to_use: str, count_host: str, count_row: str
+async def test_count_for_a_converse_deployment_keeps_the_caller_beta_its_body_needs(
+    model_to_use: str,
+    count_host: str,
+    model_info: dict[str, JsonValue],
+    caller_beta: str,
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]] | None,
+    carried: tuple[str, str],
 ) -> None:
-    caller_beta: Final = ",".join(_CONVERSE_CALLER_BETAS)
-    sent: Final = await _converse_inference_betas(caller_beta)
-    host, counted = await _counted_betas(
-        model_to_use,
-        caller_beta,
-        {"litellm_params": {**DEPLOYMENT["litellm_params"], "model": _CONVERSE_DEPLOYMENT_MODEL}},
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=messages,
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": _CONVERSE_DEPLOYMENT_MODEL},
+            "model_info": model_info,
+        },
+        request_model="claude",
+        tools=tools,
+        request_options=_THINKING,
+        anthropic_beta=caller_beta,
     )
 
-    assert host == count_host
-    assert counted == _row_sends(sent, count_row) != ()
-    assert counted != _row_sends(_CONVERSE_CALLER_BETAS, count_row)
+    assert result is not None and result.error is False
+    (request,) = bedrock.requests
+    body, betas = _counted_body_and_betas(request)
+    assert request.url.host == count_host
+    assert _carries(body, *carried)
+    assert caller_beta in betas
