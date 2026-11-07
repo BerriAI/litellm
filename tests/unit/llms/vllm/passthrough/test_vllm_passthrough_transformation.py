@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Final
 
 import httpx
 import pytest
@@ -239,3 +240,50 @@ async def test_a_relayed_text_completion_stream_without_a_usage_chunk_counts_eve
     assert payload["completion_tokens"] == sum(
         litellm.token_counter(model=MODEL, text=text, count_response_tokens=True) for text in ["Hello there", "Hey you"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "request_data", "native_fields"),
+    [
+        (
+            "pooling",
+            {"input": ["Hello"], "task": "token_classify"},
+            {"object": "list", "data": [{"index": 0, "object": "pooling", "data": [[0.1, 0.9], [0.8, 0.2]]}]},
+        ),
+        (
+            "v1/score",
+            {"text_1": "Hello", "text_2": ["Hi"]},
+            {"object": "list", "data": [{"index": 0, "object": "score", "score": 0.9}]},
+        ),
+        (
+            "v2/rerank",
+            {"query": "Hello", "documents": ["Hi"]},
+            {"results": [{"index": 0, "document": {"text": "Hi"}, "relevance_score": 0.9}]},
+        ),
+        (
+            "/classify/",
+            {"input": ["Hello"]},
+            {"object": "list", "data": [{"index": 0, "label": "greeting", "probs": [0.1, 0.9], "num_classes": 2}]},
+        ),
+    ],
+)
+async def test_native_pooling_responses_reach_standard_logging_with_their_ids_usage_and_full_body(
+    endpoint: str, request_data: dict[str, object], native_fields: dict[str, object]
+) -> None:
+    body: Final = {
+        "id": "vllm-native-response",
+        "model": MODEL,
+        "usage": {"prompt_tokens": 7, "total_tokens": 7},
+        **native_fields,
+    }
+    logging_obj: Final = _relay_logging_obj(endpoint, {"model": MODEL, **request_data})
+
+    await logging_obj.async_success_handler(result=_relayed_json(endpoint, body))
+
+    payload: Final = logging_obj.model_call_details.get("standard_logging_object")
+    assert payload is not None
+    assert payload["id"] == "vllm-native-response"
+    assert payload["custom_llm_provider"] == "hosted_vllm"
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (7, 0, 7)
+    assert payload["response"] == body
