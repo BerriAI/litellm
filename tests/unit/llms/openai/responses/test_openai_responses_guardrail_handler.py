@@ -9,6 +9,7 @@ import copy
 import json
 import uuid
 from collections.abc import Callable
+from itertools import chain
 from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -5039,3 +5040,79 @@ async def test_output_guardrail_rewrite_reaches_the_text_of_an_openai_sdk_messag
     )
 
     assert [part.text for part in response.output[0].content] == ["My SSN is [MASKED]"]
+
+
+class _WordMaskingGuardrail(CustomGuardrail):
+    def __init__(self, word: str) -> None:
+        super().__init__(guardrail_name="word-masker")
+        self.word = word
+        self.seen_tool_call_arguments: list[str] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages: Final = inputs.get("structured_messages") or []
+        tool_calls: Final = chain.from_iterable(message.get("tool_calls") or [] for message in messages)
+        self.seen_tool_call_arguments.extend(tool_call["function"]["arguments"] for tool_call in tool_calls)
+        return {**inputs, "structured_messages": json.loads(json.dumps(messages).replace(self.word, "[MASKED]"))}
+
+
+_REPLAYED_CLAUDE_SEARCH_INPUT: Final = (
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {
+        "type": "tool_search_call",
+        "id": "tsc_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "arguments": {"pattern": "Paris weather"},
+    },
+    {
+        "type": "tool_search_output",
+        "id": "tso_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}],
+    },
+    {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+    {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "14C"},
+    {"role": "user", "content": "Thanks"},
+)
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_masks_the_arguments_of_a_replayed_claude_tool_search_and_keeps_the_search() -> None:
+    guardrail: Final = _WordMaskingGuardrail("Paris")
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(list(_REPLAYED_CLAUDE_SEARCH_INPUT)),
+        "tools": [{"type": "tool_search"}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen_tool_call_arguments == ['{"pattern": "Paris weather"}', '{"city": "Paris"}']
+    assert result["input"][1:4] == [
+        {**_REPLAYED_CLAUDE_SEARCH_INPUT[1], "arguments": {"pattern": "[MASKED] weather"}},
+        _REPLAYED_CLAUDE_SEARCH_INPUT[2],
+        {**_REPLAYED_CLAUDE_SEARCH_INPUT[3], "arguments": '{"city": "[MASKED]"}'},
+    ]
+    assert "Paris" not in json.dumps(result["input"])
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_rewriting_another_turn_leaves_a_replayed_claude_tool_search_as_sent() -> None:
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(list(_REPLAYED_CLAUDE_SEARCH_INPUT)),
+        "tools": [{"type": "tool_search"}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, _WordMaskingGuardrail("Thanks"))
+
+    assert result["input"] == [*_REPLAYED_CLAUDE_SEARCH_INPUT[:5], {"role": "user", "content": "[MASKED]"}]

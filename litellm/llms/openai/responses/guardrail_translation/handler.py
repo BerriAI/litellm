@@ -272,8 +272,10 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
+_TOOL_SEARCH_ITEM_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, "tool_search_output"})
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RAW_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -337,6 +339,14 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
 
 def _is_tool_call_item(item: object) -> bool:
     return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
+
+
+def _is_tool_search_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("type") in _TOOL_SEARCH_ITEM_TYPES
+
+
+def _joins_assistant_turn(item: object) -> bool:
+    return _is_tool_call_item(item) or _is_tool_search_item(item)
 
 
 def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
@@ -456,14 +466,17 @@ def _provenance_unit_bounds(
 ) -> tuple[tuple[int, int], ...]:
     trailing_roles: Final = tuple(
         accumulate(
-            (_last_message_role(messages) for messages in solo_conversions),
+            (
+                "assistant" if _is_tool_search_item(item) else _last_message_role(messages)
+                for item, messages in zip(raw_input, solo_conversions)
+            ),
             lambda previous, current: current if current is not None else previous,
         )
     )
     start_indexes: Final = tuple(
         index
         for index in range(len(raw_input))
-        if index == 0 or not (_is_tool_call_item(raw_input[index]) and trailing_roles[index - 1] == "assistant")
+        if index == 0 or not (_joins_assistant_turn(raw_input[index]) and trailing_roles[index - 1] == "assistant")
     )
     return tuple(zip(start_indexes, (*start_indexes[1:], len(raw_input))))
 
@@ -478,6 +491,7 @@ def _input_item_provenance(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            replay_tool_search=True,
         )
         for item in raw_input
     )
@@ -485,6 +499,7 @@ def _input_item_provenance(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            replay_tool_search=True,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -497,6 +512,7 @@ def _input_item_provenance(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
                 responses_api_request=_EMPTY_RESPONSES_REQUEST,
+                replay_tool_search=True,
             )
         )
         for start, end in units
@@ -702,7 +718,42 @@ def _patch_or_convert_request_fields(
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
     )
-    return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
+    return _RequestFields(
+        input=_with_tool_searches_restored(input_items, raw_input), instructions=converted_instructions
+    )
+
+
+def _tool_search_items_by_call_id(raw_input: Sequence[object], item_type: str) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            call_id: item
+            for item in raw_input
+            if stream_item_field(item, "type") == item_type
+            and isinstance(call_id := stream_item_field(item, "call_id"), str)
+        }
+    )
+
+
+def _restored_tool_search(
+    item: object, calls: Mapping[str, object], outputs: Mapping[str, object]
+) -> tuple[object, ...]:
+    call_id: Final = stream_item_field(item, "call_id")
+    if stream_item_field(item, "type") != "function_call" or not isinstance(call_id, str) or call_id not in calls:
+        return (item,)
+    arguments: Final = stream_item_field(item, "arguments")
+    restored_call: Final = _rewritten_tool_search_call(
+        calls[call_id], arguments if isinstance(arguments, str) else None
+    )
+    return (restored_call, outputs[call_id]) if call_id in outputs else (restored_call,)
+
+
+def _with_tool_searches_restored(input_items: Sequence[object], raw_input: object) -> tuple[object, ...]:
+    raw_items: Final = _RAW_ITEMS_ADAPTER.validate_python(raw_input) if isinstance(raw_input, list) else ()
+    if not any(map(_is_tool_search_item, raw_items)):
+        return tuple(input_items)
+    calls: Final = _tool_search_items_by_call_id(raw_items, _TOOL_SEARCH_CALL_TYPE)
+    outputs: Final = _tool_search_items_by_call_id(raw_items, "tool_search_output")
+    return tuple(chain.from_iterable(_restored_tool_search(item, calls, outputs) for item in input_items))
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> int:
@@ -740,6 +791,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
             responses_api_request=data,
+            replay_tool_search=True,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
