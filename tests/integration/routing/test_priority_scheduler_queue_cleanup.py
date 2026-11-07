@@ -686,7 +686,7 @@ def test_served_request_leaves_no_queue_entry_for_the_other_instance(pair: Pair)
     group: Final = PAIR_GROUPS[0]
     markers: Final = (new_marker(), new_marker(), new_marker())
     assert_served(post(pair.first, "/v1/chat/completions", chat_body(group, markers[0], priority=1)), markers[0])
-    assert queue_entries(pair.cache, group) == []
+    assert_drained(pair.cache, group)
     assert_served(post(pair.second, "/v1/chat/completions", chat_body(group, markers[1], priority=1)), markers[1])
     assert_served(post(pair.first, "/v1/chat/completions", chat_body(group, markers[2], priority=1)), markers[2])
     assert_once(received_markers(pair.wire), markers)
@@ -1441,7 +1441,6 @@ def test_concurrent_burst_without_priority_across_instances_and_endpoints_is_ser
 
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
 def test_concurrent_burst_without_priority_across_instances_leaves_no_queue_entry(defaulted: Defaulted) -> None:
-    pytest.skip("BUG: concurrent queue writes across workers can leave a served request's entry in the queue")
     group: Final = DEFAULT_GROUPS[0]
     serve_burst_without_priority(defaulted.pair, group)
     assert_drained(defaulted.pair.cache, group)
