@@ -75,6 +75,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
     const isInternalUpdateRef = useRef(false);
+    const weightsTeamIdRef = useRef(teamId);
     const lastInitializedValueRef = useRef<string | null>(null);
 
     // Convert fallbacks format to groups format
@@ -160,6 +161,12 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         setWeights({});
       }
     }, [value]);
+
+    useEffect(() => {
+      if (weightsTeamIdRef.current === teamId) return;
+      weightsTeamIdRef.current = teamId;
+      setWeights({});
+    }, [teamId]);
 
     // Fetch router settings metadata
     useEffect(() => {

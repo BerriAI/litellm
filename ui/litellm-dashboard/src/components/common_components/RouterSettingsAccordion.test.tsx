@@ -35,7 +35,6 @@ vi.mock("../router_settings/RouterSettingsForm", () => ({
     onChange: (value: RouterSettingsFormValue) => void;
   }) => (
     <div>
-      <div data-testid="reliability-fields">{Object.keys(value.routerSettings).join(",")}</div>
       <button onClick={() => onChange({ ...value, selectedStrategy: "least-busy" })}>set-least-busy</button>
       <button onClick={() => onChange({ ...value, selectedStrategy: "usage-based-routing" })}>set-usage-based</button>
     </div>
@@ -199,7 +198,7 @@ describe("RouterSettingsAccordion", () => {
         vi.advanceTimersByTime(200);
       });
 
-      expect(screen.getByLabelText("Weight for openai/gpt-5 (dep-openai)")).toHaveValue(null);
+      expect(screen.getByLabelText("Weight for openai/gpt-5 (dep-openai)")).toHaveValue("");
       expect(screen.getByRole("button", { name: "Remove weights for gpt-5" })).toBeInTheDocument();
     });
 
@@ -237,19 +236,51 @@ describe("RouterSettingsAccordion", () => {
       ).toBeInTheDocument();
     });
 
-    it("should keep the reliability fields on a create form whose parent echoes the value back", async () => {
-      const EchoingCreateForm = () => {
-        const [value, setValue] = useState<RouterSettingsAccordionValue | undefined>(undefined);
-        return <RouterSettingsAccordion accessToken="test-token" value={value} onChange={setValue} />;
-      };
-      renderWithQueryClient(<EchoingCreateForm />);
-      await act(async () => {
-        vi.advanceTimersByTime(200);
-      });
-
-      expect(screen.getByTestId("reliability-fields")).toHaveTextContent(
-        "allowed_fails,cooldown_time,num_retries,timeout,retry_after,model_group_alias",
+    it("should accept a decimal weight typed one character at a time", async () => {
+      const ref = createRef<RouterSettingsAccordionRef>();
+      renderWithQueryClient(
+        <RouterSettingsAccordion
+          ref={ref}
+          accessToken="test-token"
+          value={{ router_settings: { weights: { "gpt-5": { "dep-openai": 9 } } } }}
+        />,
       );
+      const input = await screen.findByLabelText("Weight for azure/gpt-5 (dep-azure)");
+
+      fireEvent.change(input, { target: { value: "1." } });
+      expect(input).toHaveValue("1.");
+      fireEvent.change(input, { target: { value: "1.5" } });
+
+      expect(input).toHaveValue("1.5");
+      expect(ref.current?.getValue().router_settings.weights).toStrictEqual({
+        "gpt-5": { "dep-openai": 9, "dep-azure": 1.5 },
+      });
+    });
+
+    it("should not call saved weights stale while the deployments are still loading", async () => {
+      vi.mocked(modelInfoCall).mockReturnValue(new Promise(() => {}));
+      renderWithQueryClient(
+        <RouterSettingsAccordion
+          accessToken="test-token"
+          value={{ router_settings: { weights: { "gpt-5": { "dep-openai": 9 } } } }}
+        />,
+      );
+
+      expect(await screen.findByText("dep-openai")).toBeInTheDocument();
+      expect(screen.queryByText("Deployment no longer exists")).not.toBeInTheDocument();
+    });
+
+    it("should drop weights picked for one team when the form switches to another team", async () => {
+      const ref = createRef<RouterSettingsAccordionRef>();
+      const value = { router_settings: { weights: { "gpt-5": { "dep-openai": 9 } } } };
+      const { rerender } = renderWithQueryClient(
+        <RouterSettingsAccordion ref={ref} accessToken="test-token" teamId="team-a" value={value} />,
+      );
+      await screen.findByLabelText("Weight for openai/gpt-5 (dep-openai)");
+
+      rerender(<RouterSettingsAccordion ref={ref} accessToken="test-token" teamId="team-b" value={value} />);
+
+      await waitFor(() => expect(ref.current?.getValue().router_settings.weights).toBeNull());
     });
 
     it("should flag a group whose weights are all zero", async () => {

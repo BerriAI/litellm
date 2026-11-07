@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, X } from "lucide-react";
-import { useId } from "react";
+import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +39,41 @@ interface WeightGroupProps {
   onRemove: () => void;
 }
 
+interface WeightInputProps {
+  label: string;
+  weight: number | null;
+  onChange: (weight: number | null) => void;
+}
+
+const formatWeight = (weight: number | null): string => (weight === null ? "" : String(weight));
+
+function WeightInput({ label, weight, onChange }: WeightInputProps) {
+  const [draft, setDraft] = useState(formatWeight(weight));
+  const [shownWeight, setShownWeight] = useState(weight);
+  if (weight !== shownWeight) {
+    setShownWeight(weight);
+    if (parseWeightInput(draft) !== weight) setDraft(formatWeight(weight));
+  }
+
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setDraft(event.target.value);
+    const parsed = parseWeightInput(event.target.value);
+    if (parsed !== undefined) onChange(parsed);
+  };
+
+  return (
+    <Input
+      type="text"
+      inputMode="decimal"
+      className="w-28"
+      aria-label={label}
+      aria-invalid={parseWeightInput(draft) === undefined}
+      value={draft}
+      onChange={handleChange}
+    />
+  );
+}
+
 function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange, onRemove }: WeightGroupProps) {
   const { t } = useTranslation();
   const {
@@ -67,7 +102,8 @@ function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange,
     enabled: Boolean(accessToken),
   });
   const rows = weightRows(group, groupWeights, deployments, teamId ?? null);
-  const noDeployments = !isLoading && !isError && rows.length === 0;
+  const deploymentsKnown = !isLoading && !isError;
+  const noDeployments = deploymentsKnown && rows.length === 0;
 
   return (
     <div className="rounded-md border border-border p-4 space-y-3">
@@ -93,23 +129,16 @@ function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange,
         <div key={row.deploymentId} className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm text-foreground">
-              {row.label ?? (isError ? "" : t("routerWeights.unknownDeployment"))}
+              {row.label ?? (deploymentsKnown ? t("routerWeights.unknownDeployment") : "")}
             </div>
             <div className="truncate text-xs text-muted-foreground">{row.deploymentId}</div>
           </div>
-          <Input
-            type="number"
-            min={0}
-            step="any"
-            className="w-28"
-            aria-label={t("routerWeights.weightFor", {
+          <WeightInput
+            label={t("routerWeights.weightFor", {
               deployment: row.label ? `${row.label} (${row.deploymentId})` : row.deploymentId,
             })}
-            value={row.weight ?? ""}
-            onChange={(event) => {
-              const weight = parseWeightInput(event.target.value);
-              if (weight !== undefined) onWeightChange(row.deploymentId, weight);
-            }}
+            weight={row.weight}
+            onChange={(weight) => onWeightChange(row.deploymentId, weight)}
           />
           <span className="w-24 text-right text-xs text-muted-foreground">
             {row.sharePercent === null ? "" : t("routerWeights.share", { percent: row.sharePercent })}
