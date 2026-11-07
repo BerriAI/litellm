@@ -15,7 +15,13 @@ const discoveredModel = "nvidia_nim/discovered-model";
 
 function ConnectionFields() {
   const { register } = useFormContext<MountedFormValues>();
-  return <input aria-label="Credential" {...register("litellm_credential_name")} />;
+  return (
+    <>
+      <input aria-label="Credential" {...register("litellm_credential_name")} />
+      <input aria-label="API Base" {...register("api_base")} />
+      <input aria-label="API Key" {...register("api_key")} />
+    </>
+  );
 }
 
 function Form({
@@ -64,18 +70,47 @@ describe("NIM model discovery", () => {
     expect(screen.getByRole("option", { name: "Custom Model Name (Enter below)" })).toBeInTheDocument();
   });
 
-  it("passes inline connection settings without a saved credential", async () => {
+  it("requires explicit refresh for inline settings and never sends keys while editing", async () => {
     vi.mocked(apiClient.post).mockResolvedValue({ status: "success", models: [discoveredModel] });
-    render(<Form credentialName="" apiKey="inline-key" apiBase="https://nim.example/v1" />);
-    expect(await screen.findByText(/Models listed by your NIM endpoint/)).toBeInTheDocument();
-    expect(apiClient.post).toHaveBeenCalledWith("/credentials/nvidia_nim/models", {
-      accessToken: "proxy-token",
-      body: {
-        credential_name: undefined,
-        credential_values: { api_key: "inline-key", api_base: "https://nim.example/v1" },
-      },
-      signal: expect.any(AbortSignal),
-    });
+    vi.useFakeTimers();
+    try {
+      render(<Form credentialName="" apiKey="inline-key" apiBase="https://nim.example/v1" />);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(apiClient.post).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Refresh NIM models" }));
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(apiClient.post).toHaveBeenCalledTimes(1);
+      expect(apiClient.post).toHaveBeenLastCalledWith("/credentials/nvidia_nim/models", {
+        accessToken: "proxy-token",
+        body: {
+          credential_name: undefined,
+          credential_values: { api_key: "inline-key", api_base: "https://nim.example/v1" },
+        },
+        signal: expect.any(AbortSignal),
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "API Base" }), {
+        target: { value: "https://partial.example/v1" },
+      });
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(apiClient.post).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/Enter your connection settings/)).toBeInTheDocument();
+      fireEvent.change(screen.getByRole("textbox", { name: "API Key" }), { target: { value: "new-key" } });
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(apiClient.post).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh NIM models" }));
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(apiClient.post).toHaveBeenCalledTimes(2);
+      expect(apiClient.post).toHaveBeenLastCalledWith("/credentials/nvidia_nim/models", {
+        accessToken: "proxy-token",
+        body: {
+          credential_name: undefined,
+          credential_values: { api_key: "new-key", api_base: "https://partial.example/v1" },
+        },
+        signal: expect.any(AbortSignal),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("translates discovery status and refresh controls in the selected language", async () => {

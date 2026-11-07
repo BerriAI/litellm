@@ -148,3 +148,63 @@ def test_consecutive_discoveries_keep_the_shared_connection_usable(client: TestC
     second: Final = client.post("/credentials/nvidia_nim/models", json={"credential_values": {"api_key": "second"}})
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json() == {"status": "success", "models": ["nvidia_nim/shared"]}
+
+
+@pytest.mark.parametrize("field", ("api_key", "api_base"))
+@pytest.mark.parametrize("reference", ("os.environ/NIM_DISCOVERY_SENTINEL", "oidc/google/audience"))
+def test_inline_secret_references_are_rejected_before_any_upstream_request(
+    client: TestClient, app: FastAPI, field: str, reference: str
+) -> None:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        pytest.fail("Untrusted references must never reach the upstream")
+
+    async def connection() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    app.dependency_overrides[nim_http_client] = connection
+    response: Final = client.post(
+        "/credentials/nvidia_nim/models",
+        json={"credential_values": {"api_base": "https://nim.example/v1", field: reference}},
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_request_endpoint_does_not_receive_the_server_environment_key(client: TestClient, app: FastAPI) -> None:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer not-required"
+        return httpx.Response(200, json={"data": [{"id": "public"}]})
+
+    async def connection() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    app.dependency_overrides[nim_http_client] = connection
+    with patch.dict("os.environ", {"NVIDIA_NIM_API_KEY": "server-only-secret"}):
+        response: Final = client.post(
+            "/credentials/nvidia_nim/models", json={"credential_values": {"api_base": "https://nim.example/v1"}}
+        )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "success", "models": ["nvidia_nim/public"]}
+
+
+def test_saved_credential_can_still_resolve_its_configured_secret(client: TestClient, app: FastAPI) -> None:
+    credential: Final = CredentialItem(
+        credential_name="nim-reference",
+        credential_info={"custom_llm_provider": "nvidia_nim"},
+        credential_values={"api_key": "os.environ/NIM_DISCOVERY_SENTINEL", "api_base": "https://nim.example/v1"},
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer saved-reference-value"
+        return httpx.Response(200, json={"data": [{"id": "saved"}]})
+
+    async def connection() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    app.dependency_overrides[nim_http_client] = connection
+    with (
+        patch.dict("os.environ", {"NIM_DISCOVERY_SENTINEL": "saved-reference-value"}),
+        patch.object(litellm, "credential_list", [credential]),
+    ):
+        response: Final = client.post("/credentials/nvidia_nim/models", json={"credential_name": "nim-reference"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "success", "models": ["nvidia_nim/saved"]}

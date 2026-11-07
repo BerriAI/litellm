@@ -39,7 +39,9 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
     }),
     [credential, apiKey, apiBase],
   );
-  const [attempt, setAttempt] = useState(0);
+  const [refresh, setRefresh] = useState<{ connection: typeof connection; attempt: number }>();
+  const attempt = refresh?.connection === connection ? refresh.attempt : 0;
+  const shouldDiscover = Boolean(connection.credential_name) || refresh?.connection === connection;
   const [result, setResult] = useState<{
     connection: typeof connection;
     accessToken: string | null;
@@ -52,7 +54,7 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
       : undefined;
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !shouldDiscover) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
@@ -77,7 +79,7 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
       clearTimeout(timer);
       controller.abort();
     };
-  }, [enabled, connection, accessToken, attempt]);
+  }, [enabled, shouldDiscover, connection, accessToken, attempt]);
 
   return (
     <>
@@ -88,7 +90,8 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
       {enabled && (
         <div className="mb-4 text-sm text-muted-foreground">
           <p role="status">
-            {!current && t("addModel.nimModelDiscovery.loading")}
+            {!shouldDiscover && t("addModel.nimModelDiscovery.ready")}
+            {shouldDiscover && !current && t("addModel.nimModelDiscovery.loading")}
             {current?.status === "success" && t("addModel.nimModelDiscovery.success")}
             {current?.status === "unavailable" && t("addModel.nimModelDiscovery.unavailable")}
           </p>
@@ -96,8 +99,8 @@ export default function NimModelNameField({ accessToken, canDiscover, ...props }
             type="button"
             variant="ghost"
             size="sm"
-            disabled={!current}
-            onClick={() => setAttempt((value) => value + 1)}
+            disabled={shouldDiscover && !current}
+            onClick={() => setRefresh((value) => ({ connection, attempt: (value?.attempt ?? 0) + 1 }))}
           >
             {t("addModel.nimModelDiscovery.refresh")}
           </Button>

@@ -128,9 +128,18 @@ async def discover_nim_models(
     if provider is not None and provider != "nvidia_nim":
         raise HTTPException(status_code=400, detail="Select an NVIDIA NIM credential")
     submitted: Final = body.credential_values or NimModelDiscoveryConnection()
+    literal_key: Final = submitted.api_key.get_secret_value() if submitted.api_key is not None else None
+    if any(
+        value is not None and value.startswith(("os.environ/", "oidc/")) for value in (submitted.api_base, literal_key)
+    ):
+        raise HTTPException(
+            status_code=400, detail="Connection settings must use literal values, not secret references"
+        )
     values: Final = credential.credential_values if credential is not None else {}
-    api_base: Final = _resolved_secret(_text(values.get("api_base")) or submitted.api_base) or (
-        get_secret_str("NVIDIA_NIM_API_BASE") or _DEFAULT_API_BASE
+    api_base: Final = (
+        _resolved_secret(_text(values.get("api_base")))
+        or submitted.api_base
+        or (get_secret_str("NVIDIA_NIM_API_BASE") or _DEFAULT_API_BASE)
     )
     try:
         parsed: Final = urlsplit(api_base)
@@ -142,10 +151,11 @@ async def discover_nim_models(
         )
     if parsed.query or parsed.fragment:
         raise HTTPException(status_code=400, detail="API base cannot contain a query or fragment")
-    api_key: Final = _resolved_secret(
-        _text(values.get("api_key"))
-        or (submitted.api_key.get_secret_value() if submitted.api_key is not None else None)
-    ) or get_secret_str("NVIDIA_NIM_API_KEY")
+    api_key: Final = (
+        _resolved_secret(_text(values.get("api_key")))
+        or literal_key
+        or (get_secret_str("NVIDIA_NIM_API_KEY") if credential is not None or submitted.api_base is None else None)
+    )
     cache_key: Final = hashlib.sha256(f"{api_base.rstrip('/')}\0{api_key or ''}".encode()).hexdigest()
     cached: Final = _CACHE.get_cache(cache_key)
     if cached is not None:
