@@ -3293,6 +3293,24 @@
         "generateContent": true
       }
     },
+    "phala": {
+      "display_name": "Phala (`phala`)",
+      "url": "https://docs.phala.com/phala-cloud/confidential-ai/confidential-model/confidential-ai-api",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "pinstripes": {
       "display_name": "Pinstripes (`pinstripes`)",
       "url": "https://docs.litellm.ai/docs/providers/pinstripes",
