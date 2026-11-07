@@ -18,6 +18,14 @@
         "null"
       ]
     },
+    "agent": {
+      "default": null,
+      "maxLength": 256,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "start_ms": {
       "default": null,
       "description": "Window start, unix ms. Default: 24h ago",
