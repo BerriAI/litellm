@@ -1,8 +1,9 @@
 import importlib
 import ssl
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from threading import Event
+from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -218,23 +219,29 @@ def _resolve_member(
     return identity if identity is not None else DirectoryError("LDAP member identity is missing or multivalued")
 
 
-def _read_group(
-    connection: LDAPConnection,
-    settings: LDAPSyncSettings,
-    entry: _Entry,
-    stop: Event,
-    members: dict[str, str | DirectoryError],
-) -> DirectoryGroup | DirectoryError:
-    _check_cancelled(stop)
+def _group_header(settings: LDAPSyncSettings, entry: _Entry) -> tuple[str, str] | DirectoryError:
     team_id: Final = _one(entry, settings.group_id_attribute)
     name: Final = _one(entry, settings.group_name_attribute)
     if team_id is None or name is None:
         return DirectoryError("LDAP group ID or name is missing or multivalued", entry.dn)
     if any(";range=" in key.lower() for key in entry.attributes):
         return DirectoryError("LDAP ranged membership responses are not supported", entry.dn)
-    for value in _values(entry, settings.member_attribute):
-        if value not in members:
-            members[value] = _resolve_member(connection, settings, value, stop)
+    return team_id, name
+
+
+def _member_values(settings: LDAPSyncSettings, entries: Iterable[_Entry]) -> Iterator[str]:
+    for entry in entries:
+        if not isinstance(_group_header(settings, entry), DirectoryError):
+            yield from _values(entry, settings.member_attribute)
+
+
+def _read_group(
+    settings: LDAPSyncSettings, entry: _Entry, members: Mapping[str, str | DirectoryError]
+) -> DirectoryGroup | DirectoryError:
+    header: Final = _group_header(settings, entry)
+    if isinstance(header, DirectoryError):
+        return header
+    team_id, name = header
     identities: Final = tuple(members[value] for value in _values(entry, settings.member_attribute))
     error: Final = next((identity for identity in identities if isinstance(identity, DirectoryError)), None)
     if error is not None:
@@ -279,8 +286,13 @@ def read_directory(
             )
             if len(group_ids) != len(frozenset(group_ids)):
                 return DirectoryError("LDAP group IDs are not unique within the selected groups")
-            members: Final[dict[str, str | DirectoryError]] = {}  # mutable-ok: per-snapshot member lookup cache
-            groups: Final = tuple(_read_group(client, settings, entry, cancellation, members) for entry in entries)
+            members: Final = MappingProxyType(
+                {
+                    value: _resolve_member(client, settings, value, cancellation)
+                    for value in dict.fromkeys(_member_values(settings, entries))
+                }
+            )
+            groups: Final = tuple(_read_group(settings, entry, members) for entry in entries)
             _check_cancelled(cancellation)
             return groups
         finally:
