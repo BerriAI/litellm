@@ -20380,5 +20380,21 @@
       "query": "query",
       "request": "request"
     }
+  },
+  "routerWeights": {
+    "title": "Deployment Weights",
+    "description": "Split a model group's traffic across its deployments. A deployment with no weight gets no traffic once any weight in its group is set. Weights only apply with the simple-shuffle routing strategy.",
+    "ignoredForStrategy": "Weights are ignored with {{strategy}}. Select simple-shuffle to use them.",
+    "addGroup": "Add a model group",
+    "addGroupPlaceholder": "Select a model group to weight",
+    "noModels": "No model groups found",
+    "noDeployments": "No deployments found for this model group",
+    "unknownDeployment": "Deployment no longer exists",
+    "weightFor": "Weight for {{deployment}}",
+    "share": "{{percent}}% of traffic",
+    "noPositiveWeight": "Set at least one weight above 0, or remove this model group.",
+    "removeGroup": "Remove weights for {{group}}",
+    "summary": "Deployment Weights:",
+    "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   }
 }
