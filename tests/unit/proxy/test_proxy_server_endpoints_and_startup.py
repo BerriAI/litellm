@@ -12589,6 +12589,7 @@ async def test_update_config_general_settings_persists_always_include_stream_usa
 
     fake = _fake_prisma_with_config({})
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "proxy_config", proxy_server_module.ProxyConfig())
     monkeypatch.setattr(litellm, "store_audit_logs", False)
 
     admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
