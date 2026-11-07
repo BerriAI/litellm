@@ -860,6 +860,35 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
 
 
 @pytest.mark.asyncio
+async def test_a_recovery_probe_redis_rejects_still_closes_the_breaker():
+    """A command error is Redis answering, so a probe that gets one proves Redis is back.
+
+    Leaving that probe unsettled counted it as a failure and reopened the breaker for another
+    recovery timeout, so every Redis call kept fast-failing against a Redis that was serving.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import ResponseError
+
+    from litellm.caching.redis_cache import _run_under_circuit_breaker
+
+    health = _health(recovery_timeout=0.05)
+
+    async def failing(error: Exception) -> None:
+        raise error
+
+    for _ in range(_THRESHOLD):
+        with pytest.raises(RedisConnectionError):
+            await _run_under_circuit_breaker(health, "op", lambda: failing(RedisConnectionError("refused")))
+    assert health.breaker.state == "open"
+    await asyncio.sleep(0.06)
+
+    with pytest.raises(ResponseError):
+        await _run_under_circuit_breaker(health, "op", lambda: failing(ResponseError("WRONGTYPE")))
+
+    assert health.breaker.state == "closed"
+
+
+@pytest.mark.asyncio
 async def test_event_loop_stall_timeout_burst_keeps_breaker_closed():
     """One blocking stall of the worker event loop must not trip the breaker.
 

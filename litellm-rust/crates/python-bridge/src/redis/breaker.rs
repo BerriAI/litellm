@@ -73,7 +73,6 @@ impl NativeRedisBreaker {
 
 #[pymethods]
 impl NativeRedisBreaker {
-    /// A breaker no other cache or client shares.
     #[new]
     fn new(py: Python<'_>, settings: BreakerSettings) -> PyResult<Self> {
         let breaker = Self::build(py, &settings)?;
@@ -111,7 +110,6 @@ impl NativeRedisBreaker {
         Ok(Self(candidate))
     }
 
-    /// `None` when the breaker is open, so the caller skips Redis.
     fn admit(&self) -> Option<NativeAdmission> {
         self.0
             .admit(Instant::now())
@@ -119,7 +117,6 @@ impl NativeRedisBreaker {
             .map(|admission| NativeAdmission(Mutex::new(Some(admission))))
     }
 
-    /// A failure the caller swallowed, which no admission it holds settles.
     fn failed(&self, timeout: bool) {
         self.0.failed(failure(timeout), Instant::now());
     }
@@ -162,7 +159,6 @@ fn failure(timeout: bool) -> Failure {
     }
 }
 
-/// The state of every Redis breaker this process built, for the Prometheus state gauge.
 #[pyfunction]
 pub(crate) fn native_redis_breaker_states(py: Python<'_>) -> Vec<&'static str> {
     live_breakers(py)

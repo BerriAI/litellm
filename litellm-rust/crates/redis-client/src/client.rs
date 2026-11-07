@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::stream::BoxStream;
 use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
-use redis::{Cmd, RedisError, Value};
+use redis::{Cmd, ErrorKind, RedisError, Value};
 
 use crate::{
     CallEvent, Command, ConnectError, Error, FailureKind, Namespace, Operation, Outcome, Pipeline,
@@ -297,6 +297,9 @@ fn settle(admission: Option<Admission>, error: Option<&Error>) {
             admission.failed(Failure::Timeout, Instant::now())
         }
         Some(Error::Transport(_)) => admission.failed(Failure::Hard, Instant::now()),
+        Some(Error::Server(error)) if error.kind() != ErrorKind::InvalidClientConfig => {
+            admission.succeeded()
+        }
         Some(Error::Server(_) | Error::Decode(_) | Error::BreakerOpen) => drop(admission),
     }
 }

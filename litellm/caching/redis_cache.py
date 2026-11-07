@@ -443,9 +443,28 @@ def _enter_circuit_breaker(health: RedisHealth | None, name: str) -> _BreakerAdm
     return _BreakerAdmission(admission=admission, swallowed_before=_swallowed_redis_failures.get())
 
 
+@functools.lru_cache(maxsize=1)
+def _redis_reply_error_types() -> tuple[type, ...]:
+    from redis.exceptions import ResponseError
+
+    return (ResponseError,)
+
+
+def _is_redis_reply(exc: BaseException) -> bool:
+    try:
+        return isinstance(exc, _redis_reply_error_types())
+    except ImportError:
+        return False
+
+
 def _fail_circuit_breaker(health: RedisHealth | None, admission: _BreakerAdmission | None, exc: BaseException) -> None:
-    if health is not None and admission is not None and _is_redis_health_failure(exc):
+    if health is None or admission is None:
+        return
+    if _is_redis_health_failure(exc):
         health.failed(admission.admission, exc)
+        return
+    if _is_redis_reply(exc):
+        _exit_circuit_breaker(admission)
 
 
 def _exit_circuit_breaker(admission: _BreakerAdmission | None) -> None:
