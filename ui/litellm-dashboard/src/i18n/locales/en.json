@@ -3081,6 +3081,10 @@
     "empty": "No teams found",
     "loading": "Loading teams…"
   },
+  "storePromptsToggle": {
+    "label": "Store prompts in spend logs",
+    "description": "Turn off to exclude prompts and responses from spend logs. Global and team restrictions still apply."
+  },
   "accessGroupSelector": {
     "placeholder": "Select access groups",
     "label": "Access Group",
