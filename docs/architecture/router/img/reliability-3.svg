@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 520" role="img" aria-labelledby="t">
+<title id="t">Where the router goes after retries run out</title>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="859" height="519" rx="8"/>
+<rect class="box" x="20" y="20" width="130" height="72" rx="6"/>
+<text class="center" x="85" y="52">Retries exhausted,</text>
+<text class="center" x="85" y="69">failure e</text>
+<rect class="box decision" x="184" y="20" width="226" height="72" rx="6"/>
+<text class="center" x="297" y="43.5"><tspan class="mono">disable_fallbacks</tspan> on the</text>
+<text class="center" x="297" y="60.5">request, or a guardrail</text>
+<text class="center" x="297" y="77.5">intervention?</text>
+<rect class="box decision" x="446" y="20" width="394" height="72" rx="6"/>
+<text class="center" x="643" y="52">Several <tspan class="mono">order</tspan> values in the group,</text>
+<text class="center" x="643" y="69">and e is not context window / content policy?</text>
+<rect class="box warn" x="20" y="140" width="130" height="36" rx="6"/>
+<text class="center" x="85" y="162.5"><tspan class="mono">raise e</tspan></text>
+<rect class="box" x="236" y="126" width="180" height="64" rx="6"/>
+<text class="center" x="326" y="145.5">Re-pick across the</text>
+<text class="center" x="326" y="162.5">other deployments of</text>
+<text class="center" x="326" y="179.5">the group first</text>
+<rect class="box decision" x="446" y="130" width="200" height="56" rx="6"/>
+<text class="center" x="546" y="154"><tspan class="mono">enable_weighted_failover</tspan></text>
+<text class="center" x="546" y="171">with <tspan class="mono">simple-shuffle</tspan>?</text>
+<rect class="box" x="676" y="126" width="164" height="64" rx="6"/>
+<text class="center" x="758" y="145.5">The next orders inside</text>
+<text class="center" x="758" y="162.5">the same group, then</text>
+<text class="center" x="758" y="179.5">the group's fallbacks</text>
+<rect class="box decision" x="296" y="242" width="180" height="40" rx="6"/>
+<text class="center" x="386" y="266.5">What is e?</text>
+<rect class="box decision" x="20" y="328" width="196" height="52" rx="6"/>
+<text class="center" x="118" y="350"><tspan class="mono">context_window_fallbacks</tspan></text>
+<text class="center" x="118" y="367">set?</text>
+<rect class="box" x="256" y="322" width="244" height="64" rx="6"/>
+<text class="center" x="378" y="341.5"><tspan class="mono">fallbacks</tspan>: the group's entry,</text>
+<text class="center" x="378" y="358.5">else the <tspan class="mono">'*'</tspan> entry</text>
+<text class="center" x="378" y="375.5">(<tspan class="mono">default_fallbacks</tspan>)</text>
+<rect class="box decision" x="540" y="328" width="210" height="52" rx="6"/>
+<text class="center" x="645" y="350"><tspan class="mono">content_policy_fallbacks</tspan></text>
+<text class="center" x="645" y="367">set?</text>
+<rect class="box" x="20" y="426" width="196" height="52" rx="6"/>
+<text class="center" x="118" y="448">Its entry for this group</text>
+<text class="center small muted" x="118" y="465">(no entry: <tspan class="mono">raise e</tspan>)</text>
+<rect class="box ok" x="256" y="432" width="244" height="40" rx="6"/>
+<text class="center" x="378" y="456.5">Walk the targets in order</text>
+<rect class="box" x="540" y="426" width="210" height="52" rx="6"/>
+<text class="center" x="645" y="448">Its entry for this group</text>
+<text class="center small muted" x="645" y="465">(no entry: <tspan class="mono">raise e</tspan>)</text>
+<path class="edge" d="M150,56 H182" marker-end="url(#arrow)"/>
+<path class="edge" d="M410,56 H444" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="428" y="48">no</text>
+<path class="edge warn" d="M200,92 V158 H152" marker-end="url(#arrow-warn)"/>
+<text class="edge-label" x="208" y="128">yes</text>
+<path class="edge" d="M546,92 V128" marker-end="url(#arrow)"/>
+<text class="edge-label" x="554" y="115">no</text>
+<path class="edge" d="M758,92 V124" marker-end="url(#arrow)"/>
+<text class="edge-label" x="766" y="113">yes</text>
+<path class="edge" d="M446,158 H418" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="431" y="150">yes</text>
+<path class="edge" d="M326,190 V240" marker-end="url(#arrow)"/>
+<path class="edge" d="M462,186 V240" marker-end="url(#arrow)"/>
+<text class="edge-label" x="470" y="218">no</text>
+<path class="edge" d="M296,262 H118 V326" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="190" y="254">context window</text>
+<path class="edge" d="M476,262 H645 V326" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="560" y="254">content policy</text>
+<path class="edge" d="M386,282 V320" marker-end="url(#arrow)"/>
+<text class="edge-label" x="394" y="306">anything else</text>
+<path class="edge" d="M216,354 H254" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="236" y="346">no</text>
+<path class="edge" d="M540,354 H502" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="520" y="346">no</text>
+<path class="edge" d="M118,380 V424" marker-end="url(#arrow)"/>
+<text class="edge-label" x="126" y="407">yes</text>
+<path class="edge" d="M645,380 V424" marker-end="url(#arrow)"/>
+<text class="edge-label" x="653" y="407">yes</text>
+<path class="edge warn" d="M270,322 V212 H85 V178" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="180" y="207">no entry</text>
+<path class="edge" d="M378,386 V430" marker-end="url(#arrow)"/>
+<path class="edge" d="M216,452 H254" marker-end="url(#arrow)"/>
+<path class="edge" d="M540,452 H502" marker-end="url(#arrow)"/>
+<path class="edge" d="M800,190 V500 H378 V474" marker-end="url(#arrow)"/>
+</svg>

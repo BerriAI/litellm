@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 248" role="img" aria-labelledby="t">
+<title id="t">How a broken stream is handled</title>
+<style>
+/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="819" height="247" rx="8"/>
+
+<rect class="box" x="20" y="81" width="150" height="48" rx="6"/>
+<text class="center" x="95" y="101">Stream opened,</text>
+<text class="center" x="95" y="117">request counted</text>
+
+<rect class="box decision" x="200" y="85" width="120" height="40" rx="20"/>
+<text class="title center" x="260" y="110">Stream breaks</text>
+<path class="edge" d="M170,105 H198" marker-end="url(#arrow)"/>
+
+<rect class="box core" x="540" y="16" width="260" height="50" rx="6"/>
+<text x="552" y="37">The router picks a retry or fallback,</text>
+<text x="552" y="54">the caller sees one stream</text>
+
+<rect class="box core" x="540" y="80" width="260" height="50" rx="6"/>
+<text x="552" y="101">Continue on a fallback deployment</text>
+<text x="552" y="118">with the text so far as a prefill</text>
+
+<rect class="box warn" x="540" y="144" width="260" height="36" rx="6"/>
+<text x="552" y="166">The stream raises to the caller</text>
+
+<path class="edge core" d="M320,105 H350 V41 H538" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="444" y="35">before any content</text>
+<path class="edge core" d="M350,105 H538" marker-end="url(#arrow-core)"/>
+<text class="edge-label center" x="444" y="99">after text, continuation on</text>
+<path class="edge warn" d="M350,105 V162 H538" marker-end="url(#arrow-warn)"/>
+<text class="edge-label center" x="444" y="156">after content, continuation off</text>
+
+<rect class="box" x="20" y="196" width="150" height="36" rx="6"/>
+<text class="center" x="95" y="218">Stream ends</text>
+<path class="edge" d="M95,129 V194" marker-end="url(#arrow)"/>
+
+<rect class="box ok" x="200" y="196" width="320" height="36" rx="6"/>
+<text x="212" y="218">Success is recorded with the final usage</text>
+<path class="edge" d="M170,214 H198" marker-end="url(#arrow)"/>
+</svg>

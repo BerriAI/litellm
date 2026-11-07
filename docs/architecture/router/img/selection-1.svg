@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 630" role="img" aria-labelledby="t">
+<title id="t">The filter chain of a pick</title>
+<desc>A requested name passes pre-routing and resolution, then a chain of filters removes candidates; if anything is left a strategy picks one, otherwise the pick fails with no deployments available.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="819" height="629" rx="8"/>
+<rect class="box " x="20" y="20" width="240" height="82" rx="6"/>
+<text class="title" x="32" y="66.0">requested name + request</text>
+<rect class="box" x="290" y="20" width="240" height="82" rx="6"/>
+<text class="title" x="302" y="42.5">Pre-routing</text>
+<text class="small" x="302" y="59.5">sub-routers, routing plugins,</text>
+<text class="small" x="302" y="74.5">session binding</text>
+<text class="small" x="302" y="89.5">may route to another group</text>
+<rect class="box" x="560" y="20" width="240" height="82" rx="6"/>
+<text class="title" x="572" y="50.0">Resolve the name</text>
+<text class="small" x="572" y="67.0">see How a name finds</text>
+<text class="small" x="572" y="82.0">its deployments</text>
+<path class="edge" d="M260,61.0 H288" marker-end="url(#arrow)"/>
+<path class="edge" d="M530,61.0 H558" marker-end="url(#arrow)"/>
+<path class="edge" d="M680.0,102 V128" marker-end="url(#arrow)"/>
+<rect class="box" x="560" y="130" width="240" height="68" rx="6"/>
+<text class="title" x="572" y="152.5">Team, PTU share and</text>
+<text class="title" x="572" y="168.5">access filters</text>
+<text class="small" x="572" y="185.5">see Teams and access</text>
+<rect class="box" x="290" y="130" width="240" height="68" rx="6"/>
+<text class="title" x="302" y="153.0">Route capability filter</text>
+<text class="small" x="302" y="170.0">skips providers that cannot</text>
+<text class="small" x="302" y="185.0">serve this call</text>
+<rect class="box" x="20" y="130" width="240" height="68" rx="6"/>
+<text class="title" x="32" y="153.0">Health check filter</text>
+<text class="small" x="32" y="170.0">only with</text>
+<text class="mono small" x="32" y="185.0">enable_health_check_routing</text>
+<path class="edge" d="M560,164.0 H532" marker-end="url(#arrow)"/>
+<path class="edge" d="M290,164.0 H262" marker-end="url(#arrow)"/>
+<path class="edge" d="M140.0,198 V224" marker-end="url(#arrow)"/>
+<rect class="box" x="20" y="226" width="240" height="68" rx="6"/>
+<text class="title" x="32" y="249.0">Cooldown filter</text>
+<text class="small" x="32" y="266.0">drops ids with a live</text>
+<text class="small" x="32" y="281.0">cooldown key</text>
+<rect class="box" x="290" y="226" width="240" height="68" rx="6"/>
+<text class="title" x="302" y="249.0">Blocked filter</text>
+<text class="mono small" x="302" y="266.0">model_info.blocked</text>
+<text class="small" x="302" y="281.0">set by an admin</text>
+<rect class="box" x="560" y="226" width="240" height="68" rx="6"/>
+<text class="title" x="572" y="256.5">Callback filters</text>
+<text class="small" x="572" y="273.5">budget limiter, affinity, ...</text>
+<path class="edge" d="M260,260.0 H288" marker-end="url(#arrow)"/>
+<path class="edge" d="M530,260.0 H558" marker-end="url(#arrow)"/>
+<path class="edge" d="M680.0,294 V320" marker-end="url(#arrow)"/>
+<rect class="box" x="560" y="322" width="240" height="68" rx="6"/>
+<text class="title" x="572" y="345.0">Pre-call checks</text>
+<text class="small" x="572" y="362.0">context window, region, params</text>
+<text class="small raw" x="572" y="377.0">only with <tspan class="mono small">enable_pre_call_checks</tspan></text>
+<rect class="box" x="290" y="322" width="240" height="68" rx="6"/>
+<text class="title" x="302" y="352.5">Tag filter</text>
+<text class="small" x="302" y="369.5">only with tag filtering on</text>
+<rect class="box" x="20" y="322" width="240" height="68" rx="6"/>
+<text class="title" x="32" y="361.0">Routing plugin candidates</text>
+<path class="edge" d="M560,356.0 H532" marker-end="url(#arrow)"/>
+<path class="edge" d="M290,356.0 H262" marker-end="url(#arrow)"/>
+<path class="edge" d="M140.0,390 V416" marker-end="url(#arrow)"/>
+<rect class="box" x="20" y="418" width="240" height="68" rx="6"/>
+<text class="title" x="32" y="441.0">Text-only filter</text>
+<text class="small" x="32" y="458.0">an image request skips</text>
+<text class="small" x="32" y="473.0">deployments without vision</text>
+<rect class="box" x="290" y="418" width="240" height="68" rx="6"/>
+<text class="title" x="302" y="448.5">Order filter</text>
+<text class="small" x="302" y="465.5">the lowest order left</text>
+<rect class="box" x="560" y="418" width="240" height="68" rx="6"/>
+<text class="title" x="572" y="449.0">Excluded and</text>
+<text class="title" x="572" y="465.0">retry-skipped ids</text>
+<path class="edge" d="M260,452.0 H288" marker-end="url(#arrow)"/>
+<path class="edge" d="M530,452.0 H558" marker-end="url(#arrow)"/>
+<path class="edge" d="M680.0,486 V510" marker-end="url(#arrow)"/>
+<path class="box decision" d="M610,550 L680.0,512.0 L750,550 L680.0,588.0 Z"/>
+<text class="title center" x="680.0" y="554.5">anything left?</text>
+<rect class="box warn" x="330" y="500" width="220" height="48" rx="6"/>
+<text x="342" y="520">no deployments available,</text>
+<text class="small" x="342" y="537">with the soonest cooldown expiry</text>
+<rect class="box ok" x="330" y="562" width="220" height="48" rx="6"/>
+<text class="title" x="342" y="582">Strategy picks one</text>
+<text class="small" x="342" y="599">see Strategies</text>
+<path class="edge warn" d="M625,541.9 V524 H552" marker-end="url(#arrow-warn)"/>
+<path class="edge" d="M625,558.1 V586 H552" marker-end="url(#arrow)"/>
+<text class="edge-label" x="588" y="518">no</text>
+<text class="edge-label" x="588" y="602">yes</text>
+</svg>

@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 610" role="img" aria-labelledby="t">
+<title id="t">When a failure cools a deployment down</title>
+<desc>Decision flow of the failure handler: skip checks, whether the failure counts, the allowed fails counter, and the error-rate rule over the last 60 seconds.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="819" height="609" rx="8"/>
+
+<rect class="box warn" x="85" y="20" width="200" height="36" rx="6"/>
+<text class="center" x="185" y="42.5">failure on deployment d</text>
+
+<rect class="box decision" x="20" y="76" width="330" height="50" rx="6"/>
+<text class="center" x="185" y="96">cooldowns disabled, or a failure</text>
+<text class="center" x="185" y="114">outside d (selection, caller credentials, ...)?</text>
+
+<rect class="box decision" x="75" y="152" width="220" height="36" rx="6"/>
+<text class="center" x="185" y="174.5">does this failure count?</text>
+
+<rect class="box decision" x="25" y="234" width="320" height="50" rx="6"/>
+<text class="center" x="185" y="254"><tspan class="mono">allowed_fails</tspan> or a policy set</text>
+<text class="center" x="185" y="272">(router or deployment)?</text>
+
+<rect class="box store" x="460" y="226" width="220" height="66" rx="6"/>
+<text class="center" x="570" y="246">increment</text>
+<text class="mono center" x="570" y="263">deployment:d:allowed_fails</text>
+<text class="small muted center" x="570" y="280">(TTL = cooldown time)</text>
+
+<rect class="box decision" x="475" y="316" width="190" height="36" rx="6"/>
+<text class="center" x="570" y="338.5">count &gt; allowed fails?</text>
+
+<rect class="box decision" x="105" y="380" width="160" height="210" rx="6"/>
+<text class="center" x="185" y="481">this process's</text>
+<text class="center" x="185" y="498">last 60s for d</text>
+
+<rect class="box warn" x="500" y="380" width="140" height="170" rx="6"/>
+<text class="title center" x="570" y="469.5">cool down</text>
+
+<rect class="box ok" x="700" y="76" width="100" height="514" rx="6"/>
+<text class="title center" x="750" y="337.5">no cooldown</text>
+
+<!-- spine -->
+<path class="edge" d="M185,56 V74" marker-end="url(#arrow)"/>
+<path class="edge" d="M185,126 V150" marker-end="url(#arrow)"/>
+<text class="edge-label" x="193" y="142">no</text>
+<path class="edge" d="M185,188 V232" marker-end="url(#arrow)"/>
+<text class="edge-label" x="193" y="214">429, 401, 402, 404, 408, any 5xx</text>
+<path class="edge" d="M185,284 V378" marker-end="url(#arrow)"/>
+<text class="edge-label" x="193" y="334">no</text>
+
+<!-- to no cooldown -->
+<path class="edge" d="M350,101 H698" marker-end="url(#arrow)"/>
+<text class="edge-label" x="370" y="94">yes</text>
+<path class="edge" d="M295,170 H698" marker-end="url(#arrow)"/>
+<text class="edge-label" x="310" y="149">connection error,</text>
+<text class="edge-label" x="310" y="163">or 4xx other than 401, 402, 404, 408, 429</text>
+
+<!-- allowed fails branch -->
+<path class="edge" d="M345,259 H458" marker-end="url(#arrow)"/>
+<text class="edge-label" x="360" y="252">yes</text>
+<path class="edge" d="M570,292 V314" marker-end="url(#arrow)"/>
+<path class="edge" d="M665,334 H698" marker-end="url(#arrow)"/>
+<text class="edge-label center" x="682" y="327">no</text>
+<path class="edge" d="M570,352 V378" marker-end="url(#arrow)"/>
+<text class="edge-label" x="578" y="370">yes</text>
+
+<!-- error-rate rule -->
+<path class="edge" d="M265,405 H498" marker-end="url(#arrow)"/>
+<text class="edge-label" x="278" y="398">429 and group has 2+ deployments</text>
+<path class="edge" d="M265,445 H498" marker-end="url(#arrow)"/>
+<text class="edge-label" x="278" y="438">100% failed and 1000+ requests</text>
+<path class="edge" d="M265,495 H498" marker-end="url(#arrow)"/>
+<text class="edge-label" x="278" y="474">over 50% failed, 5+ requests,</text>
+<text class="edge-label" x="278" y="488">group has 2+ deployments</text>
+<path class="edge" d="M265,535 H498" marker-end="url(#arrow)"/>
+<text class="edge-label" x="278" y="528">status should not be retried</text>
+<path class="edge" d="M265,575 H698" marker-end="url(#arrow)"/>
+<text class="edge-label" x="278" y="568">otherwise</text>
+</svg>

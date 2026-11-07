@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 522" role="img" aria-labelledby="t">
+<title id="t">Driving the core: one call with a retry on 429</title>
+<desc>The Router facade calls the RustCore driver, which loops on RouterCall.next and answers each step through PythonHost: read cooldowns, attempt deployment a, get a 429, set its cooldown, attempt deployment b, return the response.</desc>
+<style>/* litellm architecture diagrams v1, from the litellm-docs Aurora theme (src/css/custom.css). Embed verbatim in every SVG. */
+svg { --ink:#272b37; --text:#3a3e4b; --muted:#646875; --line:#a3a8ba; --rule:#e3e5ee; --card:#ffffff; --canvas:#f7f8fd; --accent:#0117be; --accent-bg:#f2f4fd; --accent-line:#b9c1f0; --host:#1f6fa8; --host-bg:#eaf5fd; --store:#6b3fb8; --store-bg:#efe8fb; --warn:#b42318; --warn-bg:#fdecea; --ok:#1a7f4b; --ok-bg:#e7f6ee; }
+@media (prefers-color-scheme: dark) {
+  svg { --ink:#ffffff; --text:#d6d4ea; --muted:#a6a4c6; --line:#5c6294; --rule:#1a1f45; --card:#0f1335; --canvas:#080b26; --accent:#9fabff; --accent-bg:#161b4a; --accent-line:#3d4790; --host:#7cc4f5; --host-bg:#0f2a44; --store:#c3a6f0; --store-bg:#23173f; --warn:#f19a9a; --warn-bg:#3a1622; --ok:#7ee2a8; --ok-bg:#0f2e25; }
+}
+text { font-family: Geist, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; fill: var(--text); }
+.mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.title { font-weight: 600; fill: var(--ink); }
+.small { font-size: 11.5px; }
+.muted { fill: var(--muted); }
+.accent { fill: var(--accent); }
+.center { text-anchor: middle; }
+.end { text-anchor: end; }
+.canvas { fill: var(--canvas); stroke: var(--rule); stroke-width: 1; }
+.box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+.box.core { fill: var(--accent-bg); stroke: var(--accent); }
+.box.host { fill: var(--host-bg); stroke: var(--host); }
+.box.store { fill: var(--store-bg); stroke: var(--store); }
+.box.warn { fill: var(--warn-bg); stroke: var(--warn); }
+.box.ok { fill: var(--ok-bg); stroke: var(--ok); }
+.box.decision { fill: var(--card); stroke: var(--ink); }
+.group { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 5 4; }
+.group.core { stroke: var(--accent-line); }
+.group-label { font-size: 11px; font-weight: 600; fill: var(--muted); letter-spacing: 0.06em; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; }
+.edge.strong { stroke: var(--ink); }
+.edge.dashed { stroke-dasharray: 5 4; }
+.edge.core { stroke: var(--accent); }
+.edge.warn { stroke: var(--warn); }
+.edge-label { font-size: 11.5px; fill: var(--muted); paint-order: stroke; stroke: var(--canvas); stroke-width: 4px; stroke-linejoin: round; }
+.arrowhead { fill: var(--line); }
+.arrowhead.strong { fill: var(--ink); }
+.arrowhead.core { fill: var(--accent); }
+.arrowhead.warn { fill: var(--warn); }
+.lifeline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.note { fill: var(--accent-bg); stroke: var(--accent-line); stroke-width: 1; }
+.step { fill: var(--accent); }
+.step-text { font-size: 10.5px; font-weight: 600; fill: var(--card); text-anchor: middle; }</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-core" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead core" d="M0,0 L10,5 L0,10 z"/></marker>
+  <marker id="arrow-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead warn" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<rect class="canvas" x="0.5" y="0.5" width="799" height="521" rx="8"/>
+<line class="lifeline" x1="80" y1="52" x2="80" y2="512"/>
+<rect class="box" x="10" y="16" width="140" height="36" rx="6"/>
+<text class="title center" x="80" y="38.5">Router facade</text>
+<line class="lifeline" x1="240" y1="52" x2="240" y2="512"/>
+<rect class="box host" x="170" y="16" width="140" height="36" rx="6"/>
+<text class="title center" x="240" y="38.5">RustCore driver</text>
+<line class="lifeline" x1="520" y1="52" x2="520" y2="512"/>
+<rect class="box core" x="445" y="16" width="150" height="36" rx="6"/>
+<text class="title center" x="520" y="38.5">RouterCall (Rust)</text>
+<line class="lifeline" x1="710" y1="52" x2="710" y2="512"/>
+<rect class="box host" x="640" y="16" width="140" height="36" rx="6"/>
+<text class="title center" x="710" y="38.5">PythonHost</text>
+<path class="edge" d="M80,88 H239" marker-end="url(#arrow)"/>
+<circle class="step" cx="92" cy="77" r="8"/><text class="step-text" x="92" y="80.5">1</text>
+<text class="edge-label" x="104" y="81"><tspan class="mono small">acompletion(model, messages)</tspan></text>
+<path class="edge core" d="M240,114 H519" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="252" cy="103" r="8"/><text class="step-text" x="252" y="106.5">2</text>
+<text class="edge-label" x="264" y="107"><tspan class="mono small">next(None)</tspan></text>
+<path class="edge core dashed" d="M520,140 H241" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="508" cy="129" r="8"/><text class="step-text" x="508" y="132.5">3</text>
+<text class="edge-label end" x="496" y="133">step cache: read cooldowns</text>
+<path class="edge" d="M240,166 H709" marker-end="url(#arrow)"/>
+<circle class="step" cx="252" cy="155" r="8"/><text class="step-text" x="252" y="158.5">4</text>
+<text class="edge-label" x="264" y="159"><tspan class="mono small">DualCache</tspan> batch get</text>
+<path class="edge core" d="M240,192 H519" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="252" cy="181" r="8"/><text class="step-text" x="252" y="184.5">5</text>
+<text class="edge-label" x="264" y="185"><tspan class="mono small">next(values)</tspan></text>
+<path class="edge core dashed" d="M520,218 H241" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="508" cy="207" r="8"/><text class="step-text" x="508" y="210.5">6</text>
+<text class="edge-label end" x="496" y="211">step attempt on deployment a</text>
+<path class="edge" d="M240,244 H709" marker-end="url(#arrow)"/>
+<circle class="step" cx="252" cy="233" r="8"/><text class="step-text" x="252" y="236.5">7</text>
+<text class="edge-label" x="264" y="237"><tspan class="mono small">router_attempt</tspan> + <tspan class="mono small">litellm.acompletion</tspan></text>
+<path class="edge warn dashed" d="M710,270 H241" marker-end="url(#arrow-warn)"/>
+<circle class="step" cx="698" cy="259" r="8"/><text class="step-text" x="698" y="262.5">8</text>
+<text class="edge-label end" x="686" y="263">429</text>
+<path class="edge core" d="M240,296 H519" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="252" cy="285" r="8"/><text class="step-text" x="252" y="288.5">9</text>
+<text class="edge-label" x="264" y="289"><tspan class="mono small">next(failure)</tspan></text>
+<path class="edge core dashed" d="M520,322 H241" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="508" cy="311" r="8"/><text class="step-text" x="508" y="314.5">10</text>
+<text class="edge-label end" x="496" y="315">step cache: set <tspan class="mono small">deployment:a:cooldown</tspan></text>
+<path class="edge core" d="M240,348 H519" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="252" cy="337" r="8"/><text class="step-text" x="252" y="340.5">11</text>
+<text class="edge-label" x="264" y="341"><tspan class="mono small">next(ok)</tspan></text>
+<path class="edge core dashed" d="M520,374 H241" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="508" cy="363" r="8"/><text class="step-text" x="508" y="366.5">12</text>
+<text class="edge-label end" x="496" y="367">step attempt on deployment b</text>
+<path class="edge" d="M240,400 H709" marker-end="url(#arrow)"/>
+<circle class="step" cx="252" cy="389" r="8"/><text class="step-text" x="252" y="392.5">13</text>
+<text class="edge-label" x="264" y="393"><tspan class="mono small">router_attempt</tspan> + <tspan class="mono small">litellm.acompletion</tspan></text>
+<path class="edge dashed" d="M710,426 H241" marker-end="url(#arrow)"/>
+<circle class="step" cx="698" cy="415" r="8"/><text class="step-text" x="698" y="418.5">14</text>
+<text class="edge-label end" x="686" y="419">response</text>
+<path class="edge core" d="M240,452 H519" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="252" cy="441" r="8"/><text class="step-text" x="252" y="444.5">15</text>
+<text class="edge-label" x="264" y="445"><tspan class="mono small">next(response)</tspan></text>
+<path class="edge core dashed" d="M520,478 H241" marker-end="url(#arrow-core)"/>
+<circle class="step" cx="508" cy="467" r="8"/><text class="step-text" x="508" y="470.5">16</text>
+<text class="edge-label end" x="496" y="471">step done</text>
+<path class="edge dashed" d="M240,504 H81" marker-end="url(#arrow)"/>
+<circle class="step" cx="228" cy="493" r="8"/><text class="step-text" x="228" y="496.5">17</text>
+<text class="edge-label end" x="216" y="497">response with routing headers</text>
+</svg>
