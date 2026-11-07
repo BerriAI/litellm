@@ -506,6 +506,7 @@ async def _resolve_jwt_auth(
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _authorize_authenticated_request,  # pyright: ignore[reportPrivateUsage]  # credential writes use the admission gate
         _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
@@ -565,10 +566,19 @@ async def _resolve_jwt_auth(
         resolved_user: Final = authorized["user_object"]
         if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
             return None
-        return JWTAuthManager.user_api_key_auth_from_result(authorized)
+        principal: Final = JWTAuthManager.user_api_key_auth_from_result(authorized)
+        await _authorize_authenticated_request(
+            user_api_key_auth_obj=principal,
+            request=request,
+            request_data={},
+            route=write_route,
+            api_key=token,
+            credential_issuing=True,
+        )
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
         return None
+    return principal
 
 
 _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]

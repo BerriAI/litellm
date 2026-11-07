@@ -65,26 +65,8 @@ async def test_user_access_group_rules_are_enforced_at_central_authorization(
     monkeypatch.setattr(server, "llm_router", None)
     monkeypatch.setattr(server, "user_custom_auth", None)
     principal: Final = UserAPIKeyAuth(models=["explicit"], user_id="science")
+    principal.require_key_model_check()
     request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    if not enabled and not allowed:
-        with pytest.raises(ProxyException, match="model"):
-            await enforce_key_and_fallback_model_access(
-                valid_token=principal,
-                request_data={"model": model},
-                route="/chat/completions",
-                request=request,
-                llm_model_list=None,
-                llm_router=None,
-            )
-        return
-    await enforce_key_and_fallback_model_access(
-        valid_token=principal,
-        request_data={"model": model},
-        route="/chat/completions",
-        request=request,
-        llm_model_list=None,
-        llm_router=None,
-    )
     if allowed:
         assert (
             await _authorize_authenticated_request(

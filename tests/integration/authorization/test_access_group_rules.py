@@ -17,9 +17,11 @@ from tests.integration._support.wire import Reply, Request, wire_server
 pytestmark: Final = pytest.mark.shares_worker_state
 
 
-@pytest.mark.parametrize("enabled", (True, False))
+@pytest.mark.parametrize(
+    "enabled,mapping,claimed", ((True, False, False), (False, False, False), (True, True, False), (True, True, True))
+)
 def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_models(
-    gateway: Gateway, tmp_path: Path, enabled: bool
+    gateway: Gateway, tmp_path: Path, enabled: bool, mapping: bool, claimed: bool
 ) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_key: Final = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
@@ -50,6 +52,11 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
                 "user_id_jwt_field": "sub",
                 "user_id_upsert": True,
                 "enforce_team_based_model_access": True,
+                **(
+                    {"virtual_key_claim_field": "sub", "unregistered_jwt_client_behavior": "auto_register"}
+                    if mapping
+                    else {}
+                ),
             },
             **(
                 {
@@ -67,14 +74,20 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
         subject: Final = f"integration-rule-user-{uuid.uuid4().hex}"
         gateway.post("/user/new", {"user_id": subject, "user_role": "internal_user"})
         scenario.cleanups.callback(scenario.delete_user, subject)
+        team_id: Final = (
+            scenario.team(models=[explicit], members_with_roles=[{"role": "user", "user_id": subject}])
+            if claimed
+            else None
+        )
+        team_claims: Final = [team_id] if team_id is not None else []
         token: Final = jwt.encode(
-            {"sub": subject, "groups": ["science"], "exp": int(time.time()) + 300},
+            {"sub": subject, "groups": ["science", *team_claims], "exp": int(time.time()) + 300},
             private_key,
             algorithm="RS256",
             headers={"kid": key_id},
         )
         unmatched: Final = jwt.encode(
-            {"sub": subject, "groups": ["other"], "exp": int(time.time()) + 300},
+            {"sub": subject, "groups": ["other", *team_claims], "exp": int(time.time()) + 300},
             private_key,
             algorithm="RS256",
             headers={"kid": key_id},
@@ -92,7 +105,8 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
             )
             assert fallback_response.status_code == 403, fallback_response.text
             for key, model, allowed in (
-                (token, group_model, enabled),
+                (token, group_model, enabled and not mapping),
+                *(((token, group_model, False),) if mapping else ()),
                 (token, outside, False),
                 (unmatched, group_model, False),
                 (virtual_key, explicit, True),
@@ -114,7 +128,10 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
 
 
 @pytest.mark.parametrize("consumer", ("auto_register", "token_exchange"))
-def test_unmatched_teamless_jwt_cannot_provision_credentials(gateway: Gateway, tmp_path: Path, consumer: str) -> None:
+@pytest.mark.parametrize("matching", (True, False))
+def test_teamless_jwt_cannot_provision_credentials_without_native_team_access(
+    gateway: Gateway, tmp_path: Path, consumer: str, matching: bool
+) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_key: Final = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
     key_id: Final = "credential-rule-signing-key"
@@ -128,6 +145,13 @@ def test_unmatched_teamless_jwt_cannot_provision_credentials(gateway: Gateway, t
         subject: Final = f"integration-credential-user-{uuid.uuid4().hex}"
         gateway.post("/user/new", {"user_id": subject, "user_role": "internal_user"})
         scenario.cleanups.callback(scenario.delete_user, subject)
+        group_name: Final = f"credential-rule-{uuid.uuid4().hex}"
+        created_group: Final = gateway.request(
+            "POST", "/v1/access_group", {"access_group_name": group_name, "access_model_names": [model]}
+        )
+        assert created_group.status_code == 201, created_group.text
+        group_id: Final = string_value(created_group.json()["access_group_id"])
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/v1/access_group/{group_id}")
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["general_settings"] = {
             **config["general_settings"],
@@ -142,13 +166,13 @@ def test_unmatched_teamless_jwt_cannot_provision_credentials(gateway: Gateway, t
                 ),
             },
             "access_group_rules": [
-                {"attribute": "jwt_claims.groups", "contains": "science", "access_group": "unused-group"}
+                {"attribute": "jwt_claims.groups", "contains": "science", "access_group": group_name}
             ],
         }
         path: Final = tmp_path / "credential_access_group_rules.yaml"
         path.write_text(yaml.safe_dump(config))
         token: Final = jwt.encode(
-            {"sub": subject, "groups": ["other"], "exp": int(time.time()) + 300},
+            {"sub": subject, "groups": ["science" if matching else "other"], "exp": int(time.time()) + 300},
             private_key,
             algorithm="RS256",
             headers={"kid": key_id},

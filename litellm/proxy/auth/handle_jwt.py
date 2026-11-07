@@ -15,8 +15,8 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
-from functools import partial
+from dataclasses import dataclass, replace
+from itertools import chain
 from typing import Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -78,6 +78,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.auth.user_api_key_auth import JWTModelAccessPolicy
 from litellm.types.proxy.auth.user_api_key_auth import is_jwt as is_jwt_token
 
 from .auth_checks import (
@@ -1522,11 +1523,6 @@ class JWTAuthManager:
                     status_code=403,
                     detail="Unmatched token passed in. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user.",
                 )
-            JWTAuthManager.can_rbac_role_call_model(
-                rbac_role=rbac_role,
-                general_settings=general_settings,
-                model=request_data.get("model"),
-            )
             JWTAuthManager.can_rbac_role_call_route(
                 rbac_role=rbac_role,
                 general_settings=general_settings,
@@ -1753,6 +1749,22 @@ class JWTAuthManager:
         )
 
     @staticmethod
+    async def _team_matches_requested_model(team: LiteLLM_TeamTable, requested_model: str | None) -> bool:
+        from litellm.proxy.proxy_server import llm_router
+
+        if not requested_model:
+            return True
+        try:
+            return await can_team_access_model(
+                model=requested_model,
+                team_object=team,
+                llm_router=llm_router,
+                team_model_aliases=team_model_aliases(team),
+            )
+        except ProxyException:
+            return False
+
+    @staticmethod
     async def find_team_with_model_access(
         team_ids: set[str],
         requested_model: str | None,
@@ -1763,30 +1775,12 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
-        defer_model_access: bool = False,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
-        """Find first team with access to the requested model"""
-        from litellm.proxy.proxy_server import llm_router
+        """Prefer a model-matching team, otherwise retain the first route-allowed team."""
 
-        denied_pass_through_team: LiteLLM_TeamTable | None = None
-        route_denied_team_id: str | None = None  # rebind-ok: retain route-denied team while checking all claims
-
-        if not team_ids:
-            if (
-                jwt_handler.litellm_jwtauth.enforce_team_based_model_access
-                and not jwt_handler.litellm_jwtauth.fallback_to_db_teams
-                and not defer_model_access
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="No teams found in token. `enforce_team_based_model_access` is set to True. Token must belong to a team.",
-                )
-            return None, None
-
-        any_claim_team_resolved = False
-        for team_id in sorted(team_ids, key=str):
+        async def load_team(team_id: str) -> LiteLLM_TeamTable | None:
             try:
-                team_object = await get_team_object(
+                return await get_team_object(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -1794,80 +1788,51 @@ class JWTAuthManager:
                     proxy_logging_obj=proxy_logging_obj,
                 )
 
-                if team_object is not None:
-                    any_claim_team_resolved = True
-
-                if team_object and team_object.models is not None:
-                    team_models = team_object.models
-                    if isinstance(team_models, list) and (
-                        not requested_model
-                        or await can_team_access_model(
-                            model=requested_model,
-                            team_object=team_object,
-                            llm_router=llm_router,
-                            team_model_aliases=team_model_aliases(team_object),
-                        )
-                    ):
-                        is_allowed = allowed_routes_check(
-                            user_role=LitellmUserRoles.TEAM,
-                            user_route=route,
-                            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
-                        )
-                        if not is_allowed:
-                            route_denied_team_id = team_id
-                        elif not JWTAuthManager._team_has_passthrough_route_access(
-                            team_object=team_object,
-                            route=route,
-                            request_method=request_method,
-                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
-                        ):
-                            is_allowed = False
-                            denied_pass_through_team = team_object
-                        verbose_proxy_logger.debug(
-                            "JWT team route check: team_id=%s, route=%s, is_allowed=%s", team_id, route, is_allowed
-                        )
-                        if is_allowed:
-                            return team_id, team_object
             except Exception:
-                continue
+                return None
 
-        if denied_pass_through_team is not None:
-            JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=denied_pass_through_team)
-
-        if defer_model_access and requested_model is None and route_denied_team_id is not None:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Team {route_denied_team_id} cannot access route {route}",
+        loaded: Final = tuple([await load_team(team_id) for team_id in sorted(team_ids, key=str)])
+        teams: Final = tuple(team for team in loaded if team is not None)
+        if not teams:
+            return None, None
+        if not allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+        ):
+            matching_denied: Final = tuple(
+                [team for team in teams if await JWTAuthManager._team_matches_requested_model(team, requested_model)]
             )
-
-        if requested_model and (any_claim_team_resolved or not jwt_handler.litellm_jwtauth.team_claim_fallback):
-            if defer_model_access and route_denied_team_id is None:
-                return await JWTAuthManager.find_team_with_model_access(
-                    team_ids=team_ids,
-                    requested_model=None,
-                    route=route,
-                    jwt_handler=jwt_handler,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    request_method=request_method,
-                    defer_model_access=True,
-                )
-            # Claim resolved but no model access, or fallback disabled — deny.
+            denied_team: Final = matching_denied[-1] if matching_denied else teams[0]
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    f"Team {route_denied_team_id} can access model {requested_model} but route {route} "
+                    f"Team {denied_team.team_id} can access model {requested_model} but route {route} "
                     "is not in litellm_jwtauth.team_allowed_routes"
-                    if route_denied_team_id is not None
-                    else f"No team has access to the requested model: {requested_model}. "
-                    f"Checked teams={team_ids}. Check `/models` to see all available models."
+                    if requested_model and matching_denied
+                    else f"Team {denied_team.team_id} cannot access route {route}"
                 ),
             )
-
-        # No claim team resolved and fallback enabled — defer to fallback.
-        return None, None
+        route_allowed: Final = tuple(
+            team
+            for team in teams
+            if JWTAuthManager._team_has_passthrough_route_access(
+                team_object=team,
+                route=route,
+                request_method=request_method,
+                team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+            )
+        )
+        if not route_allowed:
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=teams[-1])
+        preferences: Final = tuple(
+            [
+                (team, await JWTAuthManager._team_matches_requested_model(team, requested_model))
+                for team in route_allowed
+            ]
+        )
+        selected: Final = next((team for team, matches in preferences if matches), route_allowed[0])
+        return selected.team_id, selected
 
     @staticmethod
     async def get_user_info(
@@ -2374,38 +2339,16 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
-        defer_model_access: bool = False,
     ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
-        """
-        Resolve a team for a user whose JWT carries no team claims by selecting
-        the first DB team membership that loads successfully and, when a model is
-        requested, can access that model — mirroring the per-team model-access
-        check the claim-based path enforces, so a team's `models` restriction is
-        not bypassed by the fallback.
-
-        The same `team_allowed_routes` gate the claim-based path applies is
-        enforced here too, so a DB-selected team cannot reach a route the JWT
-        config excludes for team-role callers. Auth-enforced passthrough routes
-        are exempt from that gate by design (they are governed by the team's
-        `allowed_passthrough_routes`, re-checked by the caller).
-
-        The resolved team's membership row is loaded too (when user_id is set) so
-        per-team membership budget limits are enforced on the fallback path the
-        same as on the claim-based path.
-
-        Raises HTTP 403 when the user has no usable DB team membership and
-        `enforce_team_based_model_access` is set; otherwise returns (None, None, None).
-        """
-        from litellm.proxy.proxy_server import llm_router
-
+        """Prefer the first model-matching membership, retaining a route-allowed team otherwise."""
         user_team_ids: Final = user_object.teams if user_object else []
         team_route_allowed: Final = JWTAuthManager._is_team_route_allowed(
             route=route, request_method=request_method, jwt_handler=jwt_handler
         )
-        any_team_resolved = False
-        for candidate_team_id in user_team_ids:
+
+        async def load_team(candidate_team_id: str) -> LiteLLM_TeamTable | None:
             try:
-                team_object = await get_team_object(
+                return await get_team_object(
                     team_id=candidate_team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -2414,69 +2357,51 @@ class JWTAuthManager:
                     team_id_upsert=team_id_upsert,
                 )
             except HTTPException:
-                continue
-            any_team_resolved = True
-            if requested_model:
-                try:
-                    await can_team_access_model(
-                        model=requested_model,
-                        team_object=team_object,
-                        llm_router=llm_router,
-                        team_model_aliases=team_model_aliases(team_object),
-                    )
-                except ProxyException:
-                    continue
-            if not team_route_allowed:
-                continue
-            verbose_proxy_logger.debug(
-                "JWT DB team fallback: resolved team_id=%s from user DB membership",
-                candidate_team_id,
-            )
-            if user_id:
-                return (
-                    candidate_team_id,
-                    team_object,
-                    await get_team_membership(
-                        user_id=user_id,
-                        team_id=candidate_team_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                    ),
-                )
-            return candidate_team_id, team_object, None
+                return None
 
-        if enforce_team_based_model_access:
-            if defer_model_access and team_route_allowed:
-                return await JWTAuthManager._resolve_db_team_fallback(
-                    user_object=user_object,
-                    user_id=user_id,
-                    requested_model=None,
-                    route=route,
-                    jwt_handler=jwt_handler,
-                    enforce_team_based_model_access=False,
-                    team_id_upsert=team_id_upsert,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    request_method=request_method,
-                )
-            if requested_model and any_team_resolved:
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        f"No team you are a member of has access to the requested "
-                        f"model: {requested_model}. Check `/models` to see the models "
-                        f"available to you."
-                    ),
-                )
+        loaded: Final = tuple([await load_team(team_id) for team_id in user_team_ids])
+        teams: Final = tuple(team for team in loaded if team is not None)
+        if not teams:
+            return None, None, None
+        if not team_route_allowed:
+            if not enforce_team_based_model_access:
+                return None, None, None
             raise HTTPException(
                 status_code=403,
-                detail=("User is not a member of any team. Add the user to a team via the LiteLLM UI or API."),
+                detail=f"Team {teams[0].team_id} cannot access route {route}",
             )
-        return None, None, None
+        route_allowed: Final = tuple(
+            team
+            for team in teams
+            if JWTAuthManager._team_has_passthrough_route_access(
+                team_object=team,
+                route=route,
+                request_method=request_method,
+                team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+            )
+        )
+        if not route_allowed:
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=teams[-1])
+        preferences: Final = tuple(
+            [
+                (team, await JWTAuthManager._team_matches_requested_model(team, requested_model))
+                for team in route_allowed
+            ]
+        )
+        selected: Final = next((team for team, matches in preferences if matches), route_allowed[0])
+        membership: Final = (
+            await get_team_membership(
+                user_id=user_id,
+                team_id=selected.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if user_id
+            else None
+        )
+        return selected.team_id, selected, membership
 
     @staticmethod
     def _is_team_route_allowed(
@@ -2544,7 +2469,6 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
-        defer_for_access_group_rules: bool = False,
     ) -> JWTAuthBuilderResult:
         return await JWTAuthManager.authorize_jwt(
             api_key=api_key,
@@ -2558,7 +2482,6 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             request_headers=request_headers,
             request_method=request_method,
-            defer_for_access_group_rules=defer_for_access_group_rules,
             provisioning=_JWTProvisioning(
                 user_id_upsert=jwt_handler.litellm_jwtauth.user_id_upsert,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
@@ -2644,12 +2567,10 @@ class JWTAuthManager:
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
         provisioning: _JWTProvisioning | None = None,
-        defer_for_access_group_rules: bool = False,
     ) -> JWTAuthBuilderResult:
         """Resolve and authorize JWT context; only normal admission supplies provisioning."""
         handler: Final = jwt_handler
         jwt_valid_token: Final = await JWTAuthManager.authenticate_jwt(api_key, handler)
-        defer_model_access: Final = defer_for_access_group_rules and bool(general_settings.get("access_group_rules"))
         managed: Final = await resolve_managed_agent(jwt_valid_token, prisma_client, cache=user_api_key_cache)
         if managed is not None:
             if not handler.managed_issuer_is_trusted(jwt_valid_token.get("iss")):
@@ -2687,13 +2608,23 @@ class JWTAuthManager:
 
         # Check Scope Based Access
         scopes: Final = handler.get_scopes(token=jwt_valid_token)
-        if handler.litellm_jwtauth.enforce_scope_based_access and handler.litellm_jwtauth.scope_mappings:
-            JWTAuthManager.check_scope_based_access(
-                scope_mappings=handler.litellm_jwtauth.scope_mappings,
-                scopes=scopes,
-                request_data=request_data,
-                general_settings=general_settings,
-            )
+        role_models: Final = (
+            get_role_based_models(rbac_role, general_settings)
+            if handler.litellm_jwtauth.enforce_rbac and rbac_role is not None
+            else None
+        )
+        applicable_scope_mappings: Final = tuple(
+            mapping for mapping in handler.litellm_jwtauth.scope_mappings or () if mapping.scope in scopes
+        )
+        scope_models: Final = (
+            tuple(chain.from_iterable(mapping.models or () for mapping in applicable_scope_mappings))
+            if handler.litellm_jwtauth.enforce_scope_based_access and handler.litellm_jwtauth.scope_mappings
+            else None
+        )
+        model_policy: Final = JWTModelAccessPolicy(
+            role_models=tuple(role_models) if role_models is not None else None,
+            scope_models=scope_models,
+        )
 
         object_id = handler.get_object_id(token=jwt_valid_token, default_value=None)
 
@@ -2744,8 +2675,9 @@ class JWTAuthManager:
             )
         )
         if admin_result:
+            admin_identity_result: Final[JWTAuthBuilderResult] = {**admin_result, "model_access_policy": model_policy}
             await JWTAuthManager._attach_team_from_header_for_admin(
-                admin_result=admin_result,
+                admin_result=admin_identity_result,
                 route=route,
                 request_headers=request_headers,
                 jwt_handler=handler,
@@ -2759,9 +2691,9 @@ class JWTAuthManager:
                 identity: Final = await JWTAuthManager._resolve_claim_identity(
                     jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
                 )
-                return {**admin_result, "user_object": identity.user_object}
+                return {**admin_identity_result, "user_object": identity.user_object}
             if prisma_client is None:
-                return admin_result
+                return admin_identity_result
             try:
                 admin_user: Final = await get_user_object(
                     user_id=user_id,
@@ -2774,8 +2706,8 @@ class JWTAuthManager:
                     proxy_logging_obj=proxy_logging_obj,
                 )
             except UserNotFoundError:
-                return admin_result
-            return {**admin_result, "user_object": admin_user}
+                return admin_identity_result
+            return {**admin_identity_result, "user_object": admin_user}
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
@@ -2851,21 +2783,29 @@ class JWTAuthManager:
             )
 
         needs_claim_team_selection: Final = not team_object and not team_id
-        claim_model_check: Final = partial(
-            JWTAuthManager.find_team_with_model_access,
-            team_ids=all_team_ids,
-            requested_model=requested_model,
-            route=route,
-            request_method=request_method,
-            jwt_handler=handler,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
         if needs_claim_team_selection:
-            ## CHECK USER GROUP ACCESS
-            team_id, team_object = await claim_model_check(defer_model_access=defer_model_access)
+            team_id, team_object = await JWTAuthManager.find_team_with_model_access(
+                team_ids=all_team_ids,
+                requested_model=requested_model,
+                route=route,
+                request_method=request_method,
+                jwt_handler=handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        no_token_teams: Final = (
+            needs_claim_team_selection
+            and not all_team_ids
+            and handler.litellm_jwtauth.enforce_team_based_model_access
+            and not db_team_fallback
+        )
+        unresolved_claims: Final[frozenset[str]] = (
+            frozenset(all_team_ids)
+            if needs_claim_team_selection and team_id is None and not handler.litellm_jwtauth.team_claim_fallback
+            else frozenset()
+        )
 
         # The RBAC role-claim path (rbac_role == TEAM) sets team_id without
         # loading team_object, so fetch it here before gating an auth-enforced
@@ -2975,27 +2915,25 @@ class JWTAuthManager:
 
         # If JWT did not resolve team_id, attempt a team fallback.
         needs_db_team_selection: Final = selected_team_id is None and db_team_fallback
-        db_model_check: Final = partial(
-            JWTAuthManager._resolve_db_team_fallback,
-            user_object=user_object,
-            user_id=user_id,
-            requested_model=requested_model,
-            route=route,
-            jwt_handler=handler,
-            enforce_team_based_model_access=handler.litellm_jwtauth.enforce_team_based_model_access,
-            team_id_upsert=team_id_upsert,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            request_method=request_method,
-        )
         if needs_db_team_selection:
             (
                 team_id,
                 team_object,
                 team_membership_object,
-            ) = await db_model_check(defer_model_access=defer_model_access)
+            ) = await JWTAuthManager._resolve_db_team_fallback(
+                user_object=user_object,
+                user_id=user_id,
+                requested_model=requested_model,
+                route=route,
+                jwt_handler=handler,
+                enforce_team_based_model_access=handler.litellm_jwtauth.enforce_team_based_model_access,
+                team_id_upsert=team_id_upsert,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                request_method=request_method,
+            )
             # The earlier passthrough gate ran when team_id was None; re-check
             # against the DB-resolved team so a fallback-selected team must also
             # pass the auth-enforced passthrough allowlist.
@@ -3006,7 +2944,7 @@ class JWTAuthManager:
                 team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
             ):
                 JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=team_object)
-        elif selected_team_id is None:
+        elif selected_team_id is None and not no_token_teams:
             (
                 team_id,
                 team_object,
@@ -3080,17 +3018,16 @@ class JWTAuthManager:
             jwt_claims=jwt_valid_token,
             agent_id=agent_id,
             managed_agent_context=managed,
-            deferred_model_checks=(
-                tuple(
-                    check
-                    for needed, check in (
-                        (needs_claim_team_selection, claim_model_check),
-                        (needs_db_team_selection, db_model_check),
-                    )
-                    if needed
-                )
-                if defer_model_access
-                else ()
+            model_access_policy=replace(
+                model_policy,
+                required_team=(
+                    "token"
+                    if no_token_teams
+                    else "database"
+                    if needs_db_team_selection and handler.litellm_jwtauth.enforce_team_based_model_access
+                    else None
+                ),
+                unresolved_team_ids=unresolved_claims,
             ),
         )
 
@@ -3134,6 +3071,5 @@ class JWTAuthManager:
         auth._managed_delegation_verified = (  # pyright: ignore[reportPrivateUsage]  # JWT admission produces the one-shot proof consumed by managed authorization
             auth.managed_agent_context is not None and auth.managed_agent_context.mode == "delegated"
         )
-        if "deferred_model_checks" in result:
-            auth.defer_model_checks(result["deferred_model_checks"])
+        auth.set_jwt_model_policy(result.get("model_access_policy"))
         return auth

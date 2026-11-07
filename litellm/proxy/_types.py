@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -74,6 +74,9 @@ from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.proxy.auth.user_api_key_auth import (
+    JWTModelAccessPolicy,
 )
 from litellm.types.proxy.auth.user_api_key_auth import (
     is_jwt as is_jwt,  # noqa: PLC0414  # public re-export
@@ -4737,7 +4740,7 @@ UI_TEAM_ID = "litellm-dashboard"
 
 
 class JWTAuthBuilderResult(TypedDict):
-    deferred_model_checks: ReadOnly[NotRequired[tuple[Callable[[], Awaitable[object]], ...]]]
+    model_access_policy: ReadOnly[NotRequired["JWTModelAccessPolicy"]]
     is_proxy_admin: bool
     team_object: LiteLLM_TeamTable | None
     user_object: LiteLLM_UserTable | None

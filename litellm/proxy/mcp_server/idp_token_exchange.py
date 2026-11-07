@@ -112,6 +112,9 @@ class AuthorizeSubjectToken(Protocol):
 
 
 async def exchange_idp_subject_token(subject_token: str, request: Request) -> SubjectIdentity | SubjectTokenRefusal:
+    from litellm.proxy.auth.user_api_key_auth import (
+        _authorize_authenticated_request,  # pyright: ignore[reportPrivateUsage]  # credential issuance uses the admission gate
+    )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
         general_settings,
         jwt_handler,
@@ -121,7 +124,7 @@ async def exchange_idp_subject_token(subject_token: str, request: Request) -> Su
     )
 
     async def authorize(token: str, request_headers: Mapping[str, str]) -> JWTAuthBuilderResult:
-        return await JWTAuthManager.auth_builder(
+        result: Final = await JWTAuthManager.auth_builder(
             api_key=token,
             jwt_handler=jwt_handler,
             request_data={},
@@ -134,6 +137,15 @@ async def exchange_idp_subject_token(subject_token: str, request: Request) -> Su
             request_headers=request_headers,
             request_method="POST",
         )
+        await _authorize_authenticated_request(
+            user_api_key_auth_obj=JWTAuthManager.user_api_key_auth_from_result(result),
+            request=request,
+            request_data={},
+            route=EXCHANGE_ROUTE,
+            api_key=token,
+            credential_issuing=True,
+        )
+        return result
 
     return await identity_from_subject_token(
         subject_token,
