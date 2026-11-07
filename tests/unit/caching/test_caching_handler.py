@@ -2052,6 +2052,90 @@ def test_convert_cached_responses_bridge_chat_completion_nonstream():
     assert result.choices[0].message.content == "Hi!"
 
 
+def test_convert_cached_completion_preserves_stored_finish_reason():
+    """A cache hit must replay the stored finish_reason, not re-derive it from tool_calls."""
+    caching_handler = LLMCachingHandler(
+        original_function=completion, request_kwargs={}, start_time=datetime.now()
+    )
+    cached_result = {
+        "id": "chatcmpl-cache-finish-reason",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": "claude-sonnet-4-5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.completion.value,
+        kwargs={
+            "model": "claude-sonnet-4-5",
+            "stream": False,
+            "messages": [{"role": "user", "content": "weather?"}],
+        },
+        logging_obj=_build_logging_obj(CallTypes.completion.value, stream=False),
+        model="claude-sonnet-4-5",
+        args=(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.tool_calls is not None
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_convert_raw_completion_still_derives_finish_reason_from_tool_calls():
+    """Provider payloads that say 'stop' but carry tool calls still map to 'tool_calls'."""
+    from litellm.utils import convert_to_model_response_object
+
+    result = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-raw-finish-reason",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": "claude-sonnet-4-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "toolu_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert result is not None
+    assert result.choices[0].finish_reason == "tool_calls"
+
+
 def test_convert_cached_responses_legacy_nonstream_path():
     """Genuine ResponsesAPIResponse dict (no chatcmpl/choices) falls through legacy path."""
     from litellm import responses
