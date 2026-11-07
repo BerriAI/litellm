@@ -68,16 +68,32 @@ class CountTokensFailure:
 CountTokensOutcome = CountedTokens | CountTokensFailure
 
 
-def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
+def _deployment_route(litellm_params: Mapping[str, object]) -> tuple[str, str] | None:
     deployment_model: Final = litellm_params.get("model")
     if not isinstance(deployment_model, str):
-        return AnthropicConfig()
+        return None
     provider_hint: Final = litellm_params.get("custom_llm_provider")
     model, provider, _, _ = litellm.get_llm_provider(
         model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
     )
+    return model, provider
+
+
+def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
+    route: Final = _deployment_route(litellm_params)
+    if route is None:
+        return AnthropicConfig()
+    model, provider = route
     chat_config: Final = litellm.ProviderConfigManager.get_provider_chat_config(model, LlmProviders(provider))
     return chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig()
+
+
+def _claude_options_provider(litellm_params: Mapping[str, object], use_mantle: bool) -> LlmProviders:
+    if not use_mantle:
+        return LlmProviders.BEDROCK
+    route: Final = _deployment_route(litellm_params)
+    deployment_provider: Final = None if route is None else route[1]
+    return LlmProviders.BEDROCK if deployment_provider == LlmProviders.BEDROCK.value else LlmProviders.BEDROCK_MANTLE
 
 
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
@@ -264,7 +280,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         claude_options: Final = (
             claude_count_options(
                 counted_model,
-                LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
+                _claude_options_provider(litellm_params, use_mantle),
                 sent_messages,
                 sent_tools,
                 _options_converse_sends(request_options, deployment_inference_model(deployment)),

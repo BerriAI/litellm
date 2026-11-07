@@ -10,9 +10,11 @@ This test validates:
 
 import json
 import os
+from queue import SimpleQueue
 from typing import Dict, Final, List, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from anthropic.types.anthropic_beta_param import AnthropicBetaParam
@@ -775,3 +777,45 @@ def test_each_row_forwards_exactly_its_verified_preserved_thinking_cells(bundled
         headers={"anthropic-beta": ",".join(PRESERVED_THINKING_BETAS)}, provider=provider
     )
     assert sorted(result["anthropic-beta"].split(",")) == sorted(forwarded), (provider, result)
+
+
+_MESSAGE_REPLY: Final = {
+    "id": "msg_123",
+    "type": "message",
+    "role": "assistant",
+    "content": [{"type": "text", "text": "Hello"}],
+    "model": "claude-haiku-5-5",
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 10, "output_tokens": 20},
+}
+
+
+@pytest.mark.asyncio
+async def test_direct_anthropic_deployment_sends_the_caller_betas_its_row_marks_unsupported(
+    bundled_config: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    row: Final[dict[str, str | None]] = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()["anthropic"]
+    unsupported: Final = min(beta for beta, mapped in row.items() if mapped is None and "-" in beta)
+    sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.put(request)
+        return httpx.Response(200, json=_MESSAGE_REPLY)
+
+    await litellm.anthropic_messages(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        max_tokens=16,
+        api_key="sk-ant-test",
+        extra_headers={"anthropic-beta": unsupported},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(reply)),
+    )
+
+    request: Final = sent.get_nowait()
+    assert sent.empty()
+    assert request.url.host == "api.anthropic.com"
+    assert unsupported in request.headers["anthropic-beta"].split(",")

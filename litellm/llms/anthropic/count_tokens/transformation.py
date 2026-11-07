@@ -369,6 +369,11 @@ def is_request_rejection(status_code: int) -> bool:
     return 400 <= status_code < 500 and status_code not in _STATUSES_NOT_CAUSED_BY_THE_REQUEST
 
 
+def _deployment_api_base(deployment: Mapping[str, object] | None) -> str | None:
+    api_base: Final = _INFERENCE_PARAMS.validate_python((deployment or {}).get("litellm_params") or {}).get("api_base")
+    return api_base if isinstance(api_base, str) else None
+
+
 def deployment_inference_model(deployment: Mapping[str, object] | None) -> str | None:
     deployment_params: Final = _INFERENCE_PARAMS.validate_python((deployment or {}).get("litellm_params") or {})
     deployment_model: Final = deployment_params.get("model")
@@ -377,18 +382,12 @@ def deployment_inference_model(deployment: Mapping[str, object] | None) -> str |
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     provider_hint: Final = deployment_params.get("custom_llm_provider")
-    api_base: Final = deployment_params.get("api_base")
     inference_model, _, _, _ = get_llm_provider(
         model=deployment_model,
         custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
+        api_base=_deployment_api_base(deployment),
     )
     return inference_model
-
-
-def _deployment_api_base(deployment: Mapping[str, object] | None) -> str | None:
-    api_base: Final = _INFERENCE_PARAMS.validate_python((deployment or {}).get("litellm_params") or {}).get("api_base")
-    return api_base if isinstance(api_base, str) else None
 
 
 def _messages_transform(model: str, provider: LlmProviders) -> tuple[str, BaseAnthropicMessagesConfig] | None:
@@ -434,7 +433,7 @@ def _claude_count_options_for(
         dict(beta_headers)
         if beta_filter is None
         else beta_filter.filtered(
-            dict(beta_headers), keep=messages_config.model_specific_anthropic_betas(model, litellm_params)
+            beta_headers, keep=messages_config.model_specific_anthropic_betas(model, litellm_params)
         )
     )
     request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts

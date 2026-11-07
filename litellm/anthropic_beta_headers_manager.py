@@ -481,9 +481,9 @@ class DeploymentBetaFilter:
     api_base: str | None
     unlisted: UnlistedBetas
 
-    def filtered(self, headers: dict[str, str], keep: frozenset[str]) -> dict[str, str]:
+    def filtered(self, headers: Mapping[str, str], keep: frozenset[str]) -> dict[str, str]:
         return update_headers_with_filtered_beta(
-            headers=headers, provider=self.provider, api_base=self.api_base, unlisted=self.unlisted, keep=keep
+            headers=dict(headers), provider=self.provider, api_base=self.api_base, unlisted=self.unlisted, keep=keep
         )
 
 

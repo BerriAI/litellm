@@ -1959,45 +1959,6 @@ async def test_anthropic_count_tokens_does_not_count_again_after_a_rate_limit(
     assert len(requests) == 1
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("deployment_model", "count_host", "provider_calls"),
-    (
-        ("gemini/gemini-3.8-flash", "generativelanguage.googleapis.com", 1),
-        ("anthropic/claude-haiku-5-5", "api.anthropic.com", 2),
-    ),
-    ids=("counter-without-claude-options", "claude-counter-forwarding-the-options"),
-)
-async def test_anthropic_count_tokens_counts_again_without_the_options_only_when_the_counter_forwarded_them(
-    monkeypatch: pytest.MonkeyPatch, deployment_model: str, count_host: str, provider_calls: int
-) -> None:
-    from litellm.proxy import proxy_server
-
-    request: Final = _json_request(
-        {
-            "model": "claude-agent",
-            "messages": [{"role": "user", "content": "Weather in SF?"}],
-            "thinking": {"type": "enabled", "budget_tokens": 2000},
-        },
-        "python-httpx/0.28.1",
-    )
-    monkeypatch.setattr(proxy_server, "llm_router", _claude_router(deployment_model, {}))
-    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-
-    with respx.mock:
-        route: Final = respx.route(host=count_host).mock(
-            return_value=httpx.Response(
-                400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "rejected"}}
-            )
-        )
-        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
-
-    assert isinstance(response, JSONResponse)
-    assert response.status_code == 400
-    assert route.call_count == provider_calls
-
-
 _BEDROCK_RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 _BEDROCK_MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
 _BEDROCK_CLAUDE_DEPLOYMENT: Final[dict[str, str]] = {
@@ -2006,6 +1967,88 @@ _BEDROCK_CLAUDE_DEPLOYMENT: Final[dict[str, str]] = {
     "aws_secret_access_key": "test-secret",
     "aws_region_name": "us-east-1",
 }
+_THINKING_BODY: Final[dict[str, JsonValue]] = {"thinking": {"type": "enabled", "budget_tokens": 2000}}
+_EFFORT_BODY: Final[dict[str, JsonValue]] = {"output_config": {"effort": "low"}}
+_DROPS_THE_EFFORT: Final[dict[str, JsonValue]] = {"additional_drop_params": ["output_config.effort"]}
+_ANTHROPIC_DEPLOYMENT: Final[dict[str, JsonValue]] = {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-test"}
+_AZURE_AI_DEPLOYMENT: Final[dict[str, JsonValue]] = {
+    "model": "azure_ai/claude-haiku-5-5",
+    "api_base": "https://my-resource.services.ai.azure.com/anthropic",
+    "api_key": "sk-azure-test",
+}
+_VERTEX_DEPLOYMENT: Final[dict[str, JsonValue]] = {
+    "model": "vertex_ai/claude-haiku-5-5",
+    "vertex_project": "test-project",
+    "vertex_location": "us-east5",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "body", "caller_beta", "provider_calls"),
+    (
+        ({"model": "gemini/gemini-3.8-flash", "api_key": "sk-gemini-test"}, _THINKING_BODY, None, 1),
+        (_ANTHROPIC_DEPLOYMENT, _THINKING_BODY, None, 2),
+        ({**_ANTHROPIC_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 1),
+        ({**_ANTHROPIC_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, _CALLER_BETA, 2),
+        (_AZURE_AI_DEPLOYMENT, _THINKING_BODY, None, 2),
+        ({**_AZURE_AI_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 1),
+        (_VERTEX_DEPLOYMENT, _THINKING_BODY, None, 2),
+        ({**_VERTEX_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 1),
+        ({**_BEDROCK_CLAUDE_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 2),
+    ),
+    ids=(
+        "counter-without-claude-options",
+        "anthropic-forwarding-the-options",
+        "anthropic-forwarding-nothing",
+        "anthropic-forwarding-only-the-caller-beta",
+        "azure-ai-forwarding-the-options",
+        "azure-ai-forwarding-nothing",
+        "vertex-forwarding-the-options",
+        "vertex-forwarding-nothing",
+        "bedrock-forwarding-nothing-counts-on-runtime-then-mantle-once",
+    ),
+)
+async def test_anthropic_count_tokens_counts_again_without_the_options_only_when_the_counter_forwarded_them(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_params: dict[str, JsonValue],
+    body: dict[str, JsonValue],
+    caller_beta: str | None,
+    provider_calls: int,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL", "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        "google.auth.default", lambda *_, **__: (MagicMock(token="fake-token", valid=True, expiry=None), "test-project")
+    )
+    request: Final = _json_request(
+        {"model": "claude-agent", "messages": [{"role": "user", "content": "Weather in SF?"}], **body},
+        "python-httpx/0.28.1",
+        {} if caller_beta is None else {"anthropic-beta": caller_beta},
+    )
+    router: Final = Router(model_list=[{"model_name": "claude-agent", "litellm_params": deployment_params}])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.route().mock(
+            return_value=httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "message": "rejected",
+                    "error": {"type": "invalid_request_error", "message": "rejected"},
+                },
+            )
+        )
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert route.call_count == provider_calls
 
 
 async def _count_on_a_bedrock_claude_deployment(

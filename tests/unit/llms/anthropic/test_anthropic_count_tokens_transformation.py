@@ -567,7 +567,7 @@ async def _counted_requests(
     request_options: Mapping[str, JsonValue] = MappingProxyType({}),
     anthropic_beta: str | None = None,
     model: str = "claude-opus-5-5",
-    api_base: str = "https://gateway.example",
+    api_base: str | None = "https://gateway.example",
 ) -> tuple[TokenCountResponse | None, tuple[httpx.Request, ...]]:
     sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
 
@@ -581,7 +581,12 @@ async def _counted_requests(
             model_to_use=model,
             messages=messages,
             contents=None,
-            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": api_base}},
+            deployment={
+                "litellm_params": {
+                    "api_key": "sk-ant-api03-test-key",
+                    **({} if api_base is None else {"api_base": api_base}),
+                }
+            },
             request_model=model,
             tools=tools,
             messages_format=messages_format,
@@ -973,7 +978,7 @@ async def _messages_inference_request(
     request_options: Mapping[str, JsonValue],
     model: str = "claude-haiku-5-5",
     extra_headers: Mapping[str, str] = MappingProxyType({}),
-    api_base: str = "https://gateway.example",
+    api_base: str | None = "https://gateway.example",
 ) -> httpx.Request:
     sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
 
@@ -1107,23 +1112,16 @@ _FOUNDRY_BASE: Final = "https://my-resource.services.ai.azure.com/anthropic"
 _UNLISTED_BETA: Final = "unlisted-beta-2099-01-01"
 
 
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("httpx_transport_clients", "local_beta_headers_config")
-@pytest.mark.parametrize(
-    ("counter_type", "expected_betas"),
-    ((AnthropicTokenCounter, frozenset({_UNLISTED_BETA})), (AzureAIAnthropicTokenCounter, frozenset())),
-    ids=("anthropic-deployment-forwards-unlisted", "azure-ai-deployment-drops-unlisted"),
-)
-async def test_counter_on_a_foundry_host_drops_the_caller_betas_messages_inference_drops_there(
-    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], expected_betas: frozenset[str]
-) -> None:
+async def _foundry_count_and_inference_betas(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], api_base: str | None
+) -> tuple[frozenset[str], frozenset[str]]:
     caller_betas: Final = f"mcp-servers-2025-12-04,{_UNLISTED_BETA}"
     inference: Final = await _messages_inference_request(
         counter_type,
         f"{_FOUNDRY_BASE}/v1/messages",
         {"thinking": _ENABLED_THINKING},
         extra_headers={"anthropic-beta": caller_betas},
-        api_base=_FOUNDRY_BASE,
+        api_base=api_base,
     )
     _, (count,) = await _counted_requests(
         counter_type,
@@ -1134,11 +1132,36 @@ async def test_counter_on_a_foundry_host_drops_the_caller_betas_messages_inferen
         request_options={"thinking": _ENABLED_THINKING},
         anthropic_beta=caller_betas,
         model="claude-haiku-5-5",
-        api_base=_FOUNDRY_BASE,
+        api_base=api_base,
     )
+    return _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION}, _betas(inference)
 
-    counted_betas: Final = _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION}
-    assert counted_betas == _betas(inference) == expected_betas
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("counter_type", "expected_betas"),
+    ((AnthropicTokenCounter, frozenset({_UNLISTED_BETA})), (AzureAIAnthropicTokenCounter, frozenset())),
+    ids=("anthropic-deployment-forwards-unlisted", "azure-ai-deployment-drops-unlisted"),
+)
+async def test_counter_on_a_foundry_host_drops_the_caller_betas_messages_inference_drops_there(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], expected_betas: frozenset[str]
+) -> None:
+    counted_betas, inference_betas = await _foundry_count_and_inference_betas(counter_type, _FOUNDRY_BASE)
+
+    assert counted_betas == inference_betas == expected_betas
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients", "local_beta_headers_config")
+async def test_anthropic_counter_on_a_foundry_host_from_the_environment_drops_the_betas_inference_drops_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", _FOUNDRY_BASE)
+
+    counted_betas, inference_betas = await _foundry_count_and_inference_betas(AnthropicTokenCounter, None)
+
+    assert counted_betas == inference_betas == frozenset({_UNLISTED_BETA})
 
 
 @pytest.mark.asyncio
