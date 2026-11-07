@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.count_tokens.transformation import (
     NO_CLAUDE_COUNT_OPTIONS,
@@ -137,6 +138,12 @@ def _options_converse_sends(
     }
 
 
+def _betas_converse_sends(anthropic_beta: str | None, inference_model: str | None) -> str | None:
+    if anthropic_beta is None or inference_model is None or not _runs_on_converse(inference_model):
+        return anthropic_beta
+    return ",".join(filter_and_transform_beta_headers(anthropic_beta.split(","), "bedrock_converse")) or None
+
+
 class BedrockTokenCounter(BaseTokenCounter):
     """Counts on the configured Bedrock endpoint, with Mantle retry when Runtime rejects a Claude model"""
 
@@ -203,18 +210,20 @@ class BedrockTokenCounter(BaseTokenCounter):
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = _deployment_litellm_params(deployment)
-        route: Final = _deployment_route(litellm_params) if is_mantle_claude_model(resolved_model) else None
+        claude_model: Final = is_mantle_claude_model(resolved_model)
+        route: Final = _deployment_route(litellm_params) if claude_model else None
+        inference_model: Final = deployment_inference_model(deployment) if claude_model else None
         claude_options: Final = (
             claude_count_options(
                 counted_model,
                 _claude_options_provider(route, use_mantle),
                 messages,
                 tools,
-                _options_converse_sends(request_options, deployment_inference_model(deployment)),
-                anthropic_beta,
+                _options_converse_sends(request_options, inference_model),
+                _betas_converse_sends(anthropic_beta, inference_model),
                 deployment,
             )
-            if is_mantle_claude_model(resolved_model)
+            if claude_model
             else NO_CLAUDE_COUNT_OPTIONS
         )
         if isinstance(claude_options, ChatCountTranslationError):

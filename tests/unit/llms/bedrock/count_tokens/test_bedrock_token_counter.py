@@ -1,8 +1,7 @@
 import base64
-import functools
 import itertools
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -10,6 +9,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.anthropic import (
@@ -765,9 +765,22 @@ _INTERLEAVED_THINKING: Final = "interleaved-thinking-2025-05-14"
 _PER_TURN_CONTROL: Final = ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value
 _INVOKE_DEPLOYMENT_MODEL: Final = "bedrock/invoke/us.anthropic.claude-opus-5-5"
 _MANTLE_MODEL: Final = "bedrock_mantle/anthropic.claude-opus-5-5"
+_BETAS: Final = TypeAdapter(tuple[str, ...])
 
 
-async def _inference_betas(model: str, caller_beta: str, model_info: Mapping[str, JsonValue]) -> frozenset[JsonValue]:
+def _sorted_betas(betas: Sequence[JsonValue]) -> tuple[str, ...]:
+    return tuple(sorted(_BETAS.validate_python(betas)))
+
+
+def _row_sends(betas: Sequence[str], row: str) -> tuple[str, ...]:
+    return tuple(sorted(filter_and_transform_beta_headers(list(betas), row)))
+
+
+def _row_keeps(beta: str, row: str) -> bool:
+    return beta in _row_sends((beta,), row)
+
+
+async def _inference_betas(model: str, caller_beta: str, model_info: Mapping[str, JsonValue]) -> tuple[str, ...]:
     inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
     await litellm.anthropic_messages(
         model=model,
@@ -781,13 +794,13 @@ async def _inference_betas(model: str, caller_beta: str, model_info: Mapping[str
     )
     request: Final = inference.requests[0]
     if request.url.host == MANTLE_HOST:
-        return frozenset(_sent_betas(request))
-    return frozenset(_betas_besides_effort(_JSON_BODY.validate_json(request.content)))
+        return _sent_betas(request)
+    return _sorted_betas(_betas_besides_effort(_JSON_BODY.validate_json(request.content)))
 
 
 async def _counted_betas(
     model_to_use: str, caller_beta: str, deployment: Mapping[str, JsonValue] | None
-) -> tuple[str, frozenset[JsonValue]]:
+) -> tuple[str, tuple[str, ...]]:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
     result: Final = await _counter(bedrock).count_tokens(
         model_to_use=model_to_use,
@@ -801,14 +814,14 @@ async def _counted_betas(
     assert result is not None and result.error is False
     (request,) = bedrock.requests
     if request.url.host == MANTLE_HOST:
-        return request.url.host, frozenset(_sent_betas(request))
-    return request.url.host, frozenset(_betas_besides_effort(_invoke_body(request)))
+        return request.url.host, _sent_betas(request)
+    return request.url.host, _sorted_betas(_betas_besides_effort(_invoke_body(request)))
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
 @pytest.mark.parametrize(
-    ("caller_beta", "model_info", "deployment_route", "kept"),
+    ("caller_beta", "model_info", "deployment_route", "opted_in"),
     (
         (_INTERLEAVED_THINKING, {}, {"model": _INVOKE_DEPLOYMENT_MODEL}, False),
         (_PER_TURN_CONTROL, {"supports_per_turn_control": True}, {"model": _INVOKE_DEPLOYMENT_MODEL}, True),
@@ -828,7 +841,7 @@ async def _counted_betas(
     ),
 )
 async def test_mantle_count_for_a_bedrock_deployment_sends_the_caller_betas_invoke_inference_sends(
-    caller_beta: str, model_info: Mapping[str, JsonValue], deployment_route: Mapping[str, str], kept: bool
+    caller_beta: str, model_info: Mapping[str, JsonValue], deployment_route: Mapping[str, str], opted_in: bool
 ) -> None:
     sent: Final = await _inference_betas(_INVOKE_DEPLOYMENT_MODEL, caller_beta, model_info)
     deployment: Final[Mapping[str, JsonValue]] = {
@@ -839,21 +852,21 @@ async def test_mantle_count_for_a_bedrock_deployment_sends_the_caller_betas_invo
 
     assert host == MANTLE_HOST
     assert counted == sent
-    assert (caller_beta in counted) is kept
+    assert (caller_beta in counted) is (opted_in or _row_keeps(caller_beta, "bedrock"))
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
 @pytest.mark.parametrize(
-    ("model_to_use", "inference_model", "count_host", "kept"),
+    ("model_to_use", "inference_model", "count_host", "count_row"),
     (
-        ("us.anthropic.claude-opus-5-5", _INVOKE_DEPLOYMENT_MODEL, RUNTIME_HOST, False),
-        (_MANTLE_MODEL, _MANTLE_MODEL, MANTLE_HOST, True),
+        ("us.anthropic.claude-opus-5-5", _INVOKE_DEPLOYMENT_MODEL, RUNTIME_HOST, "bedrock"),
+        (_MANTLE_MODEL, _MANTLE_MODEL, MANTLE_HOST, "bedrock_mantle"),
     ),
     ids=("runtime", "mantle"),
 )
 async def test_count_without_a_deployment_sends_the_caller_beta_inference_on_its_route_sends(
-    monkeypatch: pytest.MonkeyPatch, model_to_use: str, inference_model: str, count_host: str, kept: bool
+    monkeypatch: pytest.MonkeyPatch, model_to_use: str, inference_model: str, count_host: str, count_row: str
 ) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
@@ -863,7 +876,7 @@ async def test_count_without_a_deployment_sends_the_caller_beta_inference_on_its
 
     assert host == count_host
     assert counted == sent
-    assert (_INTERLEAVED_THINKING in counted) is kept
+    assert (_INTERLEAVED_THINKING in counted) is _row_keeps(_INTERLEAVED_THINKING, count_row)
 
 
 _CONVERSE_DEPLOYMENT_MODEL: Final = "bedrock/converse/us.anthropic.claude-opus-5-5"
@@ -871,7 +884,9 @@ _NATIVE_OUTPUT_OPT_IN: Final[Mapping[str, JsonValue]] = {"supports_bedrock_nativ
 
 
 def _at(value: JsonValue, *path: str) -> JsonValue:
-    return functools.reduce(lambda node, key: node.get(key) if isinstance(node, dict) else None, path, value)
+    if not path:
+        return value
+    return _at(value.get(path[0]), *path[1:]) if isinstance(value, dict) else None
 
 
 def _content_texts(message: JsonValue) -> tuple[str, ...]:
@@ -927,3 +942,57 @@ async def test_mantle_count_for_a_converse_deployment_sends_the_format_and_betas
     }
     assert _message_texts(counted) == _message_texts(sent)
     assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0]) != ()
+
+
+_CONVERSE_CALLER_BETAS: Final = (
+    _INTERLEAVED_THINKING,
+    _PER_TURN_CONTROL,
+    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value,
+    ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    "context-1m-2025-08-07",
+)
+
+
+async def _converse_inference_betas(caller_beta: str) -> tuple[str, ...]:
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.anthropic_messages(
+        model=_CONVERSE_DEPLOYMENT_MODEL,
+        messages=MESSAGES,
+        max_tokens=4096,
+        extra_headers={"anthropic-beta": caller_beta},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **_THINKING,
+        **DEPLOYMENT["litellm_params"],
+    )
+    (request,) = inference.requests
+    assert request.url.host == RUNTIME_HOST
+    sent: Final = _at(_JSON_BODY.validate_json(request.content), "additionalModelRequestFields", "anthropic_beta")
+    assert isinstance(sent, list)
+    return _sorted_betas(sent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model_to_use", "count_host", "count_row"),
+    (
+        (_MANTLE_MODEL, MANTLE_HOST, "bedrock_mantle"),
+        ("us.anthropic.claude-opus-5-5", RUNTIME_HOST, "bedrock"),
+    ),
+    ids=("mantle", "runtime"),
+)
+async def test_count_for_a_converse_deployment_sends_only_the_caller_betas_converse_inference_sends(
+    model_to_use: str, count_host: str, count_row: str
+) -> None:
+    caller_beta: Final = ",".join(_CONVERSE_CALLER_BETAS)
+    sent: Final = await _converse_inference_betas(caller_beta)
+    host, counted = await _counted_betas(
+        model_to_use,
+        caller_beta,
+        {"litellm_params": {**DEPLOYMENT["litellm_params"], "model": _CONVERSE_DEPLOYMENT_MODEL}},
+    )
+
+    assert host == count_host
+    assert counted == _row_sends(sent, count_row) != ()
+    assert counted != _row_sends(_CONVERSE_CALLER_BETAS, count_row)
