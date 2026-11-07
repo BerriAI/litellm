@@ -67,6 +67,12 @@ dockerfiles:
     paths:
       - cookbook/litellm-ollama-docker-image/Dockerfile
   - reason: >-
+      The FIPS image builds on the pinned cgr.dev/berri.ai chainguard-base-fips base and every apk
+      call authenticates to virtualapk.cgr.dev with a Chainguard token supplied as a build secret;
+      no pull request job holds that token, so no job can build it
+    paths:
+      - docker/Dockerfile.fips
+  - reason: >-
       The Rust gateway image compiles the whole workspace in release mode, which is too slow for
       a per-pull-request job while the gateway binary is still being assembled; the Rust lint,
       clippy, and compile jobs already cover the code it packages. Revisit when the gateway is
