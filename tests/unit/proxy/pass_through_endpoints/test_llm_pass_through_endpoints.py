@@ -15,7 +15,7 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 import respx
-from fastapi import HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
@@ -25,17 +25,20 @@ from starlette.datastructures import FormData
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
@@ -51,6 +54,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    eu_jev_proxy_route,
     fal_ai_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
@@ -73,6 +77,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 
 
 def _assert_bedrock_processing_data_classification(data: dict[str, object], is_streaming: bool) -> None:
@@ -158,63 +163,30 @@ class TestBaseOpenAIPassThroughHandler:
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
-    def test_append_openai_beta_header(self):
-        print("\nTesting _append_openai_beta_header method...")
+    def test_assemble_headers_keeps_the_operators_openai_beta_over_the_clients(self):
+        client_request: Final = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/azure/v1/agents/sessions",
+                "headers": [(b"openai-beta", b"agents=v1")],
+                "query_string": b"",
+            }
+        )
 
-        # Create mock requests with different paths
-        assistants_request = MagicMock(spec=Request)
-        assistants_request.url = MagicMock()
-        assistants_request.url.path = "/v1/threads/thread_123456/messages"
+        assembled: Final = BaseOpenAIPassThroughHandler._assemble_headers(
+            api_key="sk-upstream",
+            endpoint="v1/agents/sessions",
+            request=client_request,
+            custom_llm_provider=litellm.LlmProviders.AZURE_AI,
+            extra_headers={"OpenAI-Beta": "agents=v2"},
+        )
 
-        non_assistants_request = MagicMock(spec=Request)
-        non_assistants_request.url = MagicMock()
-        non_assistants_request.url.path = "/v1/chat/completions"
-
-        headers = {"authorization": "Bearer test_key"}
-
-        # Test with assistants API request
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistants_request)
-        print(f"Assistants API request: Added header: {result}")
-        assert result["OpenAI-Beta"] == "assistants=v2"
-
-        # Test with non-assistants API request
-        headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, non_assistants_request)
-        print(f"Non-assistants API request: Headers: {result}")
-        assert "OpenAI-Beta" not in result
-
-        # Test with assistant in the path
-        assistant_request = MagicMock(spec=Request)
-        assistant_request.url = MagicMock()
-        assistant_request.url.path = "/v1/assistants/asst_123456"
-
-        headers = {"authorization": "Bearer test_key"}
-        result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistant_request)
-        print(f"Assistant API request: Added header: {result}")
-        assert result["OpenAI-Beta"] == "assistants=v2"
-
-    def test_assemble_headers(self):
-        print("\nTesting _assemble_headers method...")
-
-        # Mock request
-        mock_request = MagicMock(spec=Request)
-        api_key = "test_api_key"
-
-        # Patch the _append_openai_beta_header method to avoid testing it again
-        with patch.object(
-            BaseOpenAIPassThroughHandler,
-            "_append_openai_beta_header",
-            return_value={
-                "authorization": "Bearer test_api_key",
-                "api-key": "test_api_key",
-                "test-header": "value",
-            },
-        ):
-            result = BaseOpenAIPassThroughHandler._assemble_headers(api_key, mock_request)
-            print(f"Assembled headers: {result}")
-            assert result["authorization"] == "Bearer test_api_key"
-            assert result["api-key"] == "test_api_key"
-            assert result["test-header"] == "value"
+        assert assembled == {
+            "authorization": "Bearer sk-upstream",
+            "api-key": "sk-upstream",
+            "OpenAI-Beta": "agents=v2",
+        }
 
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
@@ -325,12 +297,6 @@ class TestVertexAIPassThroughHandler:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
-            ) as mock_get_virtual_key,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-            ) as mock_user_auth,
-            mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
         ):
@@ -340,8 +306,6 @@ class TestVertexAIPassThroughHandler:
 
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
-            mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
 
             # Mock the vertex handler
             mock_handler = Mock()
@@ -427,12 +391,6 @@ class TestVertexAIPassThroughHandler:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
-            ) as mock_get_virtual_key,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-            ) as mock_user_auth,
-            mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
         ):
@@ -442,8 +400,6 @@ class TestVertexAIPassThroughHandler:
 
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
-            mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
 
             # Mock the vertex handler for global location
             mock_handler = Mock()
@@ -528,17 +484,12 @@ class TestVertexAIPassThroughHandler:
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-                new_callable=AsyncMock,
-            ) as mock_auth,
         ):
             # Mock credentials object with necessary attributes
             mock_credentials = Mock()
             mock_credentials.token = default_credentials
 
             mock_load_auth.return_value = (mock_credentials, default_project)
-            mock_auth.return_value = MagicMock()
 
             # Mock the vertex handler
             mock_handler = Mock()
@@ -556,6 +507,7 @@ class TestVertexAIPassThroughHandler:
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
                 )
             except Exception as e:
                 traceback.print_exc()
@@ -630,20 +582,16 @@ class TestVertexAIPassThroughHandler:
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
-                new_callable=AsyncMock,
-            ) as mock_auth,
         ):
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
-            mock_auth.return_value = UserAPIKeyAuth(api_key="sk-test-creds")
 
             with pytest.raises(HTTPException) as exc_info:
                 await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-creds"),
                 )
 
             assert exc_info.value.status_code == 401
@@ -655,8 +603,9 @@ class TestVertexAIPassThroughHandler:
         Critical
 
         This is how Vertex AI JS SDK will Auth to Litellm Proxy: the virtual key
-        arrives in x-litellm-api-key and must reach user_api_key_auth. With no Vertex
-        credential configured, that virtual key must not be forwarded to Google, so
+        arrives in x-litellm-api-key and authenticates the caller (covered through the
+        real auth dependency in TestVertexPassthroughAuthenticatesOncePerRequest). With no
+        Vertex credential configured, that virtual key must not be forwarded to Google, so
         the request fails with a clean 401 (LIT-5997).
         """
         # Mock dependencies
@@ -665,26 +614,21 @@ class TestVertexAIPassThroughHandler:
         mock_request.method = "POST"
         mock_response = Mock()
 
-        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth") as mock_auth:
-            mock_auth.return_value = {"api_key": "test-key-123"}
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_pass_through:
+            mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
-            with patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-            ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
+            with pytest.raises(HTTPException) as exc_info:
+                await vertex_proxy_route(
+                    endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key-123"),
+                )
 
-                with pytest.raises(HTTPException) as exc_info:
-                    await vertex_proxy_route(
-                        endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
-                        request=mock_request,
-                        fastapi_response=mock_response,
-                    )
-
-                assert exc_info.value.status_code == 401
-                mock_pass_through.assert_not_called()
-                mock_auth.assert_called_once()
-                call_args = mock_auth.call_args[1]
-                assert call_args["api_key"] == "Bearer test-key-123"
+            assert exc_info.value.status_code == 401
+            mock_pass_through.assert_not_called()
 
     def test_vertex_passthrough_handler_multimodal_embedding_response(self):
         """
@@ -1251,12 +1195,6 @@ class TestVertexAIDiscoveryPassThroughHandler:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_litellm_virtual_key"
-            ) as mock_get_virtual_key,
-            mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth"
-            ) as mock_user_auth,
-            mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_vertex_pass_through_handler"
             ) as mock_get_handler,
         ):
@@ -1266,8 +1204,6 @@ class TestVertexAIDiscoveryPassThroughHandler:
 
             # Setup mocks
             mock_load_auth.return_value = (mock_credentials, test_project)
-            mock_get_virtual_key.return_value = "Bearer test-key"
-            mock_user_auth.return_value = {"api_key": "test-key"}
 
             # Mock the discovery handler
             mock_handler = Mock()
@@ -1283,6 +1219,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
                 endpoint=endpoint,
                 request=mock_request,
                 fastapi_response=mock_response,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             )
 
             # Verify create_pass_through_route was called with correct arguments
@@ -1297,36 +1234,29 @@ class TestVertexAIDiscoveryPassThroughHandler:
     @pytest.mark.asyncio
     async def test_vertex_discovery_proxy_route_api_key_auth(self):
         """
-        The virtual key arrives in x-litellm-api-key and must reach user_api_key_auth.
-        With no Vertex credential configured, that virtual key must not be forwarded to
+        With no Vertex credential configured, the caller's virtual key must not be forwarded to
         Google, so the request fails with a clean 401 (LIT-5997).
         """
-        # Mock dependencies
         mock_request = Mock()
         mock_request.headers = {"x-litellm-api-key": "test-key-123"}
         mock_request.method = "POST"
         mock_response = Mock()
 
-        with patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth") as mock_auth:
-            mock_auth.return_value = {"api_key": "test-key-123"}
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_pass_through:
+            mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
-            with patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-            ) as mock_pass_through:
-                mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
+            with pytest.raises(HTTPException) as exc_info:
+                await vertex_discovery_proxy_route(
+                    endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key-123"),
+                )
 
-                with pytest.raises(HTTPException) as exc_info:
-                    await vertex_discovery_proxy_route(
-                        endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
-                        request=mock_request,
-                        fastapi_response=mock_response,
-                    )
-
-                assert exc_info.value.status_code == 401
-                mock_pass_through.assert_not_called()
-                mock_auth.assert_called_once()
-                call_args = mock_auth.call_args[1]
-                assert call_args["api_key"] == "Bearer test-key-123"
+            assert exc_info.value.status_code == 401
+            mock_pass_through.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -2789,6 +2719,68 @@ class TestVLLMProxyRoute:
         mock_factory_route.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    ("vllm_api_base", "request_path"),
+    [
+        ("http://vllm-upstream.test:8090", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/chat/completions"),
+    ],
+)
+def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
+    monkeypatch: pytest.MonkeyPatch, vllm_api_base: str, request_path: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("VLLM_API_BASE", vllm_api_base)
+    monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-upstream")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            request_path,
+            json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "chatcmpl-1"})
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-vllm-upstream"
+    assert route.calls.last.request.headers["x-api-key"] == "sk-vllm-upstream"
+
+
+def test_vllm_provider_route_with_an_empty_key_sends_no_credential_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-upstream.test:8090")
+    monkeypatch.setenv("VLLM_API_KEY", "")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            "/vllm/v1/chat/completions",
+            json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "chatcmpl-1"})
+    assert "authorization" not in route.calls.last.request.headers
+    assert "x-api-key" not in route.calls.last.request.headers
+
+
 class TestGigachatProxyRoute:
     @pytest.mark.asyncio
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
@@ -4057,6 +4049,129 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
 
 
+@pytest.mark.parametrize(
+    ("method", "client_base_path", "path", "client_headers", "upstream_openai_beta"),
+    [
+        pytest.param(
+            "POST", "/openai/v1", "/agents/sessions", {"OpenAI-Beta": "agents=v1"}, ["agents=v1"], id="sdk_agents"
+        ),
+        pytest.param(
+            "GET",
+            "/openai_passthrough/v1",
+            "/agents/sessions/sess_123/events",
+            {"OpenAI-Beta": "agents=v1"},
+            ["agents=v1"],
+            id="sdk_agents_events",
+        ),
+        pytest.param("POST", "/openai/v1", "/agents/sessions", {}, ["agents=v1"], id="agents_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/agents/sessions",
+            {"OpenAI-Beta": "agents=v2"},
+            ["agents=v2"],
+            id="client_value_beats_route_default",
+        ),
+        pytest.param("POST", "/openai", "/agents/sessions", {}, ["agents=v1"], id="agents_default_without_v1"),
+        pytest.param("GET", "/openai_passthrough/v1", "/vaults", {}, ["agents=v1"], id="vaults_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/chatkit/sessions",
+            {"OpenAI-Beta": "chatkit_beta=v1"},
+            ["chatkit_beta=v1"],
+            id="sdk_chatkit",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/agents/sessions",
+            {"OpenAI-Beta": "agents=v1", "x-pass-openai-beta": "agents=v2"},
+            ["agents=v2"],
+            id="x_pass_wins",
+        ),
+        pytest.param("POST", "/openai/v1", "/chatkit/threads", {}, [], id="chatkit_threads_no_default"),
+        pytest.param("POST", "/openai/v1", "/assistants", {}, ["assistants=v2"], id="assistants_default"),
+        pytest.param("POST", "/openai/v1", "/threads/thread_123/messages", {}, ["assistants=v2"], id="threads_default"),
+        pytest.param("POST", "/openai/v1", "/chat/completions", {}, [], id="no_beta"),
+        pytest.param(
+            "POST",
+            "/openai_passthrough/v1",
+            "/responses",
+            {"OpenAI-Beta": "12345"},
+            [],
+            id="client_beta_dropped_off_beta_paths",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/chat/completions",
+            {"OpenAI-Beta": "assistants=v2"},
+            [],
+            id="client_beta_dropped_on_chat_completions",
+        ),
+        pytest.param(
+            "POST",
+            "/openai/v1",
+            "/threads/thread_123/messages",
+            {"OpenAI-Beta": "assistants=v1"},
+            ["assistants=v2"],
+            id="assistants_client_beta_replaced",
+        ),
+    ],
+)
+def test_openai_passthrough_sends_the_openai_beta_header_upstream(
+    openai_passthrough_client: TestClient,
+    method: str,
+    client_base_path: str,
+    path: str,
+    client_headers: dict[str, str],
+    upstream_openai_beta: list[str],
+) -> None:
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.request(method, f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response: Final = openai_passthrough_client.request(method, f"{client_base_path}{path}", headers=client_headers)
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "client_headers", "upstream_openai_beta"),
+    [
+        pytest.param("GET", "/openai/v1/vector_stores", {"OpenAI-Beta": "assistants=v2"}, [], id="client_beta_dropped"),
+        pytest.param("POST", "/v1/agents/sessions", {}, [], id="no_agents_default"),
+        pytest.param(
+            "POST",
+            "/openai/v1/threads/thread_123/messages",
+            {"OpenAI-Beta": "assistants=v1"},
+            ["assistants=v2"],
+            id="assistants_default_kept",
+        ),
+    ],
+)
+def test_azure_passthrough_keeps_its_own_openai_beta_rule(
+    openai_passthrough_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    client_headers: dict[str, str],
+    upstream_openai_beta: list[str],
+) -> None:
+    monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.request(method, f"https://operator.openai.azure.com{path}").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response: Final = openai_passthrough_client.request(method, f"/azure{path}", headers=client_headers)
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers.get_list("openai-beta") == upstream_openai_beta
+
+
 @pytest.fixture
 def openai_wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     from litellm.llms.openai.workload_identity import _workload_identity_auth
@@ -4388,8 +4503,6 @@ class TestVertexRawPredictStreamingClassification:
                 return_value=(mock_credentials, "test-project"),
             ),
             mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
-            mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
-            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(api_key="test-key"))),
             mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
         ):
             await vertex_proxy_route(
@@ -6335,6 +6448,55 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
+    async def test_credential_failure_logs_the_named_model_under_vertex_ai(
+        self, monkeypatch: pytest.MonkeyPatch, model: str | None, expected_model: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        class _FailureRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.request_data: tuple[dict[str, object], ...] = ()
+
+            async def async_post_call_failure_hook(
+                self,
+                request_data: dict[str, object],
+                original_exception: Exception,
+                user_api_key_dict: UserAPIKeyAuth,
+                traceback_str: str | None = None,
+            ) -> None:
+                self.request_data = (*self.request_data, request_data)
+
+        recorder: Final = _FailureRecorder()
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        )
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        ensure_token: Final = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=self._websocket(),
+                model=model,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert [
+            (
+                d["model"],
+                PrometheusLogger._extract_api_provider_from_request_data(d),
+                get_spend_logs_id(CallTypes.pass_through.value, {}, d) is not None,
+            )
+            for d in recorder.request_data
+        ] == [(expected_model, "vertex_ai", True)]
+
 
 class TestAnthropicProxyRoute:
     """The /anthropic passthrough route: custom auth headers must not clobber the
@@ -6811,7 +6973,7 @@ class TestAzureRouterModelStreamingDispatch:
         logging_obj = MagicMock()
         logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
 
-        from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+        from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
         class StreamingRouter:
             async def allm_passthrough_route(self, **kwargs):
@@ -7035,6 +7197,178 @@ class TestRouterModelRelayUpstreamContract:
         assert json.loads(result.body) == upstream_body
         assert result.headers["x-ms-request-id"] == "req-1"
 
+    @pytest.mark.asyncio
+    async def test_azure_relay_answers_401_when_entra_rejects_the_deployment_credential(self, monkeypatch):
+        from litellm.llms.azure.common_utils import EntraRejectionError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        reason: Final = "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided."
+
+        class EntraRejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                try:
+                    raise EntraRejectionError(status_code=401, message=reason)
+                except EntraRejectionError as rejection:
+                    raise BaseLLMException(status_code=401, message=str(rejection)) from rejection
+
+        self._install_router(monkeypatch, EntraRejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(ProxyException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert (excinfo.value.code, excinfo.value.message) == ("401", reason)
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_entra_rejection_hides_an_internal_issuer_host(self, monkeypatch):
+        from litellm.llms.azure.common_utils import EntraRejectionError
+
+        reason: Final = (
+            "Failed to get Azure AD token: AADSTS700211: No matching federated identity record found for "
+            "presented assertion issuer 'https://oidc.build.internal:8443/realms/ci'."
+        )
+
+        class EntraRejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                raise EntraRejectionError(status_code=401, message=reason)
+
+        self._install_router(monkeypatch, EntraRejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(ProxyException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert excinfo.value.code == "401"
+        assert "AADSTS700211" in excinfo.value.message
+        assert "oidc.build.internal" not in excinfo.value.message
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_a_failure_entra_did_not_cause(self, monkeypatch):
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        upstream_failure: Final = BaseLLMException(status_code=500, message="Connection reset by Azure")
+
+        class FailingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                raise upstream_failure
+
+        self._install_router(monkeypatch, FailingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(BaseLLMException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert excinfo.value is upstream_failure
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_entra_throttling_the_oidc_token_exchange_as_a_429(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+        monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "tenant_id": "throttled-tenant",
+                        "client_id": "qa-client",
+                        "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
+
+        with respx.mock:
+            respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
+                return_value=httpx.Response(
+                    429,
+                    headers={"Retry-After": "7"},
+                    json={"error": "temporarily_unavailable", "error_codes": [90055]},
+                )
+            )
+            deployment_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
+                return_value=httpx.Response(200, json={"ok": True})
+            )
+            response: Final = await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert (response.status_code, response.headers.get("retry-after")) == (429, "7")
+        assert not deployment_route.called
+
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_a_later_deployment_failure_after_an_entra_rejection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from azure.core.exceptions import ClientAuthenticationError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        def rejected_token() -> str:
+            raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "azure_ad_token_provider": rejected_token,
+                        "order": 1,
+                    },
+                },
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa-unreachable.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "api_key": "configured-key",
+                        "order": 2,
+                    },
+                },
+            ],
+            num_retries=1,
+        )
+        self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
+
+        with respx.mock:
+            unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
+                side_effect=httpx.ConnectError("Connection refused")
+            )
+            with pytest.raises(BaseLLMException) as excinfo:
+                await azure_proxy_route(
+                    endpoint="openai/deployments/gpt-5/chat/completions",
+                    request=self._request("application/json"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+                )
+
+        assert unreachable_route.called
+        assert excinfo.value.status_code == 500
+
 
 NIM_INFER_BODY = {
     "input": [
@@ -7063,7 +7397,7 @@ class TestNvidiaNimProxyRoute:
                     200, json={"data": [{"index": 0, "bounding_boxes": {}}]}, headers={"x-nim-request": "r1"}
                 )
 
-        return RecordingRouter()
+        return route_entry_points_to_stubs(RecordingRouter())
 
     async def _relay(self, llm_router, endpoint: str, body: dict, user_api_key_dict=None) -> Response:
         return await relay_nvidia_nim_request(
@@ -7134,7 +7468,7 @@ class TestNvidiaNimProxyRoute:
                 captured.append(kwargs)
                 return httpx.Response(200, json={"data": []})
 
-        await self._relay(ProviderRouter(), "page-elements/v1/infer", NIM_INFER_BODY)
+        await self._relay(route_entry_points_to_stubs(ProviderRouter()), "page-elements/v1/infer", NIM_INFER_BODY)
 
         assert captured[0]["model"] == "page-elements"
 
@@ -7175,7 +7509,7 @@ class TestNvidiaNimProxyRoute:
                 return httpx.Response(200, json={"data": []})
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._relay(MixedRouter(), "detect/v1/infer", NIM_INFER_BODY)
+            await self._relay(route_entry_points_to_stubs(MixedRouter()), "detect/v1/infer", NIM_INFER_BODY)
 
         assert exc_info.value.status_code == 400
         assert captured == []
@@ -7208,7 +7542,9 @@ class TestNvidiaNimProxyRoute:
                 raise httpx.HTTPStatusError("422", request=upstream_request, response=upstream)
 
         result = await self._relay(
-            RejectingRouter(), "nim-page-elements/v1/infer", {"input": [{"type": "image_url", "url": "x"}]}
+            route_entry_points_to_stubs(RejectingRouter()),
+            "nim-page-elements/v1/infer",
+            {"input": [{"type": "image_url", "url": "x"}]},
         )
 
         assert result.status_code == 422
@@ -7306,9 +7642,7 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
     respx_mock: respx.MockRouter,
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
 ) -> None:
-    result: Final = await _bedrock_native_count(
-        monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12})
-    )
+    result: Final = await _bedrock_native_count(monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}))
 
     assert result == {"input_tokens": 12}
     assert len(respx_mock.calls) == 1
@@ -7390,7 +7724,6 @@ async def test_bedrock_native_count_tokens_without_a_model_logs_the_400_it_answe
     )
 
 
-
 @pytest.mark.asyncio
 async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_validation_error_and_logs_it(
     monkeypatch: pytest.MonkeyPatch,
@@ -7433,9 +7766,11 @@ async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_
         },
     )
 
+
 class _AzureGroupRouter:
     def __init__(self, captured: list[dict]) -> None:
         self.captured = captured
+        route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
         return ["gpt", "other-group"]
@@ -7529,6 +7864,7 @@ class _AzureBodyModelGroupRouter:
     def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
         self.captured = captured
         self.upstream = upstream
+        route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
         return ["gpt-5.4", "azure-gpt-5.4"]
@@ -8323,6 +8659,228 @@ class TestAzureSpeechRawBodyThroughRealAuth:
         assert "Invalid JSON payload" in response.text
 
 
+class _CountingCustomAuth:
+    def __init__(self, only_accepts: str | None = None) -> None:
+        self.only_accepts: Final = only_accepts
+        self.api_keys_seen: tuple[str | None, ...] = ()
+
+    async def __call__(self, request: Request, api_key: str | None) -> UserAPIKeyAuth:
+        self.api_keys_seen = (*self.api_keys_seen, api_key)
+        if self.only_accepts is not None and api_key != self.only_accepts:
+            raise ValueError("unknown caller")
+        return UserAPIKeyAuth(user_id=f"custom-auth-caller-{len(self.api_keys_seen)}")
+
+
+class _ServedCallerRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.served_user_ids: tuple[str | None, ...] = ()
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
+        self.served_user_ids = (*self.served_user_ids, user_api_key_dict.user_id)
+        return data
+
+
+class TestVertexPassthroughAuthenticatesOncePerRequest:
+    """Each Vertex pass-through request runs the proxy's auth once and is served as the caller that auth resolved"""
+
+    PROJECT: Final = "vertex-proj"
+    VIRTUAL_KEY: Final = "sk-vertex-caller"
+    GENERATE_CONTENT: Final = (
+        "v1/projects/vertex-proj/locations/us-central1/publishers/google/models/gemini-3.8-flash:generateContent"
+    )
+    DISCOVERY_SEARCH: Final = (
+        "v1/projects/vertex-proj/locations/global/collections/default_collection/engines/support-engine"
+        "/servingConfigs/default_search:search"
+    )
+    GEMINI_ANSWER: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+
+    def _post(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        path: str,
+        headers: Mapping[str, str],
+        custom_auth: _CountingCustomAuth,
+        credential_locations: tuple[str, ...],
+    ) -> tuple[httpx.Response, _ServedCallerRecorder]:
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+        from litellm.proxy.proxy_server import app
+
+        router: Final = PassthroughEndpointRouter()
+        for location in credential_locations:
+            router.add_vertex_credentials(
+                project_id=self.PROJECT, location=location, vertex_credentials="vertex-service-account"
+            )
+        recorder: Final = _ServedCallerRecorder()
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router", router
+        )
+        monkeypatch.delitem(app.dependency_overrides, user_api_key_auth, raising=False)
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        with (
+            patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (custom auth, master_key, caches) that have no injection seam
+                "litellm.proxy.proxy_server", **{**_azure_speech_real_auth_attrs(), "user_custom_auth": custom_auth}
+            ),
+            patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
+                return_value=(Mock(token="google-access-token"), self.PROJECT),
+            ),
+        ):
+            response: Final = TestClient(app).post(
+                path, json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}, headers=dict(headers)
+            )
+        return response, recorder
+
+    @pytest.mark.parametrize("route_prefix", ["/vertex_ai", "/vertex-ai"])
+    def test_generate_content_runs_custom_auth_once_and_is_served_as_its_caller(
+        self, monkeypatch: pytest.MonkeyPatch, route_prefix: str
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth()
+        vertex_url: Final = f"https://us-central1-aiplatform.googleapis.com/{self.GENERATE_CONTENT}"
+        with respx.mock(assert_all_called=True) as upstream:
+            vertex: Final = upstream.post(vertex_url).mock(return_value=httpx.Response(200, json=self.GEMINI_ANSWER))
+
+            response, recorder = self._post(
+                monkeypatch,
+                f"{route_prefix}/{self.GENERATE_CONTENT}",
+                {"Authorization": f"Bearer {self.VIRTUAL_KEY}"},
+                custom_auth,
+                ("us-central1",),
+            )
+
+        assert response.status_code == 200, response.text
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert recorder.served_user_ids == ("custom-auth-caller-1",)
+        assert vertex.call_count == 1
+
+    def test_discovery_search_runs_custom_auth_once_and_is_served_as_its_caller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth()
+        with respx.mock(assert_all_called=True) as upstream:
+            discovery: Final = upstream.post(f"https://discoveryengine.googleapis.com/{self.DISCOVERY_SEARCH}").mock(
+                return_value=httpx.Response(200, json={"results": []})
+            )
+
+            response, recorder = self._post(
+                monkeypatch,
+                f"/vertex_ai/discovery/{self.DISCOVERY_SEARCH}",
+                {"Authorization": f"Bearer {self.VIRTUAL_KEY}"},
+                custom_auth,
+                ("global",),
+            )
+
+        assert (response.status_code, response.json()) == (200, {"results": []})
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert recorder.served_user_ids == ("custom-auth-caller-1",)
+        assert discovery.call_count == 1
+
+    @pytest.mark.parametrize("scheme", ["bearer", "Basic"])
+    @pytest.mark.parametrize(
+        "route, upstream_url, credential_location, answer",
+        [
+            (
+                f"/vertex_ai/{GENERATE_CONTENT}",
+                f"https://us-central1-aiplatform.googleapis.com/{GENERATE_CONTENT}",
+                "us-central1",
+                GEMINI_ANSWER,
+            ),
+            (
+                f"/vertex_ai/discovery/{DISCOVERY_SEARCH}",
+                f"https://discoveryengine.googleapis.com/{DISCOVERY_SEARCH}",
+                "global",
+                {"results": []},
+            ),
+        ],
+        ids=["generate_content", "discovery_search"],
+    )
+    def test_x_litellm_api_key_with_any_auth_scheme_authenticates_once_on_every_vertex_route(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        scheme: str,
+        route: str,
+        upstream_url: str,
+        credential_location: str,
+        answer: Mapping[str, object],
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
+        with respx.mock(assert_all_called=True) as upstream:
+            google: Final = upstream.post(upstream_url).mock(return_value=httpx.Response(200, json=answer))
+
+            response, recorder = self._post(
+                monkeypatch,
+                route,
+                {"x-litellm-api-key": f"{scheme} {self.VIRTUAL_KEY}"},
+                custom_auth,
+                (credential_location,),
+            )
+
+        assert response.status_code == 200, response.text
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert recorder.served_user_ids == ("custom-auth-caller-1",)
+        assert google.call_count == 1
+
+    def test_x_litellm_api_key_authenticates_once_and_is_never_forwarded_without_a_vertex_credential(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth()
+        with respx.mock(assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+
+            response, _ = self._post(
+                monkeypatch,
+                f"/vertex_ai/{self.GENERATE_CONTENT}",
+                {"x-litellm-api-key": self.VIRTUAL_KEY},
+                custom_auth,
+                (),
+            )
+
+        assert response.status_code == 401, response.text
+        assert custom_auth.api_keys_seen == (self.VIRTUAL_KEY,)
+        assert not google.called
+
+    @pytest.mark.parametrize("header", ["x-goog-api-key", "x-api-key", "API-Key", "Ocp-Apim-Subscription-Key"])
+    def test_key_outside_litellm_headers_is_rejected_and_never_reaches_google_without_a_vertex_credential(
+        self, monkeypatch: pytest.MonkeyPatch, header: str
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
+        with respx.mock(assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+
+            response, recorder = self._post(
+                monkeypatch, f"/vertex_ai/{self.GENERATE_CONTENT}", {header: self.VIRTUAL_KEY}, custom_auth, ()
+            )
+
+        assert response.status_code == 401, response.text
+        assert self.VIRTUAL_KEY not in custom_auth.api_keys_seen
+        assert recorder.served_user_ids == ()
+        assert not google.called
+
+
+    @pytest.mark.parametrize("path", [f"/vertex_ai/{GENERATE_CONTENT}", f"/vertex_ai/discovery/{DISCOVERY_SEARCH}"])
+    def test_request_without_a_key_hands_custom_auth_none(
+        self, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
+        with respx.mock(assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+
+            response, recorder = self._post(monkeypatch, path, {}, custom_auth, ("us-central1", "global"))
+
+        assert response.status_code == 401, response.text
+        assert custom_auth.api_keys_seen == (None,)
+        assert recorder.served_user_ids == ()
+        assert not google.called
+
 class TestTypeSafePassthroughRoute:
     @staticmethod
     def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
@@ -8506,6 +9064,387 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class _RecordsPreCallModel(CustomLogger):
+    def __init__(self, switch_to: str | None = None) -> None:
+        super().__init__()
+        self.switch_to: Final = switch_to
+        self.models: Final[list[object]] = []
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: str
+    ) -> dict | None:
+        self.models.append(data.get("model"))
+        return None if self.switch_to is None else {**data, "model": self.switch_to}
+
+
+class TestEuJevPassthroughRoute:
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    def test_forwards_a_decision_upstream_with_the_eu_jev_key(self, client: TestClient) -> None:
+        body: Final = {"model": "eu-jeff-latest", "state": "x"}
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            response: Final = client.post("/eu_jev/v1/systemone", json=body)
+
+            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer eu-jev-test-key"
+            assert json.loads(sent.content) == body
+
+    @pytest.mark.parametrize(
+        ("body", "hook_model"),
+        [
+            ({"state": "x"}, "eu_jev/eu-jeff-latest"),
+            ({"model": "jeff-latest", "state": "x"}, "eu_jev/eu-jeff-latest"),
+            ({"model": "eu-jeff-1.0.0", "state": "x"}, "eu_jev/eu-jeff-1.0.0"),
+        ],
+    )
+    def test_pre_call_hooks_see_the_model_key_limits_name_while_upstream_gets_the_client_body(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, body: dict[str, str], hook_model: str
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json=body)
+
+        assert response.status_code == 200
+        assert recorder.models == [hook_model]
+        assert json.loads(route.calls.last.request.content) == body
+
+    @pytest.mark.parametrize("model", [7, ["eu-jeff-latest"], False])
+    def test_a_non_string_client_model_reaches_upstream_unchanged(self, model: int | list[str] | bool) -> None:
+        client_body: Final = {"model": model, "state": "x"}
+        hook_body: Final = {"model": eu_jev_scoped_model(client_body), "state": "x"}
+
+        assert eu_jev_upstream_body(hook_body, client_body) == client_body
+
+    def test_a_null_model_is_limited_as_the_latest_release_and_left_out_upstream(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": None, "state": "x"})
+
+        assert response.status_code == 200
+        assert recorder.models == ["eu_jev/eu-jeff-latest"]
+        assert json.loads(route.calls.last.request.content) == {"state": "x"}
+
+    def test_forwards_the_release_a_pre_call_hook_switched_to(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [_RecordsPreCallModel(switch_to="eu_jev/eu-jeff-1.0.0")])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "jeff-latest", "state": "x"})
+
+        assert response.status_code == 200
+        assert json.loads(route.calls.last.request.content) == {"model": "eu-jeff-1.0.0", "state": "x"}
+
+    def test_a_provider_prefixed_model_is_limited_once_and_forwarded_without_the_prefix(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu_jev/eu-jeff-1.0.0", "state": "x"})
+
+        assert response.status_code == 200
+        assert recorder.models == ["eu_jev/eu-jeff-1.0.0"]
+        assert json.loads(route.calls.last.request.content) == {"model": "eu-jeff-1.0.0", "state": "x"}
+
+    def test_a_pass_through_deployment_key_goes_to_that_deployment_base(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        deployment_router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "eu-jev-friendly",
+                    "litellm_params": {
+                        "model": "eu_jev/eu-jeff-latest",
+                        "api_key": "eu-jev-deployment-key",
+                        "api_base": "https://eu-jev-deployment.example/v2",
+                        "use_in_pass_through": True,
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", deployment_router)
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev-deployment.example/v2/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.calls.last.request.headers["authorization"] == "Bearer eu-jev-deployment-key"
+
+    def test_a_team_deployment_never_redirects_another_team_s_calls(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        team_router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "team-a-eu-jev",
+                    "litellm_params": {
+                        "model": "eu_jev/eu-jeff-latest",
+                        "api_key": "team-a-own-key",
+                        "api_base": "https://team-a-server.example",
+                        "use_in_pass_through": True,
+                    },
+                    "model_info": {"team_id": "team-a"},
+                }
+            ]
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", team_router)
+        with respx.mock(assert_all_called=False) as upstream:
+            team_server: Final = upstream.route(host="team-a-server.example").respond(200, json={"answers": {}})
+            eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
+                200, json={"answers": {}}
+            )
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "team b data"})
+
+        assert response.status_code == 200
+        assert not team_server.called
+        assert eu_jev.calls.last.request.headers["authorization"] == "Bearer eu-jev-test-key"
+
+    def test_a_base_ending_in_v1_is_not_doubled(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base/v1/")
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.called
+
+    def test_forwards_query_params_to_the_decision_endpoint(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone", params={"trace": "yes"}).respond(
+                200, json={"answers": {}}
+            )
+            response: Final = client.post("/eu_jev/v1/systemone?trace=yes", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.called
+
+    def test_uses_the_hosted_api_when_base_is_unset(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("EU_JEV_API_BASE")
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post("https://eu-jev.com/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 200
+        assert route.called
+
+    def test_answers_503_without_calling_upstream_when_the_key_is_unset(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("EU_JEV_API_KEY")
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.route(host="eu-jev.example").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 503
+        assert "EU_JEV_API_KEY" in response.text
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [("GET", "/eu_jev/api/account/keys"), ("DELETE", "/eu_jev/v1/keys/abc"), ("GET", "/eu_jev/v1/systemone")],
+    )
+    def test_forwards_nothing_but_a_decision(self, client: TestClient, method: str, path: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.route(host="eu-jev.example").respond(200, json={})
+            response: Final = client.request(method, path)
+
+        assert response.status_code in (404, 405)
+        assert not route.called
+
+    def test_rejects_custom_body_that_would_replace_the_authorized_request(self, client: TestClient) -> None:
+        smuggled: Final = {"model": "eu-jeff-latest", "state": "refund", "questions": {"q": {"type": "noul"}}}
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "gpt-4o", "custom_body": smuggled})
+
+        assert response.status_code == 400
+        assert "custom_body" in response.text
+        assert not route.called
+
+    def test_rejects_streaming_that_would_skip_spend_tracking(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(
+                "/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x", "stream": True}
+            )
+
+        assert response.status_code == 400
+        assert "Streaming" in response.text
+        assert not route.called
+
+    @pytest.fixture
+    def operator_app(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[list[str], str], FastAPI]]:
+        from litellm.proxy._lazy_features import LAZY_FEATURES, attach_lazy_features, reserve_lazy_slot
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+            _registered_pass_through_routes,
+        )
+
+        monkeypatch.delenv("EU_JEV_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        features: Final = tuple(feature for feature in LAZY_FEATURES if feature.name == "llm_passthrough")
+
+        def build(methods: list[str], path: str) -> FastAPI:
+            app: Final = FastAPI()
+            reserve_lazy_slot(app, "llm_passthrough", features=features)
+            attach_lazy_features(app, features)
+            monkeypatch.setitem(
+                app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+            )
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=app,
+                path=path,
+                target="https://operator.example/decide",
+                custom_headers={"x-operator": "on"},
+                forward_headers=None,
+                merge_query_params=None,
+                dependencies=None,
+                cost_per_request=None,
+                endpoint_id="operator-eu-jev",
+                methods=methods,
+            )
+            return app
+
+        saved_registry: Final = dict(_registered_pass_through_routes)
+        try:
+            yield build
+        finally:
+            _registered_pass_through_routes.clear()
+            _registered_pass_through_routes.update(saved_registry)
+
+    @pytest.mark.parametrize("root_path", ["", "/tenant-a"])
+    def test_a_pass_through_endpoint_configured_at_the_same_path_keeps_serving_it(
+        self, operator_app: Callable[[list[str], str], FastAPI], root_path: str
+    ) -> None:
+        with (
+            respx.mock(assert_all_called=True) as upstream,
+            TestClient(operator_app(["POST"], "/eu_jev/v1/systemone"), root_path=root_path) as client,
+        ):
+            route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
+            response: Final = client.post(f"{root_path}/eu_jev/v1/systemone", json={"state": "x", "stream": True})
+
+        assert (response.status_code, response.json()) == (200, {"operator": True})
+        assert route.calls.last.request.headers["x-operator"] == "on"
+
+    def test_a_post_to_a_get_only_pass_through_at_the_same_path_is_still_refused(
+        self, operator_app: Callable[[list[str], str], FastAPI]
+    ) -> None:
+        with TestClient(operator_app(["GET"], "/eu_jev/v1/systemone")) as client:
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert response.status_code == 405
+
+    def test_a_pass_through_configured_with_a_trailing_slash_still_gets_the_path_without_one(
+        self, operator_app: Callable[[list[str], str], FastAPI]
+    ) -> None:
+        with (
+            respx.mock(assert_all_called=True) as upstream,
+            TestClient(operator_app(["POST"], "/eu_jev/v1/systemone/")) as client,
+        ):
+            route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert (response.status_code, response.json()) == (200, {"operator": True})
+        assert route.calls.last.request.headers["x-operator"] == "on"
+
+    @pytest.mark.parametrize("method", ["GET", "PUT"])
+    def test_a_pass_through_configured_with_a_trailing_slash_still_gets_other_methods_without_one(
+        self, operator_app: Callable[[list[str], str], FastAPI], method: str
+    ) -> None:
+        with (
+            respx.mock(assert_all_called=True) as upstream,
+            TestClient(operator_app(["GET", "POST", "PUT"], "/eu_jev/v1/systemone/")) as client,
+        ):
+            route: Final = upstream.route(method=method, url="https://operator.example/decide").respond(
+                200, json={"operator": True}
+            )
+            response: Final = client.request(method, "/eu_jev/v1/systemone", json={"state": "x"})
+
+        assert (response.status_code, response.json()) == (200, {"operator": True})
+        assert route.calls.last.request.headers["x-operator"] == "on"
+
+    def test_a_request_the_built_in_route_took_is_not_forwarded_with_a_pass_through_added_meanwhile(
+        self, operator_app: Callable[[list[str], str], FastAPI], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base")
+        app: Final = operator_app(["POST"], "/eu_jev/v1/systemone")
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("operator-eu-jev")
+
+        def add_the_pass_through_after_routing() -> UserAPIKeyAuth:
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=app,
+                path="/eu_jev/v1/systemone",
+                target="https://operator.example/decide",
+                custom_headers={"x-operator": "on"},
+                forward_headers=None,
+                merge_query_params=None,
+                dependencies=None,
+                cost_per_request=None,
+                endpoint_id="operator-eu-jev",
+                methods=["POST"],
+            )
+            return UserAPIKeyAuth(api_key="sk-virtual")
+
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, add_the_pass_through_after_routing)
+        with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
+            built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
+            operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
+            response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x"})
+
+        assert (response.status_code, response.json()) == (200, {"answers": {}})
+        assert built_in.calls.last.request.headers["authorization"] == "Bearer eu-jev-test-key"
+        assert not operator.called
+
+    def test_a_deleted_pass_through_at_the_same_path_stops_forwarding_when_built_in_routes_come_first(
+        self, operator_app: Callable[[list[str], str], FastAPI], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+        monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
+        app: Final = operator_app(["GET", "PUT"], "/eu_jev/v1/systemone")
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("operator-eu-jev")
+        with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
+            operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
+            responses: Final = (client.get("/eu_jev/v1/systemone"), client.put("/eu_jev/v1/systemone", json={}))
+
+        assert [response.status_code for response in responses] == [404, 404]
+        assert not operator.called
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])

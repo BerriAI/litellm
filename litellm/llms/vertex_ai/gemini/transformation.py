@@ -8,7 +8,7 @@ import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
 import httpx
@@ -18,11 +18,9 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.bridged_audio_output import cost_map_output_modalities
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_image_mime_type_from_url,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     GeminiMediaSource,
     convert_to_anthropic_image_obj,
@@ -32,6 +30,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     gemini_tool_media_needs_download,
     get_thought_signature_from_tool,
     response_schema_prompt,
+)
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -271,8 +272,21 @@ def _image_url_payload_may_need_sync_gcs_metadata_fetch(
     return _gs_uri_requires_content_type_metadata(url)
 
 
+class _SupportsModelDump(Protocol):
+    def model_dump(self, *, exclude_none: bool) -> object: ...
+
+
+def _message_fields(raw: object) -> Mapping[object, object] | None:
+    if isinstance(raw, dict):
+        return raw
+    if not has_attributes(raw, _SupportsModelDump, "model_dump"):
+        return None
+    dumped: Final = raw.model_dump(exclude_none=False)
+    return dumped if isinstance(dumped, dict) else None
+
+
 def _openai_messages_may_need_sync_media_fetch(
-    messages: list[AllMessageValues],
+    messages: Sequence[object],
     custom_llm_provider: str = "vertex_ai",
     model: str | None = None,
 ) -> bool:
@@ -283,10 +297,7 @@ def _openai_messages_may_need_sync_media_fetch(
         model is None or VertexGeminiConfig.supports_multimodal_function_responses(model)
     )
     for raw in messages:
-        msg: Any = raw
-        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
-            msg = msg.model_dump(exclude_none=False)
-        if not isinstance(msg, dict):
+        if (msg := _message_fields(raw)) is None:
             continue
         images_field = msg.get("images")
         if isinstance(images_field, list):
@@ -1256,6 +1267,7 @@ def sync_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1275,6 +1287,7 @@ def sync_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1295,21 +1308,6 @@ def sync_transform_request_body(
         custom_llm_provider,
         litellm_params.get("model_info"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is an untyped dict
     )
-
-
-class _CostMapOutputModalities(TypedDict):
-    supported_output_modalities: NotRequired[ReadOnly[tuple[str, ...]]]
-
-
-_COST_MAP_OUTPUT_MODALITIES: Final = TypeAdapter(_CostMapOutputModalities)
-
-
-def _answers_text(cost_map_key: str) -> bool:
-    try:
-        row: Final = _COST_MAP_OUTPUT_MODALITIES.validate_python(litellm.model_cost.get(cost_map_key))  # pyright: ignore[reportUnknownMemberType]  # cost map rows are untyped JSON
-    except ValidationError:
-        return False
-    return "text" in row.get("supported_output_modalities", ("text",))
 
 
 class _OutputLimit(TypedDict):
@@ -1340,7 +1338,7 @@ def _text_chat_model_max_output_tokens(
     info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
     if isinstance(info, litellm.utils.ModelInfoLookupMiss) or info.get("mode") != "chat":
         return None
-    if not _answers_text(info["key"]):
+    if "text" not in (cost_map_output_modalities(info["key"]) or frozenset()):
         return None
     return _catalog_capped_output_limit(info["key"], deployment_model_info or info)
 
@@ -1390,6 +1388,7 @@ async def async_transform_request_body(
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
+    context_caching: bool = True,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -1409,6 +1408,7 @@ async def async_transform_request_body(
         timeout=timeout,
         extra_headers=extra_headers,
         cached_content=optional_params.pop("cached_content", None),
+        context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,

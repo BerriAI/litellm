@@ -30,7 +30,7 @@ export interface paths {
         };
         /**
          * Agent Skills Index
-         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         * @description Discover public Hub skills and the separately enabled hosted skill store.
          */
         get: operations["agent_skills_index__well_known_agent_skills_index_json_get"];
         put?: never;
@@ -339,7 +339,7 @@ export interface paths {
         };
         /**
          * Agent Skills Index
-         * @description Agent Skills v0.2.0 discovery index over every skill stored on this proxy.
+         * @description Discover public Hub skills and the separately enabled hosted skill store.
          */
         get: operations["agent_skills_index__well_known_skills_index_json_get"];
         put?: never;
@@ -446,6 +446,30 @@ export interface paths {
          *     - message/stream: Send a message and stream the response
          */
         post: operations["invoke_agent_a2a_a2a__agent_id__message_send_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/a2a/{agent_id}/message/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke Agent A2A
+         * @description Invoke an agent using the A2A protocol (JSON-RPC 2.0).
+         *
+         *     Supported methods:
+         *     - message/send: Send a message and get a response
+         *     - message/stream: Send a message and stream the response
+         */
+        post: operations["invoke_agent_a2a_a2a__agent_id__message_stream_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -699,8 +723,8 @@ export interface paths {
          * @description Update an access group's model names.
          *
          *     This will:
-         *     1. Remove the access group from all current deployments
-         *     2. Add the access group to all deployments for the new model_names list
+         *     1. Add the access group to all deployments for the new model_names list
+         *     2. Remove the access group from every other deployment
          *
          *     Example:
          *     ```bash
@@ -722,6 +746,7 @@ export interface paths {
          *     Raises:
          *     - HTTPException 400: If any model names don't exist
          *     - HTTPException 404: If access group not found
+         *     - HTTPException 409: If another edit holds the group or one of its models for 30 s
          */
         put: operations["update_access_group_access_group__access_group__update_put"];
         post?: never;
@@ -911,6 +936,44 @@ export interface paths {
         };
         /** Get Agent Daily Activity Export */
         get: operations["get_agent_daily_activity_export_agent_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerting/model-deprecations/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deprecation Alert State */
+        get: operations["get_deprecation_alert_state_alerting_model_deprecations_state_get"];
+        /** Update Deprecation Alert State */
+        put: operations["update_deprecation_alert_state_alerting_model_deprecations_state_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerting/model-deprecations/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deprecation Usage Tags
+         * @description Distinct tags observed with this model for a page of affected reporting key IDs.
+         */
+        get: operations["get_deprecation_usage_tags_alerting_model_deprecations_tags_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1801,13 +1864,15 @@ export interface paths {
         };
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         get: operations["codex_passthrough_route_backend_api_codex__endpoint__get"];
         put?: never;
         /**
          * Codex Passthrough Route
-         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication.
+         * @description Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the
+         *     key's other chat models through LiteLLM.
          */
         post: operations["codex_passthrough_route_backend_api_codex__endpoint__post"];
         delete?: never;
@@ -2408,9 +2473,14 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
-         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+         *     Without a key the catalog holds the enabled (public) plugins. With `?key=sk-...`
          *     the key is authenticated and the catalog also holds the disabled plugins granted
          *     to it through `object_permission.skills` or an access group on the key or its team.
+         *
+         *     With `general_settings.claude_code_marketplace_auth_required: true` the key must come
+         *     in the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the
+         *     marketplace source's `headers`), `?key=` is ignored, and a caller with no valid key
+         *     gets a 401 with `WWW-Authenticate: Bearer`.
          *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
@@ -2498,6 +2568,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Plugin
+         * @description Create a skill and its uploaded ZIP atomically. Duplicate names return 409.
+         */
+        post: operations["upload_plugin_claude_code_plugins_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}": {
         parameters: {
             query?: never;
@@ -2523,7 +2613,8 @@ export interface paths {
          *     The plugin is identified by its name in the path, which is the resource
          *     identity and cannot be changed here. This is a full replace, not a merge:
          *     the manifest is rebuilt from the request body, so any optional field left
-         *     out is reset to its default (e.g. an omitted version is cleared, not kept).
+         *     out is reset to its default, except version which automatically increments
+         *     the published patch version when omitted or null.
          *     Send the full desired state.
          *
          *     Returns 404 if no plugin with the given name exists; use
@@ -2574,6 +2665,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/{plugin_name}/archive/{digest}.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Plugin Archive
+         * @description Download an uploaded ZIP under the same visibility policy as its skill.
+         */
+        get: operations["download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}/disable": {
         parameters: {
             query?: never;
@@ -2593,6 +2704,29 @@ export interface paths {
          *         - plugin_name: The name of the plugin to disable
          */
         post: operations["disable_plugin_claude_code_plugins__plugin_name__disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plugin Downloads
+         * @description Admin-only ZIP download totals and authenticated downloader history.
+         *
+         *     Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+         *     starting when tracking is deployed. External sources and installation completion are not observed.
+         */
+        get: operations["get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5357,6 +5491,32 @@ export interface paths {
         patch: operations["assemblyai_proxy_route_eu_assemblyai__endpoint__patch"];
         trace?: never;
     };
+    "/eu_jev/v1/systemone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Eu Jev Proxy Route
+         * @description Forward a request to eu/jev, an EU-hosted decision API, with `EU_JEV_API_KEY`.
+         *
+         *     `POST /eu_jev/v1/systemone` sends a `state` and one to eight named `questions` (`choice`, `noul` or `score`)
+         *     and returns one answer per question name, with spend booked from the reported `usage`. `custom_body` and
+         *     `stream` are rejected with a 400. A pass-through endpoint configured at this path keeps serving it.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        post: operations["eu_jev_proxy_route_eu_jev_v1_systemone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/extraction": {
         parameters: {
             query?: never;
@@ -5809,6 +5969,26 @@ export interface paths {
         };
         /** Get Allowed Ips */
         get: operations["get_allowed_ips_get_allowed_ips_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/background_chat_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Background Chat Settings
+         * @description Get saved background-response settings and the prerequisites for changing them.
+         */
+        get: operations["get_background_chat_settings_get_background_chat_settings_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8493,7 +8673,7 @@ export interface paths {
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
@@ -8814,7 +8994,7 @@ export interface paths {
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
          *     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
-         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     Examples:
@@ -8921,14 +9101,14 @@ export interface paths {
          *     - user_id: Optional[str] - User ID associated with key
          *     - team_id: Optional[str] - Team ID associated with key
          *     - agent_id: Optional[str] - The agent id associated with the key.
-         *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
+         *     - project_id: Optional[str] - Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
          *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call
          *     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+         *     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
          *     - spend: Optional[float] - Amount spent by key
          *     - max_budget: Optional[float] - Max budget for key
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
@@ -9990,8 +10170,9 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. An entry also names its `successor_model`
-         *     when the deployment sets `model_info.successor_model`.
+         *     models configured on this proxy. An entry also names its `successor_model`:
+         *     `model_info.successor_model` when the deployment sets one, else the
+         *     replacement the cost map records from the provider's deprecation notice.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -10516,8 +10697,10 @@ export interface paths {
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
-         *                     each model's `model_info.service_tiers` as its service tiers; absent,
-         *                     the OpenAI shape below is returned
+         *                     each model's `model_info.service_tiers` as its service tiers and, for a
+         *                     model that Codex release does not know, the reasoning efforts
+         *                     `/model_group/info` reports that it can parse; absent, the OpenAI shape
+         *                     below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -11020,7 +11203,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_3"];
+        get: operations["websocket_realtime_websocket_endpoint_get_5"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11038,7 +11221,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_openai_v1_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -11055,7 +11241,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_openai_v1_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -11211,6 +11400,9 @@ export interface paths {
          *
          *     # Get provider response
          *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *
+         *     # Resume a background response's event stream after sequence number 7
+         *     curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_openai_v1_responses__response_id__get"];
@@ -13783,7 +13975,7 @@ export interface paths {
         };
         /**
          * Public Skill Hub
-         * @description Return enabled (public) Claude Code skills — no auth required.
+         * @description Return enabled (public) Claude Code skills, or none when the marketplace requires a key.
          */
         get: operations["public_skill_hub_public_skill_hub_get"];
         put?: never;
@@ -13994,7 +14186,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get"];
+        get: operations["websocket_realtime_websocket_endpoint_get_3"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14012,7 +14204,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -14029,7 +14224,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -14055,6 +14253,66 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_realtime_transcription_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
+        post: operations["proxy_realtime_calls_realtime_translations_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/realtime/translations/client_secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
+        post: operations["create_realtime_client_secret_realtime_translations_client_secrets_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14269,6 +14527,9 @@ export interface paths {
          *
          *     # Get provider response
          *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *
+         *     # Resume a background response's event stream after sequence number 7
+         *     curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_responses__response_id__get"];
@@ -15435,6 +15696,401 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skills
+         * @description Browse the caller's public and granted private skills.
+         */
+        get: operations["list_skills_skill_hub_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Skill
+         * @description Import a public skills.sh or GitHub skill as a portable snapshot.
+         */
+        post: operations["import_skill_skill_hub_skills_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Skill
+         * @description Publish a portable skill while retaining Claude marketplace compatibility.
+         */
+        post: operations["upload_skill_skill_hub_skills_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill
+         * @description Read one visible skill and its portable download URL.
+         */
+        get: operations["get_skill_skill_hub_skills__name__get"];
+        /**
+         * Replace Skill Metadata
+         * @description Replace registry metadata, preserving files. Members submit an immutable proposal for admin review.
+         */
+        put: operations["replace_skill_metadata_skill_hub_skills__name__put"];
+        post?: never;
+        /**
+         * Remove Skill
+         * @description Delete a skill and its managed archive.
+         */
+        delete: operations["remove_skill_skill_hub_skills__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Skill
+         * @description Download the complete portable skill, with SKILL.md at the ZIP root.
+         */
+        get: operations["download_skill_skill_hub_skills__name__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Skill Content
+         * @description Read the original SKILL.md without downloading supporting files.
+         */
+        get: operations["skill_content_skill_hub_skills__name__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Skill
+         * @description Make a skill public using the existing Hub publication policy.
+         */
+        post: operations["publish_skill_skill_hub_skills__name__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/unpublish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unpublish Skill
+         * @description Remove a skill from public discovery while retaining explicit grants.
+         */
+        post: operations["unpublish_skill_skill_hub_skills__name__unpublish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace Skill Archive
+         * @description Replace skill files, retaining registry fields. Members propose an update against the original editor timestamp.
+         */
+        put: operations["replace_skill_archive_skill_hub_skills__name__upload_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skill Versions
+         * @description Read published metadata history. External references are not retained artifacts.
+         */
+        get: operations["list_skill_versions_skill_hub_skills__name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill Version
+         * @description Read a retained publication under the current skill's visibility policy.
+         */
+        get: operations["get_skill_version_skill_hub_skills__name__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{name}/versions/{version_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Skill Version
+         * @description Download a retained publication as a portable ZIP with SKILL.md at its root.
+         */
+        get: operations["download_skill_version_skill_hub_skills__name__versions__version_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/skills/{plugin_name}/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plugin Downloads
+         * @description Admin-only ZIP download totals and authenticated downloader history.
+         *
+         *     Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
+         *     starting when tracking is deployed. External sources and installation completion are not observed.
+         */
+        get: operations["get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Submissions
+         * @description Read a page of owned proposals. Proxy admins and admin viewers can read every owner's proposals.
+         */
+        get: operations["list_submissions_skill_hub_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Submission
+         * @description Read an immutable proposal and its currently visible published skill.
+         */
+        get: operations["get_submission_skill_hub_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Submission
+         * @description Publish a pending proposal and record its approval atomically. Only proxy admins may review.
+         */
+        put: operations["approve_submission_skill_hub_submissions__submission_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Submission
+         * @description Download an owned proposal as a private portable ZIP. Legacy nonportable archives return 404.
+         */
+        get: operations["download_submission_skill_hub_submissions__submission_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Submission
+         * @description Reject a pending proposal without changing the published skill. Only proxy admins may review.
+         */
+        put: operations["reject_submission_skill_hub_submissions__submission_id__reject_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skill-hub/submissions/{submission_id}/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill Scan
+         * @description Read the latest manual security scan. Only proxy admins may read reports.
+         */
+        get: operations["get_skill_scan_skill_hub_submissions__submission_id__scan_get"];
+        put?: never;
+        /**
+         * Start Skill Scan
+         * @description Start an optional scan of a pending submission. Scans never change approval decisions.
+         */
+        post: operations["start_skill_scan_skill_hub_submissions__submission_id__scan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/calculate": {
         parameters: {
             query?: never;
@@ -16040,6 +16696,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/subscription_accounts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Subscription Account
+         * @description Stop tracking a subscription account's fee; its requests stay marked as subscription-covered.
+         */
+        post: operations["delete_subscription_account_subscription_accounts_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Subscription Account
+         * @description Record the monthly fee of one subscription-backed provider account.
+         */
+        post: operations["new_subscription_account_subscription_accounts_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Subscription Account
+         * @description Change the fee, currency, billing period start, or label of a subscription account.
+         *     Only the fields named in the request are written, so two admins changing different
+         *     fields at the same time both land.
+         */
+        post: operations["update_subscription_account_subscription_accounts_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subscription Usage
+         * @description Subscription-backed accounts behind the proxy's deployments or carrying a stored fee, each with
+         *     its configured monthly fee and the fixed cost attributed to the date range: the fee once per billing
+         *     period whose start date falls inside the range, however many deployments share the account.
+         */
+        get: operations["get_subscription_usage_subscription_accounts_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/systemone": {
         parameters: {
             query?: never;
@@ -16421,6 +17161,7 @@ export interface paths {
          *
          *     Parameters:
          *     - name: str - The name of the tag to update
+         *     - spend: Optional[float] - Updated spend for the tag
          *     - description: Optional[str] - Updated description
          *     - models: List[str] - Updated list of allowed LLM models
          *     - budget_id: Optional[str] - The id for a budget to associate with the tag
@@ -17958,9 +18699,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         get: operations["toolset_mcp_route_toolset__toolset_name__mcp_get"];
         /**
@@ -17968,9 +18709,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         put: operations["toolset_mcp_route_toolset__toolset_name__mcp_put"];
         /**
@@ -17978,9 +18719,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         post: operations["toolset_mcp_route_toolset__toolset_name__mcp_post"];
         /**
@@ -17988,9 +18729,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         delete: operations["toolset_mcp_route_toolset__toolset_name__mcp_delete"];
         /**
@@ -17998,9 +18739,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         options: operations["toolset_mcp_route_toolset__toolset_name__mcp_options"];
         /**
@@ -18008,9 +18749,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         head: operations["toolset_mcp_route_toolset__toolset_name__mcp_head"];
         /**
@@ -18018,9 +18759,9 @@ export interface paths {
          * @description Namespace a toolset as its own MCP endpoint.
          *
          *     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-         *     the toolset. Access is enforced: non-admin API keys must have the toolset
-         *     listed in their object_permission.mcp_toolsets grant list, or the request
-         *     will be rejected with a 403.
+         *     the toolset. Access is enforced: API keys other than an admin's key with no
+         *     team must hold the toolset through one of their grant sources, or the
+         *     request will be rejected with a 403.
          */
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
         trace?: never;
@@ -18114,6 +18855,26 @@ export interface paths {
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
          */
         patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
+        trace?: never;
+    };
+    "/update/background_chat_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Background Chat Settings
+         * @description Save background-response polling settings for the proxy configuration refresh.
+         */
+        patch: operations["update_background_chat_settings_update_background_chat_settings_patch"];
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -19137,6 +19898,30 @@ export interface paths {
          *     - message/stream: Send a message and stream the response
          */
         post: operations["invoke_agent_a2a_v1_a2a__agent_id__message_send_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/a2a/{agent_id}/message/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke Agent A2A
+         * @description Invoke an agent using the A2A protocol (JSON-RPC 2.0).
+         *
+         *     Supported methods:
+         *     - message/send: Send a message and get a response
+         *     - message/stream: Send a message and stream the response
+         */
+        post: operations["invoke_agent_a2a_v1_a2a__agent_id__message_stream_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21315,8 +22100,9 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy. An entry also names its `successor_model`
-         *     when the deployment sets `model_info.successor_model`.
+         *     models configured on this proxy. An entry also names its `successor_model`:
+         *     `model_info.successor_model` when the deployment sets one, else the
+         *     replacement the cost map records from the provider's deprecation notice.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -21428,8 +22214,10 @@ export interface paths {
          *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
          *                     provider's model catalog. When present, the response is Codex's own
          *                     catalog shape (`{"models": [...]}`) built from the same listing, with
-         *                     each model's `model_info.service_tiers` as its service tiers; absent,
-         *                     the OpenAI shape below is returned
+         *                     each model's `model_info.service_tiers` as its service tiers and, for a
+         *                     model that Codex release does not know, the reasoning efforts
+         *                     `/model_group/info` reports that it can parse; absent, the OpenAI shape
+         *                     below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -21679,7 +22467,7 @@ export interface paths {
          * WebSocket: realtime_websocket_endpoint
          * @description WebSocket connection endpoint
          */
-        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        get: operations["websocket_realtime_websocket_endpoint_get_4"];
         put?: never;
         post?: never;
         delete?: never;
@@ -21697,7 +22485,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Proxy Realtime Calls */
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
         post: operations["proxy_realtime_calls_v1_realtime_calls_post"];
         delete?: never;
         options?: never;
@@ -21714,7 +22505,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Realtime Client Secret */
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
         post: operations["create_realtime_client_secret_v1_realtime_client_secrets_post"];
         delete?: never;
         options?: never;
@@ -21740,6 +22534,66 @@ export interface paths {
          *     endpoint and encrypts the ephemeral key returned under `client_secret.value`.
          */
         post: operations["create_realtime_transcription_session_v1_realtime_transcription_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: realtime_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_realtime_websocket_endpoint_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Proxy Realtime Calls
+         * @description Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets
+         */
+        post: operations["proxy_realtime_calls_v1_realtime_translations_calls_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/realtime/translations/client_secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Realtime Client Secret
+         * @description Create a short-lived client token for a Realtime conversation, transcription, or translation session
+         */
+        post: operations["create_realtime_client_secret_v1_realtime_translations_client_secrets_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21891,6 +22745,9 @@ export interface paths {
          *
          *     # Get provider response
          *     curl -X GET http://localhost:4000/v1/responses/resp_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *
+         *     # Resume a background response's event stream after sequence number 7
+         *     curl -N "http://localhost:4000/v1/responses/resp_abc123?stream=true&starting_after=7"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["get_response_v1_responses__response_id__get"];
@@ -25666,6 +26523,13 @@ export interface components {
              */
             source: "admin";
         };
+        /** AdminMCPPermissions */
+        AdminMCPPermissions: {
+            /** Action Allowed */
+            action_allowed?: boolean | null;
+            /** Tools */
+            tools: string[];
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -26276,6 +27140,8 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** @default standard */
+            response_format: components["schemas"]["GuardrailResponseFormat"];
             /** Text */
             text: string;
         };
@@ -27021,6 +27887,37 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** BackgroundChatSettings */
+        BackgroundChatSettings: {
+            /**
+             * Enabled
+             * @description Enable cache-backed background Responses for Chat and API requests.
+             */
+            enabled: boolean;
+        };
+        /** BackgroundChatSettingsResponse */
+        BackgroundChatSettingsResponse: {
+            /**
+             * Can Save
+             * @description Whether database-backed configuration updates are available.
+             */
+            can_save: boolean;
+            /**
+             * Enabled
+             * @description Enable cache-backed background Responses for Chat and API requests.
+             */
+            enabled: boolean;
+            /**
+             * Managed By Config
+             * @description Whether the responses configuration is owned by the config file.
+             */
+            managed_by_config: boolean;
+            /**
+             * Redis Configured
+             * @description Whether this proxy has coordination Redis configured.
+             */
+            redis_configured: boolean;
+        };
         /** BaseLitellmParams */
         BaseLitellmParams: {
             /**
@@ -27163,6 +28060,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
              */
@@ -27179,7 +28081,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -27210,7 +28112,7 @@ export interface components {
             patterns?: components["schemas"]["ContentFilterPattern"][] | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -27349,6 +28251,24 @@ export interface components {
         BedrockChecksSensitiveInformationModel: {
             /** Entities */
             entities: components["schemas"]["BedrockChecksSensitiveInformationEntityItem"][];
+        };
+        /**
+         * BedrockGuardrailOutputScope
+         * @enum {string}
+         */
+        BedrockGuardrailOutputScope: "INTERVENTIONS" | "FULL";
+        /** BillingPeriod */
+        BillingPeriod: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
         };
         /** BlockKeyRequest */
         BlockKeyRequest: {
@@ -27575,6 +28495,18 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** Body_replace_skill_archive_skill_hub_skills__name__upload_put */
+        Body_replace_skill_archive_skill_hub_skills__name__upload_put: {
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
+            /**
+             * File
+             * @description Replacement Agent Skills ZIP with the same declared skill name
+             */
+            file: string;
+            /** Version */
+            version?: string | null;
+        };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
             /** Client Id */
@@ -27667,6 +28599,29 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_upload_plugin_claude_code_plugins_upload_post */
+        Body_upload_plugin_claude_code_plugins_upload_post: {
+            /**
+             * File
+             * @description Skill ZIP containing SKILL.md and supporting files, up to 10 MiB
+             */
+            file: string;
+            /**
+             * Metadata
+             * @description JSON skill metadata without a source URL
+             */
+            metadata: string;
+        };
+        /** Body_upload_skill_skill_hub_skills_upload_post */
+        Body_upload_skill_skill_hub_skills_upload_post: {
+            /**
+             * File
+             * @description Agent Skills ZIP with SKILL.md and optional supporting files
+             */
+            file: string;
+            /** Version */
+            version?: string | null;
+        };
         /** Body_video_create_character_v1_videos_characters_post */
         Body_video_create_character_v1_videos_characters_post: {
             /** Name */
@@ -27721,7 +28676,10 @@ export interface components {
             entities?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
-            /** Guardrails */
+            /**
+             * Guardrails
+             * @description Spend by guardrail ID, already included in key and model spend. Populated on user, team and organization aggregated activity only, without a model filter
+             */
             guardrails?: {
                 [key: string]: components["schemas"]["GuardrailMetric"];
             };
@@ -28492,7 +29450,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "extraction" | "aextraction" | "_arealtime" | "_aresponses_websocket" | "acreate_realtime_client_secret" | "arealtime_calls" | "acreate_realtime_transcription_session" | "acreate_realtime_translation_client_secret" | "arealtime_translation_calls" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "get_responses" | "aget_responses" | "delete_responses" | "adelete_responses" | "cancel_responses" | "acancel_responses" | "compact_responses" | "acompact_responses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -29012,7 +29970,7 @@ export interface components {
             /** Token */
             token: string;
             /** Top Logprobs */
-            top_logprobs: components["schemas"]["TopLogprob"][];
+            top_logprobs?: components["schemas"]["TopLogprob"][];
         } & {
             [key: string]: unknown;
         };
@@ -29044,6 +30002,8 @@ export interface components {
         ChatCompletionToolMessage: {
             /** Content */
             content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionFileObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
+            /** Is Error */
+            is_error?: boolean;
             /**
              * Role
              * @constant
@@ -29126,7 +30086,7 @@ export interface components {
             /** Choice */
             choice: string;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Probabilities */
             probabilities: {
                 [key: string]: number;
@@ -29143,6 +30103,8 @@ export interface components {
         ChoiceLogprobs: {
             /** Content */
             content?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
+            /** Refusal */
+            refusal?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
         } & {
             [key: string]: unknown;
         };
@@ -29840,6 +30802,16 @@ export interface components {
              */
             allow_unmanaged_response_ids?: boolean | null;
             /**
+             * Allowed Client Side S3 Buckets
+             * @description S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_buckets?: string[] | null;
+            /**
+             * Allowed Client Side S3 Endpoint Urls
+             * @description Exact `s3_endpoint_url` values a client may send in a request body. Any other value is rejected unless client-side credentials are allowed
+             */
+            allowed_client_side_s3_endpoint_urls?: string[] | null;
+            /**
              * Allowed File Extensions
              * @description the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied
              */
@@ -29881,6 +30853,12 @@ export interface components {
             claude_code_gateway_managed_settings?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Claude Code Marketplace Auth Required
+             * @description If True, GET /claude-code/marketplace.json requires a LiteLLM key in the Authorization or x-litellm-api-key header (?key= is not accepted) and answers 401 with WWW-Authenticate: Bearer without one, and GET /public/skill_hub returns an empty list. Default is False, which serves the enabled plugins to anyone.
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
             /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
@@ -30338,10 +31316,17 @@ export interface components {
              * @description Lets a non-admin change max_budget or budget_limits on a key they created and still own via /key/update. 'disabled' (default) requires an admin for any budget change. 'lower_only' lets the owner add or lower limits. 'ceiling' also lets the owner raise or remove limits when they could create that key with the new budget via /key/generate.
              */
             self_serve_budget_policy?: ("disabled" | "lower_only" | "ceiling") | null;
+            /** @description Opt-in external scanner for manual admin review of skill submissions */
+            skill_scanner?: components["schemas"]["SkillScannerConfig"] | null;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
             spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
+            /**
+             * Spend Logs Prompt Storage
+             * @description With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.
+             */
+            spend_logs_prompt_storage?: "latest_turn" | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -30383,6 +31368,12 @@ export interface components {
              * @description decrypt keys with google kms
              */
             use_google_kms?: boolean | null;
+            /**
+             * Use Spend Logs Ledger
+             * @description Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.
+             * @default true
+             */
+            use_spend_logs_ledger: boolean;
             /**
              * Use Spend Logs Partitioning
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
@@ -31675,6 +32666,11 @@ export interface components {
          */
         DefaultTeamSSOParams: {
             /**
+             * Access Group Ids
+             * @description Default access groups attached to new teams created without explicit access_group_ids
+             */
+            access_group_ids?: string[] | null;
+            /**
              * Budget Duration
              * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */
@@ -31824,6 +32820,11 @@ export interface components {
              */
             type: string;
         };
+        /** DeleteSubscriptionAccountRequest */
+        DeleteSubscriptionAccountRequest: {
+            /** Subscription Account Id */
+            subscription_account_id: string;
+        };
         /** DeleteTeamRequest */
         DeleteTeamRequest: {
             /** Team Ids */
@@ -31844,6 +32845,20 @@ export interface components {
             model_name: string;
         } & {
             [key: string]: unknown;
+        };
+        /** DeploymentPricing */
+        DeploymentPricing: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Provider */
+            provider: string;
+            /**
+             * Tiered Pricing
+             * @default []
+             */
+            tiered_pricing: components["schemas"]["PriceTier"][];
         };
         /** DeploymentWarning */
         DeploymentWarning: {
@@ -31885,6 +32900,59 @@ export interface components {
             ignore_available: boolean;
             /** Warnings */
             warnings: components["schemas"]["DeploymentWarning"][];
+        };
+        /** DeprecationAlertState */
+        DeprecationAlertState: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /** Last Seen Date */
+            last_seen_date?: string | null;
+            /**
+             * Last Seen Requests
+             * @default 0
+             */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            /** @default open */
+            status: components["schemas"]["DeprecationAlertStatus"];
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        };
+        /**
+         * DeprecationAlertStatus
+         * @enum {string}
+         */
+        DeprecationAlertStatus: "open" | "resolved" | "dismissed";
+        /** DeprecationAlertUpdate */
+        DeprecationAlertUpdate: {
+            /**
+             * Deprecation Date
+             * Format: date
+             */
+            deprecation_date: string;
+            /**
+             * Last Seen Date
+             * Format: date
+             */
+            last_seen_date: string;
+            /** Last Seen Requests */
+            last_seen_requests: number;
+            /** Model */
+            model: string;
+            status: components["schemas"]["DeprecationAlertStatus"];
+        };
+        /** DeprecationTagUsage */
+        DeprecationTagUsage: {
+            /** Api Key */
+            api_key: string;
+            /** Tag */
+            tag: string;
         };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
@@ -32081,7 +33149,7 @@ export interface components {
          * EmailEvent
          * @enum {string}
          */
-        EmailEvent: "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
+        EmailEvent: "Model Deprecations" | "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
         /** EmailEventSettings */
         EmailEventSettings: {
             /** Enabled */
@@ -32266,6 +33334,50 @@ export interface components {
             detail: {
                 [key: string]: unknown;
             };
+        };
+        /** EuJevDecisionResponse */
+        EuJevDecisionResponse: {
+            /**
+             * Answers
+             * @description One answer per question, under the same names
+             */
+            answers: {
+                [key: string]: components["schemas"]["ChoiceAnswer"] | components["schemas"]["NoulAnswer"] | components["schemas"]["ScoreAnswer"];
+            };
+            meta: components["schemas"]["EuJevMeta"];
+            /**
+             * Model
+             * @description The release that answered, such as eu-jeff-1.0.0
+             */
+            model: string;
+            usage: components["schemas"]["EuJevUsage"];
+        };
+        /** EuJevMeta */
+        EuJevMeta: {
+            /**
+             * Cost Eur
+             * @description The exact charge in euros, on authenticated requests
+             */
+            cost_eur?: string | null;
+            /**
+             * Latency Ms
+             * @description Server-side time for token quoting, credit reservation and inference
+             */
+            latency_ms: number;
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "live";
+            /** Request Id */
+            request_id: string;
+        };
+        /** EuJevUsage */
+        EuJevUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
         };
         /**
          * Eval
@@ -33128,7 +34240,7 @@ export interface components {
          */
         GenericResponseOutputItem: {
             /** Content */
-            content: components["schemas"]["OutputText"][];
+            content: (components["schemas"]["OutputText"] | components["schemas"]["ResponseOutputRefusal"])[];
             /** Id */
             id: string;
             /** Phase */
@@ -33242,32 +34354,49 @@ export interface components {
         };
         /** GuardrailKeyMetric */
         GuardrailKeyMetric: {
+            /** @description API key alias and existence information */
             metadata: components["schemas"]["KeyMetadata"];
+            /** @description Guardrail spend and unpriced units for this API key */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
         /** GuardrailMetadata */
         GuardrailMetadata: {
-            /** Guardrail Name */
+            /**
+             * Guardrail Name
+             * @description Guardrail display name, falling back to the guardrail ID
+             */
             guardrail_name: string;
         };
         /** GuardrailMetric */
         GuardrailMetric: {
-            /** Api Key Breakdown */
+            /**
+             * Api Key Breakdown
+             * @description Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown
+             */
             api_key_breakdown?: {
                 [key: string]: components["schemas"]["GuardrailKeyMetric"];
             };
+            /** @description Guardrail name information */
             metadata: components["schemas"]["GuardrailMetadata"];
+            /** @description Guardrail spend and unpriced units across all matching API keys */
             metrics: components["schemas"]["GuardrailSpendMetrics"];
         };
+        /**
+         * GuardrailResponseFormat
+         * @enum {string}
+         */
+        GuardrailResponseFormat: "standard" | "native";
         /** GuardrailSpendMetrics */
         GuardrailSpendMetrics: {
             /**
              * Spend
+             * @description Guardrail spend in USD, already included in key and model spend
              * @default 0
              */
             spend: number;
             /**
              * Untracked Units
+             * @description Guardrail units with no known price, excluded from spend
              * @default 0
              */
             untracked_units: number;
@@ -33554,6 +34683,35 @@ export interface components {
             url: string;
         } & {
             [key: string]: unknown;
+        };
+        /** ImportSkillRequest */
+        ImportSkillRequest: {
+            /**
+             * Path
+             * @description Repository-relative skill directory
+             */
+            path?: string | null;
+            /**
+             * Ref
+             * @description Git commit, tag or branch to import
+             * @default HEAD
+             */
+            ref: string;
+            /**
+             * Skill
+             * @description Skill name to select when a repository contains several skills
+             */
+            skill?: string | null;
+            /**
+             * Url
+             * @description Public skills.sh skill URL or GitHub repository URL
+             */
+            url: string;
+            /**
+             * Version
+             * @description Semantic version, or omit/null to start at 1.0.0
+             */
+            version?: string | null;
         };
         /**
          * IncompleteDetails
@@ -35172,6 +36330,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -35407,6 +36567,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -35422,6 +36584,14 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Audio Token Flex */
@@ -35460,6 +36630,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -35561,12 +36733,18 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -35601,6 +36779,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -35673,11 +36853,17 @@ export interface components {
             search_context_cost_per_query?: {
                 [key: string]: unknown;
             } | null;
+            /** Search Queries Cost Per Query */
+            search_queries_cost_per_query?: number | components["schemas"]["SearchContextCostPerQuery"] | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
@@ -35685,6 +36871,8 @@ export interface components {
             tags?: string[] | null;
             /** Tenant Id */
             tenant_id?: string | null;
+            /** Thought Signature In Tool Call Id */
+            thought_signature_in_tool_call_id?: boolean | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -35914,6 +37102,37 @@ export interface components {
              * @default
              */
             user: string | null;
+        };
+        /** LiteLLM_SubscriptionAccountTable */
+        LiteLLM_SubscriptionAccountTable: {
+            /** Account Id */
+            account_id: string;
+            /** Billing Period Start */
+            billing_period_start: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Currency */
+            currency: string;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee: number;
+            /** Subscription Account Id */
+            subscription_account_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /** LiteLLM_TeamMembership */
         LiteLLM_TeamMembership: {
@@ -36809,6 +38028,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * File Checkpoint Id
+             * @description File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).
+             */
+            file_checkpoint_id?: string | null;
+            /**
              * File Guardrail Timeout
              * @description HTTP timeout in seconds for checking attached files. Default: 10.
              */
@@ -36944,6 +38168,11 @@ export interface components {
              */
             max_input_chars?: number | null;
             /**
+             * Mcp Block Behavior
+             * @description How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.
+             */
+            mcp_block_behavior?: ("tool_result" | "raise") | null;
+            /**
              * Metadata
              * @description Additional metadata to include in the request
              */
@@ -36986,10 +38215,10 @@ export interface components {
             on_disallowed_action: "block" | "rewrite";
             /**
              * On Flagged
-             * @description Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
+             * @description Action to take when content is flagged: 'block' (raise exception), 'mask' (mask PII-only detections and allow, block anything else), 'monitor' (log only), or 'inject_system_message' (append an advisory system message and let the LLM decide)
              * @default block
              */
-            on_flagged: ("block" | "monitor" | "inject_system_message") | null;
+            on_flagged: ("block" | "mask" | "monitor" | "inject_system_message") | null;
             /**
              * On Flagged Action
              * @description Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)
@@ -37003,7 +38232,7 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
             on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
@@ -37014,6 +38243,8 @@ export interface components {
             only_scan_new_messages: boolean | null;
             /** @description Optional parameters for the guardrail */
             optional_params?: components["schemas"]["CiscoAIDefenseGuardrailConfigModelOptionalParams"] | null;
+            /** @description ApplyGuardrail response scope. FULL includes detected and non-detected findings. Omit to retain Bedrock's default of returning detected findings only. */
+            outputScope?: components["schemas"]["BedrockGuardrailOutputScope"] | null;
             /**
              * Output Parse Pii
              * @description When True, LiteLLM will replace the masked text with the original text in the response
@@ -37159,7 +38390,7 @@ export interface components {
             prompt_injections?: boolean | null;
             /**
              * Realtime Violation Message
-             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
+             * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.
              */
             realtime_violation_message?: string | null;
             /**
@@ -38415,6 +39646,11 @@ export interface components {
              */
             deprecation_date: string;
             /**
+             * Deprecation Source
+             * @description Provider deprecation notice linked by the selected model cost-map entry.
+             */
+            deprecation_source?: string | null;
+            /**
              * Litellm Model
              * @description The underlying litellm model string the deprecation date is sourced from.
              */
@@ -38437,9 +39673,16 @@ export interface components {
             status: "upcoming" | "imminent" | "deprecated";
             /**
              * Successor Model
-             * @description The model to migrate to, as set in model_info.successor_model on the deployment.
+             * @description The model to migrate to: model_info.successor_model on the deployment when set, else the successor_model the cost map names for the deprecated model.
              */
             successor_model?: string | null;
+            /** @description Whether the recommended successor comes from the model cost map or deployment configuration. */
+            successor_model_source?: components["schemas"]["SuccessorModelSource"] | null;
+            /**
+             * Team Public Model Name
+             * @description The model name visible to the team, when configured.
+             */
+            team_public_model_name?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -38480,6 +39723,11 @@ export interface components {
             } | null;
             /** Custom Tags */
             custom_tags?: string[] | null;
+            /**
+             * Deployment Pricing
+             * @default []
+             */
+            deployment_pricing: components["schemas"]["DeploymentPricing"][];
             /** Description */
             description?: string | null;
             /** Health Checked At */
@@ -38527,6 +39775,17 @@ export interface components {
             supported_openai_params: string[] | null;
             /** Supported Reasoning Efforts */
             supported_reasoning_efforts?: string[] | null;
+            /**
+             * Supports Background Chat
+             * @description Whether cache-backed background Responses runs are enabled for this model group
+             * @default false
+             */
+            supports_background_chat: boolean;
+            /**
+             * Supports Continuation
+             * @default false
+             */
+            supports_continuation: boolean;
             /**
              * Supports Fast Mode
              * @default false
@@ -39800,7 +41059,7 @@ export interface components {
             /** Choice */
             choice: string | boolean;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -39896,7 +41155,7 @@ export interface components {
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -40877,20 +42136,63 @@ export interface components {
              */
             url: string;
         };
+        /** PluginDownloadEvent */
+        PluginDownloadEvent: {
+            /** Authenticated */
+            authenticated: boolean;
+            /** Digest */
+            digest: string;
+            /**
+             * Downloaded At
+             * Format: date-time
+             */
+            downloaded_at: string;
+            /** Id */
+            id: string;
+            /** Key Alias */
+            key_alias: string | null;
+            /** Team Alias */
+            team_alias: string | null;
+            /** Team Id */
+            team_id: string | null;
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** PluginDownloadsResponse */
+        PluginDownloadsResponse: {
+            /** Anonymous Downloads */
+            anonymous_downloads: number;
+            /** Downloads */
+            downloads: components["schemas"]["PluginDownloadEvent"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Total Downloads */
+            total_downloads: number;
+        };
         /**
          * PluginListItem
          * @description Plugin item in list responses.
          */
         PluginListItem: {
+            /** Approved By */
+            approved_by?: string | null;
             author?: components["schemas"]["PluginAuthor"] | null;
             /** Category */
             category?: string | null;
             /** Created At */
             created_at: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
             domain?: string | null;
+            /** Download Count */
+            download_count?: number | null;
             /** Enabled */
             enabled: boolean;
             /** Homepage */
@@ -40905,6 +42207,13 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
             /** Source */
             source: {
                 [key: string]: string;
@@ -41623,6 +42932,18 @@ export interface components {
              */
             version_status: string;
         };
+        /** PriceTier */
+        PriceTier: {
+            /** Costs */
+            costs: {
+                [key: string]: number;
+            };
+            /** Range */
+            range: [
+                number,
+                number
+            ];
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -41632,6 +42953,8 @@ export interface components {
         };
         /** PromptCacheOptions */
         PromptCacheOptions: {
+            /** Comparison Response Id */
+            comparison_response_id?: string;
             /**
              * Mode
              * @enum {string}
@@ -42390,7 +43713,7 @@ export interface components {
             };
             /**
              * Version
-             * @description Semantic version
+             * @description Semantic version, defaults to 1.0.0 on creation
              * @default 1.0.0
              */
             version: string | null;
@@ -45136,7 +46459,7 @@ export interface components {
         /** ScoreAnswer */
         ScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Legend */
             legend: {
                 [key: string]: string | {
@@ -45190,6 +46513,17 @@ export interface components {
             x: number;
             /** Y */
             y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SearchContextCostPerQuery */
+        SearchContextCostPerQuery: {
+            /** Search Context Size High */
+            search_context_size_high?: number;
+            /** Search Context Size Low */
+            search_context_size_low?: number;
+            /** Search Context Size Medium */
+            search_context_size_medium?: number;
         } & {
             [key: string]: unknown;
         };
@@ -45656,6 +46990,245 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /** SkillHubAgentSkill */
+        SkillHubAgentSkill: {
+            /** Description */
+            description: string;
+            /** Digest */
+            digest: string;
+            /** Name */
+            name: string;
+            /** Origin */
+            origin: string | null;
+        };
+        /** SkillHubList */
+        SkillHubList: {
+            /** Count */
+            count: number;
+            /** Next Offset */
+            next_offset: number | null;
+            /** Skills */
+            skills: components["schemas"]["SkillHubSkill"][];
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+        };
+        /** SkillHubMetadata */
+        SkillHubMetadata: {
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
+        };
+        /** SkillHubPendingSkill */
+        SkillHubPendingSkill: {
+            /**
+             * Action
+             * @default submitted
+             * @constant
+             */
+            action: "submitted";
+            proposal: components["schemas"]["SkillHubProposal"];
+            /**
+             * Status
+             * @default pending_review
+             * @constant
+             */
+            status: "pending_review";
+            /** Submission Id */
+            submission_id: string;
+        };
+        /** SkillHubProposal */
+        SkillHubProposal: {
+            agent_skill?: components["schemas"]["SkillHubAgentSkill"] | null;
+            /** Description */
+            description: string | null;
+            /** Domain */
+            domain?: string | null;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /** Source */
+            source: {
+                [key: string]: string;
+            };
+            /** Version */
+            version: string | null;
+        };
+        /** SkillHubPublication */
+        SkillHubPublication: Record<string, never>;
+        /** SkillHubRejection */
+        SkillHubRejection: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /** SkillHubReviewResponse */
+        SkillHubReviewResponse: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "approved" | "rejected";
+            skill: components["schemas"]["SkillHubSkill"] | null;
+            /**
+             * Status
+             * @default success
+             * @constant
+             */
+            status: "success";
+            submission: components["schemas"]["SkillHubSubmission"];
+        };
+        /** SkillHubSkill */
+        SkillHubSkill: {
+            /** Approved By */
+            approved_by?: string | null;
+            /** Content Url */
+            content_url?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Domain */
+            domain?: string | null;
+            /**
+             * Download Count
+             * @description Gateway ZIP downloads, including repeat downloads
+             */
+            download_count?: number | null;
+            /** Download Url */
+            download_url?: string | null;
+            /** Id */
+            id: string;
+            /** Keywords */
+            keywords?: string[] | null;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /** Published By */
+            published_by?: string | null;
+            /**
+             * Security Scan Passed
+             * @default false
+             */
+            security_scan_passed: boolean;
+            /** Source */
+            source: {
+                [key: string]: string;
+            };
+            /** Updated At */
+            updated_at?: string | null;
+            /** Version */
+            version?: string | null;
+            /**
+             * Visibility
+             * @enum {string}
+             */
+            visibility: "public" | "private";
+        };
+        /** SkillHubSubmission */
+        SkillHubSubmission: {
+            /** Base Skill Id */
+            base_skill_id: string | null;
+            /** Base Updated At */
+            base_updated_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Has Archive */
+            has_archive: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "create" | "update";
+            proposal: components["schemas"]["SkillHubProposal"];
+            /** Rejection Reason */
+            rejection_reason: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Skill Name */
+            skill_name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending_review" | "approved" | "rejected";
+            /** Submitted By */
+            submitted_by: string;
+        };
+        /** SkillHubSubmissionDetail */
+        SkillHubSubmissionDetail: {
+            current_skill: components["schemas"]["SkillHubSkill"] | null;
+            submission: components["schemas"]["SkillHubSubmission"];
+        };
+        /** SkillHubSubmissionList */
+        SkillHubSubmissionList: {
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Submissions */
+            submissions: components["schemas"]["SkillHubSubmission"][];
+        };
+        /** SkillHubVersion */
+        SkillHubVersion: {
+            /**
+             * Content Kind
+             * @enum {string}
+             */
+            content_kind: "stored_archive" | "source_reference";
+            /** Description */
+            description: string | null;
+            /** Download Url */
+            download_url: string | null;
+            /** Id */
+            id: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Published At */
+            published_at: string | null;
+            /** Published By */
+            published_by: string | null;
+            /** Version */
+            version: string | null;
+        };
+        /** SkillHubVersions */
+        SkillHubVersions: {
+            /** Next Offset */
+            next_offset: number | null;
+            /** Versions */
+            versions: components["schemas"]["SkillHubVersion"][];
+        };
         /** SkillReference */
         SkillReference: {
             /** Skill Id */
@@ -45681,6 +47254,107 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
+        };
+        /** SkillScan */
+        SkillScan: {
+            /** Archive Sha256 */
+            archive_sha256?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Id */
+            id: string;
+            report?: components["schemas"]["SkillScanReport"] | null;
+            /** Requested By */
+            requested_by: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed";
+        };
+        /** SkillScanFinding */
+        SkillScanFinding: {
+            /** Explanation */
+            explanation?: string | null;
+            /** File */
+            file: string;
+            /** Message */
+            message: string;
+            /** Remediation */
+            remediation?: string | null;
+            /** Rule Id */
+            rule_id: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+            /** Start Line */
+            start_line?: number | null;
+        };
+        /** SkillScanReport */
+        SkillScanReport: {
+            /** Complete */
+            complete: boolean;
+            /** Findings */
+            findings: components["schemas"]["SkillScanFinding"][];
+            /**
+             * Limitations
+             * @default []
+             */
+            limitations: string[];
+            /** Risk Score */
+            risk_score: number;
+            /**
+             * Scan Mode
+             * @enum {string}
+             */
+            scan_mode: "static-only" | "static+llm";
+            /** Scanner Version */
+            scanner_version: string;
+        };
+        /** SkillScanRequest */
+        SkillScanRequest: Record<string, never>;
+        /** SkillScanResponse */
+        SkillScanResponse: {
+            /** Configured */
+            configured: boolean;
+            scan: components["schemas"]["SkillScan"] | null;
+        };
+        /** SkillScannerConfig */
+        SkillScannerConfig: {
+            /**
+             * Api Key Env
+             * @description Environment secret name for scanner auth
+             */
+            api_key_env: string;
+            /**
+             * Endpoint
+             * @description External scanner's authenticated POST endpoint
+             */
+            endpoint: string;
+            /**
+             * Timeout Seconds
+             * @default 180
+             */
+            timeout_seconds: number;
+            /**
+             * Use Llm
+             * @default false
+             */
+            use_llm: boolean;
         };
         /** Span */
         Span: {
@@ -45953,6 +47627,16 @@ export interface components {
              * @enum {string}
              */
             classifier_failure_reason?: "timeout" | "circuit_open" | "not_configured" | "unsupported_input" | "invalid_response" | "declined" | "classifier_error";
+            /** Classifier Input Budget Status */
+            classifier_input_budget_status?: string;
+            /** Classifier Input Budget Tokens */
+            classifier_input_budget_tokens?: number;
+            /** Classifier Input Count Method */
+            classifier_input_count_method?: string;
+            /** Classifier Input Tokens */
+            classifier_input_tokens?: number;
+            /** Classifier Input Truncated */
+            classifier_input_truncated?: boolean;
             /** Classifier Max Quality Gap */
             classifier_max_quality_gap?: number;
             /** Classifier Model */
@@ -46000,7 +47684,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -46009,6 +47693,12 @@ export interface components {
             score?: number;
             /** Signals */
             signals?: string[];
+            /** Switchyard Algorithm */
+            switchyard_algorithm?: string;
+            /** Switchyard Evidence */
+            switchyard_evidence?: unknown;
+            /** Switchyard Fallback Reason */
+            switchyard_fallback_reason?: string;
             /** Tier */
             tier?: string;
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
@@ -46123,6 +47813,55 @@ export interface components {
             /** Window Start */
             window_start: number;
         };
+        /** SubscriptionAccountFeeRequest */
+        SubscriptionAccountFeeRequest: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Billing Period Start
+             * Format: date
+             */
+            billing_period_start: string;
+            /** Currency */
+            currency: string;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee: number;
+        };
+        /** SubscriptionAccountUsage */
+        SubscriptionAccountUsage: {
+            /** Account Id */
+            account_id: string | null;
+            /** Billing Periods */
+            billing_periods: components["schemas"]["BillingPeriod"][];
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Deployments */
+            deployments: string[];
+            fee: components["schemas"]["LiteLLM_SubscriptionAccountTable"] | null;
+            /** Fixed Cost */
+            fixed_cost: number | null;
+        };
+        /** SubscriptionUsageResponse */
+        SubscriptionUsageResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["SubscriptionAccountUsage"][];
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /** Subscription Providers */
+            subscription_providers: string[];
+        };
         /**
          * SuccessfulKeyUpdate
          * @description Successfully updated key with its updated information
@@ -46135,6 +47874,11 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * SuccessorModelSource
+         * @enum {string}
+         */
+        SuccessorModelSource: "model_cost_map" | "deployment_config";
         /** SuggestTemplatesRequest */
         SuggestTemplatesRequest: {
             /** Attack Examples */
@@ -46298,6 +48042,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Spend */
+            spend?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
@@ -47464,7 +49210,7 @@ export interface components {
             id: string;
             /**
              * Tool Name
-             * @description Regex pattern applied to the tool's function name
+             * @description Regex pattern applied to the tool's name, or to its type when the tool has no name
              */
             tool_name?: string | null;
             /**
@@ -47997,6 +49743,54 @@ export interface components {
              */
             success_definition: string;
         };
+        /** TranscriptionDetectedLanguage */
+        TranscriptionDetectedLanguage: {
+            /** Code */
+            code: string;
+        };
+        /** TranscriptionResponse */
+        TranscriptionResponse: {
+            /** Languages */
+            languages?: components["schemas"]["TranscriptionDetectedLanguage"][] | null;
+            /** Text */
+            text?: string | null;
+            /** Usage */
+            usage?: components["schemas"]["TranscriptionUsageDurationObject"] | components["schemas"]["TranscriptionUsageTokensObject"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** TranscriptionUsageDurationObject */
+        TranscriptionUsageDurationObject: {
+            /** Seconds */
+            seconds: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "duration";
+        };
+        /** TranscriptionUsageInputTokenDetailsObject */
+        TranscriptionUsageInputTokenDetailsObject: {
+            /** Audio Tokens */
+            audio_tokens: number;
+            /** Text Tokens */
+            text_tokens: number;
+        };
+        /** TranscriptionUsageTokensObject */
+        TranscriptionUsageTokensObject: {
+            input_token_details?: components["schemas"]["TranscriptionUsageInputTokenDetailsObject"] | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tokens";
+        };
         /** TransformRequestBody */
         TransformRequestBody: {
             call_type: components["schemas"]["CallTypes"];
@@ -48174,6 +49968,11 @@ export interface components {
             admin_ui_disabled: boolean;
             /** Auto Redirect To Sso */
             auto_redirect_to_sso: boolean;
+            /**
+             * Claude Code Marketplace Auth Required
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
             /** Gateway Base Url */
             gateway_base_url?: string | null;
             /**
@@ -48398,7 +50197,7 @@ export interface components {
             policies?: string[] | null;
             /**
              * Project Id
-             * @description Omit to retain the project, or send null to detach. Assigning a different project is not supported.
+             * @description Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.
              */
             project_id?: string | null;
             /** Prompts */
@@ -48581,8 +50380,8 @@ export interface components {
          *
          *     The plugin name is the resource identity and is supplied as the path
          *     parameter, so it cannot be changed here. This is a full replace: omitted
-         *     fields reset to their defaults, so version is cleared rather than
-         *     defaulting to the create-time "1.0.0".
+         *     fields reset to their defaults, except version which automatically increments
+         *     the published patch version when omitted or null.
          */
         UpdatePluginRequest: {
             /** @description Plugin author */
@@ -48602,6 +50401,11 @@ export interface components {
              * @description Skill domain (e.g., 'Productivity')
              */
             domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
             /**
              * Homepage
              * @description Plugin homepage URL
@@ -48635,7 +50439,7 @@ export interface components {
             };
             /**
              * Version
-             * @description Semantic version; cleared if omitted
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
              */
             version?: string | null;
         };
@@ -48728,6 +50532,12 @@ export interface components {
         UpdateRouterConfig: {
             /** Allowed Fails */
             allowed_fails?: number | null;
+            /** Content Policy Fallbacks */
+            content_policy_fallbacks?: {
+                [key: string]: (string | {
+                    [key: string]: components["schemas"]["JsonValue"];
+                })[];
+            }[] | null;
             /** Context Window Fallbacks */
             context_window_fallbacks?: {
                 [key: string]: unknown;
@@ -48790,6 +50600,19 @@ export interface components {
         /** UpdateSearchToolRequest */
         UpdateSearchToolRequest: {
             search_tool: components["schemas"]["SearchTool"];
+        };
+        /** UpdateSubscriptionAccountFeeRequest */
+        UpdateSubscriptionAccountFeeRequest: {
+            /** Billing Period Start */
+            billing_period_start?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee?: number | null;
+            /** Subscription Account Id */
+            subscription_account_id: string;
         };
         /**
          * UpdateTeamMemberPermissionsRequest
@@ -49152,6 +50975,57 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** UploadPluginRequest */
+        UploadPluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Plugin category
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
+             */
+            domain?: string | null;
+            /**
+             * Homepage
+             * @description Plugin homepage URL
+             */
+            homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Name
+             * @description Skill name (kebab-case)
+             */
+            name: string;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Semantic version, defaults to 1.0.0 on creation
+             * @default 1.0.0
+             */
+            version: string | null;
         };
         /** UsageChartPoint */
         UsageChartPoint: {
@@ -49821,6 +51695,7 @@ export interface components {
         };
         /** UserInfoResponse */
         UserInfoResponse: {
+            admin_mcp_permissions?: components["schemas"]["AdminMCPPermissions"] | null;
             /** Keys */
             keys: unknown[];
             /** Teams */
@@ -50318,6 +52193,24 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** _A2AJsonRpcResponse */
+        _A2AJsonRpcResponse: {
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: string | number | null;
+            /**
+             * Jsonrpc
+             * @constant
+             */
+            jsonrpc: "2.0";
+            /** Result */
+            result?: unknown | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
@@ -50408,6 +52301,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Enforce Supported Endpoints */
+            enforce_supported_endpoints?: boolean | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
             /** Id */
@@ -50570,6 +52465,8 @@ export interface components {
              * @default false
              */
             allow_client_keepalive_override: boolean | null;
+            /** Allow Legacy Cloud File Ids */
+            allow_legacy_cloud_file_ids?: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
@@ -50805,6 +52702,8 @@ export interface components {
             drop_params?: boolean | string | null;
             /** Explicit Cache Read Input Token Cost */
             explicit_cache_read_input_token_cost?: number | null;
+            /** Fedramp Uplift Multiplier */
+            fedramp_uplift_multiplier?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -50820,6 +52719,14 @@ export interface components {
             input_cost_per_audio_per_second_above_128k_tokens?: number | null;
             /** Input Cost Per Audio Token */
             input_cost_per_audio_token?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens */
+            input_cost_per_audio_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Batches */
+            input_cost_per_audio_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Flex */
+            input_cost_per_audio_token_above_200k_tokens_flex?: number | null;
+            /** Input Cost Per Audio Token Above 200K Tokens Priority */
+            input_cost_per_audio_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Audio Token Batches */
             input_cost_per_audio_token_batches?: number | null;
             /** Input Cost Per Audio Token Flex */
@@ -50858,6 +52765,8 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Batches */
             input_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Flex */
+            input_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -50959,12 +52868,18 @@ export interface components {
             output_cost_per_image_1024?: number | null;
             /** Output Cost Per Image 1536 */
             output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 1K */
+            output_cost_per_image_1K?: number | null;
+            /** Output Cost Per Image 2K */
+            output_cost_per_image_2K?: number | null;
             /** Output Cost Per Image 512 */
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Priority */
+            output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -50999,6 +52914,8 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Batches */
             output_cost_per_token_above_200k_tokens_batches?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Flex */
+            output_cost_per_token_above_200k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -51071,11 +52988,17 @@ export interface components {
             search_context_cost_per_query?: {
                 [key: string]: unknown;
             } | null;
+            /** Search Queries Cost Per Query */
+            search_queries_cost_per_query?: number | components["schemas"]["SearchContextCostPerQuery"] | null;
             /** Stream Timeout */
             stream_timeout?: number | string | null;
             /** Stream Timeout By Service Tier */
             stream_timeout_by_service_tier?: {
                 [key: string]: number;
+            } | null;
+            /** Switchyard Router Config */
+            switchyard_router_config?: {
+                [key: string]: unknown;
             } | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
@@ -51083,6 +53006,8 @@ export interface components {
             tags?: string[] | null;
             /** Tenant Id */
             tenant_id?: string | null;
+            /** Thought Signature In Tool Call Id */
+            thought_signature_in_tool_call_id?: boolean | null;
             /** Tiered Pricing */
             tiered_pricing?: {
                 [key: string]: unknown;
@@ -51671,6 +53596,77 @@ export interface operations {
             };
         };
     };
+    invoke_agent_a2a_a2a__agent_id__message_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "stream-1",
+                 *       "jsonrpc": "2.0",
+                 *       "method": "message/stream",
+                 *       "params": {
+                 *         "message": {
+                 *           "kind": "message",
+                 *           "messageId": "message-1",
+                 *           "parts": [
+                 *             {
+                 *               "kind": "text",
+                 *               "text": "Hello"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | number | null;
+                    /**
+                     * Jsonrpc
+                     * @constant
+                     */
+                    jsonrpc: "2.0";
+                    /** Method */
+                    method: string;
+                    /** Params */
+                    params: {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_A2AJsonRpcResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_access_groups_access_group_list_get: {
         parameters: {
             query?: never;
@@ -52225,6 +54221,105 @@ export interface operations {
             };
         };
     };
+    get_deprecation_alert_state_alerting_model_deprecations_state_get: {
+        parameters: {
+            query: {
+                model: string;
+                deprecation_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_deprecation_alert_state_alerting_model_deprecations_state_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeprecationAlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationAlertState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deprecation_usage_tags_alerting_model_deprecations_tags_get: {
+        parameters: {
+            query: {
+                model: string;
+                api_keys: string[];
+                start_date: string;
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeprecationTagUsage"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     alerting_settings_alerting_settings_get: {
         parameters: {
             query?: never;
@@ -52494,7 +54589,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplyGuardrailResponse"];
+                    "application/json": components["schemas"]["ApplyGuardrailResponse"] | {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    } | components["schemas"]["JsonValue"][];
                 };
             };
             /** @description Validation Error */
@@ -52773,7 +54870,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -53908,7 +56006,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Unmodified Codex response or server-sent events */
+            /** @description Codex response, the model catalog with the key's LiteLLM models, or server-sent events */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -54960,6 +57058,39 @@ export interface operations {
             };
         };
     };
+    upload_plugin_claude_code_plugins_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_plugin_claude_code_plugins_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_plugin_claude_code_plugins__plugin_name__get: {
         parameters: {
             query?: never;
@@ -55057,6 +57188,38 @@ export interface operations {
             };
         };
     };
+    download_plugin_archive_claude_code_plugins__plugin_name__archive__digest__zip_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     disable_plugin_claude_code_plugins__plugin_name__disable_post: {
         parameters: {
             query?: never;
@@ -55075,6 +57238,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of download events */
+                limit?: number;
+                /** @description Previous next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDownloadsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -59449,6 +61648,144 @@ export interface operations {
             };
         };
     };
+    eu_jev_proxy_route_eu_jev_v1_systemone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "eu-jeff-latest",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "team": {
+                 *           "criteria": {
+                 *             "billing": "Payments, invoices, and refunds",
+                 *             "support": "Technical issues and bugs"
+                 *           },
+                 *           "instructions": "Which team should handle this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "I was charged twice. Can I get a refund?"
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description eu-jeff-latest follows the current release, eu-jeff-1.0.0 pins it
+                     * @default eu-jeff-latest
+                     */
+                    model?: string;
+                    /**
+                     * Questions
+                     * @description One to eight questions, keyed by names of up to 80 characters
+                     */
+                    questions: {
+                        [key: string]: {
+                            /**
+                             * Criteria
+                             * @description Two to 64 options, option name to description. A null description uses the option name
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description Free text, or a JSON object, array or null that eu/jev serializes to text before inference
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } | {
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what true and false mean
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description Free text, or a JSON object, array or null that eu/jev serializes to text before inference
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } | {
+                            /**
+                             * Criteria
+                             * @description Two to 10 level descriptions, ordered from low to high
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null)[];
+                            /**
+                             * Instructions
+                             * @description Free text, or a JSON object, array or null that eu/jev serializes to text before inference
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        };
+                    };
+                    /**
+                     * State
+                     * @description The content to evaluate, a string of up to 100,000 characters or a JSON object or array
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EuJevDecisionResponse"];
+                };
+            };
+        };
+    };
     extraction_extraction_post: {
         parameters: {
             query?: never;
@@ -60439,6 +62776,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_background_chat_settings_get_background_chat_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundChatSettingsResponse"];
                 };
             };
         };
@@ -61483,7 +63840,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApplyGuardrailResponse"];
+                    "application/json": components["schemas"]["ApplyGuardrailResponse"] | {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    } | components["schemas"]["JsonValue"][];
                 };
             };
             /** @description Validation Error */
@@ -66925,7 +69284,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_3: {
+    websocket_realtime_websocket_endpoint_get_5: {
         parameters: {
             query?: never;
             header?: never;
@@ -67129,7 +69488,16 @@ export interface operations {
     };
     get_response_openai_v1_responses__response_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry) */
+                stream?: boolean;
+                /** @description With stream=true, replay only the events after this sequence number */
+                starting_after?: number;
+                /** @description Additional output data to include, forwarded to the provider */
+                include?: string[];
+                /** @description With stream=true, whether delta events carry obfuscation padding */
+                include_obfuscation?: boolean;
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -67145,6 +69513,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -70281,7 +72650,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get: {
+    websocket_realtime_websocket_endpoint_get_3: {
         parameters: {
             query?: never;
             header?: never;
@@ -70355,6 +72724,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
+                };
+            };
+        };
+    };
+    websocket_realtime_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    proxy_realtime_calls_realtime_translations_calls_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description WebRTC SDP answer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    create_realtime_client_secret_realtime_translations_client_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "gpt-realtime-translate",
+                 *       "session": {
+                 *         "model": "gpt-realtime-translate",
+                 *         "type": "translation"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    expires_after?: {
+                        /**
+                         * Anchor
+                         * @default created_at
+                         */
+                        anchor?: string | null;
+                        /** Seconds */
+                        seconds?: number | null;
+                    } | null;
+                    /** Model */
+                    model?: string | null;
+                    session?: ({
+                        audio?: ({
+                            input?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Noise Reduction */
+                                noise_reduction?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                transcription?: ({
+                                    /** Delay */
+                                    delay?: string | null;
+                                    /** Keywords */
+                                    keywords?: string[] | null;
+                                    /** Language */
+                                    language?: string | null;
+                                    /** Languages */
+                                    languages?: string[] | null;
+                                    /** Model */
+                                    model?: string | null;
+                                    /** Prompt */
+                                    prompt?: string | null;
+                                } & {
+                                    [key: string]: unknown;
+                                }) | null;
+                                /** Turn Detection */
+                                turn_detection?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                            output?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Language */
+                                language?: string | null;
+                                /** Voice */
+                                voice?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        /** Include */
+                        include?: string[] | null;
+                        /** Instructions */
+                        instructions?: string | null;
+                        /** Max Output Tokens */
+                        max_output_tokens?: number | string | null;
+                        /** Model */
+                        model?: string | null;
+                        /** Output Modalities */
+                        output_modalities?: string[] | null;
+                        /** Prompt */
+                        prompt?: {
+                            [key: string]: unknown;
+                        } | null;
+                        /** Tool Choice */
+                        tool_choice?: unknown | null;
+                        /** Tools */
+                        tools?: {
+                            [key: string]: unknown;
+                        }[] | null;
+                        /** Tracing */
+                        tracing?: unknown | null;
+                        /** Truncation */
+                        truncation?: unknown | null;
+                        /** Type */
+                        type?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
                 };
             };
         };
@@ -70594,7 +73130,16 @@ export interface operations {
     };
     get_response_responses__response_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry) */
+                stream?: boolean;
+                /** @description With stream=true, replay only the events after this sequence number */
+                starting_after?: number;
+                /** @description Additional output data to include, forwarded to the provider */
+                include?: string[];
+                /** @description With stream=true, whether delta events carry obfuscation padding */
+                include_obfuscation?: boolean;
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -70610,6 +73155,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -71964,6 +74510,734 @@ export interface operations {
             };
         };
     };
+    list_skills_skill_hub_skills_get: {
+        parameters: {
+            query?: {
+                query?: string;
+                offset?: number;
+                limit?: number;
+                tag?: string;
+                security_scan_passed?: boolean | null;
+                sort_by?: "name" | "download_count" | "updated_at" | "created_at" | "created_by" | "published_by" | "approved_by" | "security_scan_passed";
+                sort_order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_skill_skill_hub_skills_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportSkillRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_skill_skill_hub_skills_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_skill_skill_hub_skills_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_skill_hub_skills__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_skill_metadata_skill_hub_skills__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillHubMetadata"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_skill_skill_hub_skills__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_skill_skill_hub_skills__name__archive_get: {
+        parameters: {
+            query?: {
+                digest?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skill_content_skill_hub_skills__name__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/markdown": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_skill_skill_hub_skills__name__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubPublication"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpublish_skill_skill_hub_skills__name__unpublish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubPublication"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_skill_archive_skill_hub_skills__name__upload_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_replace_skill_archive_skill_hub_skills__name__upload_put"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSkill"] | components["schemas"]["SkillHubPendingSkill"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skill_versions_skill_hub_skills__name__versions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubVersions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_version_skill_hub_skills__name__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_skill_version_skill_hub_skills__name__versions__version_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get: {
+        parameters: {
+            query?: {
+                /** @description Maximum number of download events */
+                limit?: number;
+                /** @description Previous next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginDownloadsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_submissions_skill_hub_submissions_get: {
+        parameters: {
+            query?: {
+                status?: ("pending_review" | "approved" | "rejected") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmissionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_skill_hub_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_submission_skill_hub_submissions__submission_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_submission_skill_hub_submissions__submission_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_submission_skill_hub_submissions__submission_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillHubRejection"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillHubReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_scan_skill_hub_submissions__submission_id__scan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillScanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_skill_scan_skill_hub_submissions__submission_id__scan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SkillScanRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillScanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     calculate_spend_spend_calculate_post: {
         parameters: {
             query?: never;
@@ -72716,6 +75990,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    delete_subscription_account_subscription_accounts_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteSubscriptionAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    new_subscription_account_subscription_accounts_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionAccountFeeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_subscription_account_subscription_accounts_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSubscriptionAccountFeeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_subscription_usage_subscription_accounts_usage_get: {
+        parameters: {
+            query: {
+                /** @description First day of the Usage page filter, YYYY-MM-DD */
+                start_date: string;
+                /** @description Last day of the Usage page filter, YYYY-MM-DD */
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -75610,6 +79017,39 @@ export interface operations {
             };
         };
     };
+    update_background_chat_settings_update_background_chat_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BackgroundChatSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundChatSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_default_team_settings_update_default_team_settings_patch: {
         parameters: {
             query?: never;
@@ -76029,7 +79469,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76078,7 +79518,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76123,7 +79563,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76169,7 +79609,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76216,7 +79656,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76262,7 +79702,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76308,7 +79748,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76354,7 +79794,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Filter by specific model */
                 model?: string | null;
-                /** @description Filter by specific API key */
+                /** @description Filter by reporting API key ID. Missing keys are reported as unattributed. For a literal key unattributed or a key starting with raw:, add an extra raw: prefix */
                 api_key?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
@@ -76473,6 +79913,12 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
+                /** @description Include the caller's current admin MCP route permissions */
+                admin_mcp?: boolean;
+                /** @description Admin MCP tool to authorize for this caller */
+                mcp_tool?: string | null;
+                /** @description URL-encoded concrete management path used by the MCP tool, before query-string encoding */
+                mcp_path?: string | null;
             };
             header?: never;
             path?: never;
@@ -76941,6 +80387,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    invoke_agent_a2a_v1_a2a__agent_id__message_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "id": "stream-1",
+                 *       "jsonrpc": "2.0",
+                 *       "method": "message/stream",
+                 *       "params": {
+                 *         "message": {
+                 *           "kind": "message",
+                 *           "messageId": "message-1",
+                 *           "parts": [
+                 *             {
+                 *               "kind": "text",
+                 *               "text": "Hello"
+                 *             }
+                 *           ],
+                 *           "role": "user"
+                 *         }
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Id */
+                    id?: string | number | null;
+                    /**
+                     * Jsonrpc
+                     * @constant
+                     */
+                    jsonrpc: "2.0";
+                    /** Method */
+                    method: string;
+                    /** Params */
+                    params: {
+                        [key: string]: unknown;
+                    };
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_A2AJsonRpcResponse"];
                 };
             };
             /** @description Validation Error */
@@ -77559,7 +81076,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TranscriptionResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -81155,7 +84673,7 @@ export interface operations {
             };
         };
     };
-    websocket_realtime_websocket_endpoint_get_2: {
+    websocket_realtime_websocket_endpoint_get_4: {
         parameters: {
             query?: never;
             header?: never;
@@ -81229,6 +84747,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeTranscriptionSessionResponse"];
+                };
+            };
+        };
+    };
+    websocket_realtime_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    proxy_realtime_calls_v1_realtime_translations_calls_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/sdp": string;
+            };
+        };
+        responses: {
+            /** @description WebRTC SDP answer */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    create_realtime_client_secret_v1_realtime_translations_client_secrets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "gpt-realtime-translate",
+                 *       "session": {
+                 *         "model": "gpt-realtime-translate",
+                 *         "type": "translation"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    expires_after?: {
+                        /**
+                         * Anchor
+                         * @default created_at
+                         */
+                        anchor?: string | null;
+                        /** Seconds */
+                        seconds?: number | null;
+                    } | null;
+                    /** Model */
+                    model?: string | null;
+                    session?: ({
+                        audio?: ({
+                            input?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Noise Reduction */
+                                noise_reduction?: {
+                                    [key: string]: unknown;
+                                } | null;
+                                transcription?: ({
+                                    /** Delay */
+                                    delay?: string | null;
+                                    /** Keywords */
+                                    keywords?: string[] | null;
+                                    /** Language */
+                                    language?: string | null;
+                                    /** Languages */
+                                    languages?: string[] | null;
+                                    /** Model */
+                                    model?: string | null;
+                                    /** Prompt */
+                                    prompt?: string | null;
+                                } & {
+                                    [key: string]: unknown;
+                                }) | null;
+                                /** Turn Detection */
+                                turn_detection?: {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                            output?: ({
+                                /** Format */
+                                format?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                                /** Language */
+                                language?: string | null;
+                                /** Voice */
+                                voice?: string | {
+                                    [key: string]: unknown;
+                                } | null;
+                            } & {
+                                [key: string]: unknown;
+                            }) | null;
+                        } & {
+                            [key: string]: unknown;
+                        }) | null;
+                        /** Include */
+                        include?: string[] | null;
+                        /** Instructions */
+                        instructions?: string | null;
+                        /** Max Output Tokens */
+                        max_output_tokens?: number | string | null;
+                        /** Model */
+                        model?: string | null;
+                        /** Output Modalities */
+                        output_modalities?: string[] | null;
+                        /** Prompt */
+                        prompt?: {
+                            [key: string]: unknown;
+                        } | null;
+                        /** Tool Choice */
+                        tool_choice?: unknown | null;
+                        /** Tools */
+                        tools?: {
+                            [key: string]: unknown;
+                        }[] | null;
+                        /** Tracing */
+                        tracing?: unknown | null;
+                        /** Truncation */
+                        truncation?: unknown | null;
+                        /** Type */
+                        type?: string | null;
+                    } & {
+                        [key: string]: unknown;
+                    }) | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeClientSecretResponse"];
                 };
             };
         };
@@ -81397,7 +85082,16 @@ export interface operations {
     };
     get_response_v1_responses__response_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Replay the response's events as server-sent events (OpenAI, Azure, and Azure AI Foundry) */
+                stream?: boolean;
+                /** @description With stream=true, replay only the events after this sequence number */
+                starting_after?: number;
+                /** @description Additional output data to include, forwarded to the provider */
+                include?: string[];
+                /** @description With stream=true, whether delta events carry obfuscation padding */
+                include_obfuscation?: boolean;
+            };
             header?: never;
             path: {
                 response_id: string;
@@ -81413,6 +85107,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */

@@ -5,9 +5,15 @@ Every azure_ai route must authenticate with an Entra ID token when no API key is
 instead of requiring an API key.
 """
 
+import json
+import queue
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.azure_ai.common_utils import (
@@ -16,6 +22,8 @@ from litellm.llms.azure_ai.common_utils import (
     has_azure_entra_params,
     resolve_azure_ai_agent_auth_header,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 ENTRA_PARAMS = {"azure_ad_token": "entra-token"}
 
@@ -246,6 +254,57 @@ def test_agent_entra_values_resolve_os_environ_references(monkeypatch):
     assert get_azure_ai_agent_entra_token({"azure_ad_token": "os.environ/FOUNDRY_AGENT_AD_TOKEN"}) == "token-from-env"
 
 
+_AGENT_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_AGENT_CREDENTIALS: Final = {
+    "service_principal": (
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id",
+        {"tenant_id": "tenant", "client_id": _AGENT_APP_CLIENT_ID, "client_secret": "wrong-secret"},
+    ),
+    "username_password": (
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
+        {"client_id": _AGENT_APP_CLIENT_ID, "azure_username": "agent@example.com", "azure_password": "wrong"},
+    ),
+}
+
+
+def _raising(error: Exception):
+    def token() -> str:
+        raise error
+
+    return token
+
+
+@pytest.mark.parametrize(("token_fetch", "agent_params"), _AGENT_CREDENTIALS.values(), ids=_AGENT_CREDENTIALS.keys())
+def test_agent_entra_rejection_raises_401_with_only_the_aadsts_reason(token_fetch, agent_params):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    rejection: Final = ClientAuthenticationError(
+        message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being sent "
+        f"in the request is the client secret value, for a secret added to app '{_AGENT_APP_CLIENT_ID}'."
+    )
+
+    with patch(token_fetch, return_value=_raising(rejection)):  # test-quality-ok: stands in for the Entra token endpoint answering a wrong credential, the shape azure-identity raises
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            get_azure_ai_agent_entra_token(agent_params)
+
+    assert excinfo.value.status_code == 401
+    assert "AADSTS7000215" in str(excinfo.value)
+    assert _AGENT_APP_CLIENT_ID not in str(excinfo.value)
+
+
+def test_agent_entra_endpoint_unreachable_is_not_an_auth_error():
+    from azure.core.exceptions import ClientAuthenticationError
+
+    unreachable: Final = ClientAuthenticationError(message="Authentication failed: Connection refused")
+    token_fetch, agent_params = _AGENT_CREDENTIALS["service_principal"]
+
+    with patch(token_fetch, return_value=_raising(unreachable)):  # test-quality-ok: stands in for an unreachable Entra token endpoint, the shape azure-identity raises
+        with pytest.raises(ClientAuthenticationError) as excinfo:
+            get_azure_ai_agent_entra_token(agent_params)
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+
+
 def test_agent_entra_token_failure_names_the_credential_fields():
     with pytest.raises(ValueError, match="client_secret"):
         get_azure_ai_agent_entra_token({"azure_scope": "https://ai.azure.com/.default"})
@@ -290,3 +349,159 @@ async def test_agent_auth_header_is_the_entra_bearer():
     headers = await resolve_azure_ai_agent_auth_header({"azure_ad_token": "entra-token"})
 
     assert headers == {"Authorization": "Bearer entra-token"}
+
+
+OPENAI_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-6.1-sol",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+OPENAI_EMBEDDING: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+    "model": "cohere-embed-v3-english",
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
+ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_test",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [{"type": "text", "text": "OK"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+class _PreCallOptionalParamsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.optional_params: tuple[dict[str, object], ...] = ()
+
+    def log_pre_api_call(self, model: str, messages: list[object], kwargs: dict[str, dict[str, object]]) -> None:
+        self.optional_params = (*self.optional_params, kwargs["optional_params"])
+
+
+@pytest.mark.parametrize(
+    ("model", "provider_response"),
+    [
+        pytest.param("azure_ai/gpt-6.1-sol", OPENAI_CHAT_COMPLETION, id="openai-shaped"),
+        pytest.param("azure_ai/claude-sonnet-5-5", ANTHROPIC_MESSAGE, id="claude"),
+    ],
+)
+def test_completion_sends_the_entra_token_only_as_the_bearer_header(
+    model: str, provider_response: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    capture: Final = _PreCallOptionalParamsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    sent: Final[queue.Queue[httpx.Request]] = queue.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.put_nowait(request)
+        return httpx.Response(200, json=provider_response)
+
+    response: Final = litellm.completion(
+        model=model,
+        api_base="https://example-resource.services.ai.azure.com",
+        azure_ad_token="entra-token",
+        messages=[{"role": "user", "content": "hi"}],
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    request: Final = sent.get_nowait()
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert "azure_ad_token" not in json.loads(request.content)
+    assert response.choices[0].message.content == "OK"
+    assert capture.optional_params
+    assert "entra-token" not in json.dumps(capture.optional_params, default=str)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_embedding_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=OPENAI_EMBEDDING)
+    )
+
+    litellm.embedding(
+        model="azure_ai/cohere-embed-v3-english",
+        api_base="https://example-resource.services.ai.azure.com",
+        azure_ad_token="entra-token",
+        input=["hello"],
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert "azure_ad_token" not in json.loads(request.content)
+
+
+IMAGE_RESPONSE: Final = {"created": 1, "data": [{"b64_json": "aGk="}]}
+PNG_BYTES: Final = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [{}, {"extra_body": {"azure_ad_token": "entra-token", "client_secret": "entra-token"}}],
+    ids=["kwarg", "extra_body"],
+)
+def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(
+    respx_mock: respx.MockRouter, extra_kwargs: dict[str, dict[str, str]]
+):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=IMAGE_RESPONSE)
+    )
+
+    litellm.image_edit(
+        model="azure_ai/FLUX.1-Kontext-pro",
+        api_base="https://example-resource.services.ai.azure.com",
+        api_version="2025-04-01-preview",
+        azure_ad_token="entra-token",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        **extra_kwargs,
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert b"entra-token" not in request.content
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_image_generation_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json=IMAGE_RESPONSE)
+    )
+
+    litellm.image_generation(
+        model="azure_ai/FLUX-1.1-pro",
+        api_base="https://example-resource.services.ai.azure.com",
+        azure_ad_token="entra-token",
+        prompt="a red circle",
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert "azure_ad_token" not in json.loads(request.content)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_transcription_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
+        return_value=httpx.Response(200, json={"text": "hi"})
+    )
+
+    litellm.transcription(
+        model="azure_ai/whisper",
+        api_base="https://example-resource.services.ai.azure.com",
+        api_version="2024-06-01",
+        azure_ad_token="entra-token",
+        file=("hello.wav", b"RIFF" + b"\x00" * 32),
+    )
+
+    request: Final = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-token"
+    assert b"entra-token" not in request.content
