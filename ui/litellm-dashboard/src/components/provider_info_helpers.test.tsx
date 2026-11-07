@@ -97,7 +97,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return empty logo and dash display name when providerValue is undefined", () => {
-      const result = getProviderLogoAndName(undefined as any);
+      const result = getProviderLogoAndName(undefined as unknown as string);
       expect(result).toEqual({ logo: "", displayName: "-" });
     });
 
@@ -447,7 +447,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
-      expect(getPlaceholder("UnknownProvider" as any)).toBe("gpt-3.5-turbo");
+      expect(getPlaceholder("UnknownProvider")).toBe("gpt-3.5-turbo");
     });
 
     it("should return default gpt-3.5-turbo placeholder for OpenAI provider", () => {
@@ -492,17 +492,22 @@ describe("provider_info_helpers", () => {
   describe("getProviderModels", () => {
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
-      const result = getProviderModels(undefined as any, modelMap);
+      const result = getProviderModels(undefined as unknown as string, modelMap);
       expect(result).toEqual([]);
     });
 
     it("should return empty array when modelMap is not an object type", () => {
-      const result = getProviderModels(Providers.OpenAI, "not-an-object" as any);
+      const result = getProviderModels(Providers.OpenAI, "not-an-object");
       expect(result).toEqual([]);
     });
 
     it("should return empty array when modelMap is undefined", () => {
-      const result = getProviderModels(Providers.OpenAI, undefined as any);
+      const result = getProviderModels(Providers.OpenAI, undefined);
+      expect(result).toEqual([]);
+    });
+
+    it("should return empty array when modelMap is null", () => {
+      const result = getProviderModels(Providers.OpenAI, null);
       expect(result).toEqual([]);
     });
 

@@ -542,58 +542,39 @@ export const getPlaceholder = (selectedProvider: string): string => {
   return providerPlaceholderMap[resolvedProvider] ?? "gpt-3.5-turbo";
 };
 
-export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
-  let providerKey = provider;
-  let custom_llm_provider = providerKey ? resolveLitellmProviderSlug(providerKey) : undefined;
+const chatVariantSlugs: Partial<Record<string, string>> = {
+  [Providers.Cohere]: "cohere_chat",
+  [Providers.SageMaker]: "sagemaker_chat",
+};
 
-  let providerModels: Array<string> = [];
+const litellmProviderOf = (modelInfo: unknown): unknown =>
+  modelInfo !== null && typeof modelInfo === "object" && "litellm_provider" in modelInfo
+    ? modelInfo.litellm_provider
+    : undefined;
 
-  if (providerKey && typeof modelMap === "object") {
-    Object.entries(modelMap).forEach(([key, value]) => {
-      if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
-        const litellmProvider = (value as any)["litellm_provider"];
-        const isPrefixVariant =
-          typeof litellmProvider === "string" &&
-          (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
-            litellmProvider.startsWith(`${custom_llm_provider}-`));
-        if (
-          litellmProvider === custom_llm_provider ||
-          (isPrefixVariant && !standaloneSubproviderSlugs.has(litellmProvider))
-        ) {
-          providerModels.push(key);
-        }
-      }
-    });
-    // Special case for cohere
-    // we need both cohere_chat and cohere models to show on dropdown
-    if (providerKey == Providers.Cohere) {
-      Object.entries(modelMap).forEach(([key, value]) => {
-        if (
-          value !== null &&
-          typeof value === "object" &&
-          "litellm_provider" in (value as object) &&
-          (value as any)["litellm_provider"] === "cohere_chat"
-        ) {
-          providerModels.push(key);
-        }
-      });
-    }
-
-    // Special case for sagemaker
-    // we need both sagemaker and sagemaker_chat models to show on dropdown
-    if (providerKey == Providers.SageMaker) {
-      Object.entries(modelMap).forEach(([key, value]) => {
-        if (
-          value !== null &&
-          typeof value === "object" &&
-          "litellm_provider" in (value as object) &&
-          (value as any)["litellm_provider"] === "sagemaker_chat"
-        ) {
-          providerModels.push(key);
-        }
-      });
-    }
+export const getProviderModels = (provider: string, modelMap: unknown): Array<string> => {
+  if (!provider || modelMap === null || typeof modelMap !== "object") {
+    return [];
   }
 
-  return providerModels;
+  const slug = resolveLitellmProviderSlug(provider);
+  const chatVariantSlug = chatVariantSlugs[provider];
+  const modelProviders = Object.entries(modelMap).map(([key, value]) => [key, litellmProviderOf(value)] as const);
+
+  const belongsToProvider = (litellmProvider: unknown): boolean => {
+    if (litellmProvider === slug) {
+      return true;
+    }
+    const isPrefixVariant =
+      typeof litellmProvider === "string" &&
+      (litellmProvider.startsWith(`${slug}_`) || litellmProvider.startsWith(`${slug}-`));
+    return isPrefixVariant && !standaloneSubproviderSlugs.has(litellmProvider);
+  };
+
+  return [
+    ...modelProviders.filter(([, litellmProvider]) => belongsToProvider(litellmProvider)).map(([key]) => key),
+    ...modelProviders
+      .filter(([, litellmProvider]) => chatVariantSlug !== undefined && litellmProvider === chatVariantSlug)
+      .map(([key]) => key),
+  ];
 };
