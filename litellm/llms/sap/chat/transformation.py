@@ -4,7 +4,6 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -26,7 +25,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import get_token_creator
+from ..deployment import fetch_deployment_url, resolve_deployment_url
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -43,6 +43,8 @@ from .models import (
     SAPToolChatMessage,
     SAPUserMessage,
 )
+
+_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR: Final = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -182,25 +184,20 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
-    @cached_property
+    @property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments: Final[AICoreDeploymentList] = client.get(
-            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-        ).json()
-        valid: Final[list[tuple[str, str]]] = []
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg: AICoreConfiguration = client.get(
-                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        return resolve_deployment_url(
+            self.base_url,
+            self.resource_group,
+            _AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR,
+            self._fetch_deployment_url,
+        )
+
+    def _fetch_deployment_url(self) -> str:
+        return fetch_deployment_url(
+            self.base_url,
+            self.headers,
+        )
 
     @classmethod
     def get_config(cls):
@@ -267,8 +264,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
-        return api_base_
+        # Per-request override wins; deployment_url handles env var + discovery.
+        base: Final = optional_params.get("deployment_url") or self.deployment_url
+        return join_api_base(base, "v2/completion")
 
     def _build_prompt_module(
         self,
