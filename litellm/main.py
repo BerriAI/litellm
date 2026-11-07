@@ -6244,7 +6244,7 @@ def completion(
 
 
 def _is_not_resent_failure(error: BaseException) -> bool:
-    return not (isinstance(error, Exception) and is_resent_failure(error))
+    return isinstance(error, Exception) and not is_resent_failure(error)
 
 
 def completion_with_retries(*args, **kwargs):

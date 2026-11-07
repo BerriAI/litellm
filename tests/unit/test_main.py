@@ -7936,6 +7936,17 @@ async def test_responses_with_retries(sync_mode):
         assert mock_responses.call_args.kwargs["max_retries"] == 0
 
 
+@pytest.mark.parametrize("retry_function", [acompletion_with_retries, aresponses_with_retries])
+@pytest.mark.asyncio
+async def test_async_retry_helpers_stop_when_the_call_is_cancelled(retry_function):
+    upstream: Final = AsyncMock(side_effect=[asyncio.CancelledError(), MagicMock()])
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry_function(model="gpt-4o", num_retries=3, original_function=upstream)
+
+    assert upstream.await_count == 1
+
+
 def test_azure_embedding_exceptions():
     with pytest.raises(Exception, match="Mock error") as exc_info:
         litellm.embedding(
