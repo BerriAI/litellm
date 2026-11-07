@@ -6,12 +6,16 @@ import hashlib
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageRequest, SendStreamingMessageRequest
+
+_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 
 
 class _SupportsModelDump(Protocol):
@@ -34,6 +38,9 @@ class A2ARequestUtils:
         """
         if message is None:
             return ""
+        # a2a-sdk Part RootModels keep kind/text on part.root, so read pydantic messages as dicts
+        if has_attributes(message, _SupportsModelDump, "model_dump"):
+            return A2ARequestUtils.extract_text_from_message(message.model_dump(mode="json"))
 
         # Handle both dict and object access
         if isinstance(message, dict):
@@ -63,8 +70,8 @@ class A2ARequestUtils:
         Returns:
             Text from response message parts
         """
-        result: Final = response_dict.get("result", {})
-        if not isinstance(result, dict):
+        result: Final = as_str_mapping(response_dict.get("result"))
+        if result is None:
             return ""
 
         # Direct message format (A2A spec): detect by explicit kind tag only.
@@ -72,9 +79,35 @@ class A2ARequestUtils:
         # type that happens to include a "parts" field.
         if result.get("kind") == "message":
             return A2ARequestUtils.extract_text_from_message(result)
+        if result.get("kind") == "task":
+            return A2ARequestUtils.extract_text_from_task(result)
 
         message: Final = result.get("message", {})
         return A2ARequestUtils.extract_text_from_message(message)
+
+    @staticmethod
+    def extract_text_from_task(task: Mapping[str, object]) -> str:
+        artifacts: Final = task.get("artifacts")
+        artifact_items: Final = _OBJECT_ITEMS.validate_python(artifacts) if isinstance(artifacts, list) else ()
+        artifact_texts: Final = tuple(
+            A2ARequestUtils.extract_text_from_message(artifact) for artifact in artifact_items
+        )
+        if any(artifact_texts):
+            return " ".join(text for text in artifact_texts if text)
+        status: Final = as_str_mapping(task.get("status"))
+        return A2ARequestUtils.extract_text_from_message(status.get("message")) if status is not None else ""
+
+    @staticmethod
+    def extract_text_from_stream_event(event: Mapping[str, object]) -> str:
+        result: Final = as_str_mapping(event.get("result"))
+        if result is None:
+            return ""
+        if result.get("kind") == "artifact-update":
+            return A2ARequestUtils.extract_text_from_message(result.get("artifact"))
+        if result.get("kind") == "status-update":
+            status: Final = as_str_mapping(result.get("status"))
+            return A2ARequestUtils.extract_text_from_message(status.get("message")) if status is not None else ""
+        return A2ARequestUtils.extract_text_from_response(event)
 
     @staticmethod
     def get_input_message_from_request(
@@ -128,17 +161,8 @@ class A2ARequestUtils:
         Returns:
             Tuple of (prompt_tokens, completion_tokens, total_tokens)
         """
-        # Count input tokens. Dump the message to a dict first so extraction hits
-        # the dict branch — request-side parts are a2a-sdk Part RootModels whose
-        # kind/text live on part.root, which the object branch cannot read. This
-        # mirrors how the response side already works (it operates on model_dump).
         input_message: Final = A2ARequestUtils.get_input_message_from_request(request)
-        input_text: Final = A2ARequestUtils.extract_text_from_message(
-            input_message.model_dump(mode="json")
-            if has_attributes(input_message, _SupportsModelDump, "model_dump")
-            else input_message
-        )
-        prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
+        prompt_tokens: Final = A2ARequestUtils.count_tokens(A2ARequestUtils.extract_text_from_message(input_message))
 
         # Count output tokens
         output_text: Final = A2ARequestUtils.extract_text_from_response(response_dict)

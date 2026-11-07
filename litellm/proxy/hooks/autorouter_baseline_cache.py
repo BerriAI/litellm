@@ -150,7 +150,7 @@ class AutoRouterBaselineCache(CustomLogger):
             if not isinstance(session, str) or not session or len(session) > 256:
                 return
             router: Final = self.router()
-            deployment: Final = router.get_deployment(request.route.baseline_deployment_id) if router else None
+            deployment: Final = router.registry().deployment(request.route.baseline_deployment_id) if router else None
             if deployment is None:
                 return
             target: Final = resolve_baseline_prediction_target(deployment.litellm_params)

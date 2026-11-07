@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
 import { ChevronDown, ChevronRight, Database, Send } from "lucide-react";
 import { vectorStoreSearchCall } from "@/components/networking";
@@ -34,6 +35,7 @@ interface VectorStoreTesterProps {
 }
 
 export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStoreId, accessToken, className = "" }) => {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [searchHistory, setSearchHistory] = useState<
@@ -48,7 +50,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
 
   const handleSearch = async () => {
     if (!query.trim()) {
-      toast.warning("Please enter a search query");
+      toast.warning(t("vectorStores.tester.toasts.emptyQuery"));
       return;
     }
 
@@ -90,7 +92,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
   const clearHistory = () => {
     setSearchHistory([]);
     setExpandedResults({});
-    toast.success("Search history cleared");
+    toast.success(t("vectorStores.tester.toasts.historyCleared"));
   };
 
   const toggleResultExpansion = (historyIndex: number, resultIndex: number) => {
@@ -108,11 +110,11 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
         <div className="flex items-center justify-between border-b p-4">
           <div className="flex items-center">
             <Database className="mr-2 size-4 text-primary" />
-            <h4 className="text-base font-medium text-foreground">Test Vector Store</h4>
+            <h4 className="text-base font-medium text-foreground">{t("vectorStores.tester.title")}</h4>
           </div>
           {searchHistory.length > 0 && (
             <Button variant="outline" size="sm" onClick={clearHistory}>
-              Clear History
+              {t("vectorStores.tester.clearHistory")}
             </Button>
           )}
         </div>
@@ -122,7 +124,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
           {searchHistory.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
               <Database className="mb-4 size-12" />
-              <p className="text-sm">Test your vector store by entering a search query below</p>
+              <p className="text-sm">{t("vectorStores.tester.emptyHint")}</p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -132,7 +134,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                   <div className="text-right">
                     <div className="inline-block max-w-[80%] rounded-lg bg-muted p-3 shadow-xs ring-1 ring-foreground/10">
                       <div className="mb-1 flex items-center gap-2">
-                        <strong className="text-sm">Query</strong>
+                        <strong className="text-sm">{t("vectorStores.tester.query")}</strong>
                         <span className="text-xs text-muted-foreground">{formatTimestamp(entry.timestamp)}</span>
                       </div>
                       <div className="text-left">{entry.query}</div>
@@ -144,10 +146,10 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                     <div className="inline-block max-w-[80%] rounded-lg bg-card p-3 shadow-xs ring-1 ring-foreground/10">
                       <div className="mb-2 flex items-center gap-2">
                         <Database className="size-4 text-primary" />
-                        <strong className="text-sm">Vector Store Results</strong>
+                        <strong className="text-sm">{t("vectorStores.tester.results")}</strong>
                         {entry.response && (
                           <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                            {entry.response.data?.length || 0} results
+                            {t("vectorStores.tester.resultCount", { count: entry.response.data?.length || 0 })}
                           </span>
                         )}
                       </div>
@@ -170,7 +172,9 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                     ) : (
                                       <ChevronRight className="mr-2 size-4 text-muted-foreground" />
                                     )}
-                                    <span className="text-sm font-medium">Result {resultIndex + 1}</span>
+                                    <span className="text-sm font-medium">
+                                      {t("vectorStores.tester.result", { number: resultIndex + 1 })}
+                                    </span>
                                     {/* Show preview of content when collapsed */}
                                     {!isExpanded && result.content && result.content[0] && (
                                       <span className="ml-2 max-w-md truncate text-xs text-muted-foreground">
@@ -179,7 +183,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                     )}
                                   </div>
                                   <span className="rounded-sm bg-muted px-2 py-1 text-xs text-foreground">
-                                    Score: {result.score.toFixed(4)}
+                                    {t("vectorStores.tester.score", { score: result.score.toFixed(4) })}
                                   </span>
                                 </div>
 
@@ -191,7 +195,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                       result.content.map((content, contentIndex) => (
                                         <div key={contentIndex} className="mb-3">
                                           <div className="mb-1 text-xs text-muted-foreground">
-                                            Content ({content.type})
+                                            {t("vectorStores.tester.content", { type: content.type })}
                                           </div>
                                           <div className="max-h-40 overflow-y-auto rounded-sm border bg-muted/50 p-3 text-sm text-foreground">
                                             {content.text}
@@ -202,21 +206,27 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                     {/* Metadata */}
                                     {(result.file_id || result.filename || result.attributes) && (
                                       <div className="mt-3 border-t pt-3">
-                                        <div className="mb-2 text-xs font-medium text-muted-foreground">Metadata</div>
+                                        <div className="mb-2 text-xs font-medium text-muted-foreground">
+                                          {t("vectorStores.tester.metadata")}
+                                        </div>
                                         <div className="space-y-2 text-xs">
                                           {result.file_id && (
                                             <div className="rounded-sm bg-muted/50 p-2">
-                                              <span className="font-medium">File ID:</span> {result.file_id}
+                                              <span className="font-medium">{t("vectorStores.tester.fileId")}</span>{" "}
+                                              {result.file_id}
                                             </div>
                                           )}
                                           {result.filename && (
                                             <div className="rounded-sm bg-muted/50 p-2">
-                                              <span className="font-medium">Filename:</span> {result.filename}
+                                              <span className="font-medium">{t("vectorStores.tester.filename")}</span>{" "}
+                                              {result.filename}
                                             </div>
                                           )}
                                           {result.attributes && Object.keys(result.attributes).length > 0 && (
                                             <div className="rounded-sm bg-muted/50 p-2">
-                                              <span className="mb-1 block font-medium">Attributes:</span>
+                                              <span className="mb-1 block font-medium">
+                                                {t("vectorStores.tester.attributes")}
+                                              </span>
                                               <pre className="overflow-x-auto rounded-sm border bg-card p-2 text-xs">
                                                 {JSON.stringify(result.attributes, null, 2)}
                                               </pre>
@@ -237,7 +247,9 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                             entry.error ? "text-sm break-words text-destructive" : "text-sm text-muted-foreground"
                           }
                         >
-                          {entry.error ? `Search failed: ${entry.error}` : "No results found"}
+                          {entry.error
+                            ? t("vectorStores.tester.searchFailed", { error: entry.error })
+                            : t("vectorStores.tester.noResults")}
                         </div>
                       )}
                     </div>
@@ -264,7 +276,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Enter your search query... (Shift+Enter for new line)"
+                placeholder={t("vectorStores.tester.placeholder")}
                 disabled={isLoading}
                 rows={1}
                 className="field-sizing-fixed max-h-24 min-h-9 resize-none"
@@ -272,7 +284,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
             </div>
             <Button onClick={handleSearch} disabled={isLoading || !query.trim()}>
               {isLoading ? <UiLoadingSpinner className="size-4" /> : <Send className="size-4" />}
-              Search
+              {t("vectorStores.tester.search")}
             </Button>
           </div>
         </div>

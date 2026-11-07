@@ -42,6 +42,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_VERSION: litellm-ci-v1
+  SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   db-queries:
@@ -86,6 +91,11 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a
+        with:
+          version: "v0.18.0"
 
       - name: Install Python dependencies
         working-directory: .

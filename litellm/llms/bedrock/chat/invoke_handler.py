@@ -11,12 +11,14 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
-from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    native_redacted_thinking_data,
+)
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -48,6 +50,7 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 from ..common_utils import (
     BedrockError,
     BedrockEventStreamResponseDict,
+    bedrock_event_chunk_text,
     bedrock_event_stream_header,
     bedrock_event_stream_response,
     bedrock_stream_event_error_status,
@@ -57,6 +60,7 @@ from ..common_utils import (
     get_bedrock_response_stream_shape,
     get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
+    parse_bedrock_event_stream,
 )
 
 bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_memory=50, default_ttl=600)
@@ -920,7 +924,7 @@ class AWSEventStreamDecoder:
         response_stream_shape: "Shape",
         request_id_headers: httpx.Headers | None = None,
     ) -> str | None:
-        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final = parse_bedrock_event_stream(self.parser, response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape, headers=request_id_headers)
@@ -930,11 +934,12 @@ class AWSEventStreamDecoder:
             raise build_bedrock_stream_event_error(
                 event_type, event_error_status, response_dict["body"], headers=request_id_headers
             )
-        if "chunk" in parsed_response:
-            chunk = parsed_response.get("chunk")
-            if not chunk:
+        parsed_fields: Final = decoded_json_object(parsed_response)
+        if "chunk" in parsed_fields:
+            event_chunk: Final = parsed_fields.get("chunk")
+            if not event_chunk:
                 return None
-            return chunk.get("bytes").decode()
+            return bedrock_event_chunk_text(event_chunk)
         else:
             chunk = response_dict.get("body")
             if not chunk:
