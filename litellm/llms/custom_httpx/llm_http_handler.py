@@ -48,6 +48,7 @@ from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAG
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import (
+    called_tool_names,
     every_claimed_tool_call,
     finalize_refused_responses_turn,
     is_refused_item,
@@ -64,7 +65,9 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
+    holds_a_call_the_choice_excludes,
     run_chat_completion_agentic_hooks,
+    with_caller_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
@@ -160,6 +163,7 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+    AgenticLoopToolChoiceError,
     converted_stream_requested,
     is_interception_internal_key,
 )
@@ -6402,7 +6406,13 @@ class BaseLLMHTTPHandler:
         tools: Final = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
-        hook_kwargs: Final = {**kwargs, "_agentic_loop_api_surface": api_surface}
+        hook_kwargs: Final = {
+            **with_caller_tool_choice(
+                _OPTIONAL_PARAMS.validate_python(kwargs),
+                _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params),
+            ),
+            "_agentic_loop_api_surface": api_surface,
+        }
 
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
@@ -6441,6 +6451,10 @@ class BaseLLMHTTPHandler:
             # Safety guards must run OUTSIDE the callback try/except — they are
             # bounded-loop / cycle-break rails, not callback bugs.
             try:
+                if holds_a_call_the_choice_excludes(
+                    called_tool_names(response), hook_kwargs, (cb for cb in callbacks if isinstance(cb, CustomLogger))
+                ):
+                    raise AgenticLoopToolChoiceError(model)
                 fingerprint = self._check_agentic_loop_safety(
                     tool_calls=tool_calls,
                     fingerprints=fingerprints,

@@ -557,15 +557,21 @@ _ALLOWED_TOOLS_TOOL_CHOICE: Final = {
     "type": "allowed_tools",
     "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
 }
+_RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE: Final = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [{"type": "function", "name": "get_time"}],
+}
 _TWO_TOOLS: Final = [
     {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
 ]
 
 
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
 def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
-    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str, tool_choice: dict[str, object]
 ):
     mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
         return_value=httpx.Response(status_code=200, json=openai_api_response)
@@ -575,7 +581,7 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
         model=model,
         messages=[{"role": "user", "content": "What time is it?"}],
         tools=_TWO_TOOLS,
-        tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+        tool_choice=tool_choice,
         api_base="http://localhost:12346/v1",
         api_key="fake_api_key",
         api_version="2025-04-01-preview",
@@ -587,10 +593,10 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
     assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
 
 
-@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
 def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot_enforce_it(
-    respx_mock: respx.MockRouter, model: str, drop_params: bool
+    respx_mock: respx.MockRouter, model: str, tool_choice: dict[str, object]
 ):
     with pytest.raises(
         litellm.BadRequestError, match=r"allowed_tools.*only supported for azure, litellm_proxy, openai"
@@ -599,8 +605,7 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
             model=model,
             messages=[{"role": "user", "content": "What time is it?"}],
             tools=_TWO_TOOLS,
-            tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
-            drop_params=drop_params,
+            tool_choice=tool_choice,
             api_key="fake_api_key",
             aws_access_key_id="fake",
             aws_secret_access_key="fake",
@@ -608,6 +613,92 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
         )
     assert exc.value.status_code == 400
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_choice"),
+    [
+        ("hosted_vllm/my-model", _ALLOWED_TOOLS_TOOL_CHOICE),
+        ("hosted_vllm/my-model", _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE),
+        ("openai/gpt-5.5", {"type": "allowed_tools", "mode": "required", "tools": []}),
+        ("openai/gpt-5.5", {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]}),
+    ],
+)
+def test_completion_drop_params_drops_an_allowed_tools_tool_choice_it_cannot_send(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str, tool_choice: dict[str, object]
+):
+    mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=_TWO_TOOLS,
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "tool_choice" not in sent
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}},
+    ],
+)
+async def test_a_malformed_allowed_tools_tool_choice_is_a_400_on_mcp_gateway_tools_without_drop_params(
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter
+):
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc:
+        await litellm.acompletion(
+            model="openai/gpt-5.5",
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            tool_choice=tool_choice,
+            api_base="http://localhost:12346/v1",
+            api_key="fake_api_key",
+        )
+
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
+def test_drop_params_drops_the_choice_beside_a_tool_the_provider_runs(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {

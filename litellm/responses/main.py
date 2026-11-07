@@ -29,6 +29,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
     routed_model_info,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_effect,
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params, require_attributes
@@ -312,6 +316,11 @@ async def aresponses_api_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
+    request_kwargs: Final = _STR_MAPPING.validate_python(kwargs)
+    tool_choice_in_effect: Final = allowed_tools_tool_choice_in_effect(
+        tool_choice, model, drops_unsupported_params(request_kwargs.get("drop_params"))
+    )
+
     # Parse MCP tools and separate from other tools
     (
         mcp_tools_with_litellm_proxy,
@@ -330,14 +339,13 @@ async def aresponses_api_with_mcp(
         else (None, None, None, None)
     )
 
-    request_kwargs: Final = _STR_MAPPING.validate_python(kwargs)
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     joins_request_trace: Final = isinstance(logging_obj, LiteLLMLoggingObj)
     bridged_first_turn: Final = (
         joins_request_trace
         and not stream
         and previous_response_id is None
-        and not provider_stores_the_conversation(model, custom_llm_provider, kwargs)
+        and not provider_stores_the_conversation(model, custom_llm_provider, request_kwargs)
     )
 
     listing_trace_id: Final = (
@@ -361,6 +369,9 @@ async def aresponses_api_with_mcp(
         raw_headers=discovery_raw_headers,
     )
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(original_mcp_tools)
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        tool_choice_in_effect, tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -379,7 +390,7 @@ async def aresponses_api_with_mcp(
         "stream": stream,
         "temperature": temperature,
         "text": text,
-        "tool_choice": tool_choice,
+        "tool_choice": allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice_in_effect, gateway),
         "top_p": top_p,
         "truncation": truncation,
         "user": user,
@@ -418,6 +429,8 @@ async def aresponses_api_with_mcp(
             previous_response_id=previous_response_id,
             tool_server_map=tool_server_map,
             served_tools=original_mcp_tools,
+            tool_choice=tool_choice_in_effect,
+            gateway=gateway,
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
@@ -456,7 +469,11 @@ async def aresponses_api_with_mcp(
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
         with first_round_billed_on_failure(logging_obj, response):
-            tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response)
+            tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response),
+                tool_choice_in_effect,
+                gateway,
+            )
 
             if tool_calls:
                 user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")

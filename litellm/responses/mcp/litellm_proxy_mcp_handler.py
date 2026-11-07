@@ -1,6 +1,8 @@
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
 from openai.types.chat import ChatCompletionToolParam
@@ -10,11 +12,20 @@ from typing_extensions import Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    NO_GATEWAY_TOOLS,
+    GatewayTool,
+    GatewayTools,
+    parse_allowed_tools_tool_choice,
+    tool_calls_the_choice_excludes,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.utils import (
     iter_known_server_prefixes,
+    iter_known_tool_name_spellings,
     logging_safe_mcp_headers,
+    match_known_tool_name,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
@@ -115,6 +126,47 @@ async def _served_mcp_path_names(
 ) -> frozenset[str]:
     names: Final = frozenset(name for name in map(proxy_path_mcp_name, tools) if name is not None)
     return await served_names(names) if names else frozenset[str]()
+
+
+def _served_tool(tool_name: str, server_name: str) -> tuple[MCPServer | None, str]:
+    from litellm.proxy.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.mcp_server.server import (
+        _resolve_display_name_to_original,
+    )
+
+    mcp_server: Final = global_mcp_server_manager.get_mcp_server_by_name(
+        server_name
+    ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
+    resolved_tool_name: Final = _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
+    return mcp_server, strip_known_server_prefix(resolved_tool_name, mcp_server)
+
+
+@dataclass(frozen=True, slots=True)
+class _LabelScope:
+    label: str
+    whole_gateway: bool = False
+    server_ids: frozenset[str] = frozenset()
+    toolset_tools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+
+    def serves(self, server: MCPServer | None, tool_name: str) -> bool:
+        if self.whole_gateway:
+            return True
+        if server is None:
+            return False
+        toolset_names: Final = self.toolset_tools.get(server.server_id)
+        return server.server_id in self.server_ids or (
+            toolset_names is not None and match_known_tool_name(tool_name, server, toolset_names) is not None
+        )
+
+
+def _gateway_tool(name: str, server: MCPServer | None, tool_name: str, scopes: Iterable[_LabelScope]) -> GatewayTool:
+    spellings: Final = () if server is None else tuple(iter_known_tool_name_spellings(tool_name, server))
+    return GatewayTool(
+        names=frozenset((name, tool_name, *spellings)),
+        server_labels=frozenset(scope.label for scope in scopes if scope.serves(server, tool_name)),
+    )
 
 
 class LiteLLM_Proxy_MCP_Handler:
@@ -609,6 +661,82 @@ class LiteLLM_Proxy_MCP_Handler:
     _should_auto_execute_tools = should_auto_execute_tools
 
     @staticmethod
+    async def _label_scope(
+        tool: Mapping[str, object],
+        servers: Sequence[MCPServer],
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        granted_toolsets: "GrantedToolsetIds | None",
+    ) -> _LabelScope | None:
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.mcp_server.server import (
+            _get_allowed_mcp_servers_from_mcp_server_names,
+        )
+
+        label: Final = tool.get("server_label")
+        server_url: Final = tool.get("server_url")
+        if not isinstance(label, str) or not isinstance(server_url, str):
+            return None
+        if names_whole_gateway(tool):
+            return _LabelScope(label=label, whole_gateway=True)
+        kind, value = await LiteLLM_Proxy_MCP_Handler._resolve_proxy_mcp_name(
+            server_url.split("/")[-1], user_api_key_auth, granted_toolsets
+        )
+        match kind:
+            case "server":
+                resolved: Final = await _get_allowed_mcp_servers_from_mcp_server_names([value], list(servers))
+                return _LabelScope(label=label, server_ids=frozenset(server.server_id for server in resolved))
+            case "toolset":
+                permissions: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                    toolset_ids=[value]
+                )
+                return _LabelScope(
+                    label=label,
+                    toolset_tools=MappingProxyType({key: tuple(names) for key, names in permissions.items()}),
+                )
+            case "denied_toolset":
+                return _LabelScope(label=label)
+
+    @staticmethod
+    async def gateway_tools(
+        tool_choice: object,
+        tool_server_map: Mapping[str, str],
+        mcp_tools_with_litellm_proxy: Iterable[Mapping[str, object]],
+        user_api_key_auth: "UserAPIKeyAuth | None",
+        granted_toolsets: "GrantedToolsetIds | None" = None,
+    ) -> GatewayTools:
+        if parse_allowed_tools_tool_choice(tool_choice) is None:
+            return NO_GATEWAY_TOOLS
+        served: Final = {name: _served_tool(name, server_name) for name, server_name in tool_server_map.items()}
+        servers: Final = {server.server_id: server for server, _ in served.values() if server is not None}
+        scopes: Final = tuple(
+            [
+                await LiteLLM_Proxy_MCP_Handler._label_scope(
+                    tool, tuple(servers.values()), user_api_key_auth, granted_toolsets
+                )
+                for tool in mcp_tools_with_litellm_proxy
+            ]
+        )
+        label_scopes: Final = tuple(scope for scope in scopes if scope is not None)
+        return GatewayTools(
+            server_labels=frozenset(scope.label for scope in label_scopes),
+            tools=MappingProxyType(
+                {
+                    name: _gateway_tool(name, server, tool_name, label_scopes)
+                    for name, (server, tool_name) in served.items()
+                }
+            ),
+        )
+
+    @staticmethod
+    def tool_calls_to_run(tool_calls: Sequence[object], tool_choice: object, gateway: GatewayTools) -> Sequence[object]:
+        names: Final = tuple(
+            LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)[0] or "" for tool_call in tool_calls
+        )
+        return () if tool_calls_the_choice_excludes(tool_choice, names, gateway) else tool_calls
+
+    @staticmethod
     def extract_tool_calls_from_response(response: ResponsesAPIResponse) -> list[object]:
         """Extract tool calls from the response output."""
         tool_calls: Final[list[object]] = []
@@ -749,9 +877,6 @@ class LiteLLM_Proxy_MCP_Handler:
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy.mcp_server.server import (
-            _resolve_display_name_to_original,
-        )
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         tool_results: Final[list[MCPToolResult]] = []
@@ -780,13 +905,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 server_name = tool_server_map[tool_name]
 
-                mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
-                    server_name
-                ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
-                resolved_tool_name = (
-                    _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
-                )
-                sanitized_tool_name = strip_known_server_prefix(resolved_tool_name, mcp_server)
+                mcp_server, sanitized_tool_name = _served_tool(tool_name, server_name)
 
                 start_time = datetime.now()
                 logging_input: Sequence[Mapping[str, object]] = [
@@ -1226,6 +1345,8 @@ class LiteLLM_Proxy_MCP_Handler:
         previous_response_id: str | None,
         tool_server_map: dict[str, str],
         served_tools: Sequence[MCPTool] | None = None,
+        tool_choice: object = None,
+        gateway: GatewayTools = NO_GATEWAY_TOOLS,
         **kwargs,
     ) -> "MCPEnhancedStreamingIterator":
         """
@@ -1260,6 +1381,8 @@ class LiteLLM_Proxy_MCP_Handler:
             user_api_key_auth=kwargs.get("user_api_key_auth")
             or kwargs.get("litellm_metadata", {}).get("user_api_key_auth"),
             original_request_params=request_params,
+            tool_choice=tool_choice,
+            gateway=gateway,
         )
 
     @staticmethod

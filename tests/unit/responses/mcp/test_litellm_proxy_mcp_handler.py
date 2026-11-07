@@ -1767,14 +1767,14 @@ async def _no_toolset_grants(context: UserAPIKeyAuth) -> frozenset[str]:
     return frozenset()
 
 
-async def _tools_listed_through_the_gateway(
+async def _listing_through_the_gateway(
     monkeypatch: pytest.MonkeyPatch,
     user_api_key_auth: UserAPIKeyAuth,
-    server_urls: tuple[str, ...],
+    mcp_tools: Sequence[Mapping[str, object]],
     granted_toolsets: GrantedToolsetIds,
     toolset_table: types.SimpleNamespace | None = None,
     agent_permission: LiteLLM_ObjectPermissionTable | None = None,
-) -> list[str]:
+) -> tuple[list[MCPTool], list[str]]:
     async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
         return list(UPSTREAM_TOOLS[server_name])
 
@@ -1800,15 +1800,97 @@ async def _tools_listed_through_the_gateway(
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"supported_db_objects": []})
     try:
-        tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        return await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
             user_api_key_auth=user_api_key_auth,
-            mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": url} for url in server_urls],
+            mcp_tools_with_litellm_proxy=mcp_tools,
             granted_toolsets=granted_toolsets,
         )
     finally:
         for server in GATEWAY_SERVERS:
             manager._drop_listed_tools(server.server_id)
+
+
+async def _tools_listed_through_the_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    user_api_key_auth: UserAPIKeyAuth,
+    server_urls: tuple[str, ...],
+    granted_toolsets: GrantedToolsetIds,
+    toolset_table: types.SimpleNamespace | None = None,
+    agent_permission: LiteLLM_ObjectPermissionTable | None = None,
+) -> list[str]:
+    tools, _server_names = await _listing_through_the_gateway(
+        monkeypatch,
+        user_api_key_auth,
+        [{"type": "mcp", "server_url": url} for url in server_urls],
+        granted_toolsets,
+        toolset_table,
+        agent_permission,
+    )
     return sorted(tool.name for tool in tools)
+
+
+async def _calls_the_gateway_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    labeled_server_urls: Mapping[str, str],
+    allowed_label: str,
+    called: tuple[str, ...],
+    unresolvable_tools: Mapping[str, str] = MappingProxyType({}),
+) -> tuple[str, ...]:
+    user: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    mcp_tools: Final = [
+        {"type": "mcp", "server_label": label, "server_url": url} for label, url in labeled_server_urls.items()
+    ]
+    tools, server_names = await _listing_through_the_gateway(monkeypatch, user, mcp_tools, _team_grants("ts-granted"))
+    _deduplicated, tool_server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(tools, server_names)
+    tool_choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": allowed_label}]}
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        tool_choice, {**tool_server_map, **unresolvable_tools}, mcp_tools, user, _team_grants("ts-granted")
+    )
+    return tuple(
+        name
+        for name in called
+        if LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+            ({"type": "function_call", "name": name, "call_id": f"call_{name}", "arguments": "{}"},),
+            tool_choice,
+            gateway,
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("labeled_server_urls", "allowed_label", "runs"),
+    [
+        ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "team", ("calc-add",)),
+        ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "docs", ("docs-lookup",)),
+        ({"team": "litellm_proxy/mcp/team-toolset", "other": "litellm_proxy/mcp/other-toolset"}, "other", ()),
+    ],
+    ids=["granted_toolset", "server_beside_a_toolset", "ungranted_toolset"],
+)
+async def test_an_mcp_entry_allows_only_the_tools_its_labels_toolset_or_server_serves(
+    monkeypatch: pytest.MonkeyPatch,
+    labeled_server_urls: Mapping[str, str],
+    allowed_label: str,
+    runs: tuple[str, ...],
+):
+    ran: Final = await _calls_the_gateway_runs(
+        monkeypatch, labeled_server_urls, allowed_label, ("calc-add", "docs-lookup")
+    )
+
+    assert ran == runs
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_entry_allows_no_call_on_a_server_the_gateway_cannot_resolve(monkeypatch: pytest.MonkeyPatch):
+    ran: Final = await _calls_the_gateway_runs(
+        monkeypatch,
+        {"team": "litellm_proxy/mcp/team-toolset"},
+        "team",
+        ("calc-add", "ghost-add"),
+        MappingProxyType({"ghost-add": "ghost"}),
+    )
+
+    assert ran == ("calc-add",)
 
 
 def _key_holding(*server_ids: str, role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> UserAPIKeyAuth:

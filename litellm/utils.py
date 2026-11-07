@@ -85,8 +85,8 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    CHAT_ALLOWED_TOOLS_LAYOUT,
-    parse_chat_allowed_tools_tool_choice,
+    chat_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice_or_refuse,
 )
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
@@ -9724,6 +9724,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
+    drop_params: bool = False,
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -9736,28 +9737,18 @@ def validate_chat_completion_tool_choice(
         tool_choice_type = tool_choice.get("type")
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
-        if (
-            tool_choice_type == "allowed_tools"
-            and (
-                parse_chat_allowed_tools_tool_choice(
-                    cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
-                        object, tool_choice
-                    )
-                )
-                is None
-            )
-        ):
-            raise BadRequestError(
-                message=(
-                    f"Invalid tool choice, tool_choice={tool_choice}. On chat completions an allowed_tools "
-                    f"tool_choice must be {CHAT_ALLOWED_TOOLS_LAYOUT}"
+        if tool_choice_type == "allowed_tools":
+            allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(
+                cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                    object, tool_choice
                 ),
-                model=model,
-                llm_provider="",
+                model,
+                drop_params,
             )
+            return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice_type != "allowed_tools" and (tool_choice_type is None or tool_choice.get("function") is None):
+        if tool_choice_type is None or tool_choice.get("function") is None:
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,

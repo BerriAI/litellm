@@ -8825,22 +8825,29 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("mode", ["auto", "required"])
-def test_validate_tool_choice_allowed_tools_chat_layout_passes_through(mode: str):
-    tool_choice: Final = {
+def test_validate_tool_choice_allowed_tools_either_layout_comes_back_in_the_chat_layout(mode: str):
+    chat_layout: Final = {
         "type": "allowed_tools",
         "allowed_tools": {
             "mode": mode,
             "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
         },
     }
-    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+    responses_layout: Final = {
+        "type": "allowed_tools",
+        "mode": mode,
+        "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+    }
+    assert validate_chat_completion_tool_choice(chat_layout, model=MODEL) == chat_layout
+    assert validate_chat_completion_tool_choice(responses_layout, model=MODEL) == chat_layout
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "tool_choice",
     [
-        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": []},
         {"type": "allowed_tools"},
         {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
         {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
@@ -8855,6 +8862,18 @@ def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
     assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_dropped_under_drop_params(tool_choice: dict[str, object]):
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL, drop_params=True) is None
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
