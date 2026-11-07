@@ -63,6 +63,7 @@ _AWS_FILTER_KEYS: Final = frozenset(
 )
 _OPENAI_FILTER: Final[TypeAdapter[OpenAIComparisonFilter | OpenAICompoundFilter]] = TypeAdapter(OpenAIVectorStoreFilter)
 _MAX_REASON_CHARS: Final = 2000
+_REASON_END_CHARS: Final = _MAX_REASON_CHARS // 2
 
 
 def _aws_retrieval_filter(openai_filter: OpenAIComparisonFilter | OpenAICompoundFilter) -> Mapping[str, object]:
@@ -81,7 +82,9 @@ def _validation_reason(error: ValidationError) -> str:
         ".".join(("filters", *(str(part) for part in detail["loc"]))) + f": {detail['msg']}"
         for detail in error.errors()
     )
-    return reason if len(reason) <= _MAX_REASON_CHARS else f"{reason[:_MAX_REASON_CHARS]}..."
+    return (
+        reason if len(reason) <= _MAX_REASON_CHARS else f"{reason[:_REASON_END_CHARS]}...{reason[-_REASON_END_CHARS:]}"
+    )
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
