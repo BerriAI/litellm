@@ -767,14 +767,15 @@ def _message_dropping_created_cache_controls_between(
     )
 
 
-_SYSTEM_PROMPT_ROLES: Final = ("system", "developer")
-
-
-def _has_targeted_role(message: Mapping[str, object], targeted_role: str) -> bool:
-    role: Final = message.get("role")
-    if targeted_role == "system":
-        return role in _SYSTEM_PROMPT_ROLES
-    return role == targeted_role
+def _points_with_their_target_roles(
+    points: Sequence[CacheControlMessageInjectionPoint],
+) -> tuple[tuple[CacheControlMessageInjectionPoint, str | None], ...]:
+    """A developer message is the system prompt in the OpenAI shapes, so a ``role: system`` point
+    covers it too, but only with the breakpoints left after every configured point is placed."""
+    return (
+        *((point, point.get("role")) for point in points),
+        *((point, "developer") for point in points if point.get("role") == "system" and point.get("index") is None),
+    )
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
@@ -1113,7 +1114,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
         limit_reached = False
-        for point in points:
+        for point, targeted_role in _points_with_their_target_roles(points):
             if used_blocks >= max_blocks:
                 limit_reached = True
                 break
@@ -1122,7 +1123,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 type="ephemeral"
             )
 
-            for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(
+                point=point, messages=messages, targeted_role=targeted_role
+            ):
                 if used_blocks >= max_blocks:
                     limit_reached = True
                     break
@@ -1150,7 +1153,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _resolve_target_indices(
-        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
+        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues], targeted_role: str | None
     ) -> list[int]:
         """Resolve which message indices an injection point targets."""
         _targetted_index: Final[int | str | None] = point.get("index", None)
@@ -1181,9 +1184,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return []
 
         # Case 2: Target by role
-        targetted_role: Final = point.get("role", None)
-        if targetted_role is not None:
-            return [idx for idx, msg in enumerate(messages) if _has_targeted_role(msg, targetted_role)]
+        if targeted_role is not None:
+            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targeted_role]
 
         return []
 
