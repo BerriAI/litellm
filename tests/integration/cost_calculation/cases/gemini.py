@@ -23,6 +23,7 @@ def _gemini_case_response(
     response: JsonResponse | SseResponse,
     model_version: str,
     usage_fields: dict[str, JsonValue] | None = None,
+    omit_usage_fields: frozenset[str] = frozenset(),
 ) -> JsonResponse | SseResponse:
     match response:
         case JsonResponse():
@@ -35,11 +36,11 @@ def _gemini_case_response(
                         **(
                             {
                                 "usageMetadata": {
-                                    **cast(dict[str, JsonValue], usage),
-                                    **usage_fields,
+                                    **{key: value for key, value in usage.items() if key not in omit_usage_fields},
+                                    **(usage_fields or {}),
                                 }
                             }
-                            if usage_fields is not None and isinstance(usage, dict)
+                            if (usage_fields is not None or omit_usage_fields) and isinstance(usage, dict)
                             else {}
                         ),
                     }
@@ -49,17 +50,21 @@ def _gemini_case_response(
             return response.model_copy(
                 update={
                     "frames": tuple(
-                        _gemini_case_frame(frame, model_version, usage_fields) for frame in response.frames
+                        _gemini_case_frame(frame, model_version, usage_fields, omit_usage_fields)
+                        for frame in response.frames
                     )
                 }
             )
 
 
 def _gemini_case_frame(
-    frame: str, model_version: str, usage_fields: dict[str, JsonValue] | None
+    frame: str,
+    model_version: str,
+    usage_fields: dict[str, JsonValue] | None,
+    omit_usage_fields: frozenset[str] = frozenset(),
 ) -> str:
     replaced: Final = frame.replace("gemini-3.8-flash", model_version)
-    if usage_fields is None:
+    if usage_fields is None and not omit_usage_fields:
         return replaced
     prefix, separator, payload = replaced.partition("data: ")
     if not separator or payload == "[DONE]":
@@ -68,7 +73,11 @@ def _gemini_case_frame(
     usage: Final = event.get("usageMetadata")
     if not isinstance(usage, dict):
         return replaced
-    return f"{prefix}data: {json.dumps({**event, 'usageMetadata': {**usage, **usage_fields}})}"
+    updated_usage: Final = {
+        **{key: value for key, value in usage.items() if key not in omit_usage_fields},
+        **(usage_fields or {}),
+    }
+    return f"{prefix}data: {json.dumps({**event, 'usageMetadata': updated_usage})}"
 
 
 def _gemini_case(
@@ -79,13 +88,14 @@ def _gemini_case(
     expected: ExactExpected,
     *,
     usage_fields: dict[str, JsonValue] | None = None,
+    omit_usage_fields: frozenset[str] = frozenset(),
 ) -> CostTrackingTestCase:
     return sibling.model_copy(
         update={
             "name": name,
             "model": model,
             "response": _gemini_case_response(
-                cast(JsonResponse | SseResponse, sibling.response), model_version, usage_fields
+                cast(JsonResponse | SseResponse, sibling.response), model_version, usage_fields, omit_usage_fields
             ),
             "expected": expected,
         }
@@ -3398,21 +3408,25 @@ GEMINI_GEMINI_4_ARGON_INPUT_TEXT: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT, "gemini-gemini-4-argon-input_text", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}]},
+    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_STREAM: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_STREAM, "gemini-gemini-4-argon-stream", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}]},
+    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_CACHE_READ: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_CACHE_READ, "gemini-gemini-4-argon-cache_read", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.00693968, input_cost=0.00275968, output_cost=0.00418, prompt_tokens=12928, completion_tokens=380),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 380}]},
+    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_REASONING: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_REASONING, "gemini-gemini-4-argon-reasoning", "gemini/gemini-4-argon",
     "gemini-4-argon", ExactExpected(spend=0.047168, input_cost=0.002728, output_cost=0.04444, prompt_tokens=1240, completion_tokens=4040),
     usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 560}]},
+    omit_usage_fields=frozenset({"serviceTier"}),
 )
 GEMINI_GEMINI_4_ARGON_SERVICE_TIER_FLEX: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
