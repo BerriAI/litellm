@@ -72,7 +72,10 @@ class BitBucketClient:
                 - repository: Repository name
                 - access_token: BitBucket access token (or app password)
                 - branch: Branch to fetch from (default: main)
-                - base_url: Custom BitBucket API base URL (optional)
+                - base_url: Custom BitBucket API base URL (optional). Must stay
+                  compatible with the Bitbucket Cloud 2.0 path scheme; Bitbucket Data
+                  Center (Server) REST APIs use different paths and are not supported
+                  by this client.
                 - auth_method: Authentication method ('token' or 'basic', default: 'token')
                 - username: Username for basic auth (optional)
         """
