@@ -35,6 +35,10 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
 ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
 WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT: Final = 2
 WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT: Final = 3
+WILDCARD_HEALTH_CHECK_MAX_TOKENS: Final = 16  # GPT-5 models require max_output_tokens >= 16
+_WILDCARD_PROBE_TOKEN_CAP_PARAM: Final = MappingProxyType(
+    {"completion": "max_tokens", "responses": "max_output_tokens"}
+)
 BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
@@ -187,6 +191,20 @@ def _wildcard_served_models_of_mode(wildcard: str, custom_llm_provider: str, han
     )
 
 
+def _with_probe_token_cap(model_params: Mapping[str, object], handler_mode: str) -> dict[str, object]:
+    cap_param: Final = _WILDCARD_PROBE_TOKEN_CAP_PARAM.get(handler_mode)
+    if cap_param is None:
+        return dict(model_params)
+    return {
+        **model_params,
+        cap_param: model_params.get(cap_param, model_params.get("max_tokens", WILDCARD_HEALTH_CHECK_MAX_TOKENS)),
+    }
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
 async def _first_answer(probes: Sequence[Callable[[], Awaitable[object]]]) -> object:
     try:
         return await probes[0]()
@@ -221,7 +239,7 @@ class HealthCheckHelpers:
                 handler := HealthCheckHelpers.get_mode_handlers(
                     model=served_model.removeprefix(provider_prefix),
                     custom_llm_provider=custom_llm_provider,
-                    model_params={**model_params, "model": served_model},
+                    model_params={**_with_probe_token_cap(model_params, handler_mode), "model": served_model},
                     prompt=prompt,
                     input=None if input is None else list(input),
                 ).get(handler_mode)
@@ -241,7 +259,7 @@ class HealthCheckHelpers:
         model_params["model"] = probe_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = list(probe_models[1:]) or None
-        model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
+        model_params["max_tokens"] = model_params.get("max_tokens", WILDCARD_HEALTH_CHECK_MAX_TOKENS)
         await acompletion(**model_params)
         return {}
 
@@ -356,7 +374,6 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.health_check_utils import (
             DECISIONS_CALL_PARAMS,
             EXTRACTION_CALL_PARAMS,
-            OPTIONAL_STR,
             _filter_model_params,
         )
         from litellm.realtime_api.main import realtime_health_check
@@ -407,9 +424,9 @@ class HealthCheckHelpers:
             "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                api_base=OPTIONAL_STR.validate_python(model_params.get("api_base")),
-                api_key=OPTIONAL_STR.validate_python(model_params.get("api_key")),
-                api_version=OPTIONAL_STR.validate_python(model_params.get("api_version")),
+                api_base=_optional_text(model_params.get("api_base")),
+                api_key=_optional_text(model_params.get("api_key")),
+                api_version=_optional_text(model_params.get("api_version")),
                 model_params=model_params,
             ),
             "batch": lambda: HealthCheckHelpers._batch_health_check(

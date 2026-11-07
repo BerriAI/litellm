@@ -104,7 +104,10 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
-from litellm.litellm_core_utils.health_check_utils import _filter_model_params
+from litellm.litellm_core_utils.health_check_utils import (
+    _filter_model_params,
+    create_health_check_response,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import (
@@ -172,6 +175,7 @@ from litellm.types.utils import (
     ProviderRoutingHints,
     RawRequestTypedDict,
     StreamingChoices,
+    is_decisions_model_mode,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
@@ -9388,7 +9392,7 @@ async def ahealth_check(
     model_params: dict,
     mode: str | None = None,
     prompt: str | None = None,
-    input: list[str] | None = None,
+    input: list | None = None,
 ):
     """
     Support health checks for different providers. Return remaining rate limit, etc.
@@ -9401,12 +9405,7 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
-    from litellm.litellm_core_utils.health_check_helpers import (
-        HealthCheckHelpers,
-        default_health_check_mode,
-        health_check_handler_mode,
-        health_check_response,
-    )
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
@@ -9471,9 +9470,13 @@ async def ahealth_check(
             input=input,
         )
 
-        handler_mode: Final = health_check_handler_mode(mode)
+        handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
         if handler_mode in mode_handlers:
-            return health_check_response(await mode_handlers[handler_mode]())
+            _response: Final = await mode_handlers[handler_mode]()
+            _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
+                Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
+            )
+            return create_health_check_response(_response_headers)
         else:
             raise Exception(f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health")
     except Exception as e:

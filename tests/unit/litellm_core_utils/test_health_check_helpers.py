@@ -2161,3 +2161,61 @@ async def test_embedding_mode_wildcard_health_check_without_a_served_embedding_m
 
     assert [json.loads(call.request.content)["model"] for call in upstream.calls] == ["databricks-claude-fixture-a"]
     assert response == {}
+
+
+_RESPONSES_API_BODY: Final = MappingProxyType(
+    {
+        "id": "resp_health",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-fixture-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_health",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "2", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 5, "output_tokens": 1, "total_tokens": 6},
+    }
+)
+_TEXT_COMPLETION_BODY: Final = MappingProxyType(
+    {
+        "id": "cmpl-health",
+        "object": "text_completion",
+        "created": 1700000000,
+        "model": "gpt-fixture-mini",
+        "choices": [{"text": "2", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "url", "body", "token_cap_param"),
+    [
+        ("responses", "https://api.openai.com/v1/responses", _RESPONSES_API_BODY, "max_output_tokens"),
+        ("completion", "https://api.openai.com/v1/completions", _TEXT_COMPLETION_BODY, "max_tokens"),
+    ],
+)
+async def test_text_generating_mode_wildcard_health_check_caps_the_probe_output_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    mode: str,
+    url: str,
+    body: Mapping[str, object],
+    token_cap_param: str,
+) -> None:
+    _register_catalog(monkeypatch, "openai", {"openai/gpt-fixture-mini": (mode, 1e-9)})
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(url).respond(json=dict(body))
+
+    response: Final = await ahealth_check({"model": "openai/gpt-fixture-*", "api_key": "fake-key"}, mode=mode)
+
+    assert "error" not in response, response
+    assert json.loads(upstream.calls.last.request.content)[token_cap_param] == 16
