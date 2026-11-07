@@ -2877,14 +2877,38 @@ def _streamed_json_mode_contents(
     return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
 
 
-@pytest.mark.parametrize("fragment", ["48420083852775e76508", "1e5", "123", " ", ""])
-def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragment: str) -> None:
-    fragments: Final = ('{"summary":"', fragment, '"}')
+def _schemaless_streamed_json_mode_contents(fragments: tuple[str, ...]) -> str:
     iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
     chunks: Final = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "".join(fragments)
     assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
     assert chunks[-1].choices[0].finish_reason == "stop"
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    "fragments",
+    [
+        ('{"summary":"', "48420083852775e76508", '"}'),
+        ('{"summary":"', "1e5", '"}'),
+        ('{"outer":', '{"values": [3, 5]}', "}"),
+    ],
+)
+def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragments: tuple[str, ...]) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == "".join(fragments)
+
+
+@pytest.mark.parametrize(
+    ("fragments", "expected"),
+    [
+        (('{"values": [3, 5]}',), [3, 5]),
+        ((" ", '{"values": [3, 5]}', " "), [3, 5]),
+        (('{"summary": "48420083852775e76508"}',), {"summary": "48420083852775e76508"}),
+    ],
+)
+def test_streamed_json_mode_without_schema_unwraps_a_one_piece_input_like_non_stream(
+    fragments: tuple[str, ...], expected: object
+) -> None:
+    assert json.loads(_schemaless_streamed_json_mode_contents(fragments)) == expected
 
 
 def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
