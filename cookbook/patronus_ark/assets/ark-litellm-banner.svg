@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Patronus Ark — guardrails for LiteLLM</title>
+  <desc id="desc">Native PII and DLP protection with Wolf Defender prompt-injection detection. Local Core scanning, with Wolf on your hardware or through the Patronus Control API.</desc>
+  <defs>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="0.8" fill="#c5dfff"/></pattern>
+  </defs>
+  <rect x="0.5" y="0.5" width="1199" height="359" rx="20" fill="#ffffff" stroke="#d5e6fa"/>
+  <rect x="1" y="1" width="1198" height="358" rx="20" fill="url(#dots)"/>
+  <g fill="#102541" shape-rendering="crispEdges">
+    <path d="M120 72h144v16h16v112h-16v32h-16v16h-16v16h-24v16h-32v-16h-24v-16h-16v-16h-16v-32h-16V88h16z"/>
+    <path d="M136 104h112v88h-16v24h-16v16h-16v16h-16v-16h-16v-16h-16v-24h-16z" fill="#dceeff"/>
+    <path d="M176 128h32v16h16v64h-16v-24h-32v24h-16v-64h16z"/>
+    <path d="M176 152h32v16h-32z" fill="#dceeff"/>
+  </g>
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif">
+    <text x="350" y="70" fill="#4d759c" font-size="14" letter-spacing="3">PATRONUS · AI SECURITY</text>
+    <text x="346" y="142" fill="#102541" font-size="62" font-weight="750" letter-spacing="-2">Patronus Ark</text>
+    <text x="350" y="191" fill="#102541" font-size="29">Guardrails for LiteLLM.</text>
+    <text x="350" y="230" fill="#4d759c" font-size="21">Protect sensitive data. Detect prompt injection.</text>
+    <g font-size="15" font-weight="600">
+      <rect x="350" y="252" width="118" height="32" rx="16" fill="#eaf4ff" stroke="#d5e6fa"/>
+      <text x="409" y="273" text-anchor="middle" fill="#1c527e">PII &amp; DLP</text>
+      <rect x="480" y="252" width="160" height="32" rx="16" fill="#eaf4ff" stroke="#d5e6fa"/>
+      <text x="560" y="273" text-anchor="middle" fill="#1c527e">Wolf Defender</text>
+      <text x="662" y="273" fill="#4d759c" font-weight="400">Wolf Defender · Local or API</text>
+    </g>
+  </g>
+  <path d="M54 320H1146" stroke="#d5e6fa"/>
+  <circle cx="54" cy="320" r="4" fill="#4aa6ff"/>
+</svg>
