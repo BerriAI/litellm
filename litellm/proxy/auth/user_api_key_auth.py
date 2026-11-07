@@ -400,6 +400,17 @@ def _get_model_names_for_budget_checks(
     return model
 
 
+async def _normalize_model_for_auth(
+    request_data: dict[str, object],
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    await _normalize_claude_model(request_data, valid_token, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
+    _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
+
+
 def _budget_fallback_target_model(target: object) -> str | None:
     if isinstance(target, str):
         return target
@@ -3056,6 +3067,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
+        await _normalize_model_for_auth(request_data, valid_token, request, route)
         await _prefetch_referenced_auth_objects(
             valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
         )
@@ -4216,9 +4228,7 @@ async def authorize_authenticated_model_access(
 
     grants: Final = () if credential_issuing else await access_group_ids_for_identity(identity)
     identity.apply_access_group_rule_grants(grants)
-    await _normalize_claude_model(request_data, identity, request, route)
-    await _resolve_router_settings_model_group_alias(request_data, identity, request, route)
-    _resolve_codex_native_chatgpt_model(request_data, identity, request, route)
+    await _normalize_model_for_auth(request_data, identity, request, route)
     model: Final = _get_model_from_request_context(
         request_data=request_data, route=route, request=request, llm_router=llm_router, team_id=identity.team_id
     )
@@ -4793,9 +4803,7 @@ async def enforce_key_and_fallback_model_access(
     Key-level model allowlist and client fallbacks (same as standard auth).
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
-    await _normalize_claude_model(request_data, valid_token, request, route)
-    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
-    _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
+    await _normalize_model_for_auth(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:
@@ -4897,6 +4905,7 @@ async def _run_post_custom_auth_checks(
             )
 
     if general_settings.get("custom_auth_run_common_checks", False):
+        await _normalize_model_for_auth(request_data, valid_token, request, route)
         valid_token.require_key_model_check()
 
     current_model = _get_model_from_request_context(
