@@ -21,7 +21,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.db.db_span import db_span, db_spanned
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, query_raw_rows
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -207,7 +207,9 @@ async def _reverse_hash_key_metadata(
     warning: str,
 ) -> Mapping[str, KeyMetadataDict]:
     rows: Final = await _db_or_empty(
-        lambda: db_spanned("recover_key_metadata", table, lambda: prisma_client.db.query_raw(sql, sorted(wanted))),
+        lambda: db_spanned(
+            "recover_key_metadata", table, lambda: query_raw_rows(prisma_client.db, sql, sorted(wanted))
+        ),
         warning,
         len(wanted),
     )

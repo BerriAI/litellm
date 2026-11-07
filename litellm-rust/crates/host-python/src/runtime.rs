@@ -68,6 +68,11 @@ fn runtime() -> PyResult<&'static Runtime> {
     Ok(pyo3_async_runtimes::tokio::get_runtime())
 }
 
+/// The native runtime, for work that must outlive the call that schedules it.
+pub fn runtime_handle() -> PyResult<Handle> {
+    Ok(runtime()?.handle().clone())
+}
+
 #[expect(clippy::disallowed_methods, reason = "this is the gated door")]
 fn future_into_py<F, T>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
 where

@@ -21,7 +21,10 @@ interface RankedRow extends Record<string, unknown> {
 const EMPTY_RANKED = { spend: 0, requests: 0, successful_requests: 0, failed_requests: 0, tokens: 0 } as const;
 
 /** Sums one breakdown dimension across every day, highest spend first. */
-export const rollUpBreakdown = (results: readonly DailyData[], dimension: BreakdownDimension): RankedRow[] => {
+export const rollUpBreakdown = (
+  results: readonly DailyData[],
+  dimension: BreakdownDimension | "api_keys",
+): RankedRow[] => {
   const entries = results.flatMap((day) => Object.entries(day.breakdown[dimension] ?? {}));
   const totals = entries.reduce<ReadonlyMap<string, RankedRow>>((acc, [key, entry]) => {
     const row = acc.get(key) ?? { key, ...EMPTY_RANKED };
@@ -117,7 +120,7 @@ export const rankValue = (row: RankedRow, metric: UsageMetric): number => {
  */
 export const seriesBy = (
   results: readonly DailyData[],
-  dimension: BreakdownDimension,
+  dimension: BreakdownDimension | "api_keys",
   metric: UsageMetric,
   options: number | { top?: number; colorByKey?: ReadonlyMap<string, string> } = 6,
 ): Series => {
@@ -245,8 +248,6 @@ export const formatCompactUsd = (value: number): string => {
 
 export const formatCompact = (value: number): string =>
   Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-
-export const formatLatency = (ms: number): string => (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
 
 export interface OverviewTotals {
   spend: number;

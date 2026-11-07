@@ -90,6 +90,8 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
+    has_attributes,
+    iter_items,
     normalize_drop_params,
     unbind_budget_reservation_from_callbacks,
 )
@@ -4167,6 +4169,13 @@ def _registration_base(
     return _RegistrationWrite(key=key, entry=dict(fallback.entry))
 
 
+def native_structured_output_support(model_info: Mapping[str, object]) -> bool | None:
+    if model_info.get("supports_bedrock_native_structured_output_by_default"):
+        return model_info.get("supports_bedrock_native_structured_output") is not False
+    declared: Final = model_info.get("supports_native_structured_output")
+    return declared if isinstance(declared, bool) else None
+
+
 def _base_fields_replaced_by(value: Mapping[str, object]) -> frozenset[str]:
     return (
         frozenset({"explicit_cache_read_input_token_cost"})
@@ -4305,6 +4314,13 @@ class _LiveDeploymentReplay:
     """
 
     callback: Callable[[], None] | None = None
+    # Replays other router cores add beside the slot, run after it.
+    extra: tuple[Callable[[], None], ...] = ()
+
+
+def add_live_deployment_replay(replay: Callable[[], None]) -> None:
+    """Add a callback that re-asserts another router core's live deployments after a refresh."""
+    _LiveDeploymentReplay.extra = (*_LiveDeploymentReplay.extra, replay)
 
 
 def set_live_deployment_replay(replay: Callable[[], None]) -> None:
@@ -4338,6 +4354,8 @@ def reapply_runtime_model_cost_registrations() -> None:
     """
     if _LiveDeploymentReplay.callback is not None:
         _LiveDeploymentReplay.callback()
+    for extra_replay in _LiveDeploymentReplay.extra:
+        extra_replay()
     if _runtime_registered_model_cost:
         register_model(
             model_cost=dict(
@@ -4490,8 +4508,9 @@ def get_optional_params_transcription(
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     passed_params.pop("model")
-    custom_llm_provider = passed_params.pop("custom_llm_provider")
-    drop_params = normalize_drop_params(passed_params.pop("drop_params"))
+    passed_params.pop("custom_llm_provider")
+    passed_params.pop("drop_params")
+    normalized_drop_params: Final = normalize_drop_params(drop_params)
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
     from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
         transcription_stream_flag,
@@ -4502,7 +4521,7 @@ def get_optional_params_transcription(
         passed_params[k] = v
 
     sends_through_openai_sdk: Final = custom_llm_provider in ("openai", "azure")
-    drops_unsupported_params: Final = drop_params is True or litellm.drop_params is True
+    drops_unsupported_params: Final = normalized_drop_params is True or litellm.drop_params is True
     transcription_params: Final = (
         OPENAI_TRANSCRIPTION_PARAMS
         if sends_through_openai_sdk or drops_unsupported_params
@@ -4554,7 +4573,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=normalized_drop_params if normalized_drop_params is not None else False,
         )
     elif custom_llm_provider == "bedrock":
         from litellm.llms.bedrock.audio_transcription import (
@@ -4563,7 +4582,7 @@ def get_optional_params_transcription(
         )
 
         match map_openai_transcription_params(
-            non_default_params, drop_params=drop_params is True or litellm.drop_params is True
+            non_default_params, drop_params=normalized_drop_params is True or litellm.drop_params is True
         ):
             case UnsupportedTranscriptionParams(message=message):
                 raise UnsupportedParamsError(message=message, llm_provider="bedrock")
@@ -4576,7 +4595,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=normalized_drop_params if normalized_drop_params is not None else False,
         )
 
     optional_params = add_provider_specific_params_to_optional_params(
@@ -6338,7 +6357,15 @@ def get_deployment_order(deployment: Mapping[str, object]) -> int | None:
     resolved_order: Final = (
         order if order is not None else cast(Mapping[str, object], deployment.get("model_info", {})).get("order")
     )
-    return cast(int | None, resolved_order)
+    # One number for every spelling (`1`, `1.0`, `"1"`, `True`), so orders written different ways
+    # sort and compare together; anything else counts as no order.
+    if isinstance(resolved_order, bool | int):
+        return int(resolved_order)
+    if isinstance(resolved_order, float):
+        return int(resolved_order) if resolved_order.is_integer() else None
+    if isinstance(resolved_order, str) and re.fullmatch(r"[+-]?[0-9]+", resolved_order):
+        return int(resolved_order)
+    return None
 
 
 _get_deployment_order = get_deployment_order
@@ -6538,26 +6565,41 @@ def count_characters(text: str) -> int:
 _count_characters = count_characters
 
 
+class _ResponsesOutputCarrier(Protocol):
+    @property
+    def output(self) -> object: ...
+
+
+class _ResponsesContentCarrier(Protocol):
+    @property
+    def content(self) -> object: ...
+
+
+class _ResponsesTextCarrier(Protocol):
+    @property
+    def text(self) -> str: ...
+
+
 def get_response_string(response_obj: ModelResponse | ModelResponseStream) -> str:
     # Handle Responses API streaming events
     if hasattr(response_obj, "type") and hasattr(response_obj, "response"):
         # This is a Responses API streaming event (e.g., ResponseCreatedEvent, ResponseCompletedEvent)
         # Extract text from the response object's output if available
-        responses_api_response: Final = getattr(response_obj, "response", None)
-        if responses_api_response and hasattr(responses_api_response, "output"):
+        responses_api_response: Final[object] = getattr(response_obj, "response", None)
+        if responses_api_response and has_attributes(responses_api_response, _ResponsesOutputCarrier, "output"):
             output_list: Final = responses_api_response.output
             # Use list accumulation to avoid O(n^2) string concatenation:
             # repeatedly doing `response_str += part` copies the full string each time
             # because Python strings are immutable, so total work grows with n^2.
             response_output_parts: Final[list[str]] = []
-            for output_item in output_list:
+            for output_item in iter_items(output_list):
                 # Handle output items with content array
-                if hasattr(output_item, "content"):
-                    for content_part in output_item.content:
-                        if hasattr(content_part, "text"):
+                if has_attributes(output_item, _ResponsesContentCarrier, "content"):
+                    for content_part in iter_items(output_item.content):
+                        if has_attributes(content_part, _ResponsesTextCarrier, "text"):
                             response_output_parts.append(content_part.text)
                 # Handle output items with direct text field
-                elif hasattr(output_item, "text"):
+                elif has_attributes(output_item, _ResponsesTextCarrier, "text"):
                     response_output_parts.append(output_item.text)
             return "".join(response_output_parts)
 
@@ -7542,6 +7584,8 @@ def get_model_info_helper(
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_cost_per_image_1K=_model_info.get("output_cost_per_image_1K", None),
+                output_cost_per_image_2K=_model_info.get("output_cost_per_image_2K", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
@@ -7570,9 +7614,12 @@ def get_model_info_helper(
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
                 supports_native_streaming=_model_info.get("supports_native_streaming", None),
-                supports_native_structured_output=_model_info.get("supports_native_structured_output", None),
+                supports_native_structured_output=native_structured_output_support(_model_info),
                 supports_bedrock_native_structured_output=_model_info.get(
                     "supports_bedrock_native_structured_output", None
+                ),
+                supports_bedrock_native_structured_output_by_default=_model_info.get(
+                    "supports_bedrock_native_structured_output_by_default", None
                 ),
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
@@ -7581,7 +7628,9 @@ def get_model_info_helper(
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
                 supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
                 thinking_always_on=_model_info.get("thinking_always_on", None),
+                thinking_on_by_default=_model_info.get("thinking_on_by_default", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
+                supports_per_turn_control=_model_info.get("supports_per_turn_control", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_anthropic_thinking_payload=_model_info.get("supports_anthropic_thinking_payload", None),
                 supports_anthropic_compaction=_model_info.get("supports_anthropic_compaction", None),
@@ -10662,8 +10711,8 @@ class ProviderConfigManager:
             # given model is on it; None keeps the chat-completions bridge.
             return litellm.BedrockOpenAIResponsesConfig.for_model(model)
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Both decisions are data-driven from the model's price-map entry, with
-            # no model-name logic. Capability (can it serve Responses?) comes from
+            # Capability and wire path are data-driven from the model's price-map
+            # entry, with no model-name logic. Capability (can it serve Responses?) comes from
             # mantle_supports_responses (supported_endpoints / mode);
             # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
             # the chat-completions emulation (responses/main.py "config is None").
@@ -10671,6 +10720,7 @@ class ProviderConfigManager:
             # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
             # /openai/v1/responses, everything else (incl. gpt-oss) on
             # /v1/responses.
+            from litellm.llms.bedrock.common_utils import bedrock_model_encrypts_agent_messages
             from litellm.llms.bedrock_mantle.common_utils import (
                 mantle_base_segment,
                 mantle_supports_responses,
@@ -10679,7 +10729,8 @@ class ProviderConfigManager:
             if not model or not mantle_supports_responses(model, litellm.model_cost):
                 return None
             return litellm.BedrockMantleResponsesAPIConfig(
-                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
+                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1",
+                encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model),
             )
         return None
 
@@ -11976,15 +12027,6 @@ def should_run_mock_completion(
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler for utils module with cached registry for improved performance."""
-    # Use cached registry from _lazy_imports instead of importing tuples every time
-    from litellm._lazy_imports import get_lazy_import_registry
+    from litellm._lazy_imports import resolve_lazy_attribute
 
-    registry: Final = get_lazy_import_registry()
-
-    # Check if name is in registry and call the cached handler function
-    if name in registry:
-        handler_func: Final = registry[name]
-        return handler_func(name)
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return resolve_lazy_attribute(__name__, name)
