@@ -28,6 +28,10 @@ class OvalixGuardrailConfigModel(GuardrailConfigModel):
         default=None,
         description="Post-checkpoint ID for the Ovalix Tracker service.",
     )
+    file_checkpoint_id: str | None = Field(
+        default=None,
+        description="File-checkpoint ID for the Ovalix Tracker service (falls back to pre/post).",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
