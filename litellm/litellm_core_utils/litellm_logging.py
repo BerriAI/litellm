@@ -475,7 +475,6 @@ _INPUT_PRICING_KEY_PREFIXES: Final = (
 _OUTPUT_PRICING_KEY_PREFIXES: Final = ("output_cost_per_token",)
 _BATCH_PRICING_KEY_SUFFIX: Final = "_batches"
 
-
 _NO_CARRIED_RATES: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -2953,9 +2952,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         request_params: Final = require_attributes(litellm_params, _ParamsLookup, "get")
         if request_params.get("no-log", False) is True:
-            # proxy cost tracking cal backs should run
-
-            if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
+            # A `no-log` request still has to be accounted for: billing, budgets and rate
+            # limits all read the same success path. Callbacks that only move numbers opt in
+            # through `runs_on_no_log_requests`; the internal `_PROXY_` handler prefix stays
+            # as a back-compat signal for hooks that predate the attribute. Exporters stay
+            # filtered, which is the point of `no-log` in the first place.
+            callback_class_name: Final = callback.__class__.__name__
+            runs_on_no_log: Final = isinstance(callback, CustomLogger) and (
+                callback.runs_on_no_log_requests or callback_class_name.startswith("_PROXY_")
+            )
+            if not runs_on_no_log:
                 verbose_logger.debug("no-log request, skipping logging for %s event", event_hook)
                 return False
 

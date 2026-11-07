@@ -147,6 +147,9 @@ def budget_window_seconds(started_at: float, budget_duration: str) -> int:
 
 
 class RouterBudgetLimiting(CustomLogger):
+    # Deployment, provider and tag budgets are accounting: a `no-log` request still spends.
+    runs_on_no_log_requests = True
+
     def __init__(
         self,
         dual_cache: DualCache,

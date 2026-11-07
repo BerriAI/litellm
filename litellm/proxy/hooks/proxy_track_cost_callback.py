@@ -395,6 +395,9 @@ def _attempt_spend_row_kwargs(
 
 
 class _ProxyDBLogger(CustomLogger):
+    # The proxy still bills a `no-log` request; only its content is withheld.
+    runs_on_no_log_requests = True
+
     def __init__(
         self,
         spend_event_producer: SpendEventProducer | None = None,
@@ -425,7 +428,11 @@ class _ProxyDBLogger(CustomLogger):
             response_obj,
             start_time,
             end_time,
-            store_bodies=should_store_prompts_and_responses_in_spend_logs(),
+            store_bodies=should_store_prompts_and_responses_in_spend_logs(
+                cast(  # cast-ok: kwargs mapping asserted for basedpyright; no runtime effect
+                    "Mapping[str, object] | None", kwargs.get("litellm_params")
+                )
+            ),
         )
         if isinstance(event, SpendEventBuildError):
             verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
