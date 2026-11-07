@@ -282,11 +282,9 @@ def _expect_metrics(
     blank: float,
     *,
     api_provider: str = "openai",
-    pf_id: str | None = None,
     pf_populated: float | None = None,
     pf_blank: float | None = None,
 ) -> tuple:
-    expected_id: Final = rig.deployment_id if pf_id is None else pf_id
     expected_pf_populated: Final = populated if pf_populated is None else pf_populated
     expected_pf_blank: Final = blank if pf_blank is None else pf_blank
 
@@ -295,7 +293,7 @@ def _expect_metrics(
         satisfied: Final = (
             _populated_failures(samples, rig, api_provider) == populated
             and _count(samples, DEPLOYMENT_FAILURE, "") == blank
-            and _count(samples, PROXY_FAILED, expected_id) == expected_pf_populated
+            and _count(samples, PROXY_FAILED, rig.deployment_id) == expected_pf_populated
             and _count(samples, PROXY_FAILED, "") == expected_pf_blank
         )
         return samples if satisfied else ()
