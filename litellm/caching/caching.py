@@ -31,6 +31,12 @@ from litellm.litellm_core_utils.model_param_helper import (
     embeds_thought_signature_in_tool_call_id,
     peek_reasoning_summary_aliases,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    LastUserTurnSplit,
+    as_object_tuple,
+    semantic_cache_turn_without_text,
+    split_last_user_turn,
+)
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
@@ -125,7 +131,24 @@ def _request_message_count(kwargs: Mapping[str, object]) -> int:
     return sum(1 for item in items if _is_conversation_item(item))
 
 
+def _conversation_turns(kwargs: Mapping[str, object]) -> tuple[Literal["messages", "input"], tuple[object, ...]] | None:
+    """Chat and Messages API `messages`, else Responses API `input` items. A string or embedding input is no conversation"""
+    messages: Final = as_object_tuple(kwargs.get("messages"))
+    if messages is not None:
+        return "messages", messages
+    items: Final = as_object_tuple(kwargs.get("input"))
+    if items is None:
+        return None
+    return ("input", items) if any(_is_conversation_item(item) for item in items) else None
+
+
+def _json_default(value: object) -> object:
+    return value.model_dump(mode="json") if isinstance(value, BaseModel) else str(value)
+
+
 class Cache:
+    semantic_cache_prompt: str = SemanticCachePrompt.ALL_MESSAGES.value
+
     def __init__(
         self,
         type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
@@ -174,6 +197,7 @@ class Cache:
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
         max_messages: int | None = 4,
+        semantic_cache_prompt: str = SemanticCachePrompt.ALL_MESSAGES.value,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -204,6 +228,7 @@ class Cache:
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
             max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
+            semantic_cache_prompt (str, optional): "all_messages" embeds the text of every message. "last_user_message" embeds only the text of the last user message and keys the bucket on everything else (system prompt, history, the current turn's tool calls and results, and the non-text parts of that message), so a long system prompt can't make different questions look alike and a hit never comes from another context. Requests with no user message skip the cache. Agent loops longer than `max_messages` still skip it, so set `max_messages: None` to cache them. Defaults to "all_messages".
 
             # S3 Cache Args
             s3_bucket_name (str, optional): The bucket name for the s3 cache. Defaults to None.
@@ -355,6 +380,7 @@ class Cache:
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
         self.max_messages: int | None = max_messages
+        self.semantic_cache_prompt = SemanticCachePrompt(semantic_cache_prompt).value
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -395,6 +421,46 @@ class Cache:
         if self.semantic_cache_scope == SemanticCacheScope.END_USER:
             return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
         return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
+
+    def _embeds_last_user_message(self) -> bool:
+        return self.semantic_cache_prompt == SemanticCachePrompt.LAST_USER_MESSAGE and self._is_semantic_cache()
+
+    def _split_last_user_turn(
+        self, kwargs: Mapping[str, object]
+    ) -> tuple[Literal["messages", "input"], LastUserTurnSplit] | None:
+        if not self._embeds_last_user_message():
+            return None
+        conversation: Final = _conversation_turns(kwargs)
+        if conversation is None:
+            return None
+        field, turns = conversation
+        split: Final = split_last_user_turn(turns)
+        return None if split is None else (field, split)
+
+    def _semantic_context_scope(self, kwargs: Mapping[str, object]) -> str:
+        found: Final = self._split_last_user_turn(kwargs)
+        if found is None:
+            return ""
+        split: Final = found[1]
+        context: Final = {
+            "before": split.before,
+            "after": split.after,
+            "question_without_text": semantic_cache_turn_without_text(split.turn),
+        }
+        return f"semantic_context: {json.dumps(context, default=_json_default, sort_keys=True)}"
+
+    def _with_last_user_turn_only(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        found: Final = self._split_last_user_turn(kwargs)
+        if found is None:
+            return kwargs
+        field, split = found
+        return {**kwargs, field: [split.turn]}
+
+    def _lacks_user_turn_to_embed(self, kwargs: Mapping[str, object]) -> bool:
+        if not self._embeds_last_user_message():
+            return False
+        conversation: Final = _conversation_turns(kwargs)
+        return conversation is not None and split_last_user_turn(conversation[1]) is None
 
     def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
         litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
@@ -444,7 +510,7 @@ class Cache:
                     cache_key += f"{param}: {kwargs[param]}"
 
         if is_semantic_cache:
-            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
+            cache_key += self._get_semantic_cache_tenant_scope(kwargs) + self._semantic_context_scope(kwargs)
 
         reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
         reasoning_summary_material: Final = (
@@ -720,9 +786,13 @@ class Cache:
                     max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
                     cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
                     if dynamic_cache_object is not None:
-                        cached_result = dynamic_cache_object.get_cache(cache_key, **cache_lookup_kwargs)
+                        cached_result = dynamic_cache_object.get_cache(
+                            cache_key, **self._with_last_user_turn_only(cache_lookup_kwargs)
+                        )
                     else:
-                        cached_result = self.cache.get_cache(cache_key, **cache_lookup_kwargs)
+                        cached_result = self.cache.get_cache(
+                            cache_key, **self._with_last_user_turn_only(cache_lookup_kwargs)
+                        )
                     self._update_metadata_from_cache_lookup_kwargs(
                         original_kwargs=kwargs,
                         cache_lookup_kwargs=cache_lookup_kwargs,
@@ -754,9 +824,13 @@ class Cache:
                         "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                     )
                     if dynamic_cache_object is not None:
-                        cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
+                        cached_result = await dynamic_cache_object.async_get_cache(
+                            cache_key, **self._with_last_user_turn_only(kwargs)
+                        )
                     else:
-                        cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
+                        cached_result = await self.cache.async_get_cache(
+                            cache_key, **self._with_last_user_turn_only(kwargs)
+                        )
                     return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
@@ -792,7 +866,7 @@ class Cache:
         except Exception as e:
             raise e
 
-    def add_cache(self, result, **kwargs):
+    def add_cache(self, result: object, **kwargs: object) -> None:
         """
         Adds a result to the cache.
 
@@ -808,7 +882,7 @@ class Cache:
                 return
             with response_cache_phase("set"):
                 cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-                self.cache.set_cache(cache_key, cached_data, **kwargs)
+                self.cache.set_cache(cache_key, cached_data, **self._with_last_user_turn_only(kwargs))
         except Exception as e:
             self._log_add_cache_failure(e)
 
@@ -819,7 +893,9 @@ class Cache:
             return
         verbose_logger.error("%s: %s", message, exc)
 
-    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache(
+        self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object
+    ) -> None:
         """
         Async implementation of add_cache
         """
@@ -833,9 +909,13 @@ class Cache:
                 else:
                     cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
                     if dynamic_cache_object is not None:
-                        await dynamic_cache_object.async_set_cache(cache_key, cached_data, **kwargs)
+                        await dynamic_cache_object.async_set_cache(
+                            cache_key, cached_data, **self._with_last_user_turn_only(kwargs)
+                        )
                     else:
-                        await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+                        await self.cache.async_set_cache(
+                            cache_key, cached_data, **self._with_last_user_turn_only(kwargs)
+                        )
         except Exception as e:
             self._log_add_cache_failure(e)
 
@@ -1018,7 +1098,7 @@ class Cache:
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def should_use_cache(self, **kwargs):
+    def should_use_cache(self, **kwargs: object) -> bool:
         """
         Returns true if we should use the cache for LLM API calls
 
@@ -1027,6 +1107,8 @@ class Cache:
         Always False once the request carries more than `max_messages` messages
         """
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
+        if self._lacks_user_turn_to_embed(kwargs):
             return False
         if self.mode == CacheMode.default_on:
             return True

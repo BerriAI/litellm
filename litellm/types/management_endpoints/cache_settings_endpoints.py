@@ -200,6 +200,19 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         ui_field_name="Semantic Cache Scope",
         redis_type="semantic",
     ),
+    CacheSettingsField(
+        field_name="semantic_cache_prompt",
+        field_type="String",
+        field_value=None,
+        field_description=(
+            "Text the semantic cache embeds. 'all_messages' embeds every message. 'last_user_message' embeds only the"
+            " last user message and matches the system prompt and earlier messages exactly."
+        ),
+        field_default="all_messages",
+        options=["all_messages", "last_user_message"],
+        ui_field_name="Semantic Cache Prompt",
+        redis_type="semantic",
+    ),
     # GCP IAM authentication fields
     CacheSettingsField(
         field_name="gcp_service_account",
