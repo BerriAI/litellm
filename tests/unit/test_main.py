@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -7938,7 +7938,9 @@ async def test_responses_with_retries(sync_mode):
 
 @pytest.mark.parametrize("retry_function", [acompletion_with_retries, aresponses_with_retries])
 @pytest.mark.asyncio
-async def test_async_retry_helpers_stop_when_the_call_is_cancelled(retry_function):
+async def test_async_retry_helpers_stop_when_the_call_is_cancelled(
+    retry_function: Callable[..., Awaitable[object]],
+) -> None:
     upstream: Final = AsyncMock(side_effect=[asyncio.CancelledError(), MagicMock()])
 
     with pytest.raises(asyncio.CancelledError):
