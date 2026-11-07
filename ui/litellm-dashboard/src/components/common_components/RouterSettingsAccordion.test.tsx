@@ -4,7 +4,7 @@ import { createRef, useState, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { fetchAvailableModels, fetchAvailableModelsForTeam } from "@/components/llm_calls/fetch_models";
-import { modelInfoCall } from "../networking";
+import { getRouterSettingsCall, modelInfoCall } from "../networking";
 import RouterSettingsAccordion, {
   RouterSettingsAccordionRef,
   RouterSettingsAccordionValue,
@@ -200,6 +200,40 @@ describe("RouterSettingsAccordion", () => {
 
       expect(screen.getByLabelText("Weight for openai/gpt-5")).toHaveValue(null);
       expect(screen.getByRole("button", { name: "Remove weights for gpt-5" })).toBeInTheDocument();
+    });
+
+    it("should say the deployments failed to load instead of calling saved weights stale", async () => {
+      vi.mocked(modelInfoCall).mockRejectedValue(new Error("403"));
+      const ref = createRef<RouterSettingsAccordionRef>();
+      renderWithQueryClient(
+        <RouterSettingsAccordion
+          ref={ref}
+          accessToken="test-token"
+          value={{ router_settings: { weights: { "gpt-5": { "dep-openai": 9 } } } }}
+        />,
+      );
+
+      expect(
+        await screen.findByText("Could not load this model group's deployments. Saved weights are kept."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Deployment no longer exists")).not.toBeInTheDocument();
+      expect(ref.current?.getValue().router_settings.weights).toStrictEqual({ "gpt-5": { "dep-openai": 9 } });
+    });
+
+    it("should warn that weights are ignored when the inherited global strategy is not simple-shuffle", async () => {
+      vi.mocked(getRouterSettingsCall).mockResolvedValueOnce({
+        fields: [{ field_name: "routing_strategy", options: ["simple-shuffle"], field_value: "latency-based-routing" }],
+      });
+      renderWithQueryClient(
+        <RouterSettingsAccordion
+          accessToken="test-token"
+          value={{ router_settings: { weights: { "gpt-5": { "dep-openai": 9 } } } }}
+        />,
+      );
+
+      expect(
+        await screen.findByText("Weights are ignored with latency-based-routing. Select simple-shuffle to use them."),
+      ).toBeInTheDocument();
     });
 
     it("should flag a group whose weights are all zero", async () => {

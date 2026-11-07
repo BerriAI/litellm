@@ -19,7 +19,7 @@ import {
 } from "./routerWeights";
 
 const WEIGHTED_STRATEGY = "simple-shuffle";
-const DEPLOYMENTS_PAGE_SIZE = 100;
+const DEPLOYMENTS_PAGE_SIZE = 1000;
 
 interface RouterWeightsSectionProps {
   accessToken: string;
@@ -41,7 +41,11 @@ interface WeightGroupProps {
 
 function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange, onRemove }: WeightGroupProps) {
   const { t } = useTranslation();
-  const { data: deployments = [], isLoading } = useQuery<WeightableDeployment[]>({
+  const {
+    data: deployments = [],
+    isLoading,
+    isError,
+  } = useQuery<WeightableDeployment[]>({
     queryKey: ["routerWeightDeployments", accessToken, teamId ?? null, group],
     queryFn: async () =>
       (
@@ -63,6 +67,7 @@ function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange,
     enabled: Boolean(accessToken),
   });
   const rows = weightRows(group, groupWeights, deployments, teamId ?? null);
+  const noDeployments = !isLoading && !isError && rows.length === 0;
 
   return (
     <div className="rounded-md border border-border p-4 space-y-3">
@@ -78,13 +83,18 @@ function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange,
           <X />
         </Button>
       </div>
-      {!isLoading && rows.length === 0 && (
-        <p className="text-xs text-muted-foreground">{t("routerWeights.noDeployments")}</p>
+      {isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t("routerWeights.loadFailed")}
+        </p>
       )}
+      {noDeployments && <p className="text-xs text-muted-foreground">{t("routerWeights.noDeployments")}</p>}
       {rows.map((row) => (
         <div key={row.deploymentId} className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm text-foreground">{row.label ?? t("routerWeights.unknownDeployment")}</div>
+            <div className="truncate text-sm text-foreground">
+              {row.label ?? (isError ? "" : t("routerWeights.unknownDeployment"))}
+            </div>
             <div className="truncate text-xs text-muted-foreground">{row.deploymentId}</div>
           </div>
           <Input

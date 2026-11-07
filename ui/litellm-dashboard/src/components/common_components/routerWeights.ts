@@ -33,11 +33,11 @@ export const routerWeightsFrom = (stored: unknown): RouterWeights =>
       )
     : {};
 
-/** Mirrors the proxy's canonical group check: team deployments are named by their public model name. */
 const deploymentGroup = (deployment: WeightableDeployment): string | null =>
-  deployment.model_info?.team_public_model_name || deployment.model_name || null;
+  (deployment.model_info?.team_id ? deployment.model_info.team_public_model_name : null) ||
+  deployment.model_name ||
+  null;
 
-/** Mirrors the proxy's ownership check: another team's deployment is never weightable. */
 const isWeightable = (deployment: WeightableDeployment, group: string, teamId: string | null): boolean => {
   const ownerTeamId = deployment.model_info?.team_id ?? null;
   const visibleToCaller = ownerTeamId === null || ownerTeamId === teamId;
@@ -68,10 +68,6 @@ export const savedRouterWeights = (weights: RouterWeights): RouterWeights | null
 export const hasNoPositiveWeight = (group: GroupWeights): boolean =>
   Object.keys(group).length > 0 && !Object.values(group).some((weight) => weight > 0);
 
-/**
- * One row per deployment of the group, then one per weighted id the group no longer has, so a stale id
- * can still be cleared. A deployment without a weight gets none of the group's traffic once any weight is set.
- */
 export const weightRows = (
   group: string,
   groupWeights: GroupWeights,

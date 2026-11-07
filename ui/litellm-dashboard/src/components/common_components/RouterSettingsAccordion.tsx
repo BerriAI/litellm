@@ -64,6 +64,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     const [fallbackGroups, setFallbackGroups] = useState<FallbackGroup[]>([]);
     const [weights, setWeights] = useState<RouterWeights>({});
     const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
+    const [globalRoutingStrategy, setGlobalRoutingStrategy] = useState<string | null>(null);
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
     const isInternalUpdateRef = useRef(false);
@@ -177,6 +178,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
           if (routingStrategyField?.options) {
             setAvailableRoutingStrategies(routingStrategyField.options);
           }
+          setGlobalRoutingStrategy(routingStrategyField?.field_value ?? null);
 
           // Store routing strategy descriptions
           if (data.routing_strategy_descriptions) {
@@ -375,7 +377,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
                   accessToken={accessToken}
                   teamId={teamId}
                   availableModels={availableModels}
-                  selectedStrategy={formValue.selectedStrategy}
+                  selectedStrategy={formValue.selectedStrategy ?? globalRoutingStrategy}
                   weights={weights}
                   onChange={setWeights}
                 />

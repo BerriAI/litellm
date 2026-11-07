@@ -20394,6 +20394,7 @@
     "share": "{{percent}}% of traffic",
     "noPositiveWeight": "Set at least one weight above 0, or remove this model group.",
     "removeGroup": "Remove weights for {{group}}",
-    "summary": "Deployment Weights:"
+    "summary": "Deployment Weights:",
+    "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   }
 }

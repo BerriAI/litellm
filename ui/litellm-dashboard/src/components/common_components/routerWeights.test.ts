@@ -102,6 +102,16 @@ describe("weightRows", () => {
     expect(rows.map((row) => row.deploymentId)).toStrictEqual(["team-dep"]);
   });
 
+  it("should group a deployment with no team by its model name even if it carries a public name", () => {
+    const orphanedPublicName = {
+      model_name: "gpt-5-internal",
+      litellm_params: { model: "openai/gpt-5" },
+      model_info: { id: "x", team_public_model_name: "gpt-5" },
+    };
+    expect(weightRows("gpt-5", {}, [orphanedPublicName], null)).toStrictEqual([]);
+    expect(weightRows("gpt-5-internal", {}, [orphanedPublicName], null)).toHaveLength(1);
+  });
+
   it("should leave out another team's deployments, which the proxy rejects", () => {
     const deployments = [
       deployment("global", "gpt-5", "openai/gpt-5"),
