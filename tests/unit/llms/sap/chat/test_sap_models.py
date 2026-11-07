@@ -203,6 +203,26 @@ class TestSAPToolChatMessage:
         assert isinstance(msg.content, list)
         assert len(msg.content) == 2
 
+    def test_image_content_accepted(self):
+        from litellm.llms.sap.chat.models import ImageContent
+
+        msg = SAPToolChatMessage.model_validate({
+            "tool_call_id": "call_1",
+            "content": {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+        })
+        assert isinstance(msg.content, ImageContent)
+
+    def test_mixed_list_of_text_and_image_accepted(self):
+        msg = SAPToolChatMessage.model_validate({
+            "tool_call_id": "call_1",
+            "content": [
+                {"type": "text", "text": "screenshot"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+            ],
+        })
+        assert isinstance(msg.content, list)
+        assert len(msg.content) == 2
+
     def test_missing_content_rejected(self):
         with pytest.raises(ValidationError):
             SAPToolChatMessage.model_validate({"tool_call_id": "call_1"})
