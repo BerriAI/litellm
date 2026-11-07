@@ -486,8 +486,9 @@ _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 def _parse_usage_metadata(raw_usage_metadata: object) -> UsageMetadata | None:
     if not isinstance(raw_usage_metadata, dict):
         return None
+    details: Final = raw_usage_metadata.get("promptTokensDetails", raw_usage_metadata.get("promptTokenDetails"))
     try:
-        return _usage_metadata_adapter.validate_python(raw_usage_metadata)
+        return _usage_metadata_adapter.validate_python({**raw_usage_metadata, "promptTokensDetails": details or []})
     except ValidationError:
         return None
 
@@ -615,6 +616,7 @@ def process_response(
     model_response: EmbeddingResponse,
     model: str,
     _predictions: VertexAIBatchEmbeddingsResponseObject,
+    raw_usage_metadata: object = None,
 ) -> EmbeddingResponse:
     openai_embeddings: Final[list[Embedding]] = []
     for idx, embedding in enumerate(_predictions["embeddings"]):
@@ -627,6 +629,12 @@ def process_response(
 
     model_response.data = openai_embeddings
     model_response.model = model
+
+    if _parse_usage_metadata(raw_usage_metadata) is not None:
+        model_response.usage = _usage_from_embed_content_response(
+            input=input, model=model, raw_usage_metadata=raw_usage_metadata, resolved_files={}
+        )
+        return model_response
 
     has_nested: Final = isinstance(input, list) and any(isinstance(e, list) for e in input)
     if _is_multimodal_input(input) or has_nested:

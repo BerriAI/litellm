@@ -486,3 +486,50 @@ def test_build_complete_streaming_response_assembles_stream_generate_content_sse
     assert response.choices[0].message.content == "Hello there!"
     assert response.choices[0].finish_reason == "stop"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (10, 8, 18)
+
+
+def test_gemini_batch_embed_contents_passthrough_bills_image_tokens_from_usage_metadata():
+    logging_obj: Final = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.optional_params = {}
+    response: Final = httpx.Response(
+        200,
+        json={
+            "embeddings": [{"values": [0.1, 0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 258,
+                "promptTokenDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    result: Final = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route="https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents",
+        result=response.text,
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1),
+        cache_hit=False,
+        request_body={
+            "requests": [
+                {
+                    "model": "models/gemini-embedding-2",
+                    "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]},
+                }
+            ]
+        },
+    )
+
+    assert result["result"].usage.prompt_tokens == 258
+    assert result["result"].usage.prompt_tokens_details.image_tokens == 258
+    assert result["kwargs"]["response_cost"] == pytest.approx(
+        258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
+    )
